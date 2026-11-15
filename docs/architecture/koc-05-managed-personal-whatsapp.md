@@ -951,3 +951,40 @@ attempts a stale, otherwise correct next-sequence disconnect and verifies the
 stored pairing sequence cannot advance before continuing the valid teardown.
 No provider was activated, no migration or new route added, and final
 retirement cleanup remains unauthorized.
+
+## KOC-05 disabled-connection pairing admission fence
+
+`SqlChannelRepository.commit_personal_pairing_observation` is the
+canonical transaction owner for admitted, provider-authenticated pairing
+events. It already locks the owning connection, checks tenant/owner,
+original revision, consent, stored event sequence and the irreversible
+retirement hold. However, a **non-retired connection with
+`enabled=false`** could previously accept `QR_ISSUED` or
+`LINK_CONFIRMED` when the callback signature, consent, revision and
+sequence otherwise matched.
+
+The existing connection-row lock now also checks `enabled is True`
+before allowing either pairing-establishment event. Thus a disabled
+connection cannot mint a new QR observation or confirm a link, regardless
+of a retained signing secret or active consent row. Terminal
+`DISCONNECT_REQUESTED`, `UNLINK_CONFIRMED` and `FAILED` transitions
+retain their established reducer, timestamp and sequence requirements,
+so disabling a transport does not misrepresent a live remote session as
+unlinked or trap timely authenticated teardown of a still-current
+revision. Retirement holds continue to accept only original-revision
+terminal evidence, as before.
+
+The disposable live PostgreSQL channel suite now creates an owned,
+non-retired disabled connection with an accepted consent row, proves
+that a valid next-sequence QR cannot be stored, activates it through
+`set_connection_enabled`, then explicitly simulates a legacy direct
+SQL disable without revision change. A correctly scoped next-sequence
+link receipt is rejected and the pairing row remains at the prior
+`qr_available` sequence. This deliberately stronger test bypasses
+the *test fixture's* normal revision bump, never the production
+admission gate. It does not change any real provider configuration,
+grant erasure authority, mutate historical retirement evidence,
+introduce an endpoint or change the v2 report contract.
+
+Independent vendor unlink/erasure verification and final destructive
+cleanup remain unavailable.

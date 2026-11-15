@@ -284,6 +284,18 @@ class SqlChannelRepository:
                 or connection["revision"] != observation.connection_revision
             ):
                 raise PairingEvidenceDenied("Connection owner or revision has changed")
+            # The row lock is the canonical activation authority. A disabled
+            # non-retired connection may still receive authenticated terminal
+            # teardown, but never a new QR or link confirmation, even with a
+            # valid signing key, consent, matching revision and next sequence.
+            if (
+                not held
+                and observation.event in (
+                    PairingEvent.QR_ISSUED, PairingEvent.LINK_CONFIRMED,
+                )
+                and connection["enabled"] is not True
+            ):
+                raise PairingEvidenceDenied("Disabled connection cannot establish pairing")
             consent = (await session.execute(
                 text("""
                     SELECT accepted_at
