@@ -1099,7 +1099,7 @@ async def test_consumer_model_key_scopes_read_revoke_delete_to_authenticated_own
 
     assert await settings_routes.revoke_consumer_model_key(
         credential_id, current_user=actor
-    ) == {"revoked": True}
+    ) == {"locally_revoked": True, "provider_revocation_verified": False}
     vault.revoke_owned_credential.assert_awaited_with(
         credential_id, tenant, "alice", reason="consumer_request"
     )
