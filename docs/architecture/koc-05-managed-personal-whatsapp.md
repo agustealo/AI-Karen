@@ -1026,3 +1026,39 @@ persisted sequence. After restoring live verification, normal pairing
 succeeds; a later inactive owner can complete authenticated disconnect
 and provider-unlink *claims* only. No real provider was enabled, and
 none of this constitutes independently verified erasure or final cleanup.
+
+## KOC-05 pairing status and inventory truth boundary
+
+The current ChannelHost deliberately reports `live_connected=false` and
+`qr_available=false` because no reviewed, current source-authenticated
+remote session probe or QR retrieval capability is enabled. Only
+`last_observed_phase` and a scoped `provider_unlinked` boolean represent
+**historical provider claims**, not independently verified live state or
+credential erasure. However, the prior API `PersonalPairingStatus` model
+and settings inventory parser accepted arbitrary boolean `true` values
+for the two unsupported capabilities. A stale/mock/malformed host result
+could therefore display a fabricated live connection or QR.
+
+The existing pairing status API and owner inventory now reuse one strict
+`PersonalPairingStatus` contract: enumerated availability and persisted
+phase, strict booleans, and a model-level prohibition on either live-health
+or QR success until a separately authenticated source capability exists.
+A persisted `provider_unlinked=true` is accepted only for a configured
+provider whose last accepted phase is `disconnected`, without upgrading
+it to independently verified unlink or credential deletion.
+
+Both API responses validate the host output before serialization and
+return a redacted HTTP 503 on contradictory or extra fields, rather than
+silently converting a false source claim to success or disclosing vendor
+receipt/session metadata. The Channels settings parser mirrors the
+negative live-status invariants and rejects invalid phase/unlink
+correlations, dropping the previous inventory on a failed refresh.
+Regression tests cover forged booleans, numeric/string coercion, invented
+phases, unsafe extra provider fields, post-refresh failure, and a
+legitimate scoped historical unlink observation.
+
+The response field names, consent/revocation actions, ownership,
+tenant/RBAC enforcement, original-session retirement holds, and the
+mandatory independent verification blockers are unchanged. This
+validation does **not** implement remote session health, pairing QR,
+device unlink verification, credential erasure or final cleanup.
