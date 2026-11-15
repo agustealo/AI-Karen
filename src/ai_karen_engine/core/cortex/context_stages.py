@@ -14,10 +14,11 @@ from ai_karen_engine.core.context.contracts import (
     CognitiveContext,
     ContextRequirement,
     ContextRequirements,
+    EvidenceContradictionStatus,
     EvidenceSource,
 )
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
-from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision, ExecutionTopology
 
 
 def build_context_requirements(
@@ -123,6 +124,41 @@ def build_context_requirements(
     )
 
 
+def scoped_conflict_evidence_ids(cognitive_context: CognitiveContext) -> list[str]:
+    """Recognize explicitly linked source-reported conflicts in governed evidence.
+
+    A memory's contradiction flag is not independently verified ground truth.
+    It is eligible only to trigger policy-gated verification, never to assert
+    causation, certainty, or to expand evidence access. Require both linked
+    evidence items to be in an authorized, resolved, identity-scoped source.
+    """
+    allowed = (
+        set(cognitive_context.authorized_sources)
+        - set(cognitive_context.denied_sources)
+        - set(cognitive_context.unresolved_sources)
+    )
+    scoped = {
+        item.evidence_id: item
+        for item in cognitive_context.evidence
+        if item.evidence_id
+        and item.source.value in allowed
+        and item.scope is not None
+        and item.scope.tenant_id == cognitive_context.tenant_id
+        and item.scope.user_id == cognitive_context.user_id
+        and item.provenance.resolver_id
+    }
+    return sorted(
+        item.evidence_id
+        for item in scoped.values()
+        if item.contradiction.status is EvidenceContradictionStatus.CONFIRMED
+        and item.contradiction.resolution_ref is None
+        and any(
+            evidence_id != item.evidence_id and evidence_id in scoped
+            for evidence_id in item.contradiction.conflicting_evidence_ids
+        )
+    )
+
+
 def finalize_decision_with_context(
     preliminary: ExecutionDecision,
     cognitive_context: CognitiveContext,
@@ -205,6 +241,22 @@ def finalize_decision_with_context(
             else:
                 reason_codes.append("context_conversation_resolved_empty")
 
+    # Stage 2 may propose extra verification from conflicting authorized
+    # evidence. RuntimePolicy remains the authority that can approve it.
+    conflict_ids = scoped_conflict_evidence_ids(cognitive_context)
+    reasoning_modes = list(preliminary.reasoning_modes)
+    topology = preliminary.topology
+    if conflict_ids:
+        reason_codes.append("cognitive_source_reported_conflict")
+        if preliminary.max_steps > 0:
+            if "verification" not in reasoning_modes:
+                reasoning_modes.append("verification")
+            if topology == ExecutionTopology.DIRECT:
+                topology = ExecutionTopology.REASONING
+            reason_codes.append("cognitive_conflict_verification_requested")
+        else:
+            reason_codes.append("cognitive_conflict_verification_budget_exhausted")
+
     policy_constraints = dict(preliminary.policy_constraints)
     policy_constraints.update(
         {
@@ -218,6 +270,10 @@ def finalize_decision_with_context(
             "context_conversation_evidence_count": len(conversation_evidence),
             "context_continuity_evidence_count": len(continuity_evidence),
             "context_policy_decision_id": cognitive_context.policy_decision_id,
+            "cognitive_conflict_evidence_ids": conflict_ids,
+            "cognitive_conflict_status": (
+                "source_reported" if conflict_ids else "not_established"
+            ),
         }
     )
 
@@ -225,6 +281,8 @@ def finalize_decision_with_context(
         preliminary,
         memory_recall_required=memory_recall_required,
         cognitive_context=cognitive_context,
+        topology=topology,
+        reasoning_modes=reasoning_modes,
         required_capabilities=required_capabilities,
         forbidden_capabilities=forbidden_capabilities,
         reason_codes=list(dict.fromkeys(reason_codes)),
@@ -232,4 +290,4 @@ def finalize_decision_with_context(
     )
 
 
-__all__ = ["build_context_requirements", "finalize_decision_with_context"]
+__all__ = ["build_context_requirements", "finalize_decision_with_context", "scoped_conflict_evidence_ids"]

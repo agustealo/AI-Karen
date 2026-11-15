@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.cognitive.state import CognitiveState
 from ai_karen_engine.core.context.contracts import CognitiveContext
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.runtime.contracts import ExecutionTopology
@@ -60,6 +61,7 @@ class ExecutionDecision:
     memory_top_k: int = 10
     memory_classes: List[str] = field(default_factory=list)
     cognitive_context: Optional[CognitiveContext] = None
+    cognitive_state: Optional[CognitiveState] = None
 
     tool_requirements: List[str] = field(default_factory=list)
     plugin_candidates: List[str] = field(default_factory=list)
