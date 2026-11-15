@@ -987,6 +987,21 @@ async def build_model_settings_payload() -> Dict[str, Any]:
 
         api_key_status = _get_api_key_status(provider.name, provider)
         
+        # Ollama runtime options are measured with a native /api/tags probe.
+        # Publish only the selected endpoint's actual observation through the
+        # existing canonical health monitor, before reading its status. This
+        # is not an authorization grant or proof that any model is installed.
+        if provider.name == "ollama" and provider.enabled and runtime_options:
+            selected_source = override.get("runtime_source") or OLLAMA_HOST_RUNTIME
+            selected_option = next(
+                (option for option in runtime_options if option.source == selected_source),
+                None,
+            )
+            if selected_option is not None:
+                health_monitor.update_provider_health(
+                    provider.name, is_healthy=bool(selected_option.available)
+                )
+
         # Read the registry-owned observed health record by canonical ID.
         # Registration and configured keys never stand in for a successful
         # provider probe. This projection cannot grant RuntimePolicy access.
