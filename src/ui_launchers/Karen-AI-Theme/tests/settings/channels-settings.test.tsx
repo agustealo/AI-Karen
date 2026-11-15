@@ -137,25 +137,44 @@ describe('KOC-05 personal Channels truth-only settings', () => {
     expect(apiClient.get).not.toHaveBeenCalled();
   });
 
-  it('refreshes backend truth without keeping a formerly connected state visible', async () => {
+  it('refreshes without retaining a valid inventory after an unsupported live claim', async () => {
     vi.mocked(apiClient.get)
-      .mockResolvedValueOnce({
-        connections: [{ ...channel, live_connected: true }],
-      })
-      .mockRejectedValueOnce(new ApiError(403, 'denied'));
+      .mockResolvedValueOnce({ connections: [channel] })
+      .mockResolvedValueOnce({ connections: [{ ...channel, live_connected: true }] });
     render(<ChannelsSettings />);
-    expect(await screen.findByText('Reported connected by Karen')).toBeTruthy();
+    expect(await screen.findByText('whatsapp-cloud')).toBeTruthy();
+    expect(screen.getByText('Not verified connected')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh channel inventory' }));
     await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(2));
-    expect((await screen.findByRole('alert')).textContent).toContain('did not authorize');
+    expect((await screen.findByRole('alert')).textContent).toContain('could not verify');
+    expect(screen.queryByText('whatsapp-cloud')).toBeNull();
     expect(screen.queryByText('Reported connected by Karen')).toBeNull();
   });
 
-  it('never interprets an unlink receipt as verified credential deletion', async () => {
+  it.each([
+    ['invented live session', { live_connected: true }],
+    ['invented live QR', { qr_available: true }],
+    ['unsupported event phase', { last_observed_phase: 'verified' }],
+    ['unscoped unlink claim', { provider_unlinked: true }],
+    ['wrong-type unlink claim', { provider_unlinked: 'true' }],
+  ])('rejects %s without rendering or inventing a verified channel', async (_name, forged) => {
     vi.mocked(apiClient.get).mockResolvedValue({
-      connections: [{ ...channel, provider_unlinked: true }],
+      connections: [{ ...channel, ...forged }],
     });
+    render(<ChannelsSettings />);
+    expect((await screen.findByRole('alert')).textContent).toContain('could not verify');
+    expect(screen.queryByText('whatsapp-cloud')).toBeNull();
+    expect(screen.queryByText('Reported connected by Karen')).toBeNull();
+    expect(screen.queryByText('Reported available by Karen')).toBeNull();
+  });
+
+  it('never interprets a correctly scoped unlink receipt as verified credential deletion', async () => {
+    mockInventoryAndConsent({ connections: [{
+      ...configuredChannel,
+      last_observed_phase: 'disconnected',
+      provider_unlinked: true,
+    }] });
     render(<ChannelsSettings />);
     expect(await screen.findByText(/not proof of credential or message-data erasure/)).toBeTruthy();
   });
