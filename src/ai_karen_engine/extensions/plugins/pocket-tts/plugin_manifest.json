@@ -1,0 +1,87 @@
+{
+  "id": "pocket-tts",
+  "name": "pocket-tts",
+  "display_name": "Pocket TTS",
+  "version": "1.0.0",
+  "description": "Governed offline-first Kyutai Pocket TTS v4.0.1 CPU synthesis, backed only by licensed models installed by Karen's model-download worker.",
+  "purpose": "Generate local speech without selecting providers, capturing microphones, transcribing input or managing conversations.",
+  "author": "KAREN Engineering",
+  "license": "MIT",
+  "category": "integration",
+  "entrypoint": "handler:MainExtension",
+  "tags": [
+    "voice",
+    "text-to-speech",
+    "tts",
+    "local-first",
+    "cpu",
+    "audio"
+  ],
+  "capabilities": {
+    "provides_ui": false,
+    "provides_api": false,
+    "prompt_first": true,
+    "voice_modality": {
+      "version": "1.0.0",
+      "modalities": [
+        "tts"
+      ],
+      "languages": [
+        "en"
+      ],
+      "streaming": false,
+      "voice_cloning": false
+    }
+  },
+  "prompt_files": {
+    "prompt_first": true,
+    "mode": "none"
+  },
+  "resources": {
+    "max_memory_mb": 2048,
+    "max_cpu_percent": 100,
+    "max_disk_mb": 1024,
+    "enforcement_action": "default"
+  },
+  "permissions": {
+    "memory_read": false,
+    "memory_write": false,
+    "user_data_read": false,
+    "user_data_write": false,
+    "network_access": []
+  },
+  "rbac": {
+    "allowed_roles": [
+      "user",
+      "admin",
+      "developer"
+    ],
+    "default_enabled": false
+  },
+  "execution_input_schema": {
+    "type": "object",
+    "properties": {
+      "operation": {
+        "type": "string",
+        "enum": [
+          "catalog",
+          "synthesize"
+        ]
+      },
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "voice_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 96
+      }
+    },
+    "required": [
+      "operation"
+    ],
+    "additional_properties": false
+  }
+}
