@@ -1896,7 +1896,7 @@ async def test_personal_model_credential_resolution_audit_commit_precedes_plaint
 
     # A failed durable audit commit must deny output, not return the secret.
     session.commit.side_effect = RuntimeError("simulated audit persistence failure")
-    with pytest.raises(RuntimeError, match="simulated audit persistence failure"):
+    with pytest.raises(PermissionError, match="execution denied"):
         await service.resolve_authorized_personal_model_key(
             context=context, plan=plan, credential_id=credential_id,
             provider_id="openai", model_id="gpt-4o-mini",
