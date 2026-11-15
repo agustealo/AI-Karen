@@ -125,22 +125,30 @@ def test_pipeline_drops_policy_denied_soft_exploration_without_inventing_mode() 
     asyncio.run(run())
 
 
-def test_pipeline_memory_write_is_false_until_policy_grants_capability() -> None:
-    async def run() -> None:
-        cognitive = ExecutionDecision(
-            required_capabilities=[],
-            memory_write_allowed=False,
-            policy_constraints={"memory_write_requested": True},
-        )
-        pipeline = RuntimeDecisionPipeline(
-            cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
-            policy=RuntimePolicyEnforcer(),
-            evidence_resolver=NoEvidenceResolver(),
-        )
-        result = await pipeline.decide(_request())
-        assert result.memory_write_allowed is False
+def test_pipeline_memory_write_requires_explicit_capability_and_policy() -> None:
+    # Test the final policy gate directly: CORTEX's separate formation owner
+    # may legitimately add a memory.write request for user interactions.
+    cognitive = ExecutionDecision(
+        required_capabilities=[],
+        memory_write_allowed=False,
+        policy_constraints={"memory_write_requested": True},
+    )
+    policy = PolicyDecision(
+        decision_id="policy-memory",
+        policy_version="v2",
+        allowed=True,
+        allowed_capabilities=["memory.write"],
+    )
+    pipeline = RuntimeDecisionPipeline(
+        cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
+        policy=RuntimePolicyEnforcer(),
+        evidence_resolver=NoEvidenceResolver(),
+    )
 
-    asyncio.run(run())
+    result = pipeline._apply_execution_policy(cognitive, policy)
+
+    assert result.memory_write_allowed is False
+    assert result.policy_decision_id == "policy-memory"
 
 
 def test_pipeline_memory_write_becomes_true_only_when_requested_capability_is_allowed() -> None:
