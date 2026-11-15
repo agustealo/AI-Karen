@@ -2290,6 +2290,7 @@ async def test_owned_model_chat_consent_opt_out_succeeds_after_provider_disabled
     tenant, credential_id, _context, _plan = _personal_model_resolution_fixture()
     record = SimpleNamespace(
         id=credential_id, credential_type="model_api_key",
+        provider_id=uuid.uuid4(),
         credential_metadata={
             "personal_model_chat_consent": {
                 "enabled": True, "model_id": "gpt-4o-mini",
