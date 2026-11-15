@@ -188,9 +188,10 @@ The CopilotKit v2 chat now mounts its speech controls in one
 rather than a disconnected two-microphone footer. This dock is a **consumer UI
 slice**, not another runtime or model registry.
 
-- Shows independently verified `/api/voice/capabilities` listening readiness
-  and the authorized `/api/voice/engines` speaking catalog. Neither
-  advertises an uninstalled model.
+- Shows independently verified `/api/voice/capabilities` listening readiness.
+  Heavy `/api/voice/engines` and saved output preference discovery run only
+  after the user opens Voice options, so chat boot/first prompt does not
+  cold-load a TTS model. Neither advertises an uninstalled model.
 - Uses the existing
   [durable user voice preference](../../src/ai_karen_engine/api_routes/system/settings.py)
   and `/api/settings/voice` for inline engine and voice selection.
