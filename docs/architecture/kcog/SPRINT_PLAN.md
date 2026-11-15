@@ -12,8 +12,8 @@
 - Documentation checkpoint #866 merged `724edec8ec12425bc193510270e6bdbb04677f30` and post-merge Main Quality green at inspection.
 - KCOG-00A2 #868 (**MERGED**) `afa845187151715692ca15a75b93871c7403351f`, exact-head CI green including First-Boot; unsupported causal numerical APIs abstain.
 - KCOG-00B1 #869 (**MERGED**) `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3`, exact-head CI green including First-Boot; unknown calibration and attribution cannot masquerade as zero.
-- KCOG-00A3 #871 (**OPEN**) head `b05942395f328533dc3990cb6a24bc1d0535950a`: registered causal strategy now abstains instead of calling absent methods; first-boot pending at checkpoint.
-- KCOG-01A **NEXT**: reuse existing `CognitiveState`, `ContextSnapshot`, `MetaCognitiveAssessor`, `RuntimeDecisionPipeline`, CORTEX and RuntimePolicy; prove a typed, authorized and measurable state-to-decision contract.
+- KCOG-00A3 #871 (**MERGED**) `92ab8a45babc3b271447b3874a10feac99df3085`: verified exact-head gates incl first boot, advertised capability now abstains without pretending causal estimation.
+- KCOG-01A1 #875 (**OPEN**) governed conflict-to-verification + post-policy typed `CognitiveState` and audit-safe status; multiple CI findings repaired on branch, exact-head gates pending. This is source integration, **not measured cognitive improvement**. KCON-211 explicit model reasoning parity and independently calibrated metacognition remain next separate acceptance gates.
 - GitHub Issues are disabled (HTTP 410); this wiki and PR descriptions retain sprint continuity. Verify live CI before acting.
 - **No claims yet** of validated causal-effect estimation, calibrated metacognition, specialist competence gain, or cross-task transfer.
 

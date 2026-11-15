@@ -34,8 +34,11 @@
 | 2026-11-15 | KCOG-00A2 causal identification containment | PR #868; merged `afa845187151715692ca15a75b93871c7403351f` | All exact-head CI green incl. first-boot | MERGED, future estimator still unimplemented |
 | 2026-11-15 | KCOG-00B1 calibration and attribution truth | PR #869; merged `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3` | All exact-head CI green incl. first-boot | MERGED, validated calibration still unimplemented |
 
-| 2026-11-15 | KCOG-00A3 causal strategy wiring | PR #871; head `b05942395f328533dc3990cb6a24bc1d0535950a` | Exact-head Cognitive Proof, Reasoning Smoke and Main Quality green; first-boot pending at checkpoint | OPEN, not merged |
+| 2026-11-15 | KCOG-00A3 causal strategy wiring | PR #871; merged `92ab8a45babc3b271447b3874a10feac99df3085` | All exact-head gates green including first boot | MERGED, causality still unavailable |
 | 2026-11-15 | KCOG-01A state integration source review | main `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3` | `CognitiveState` and `MetaCognitiveAssessor` not referenced directly in inspected decision_pipeline, ChatRuntime and CORTEX executive; `ContextSnapshot` already referenced in context contracts | SOURCE-LEVEL GAP, integration not claimed |
+
+| 2026-11-15 | KCOG-01A1 conflict-driven cognitive-state projection | PR #875, exact head must be read from live PR | Source tests for scope, RuntimePolicy denial, budget and unknown calibration; CI initial failures diagnosed and source/test/workflow fixes pushed; latest CI not yet complete at this checkpoint | IN_PROGRESS / NOT MERGED |
+| 2026-11-15 | KCON-211 reasoning selection parity | `core/runtime/chat_runtime.py` branch review | Non-stream and stream reasoning paths currently suppress reasoning topology when explicit preferred provider+model are present; no fix or regression proof in KCOG-01A1 | OPEN / separate owner gate |
 
 **Non-closure:** these safety slices do not implement causal identification, independently verified calibration or cross-domain transfer. A future real-model runtime trial is still required.
 
