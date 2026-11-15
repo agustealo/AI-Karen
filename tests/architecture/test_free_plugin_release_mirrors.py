@@ -26,7 +26,14 @@ def _source_file_hashes(directory: Path) -> dict[str, str]:
         if not item.is_file():
             continue
         name = item.relative_to(directory).as_posix()
-        assert "__pycache__" not in item.parts and not name.endswith((".pyc", ".pyo"))
+        generated = "__pycache__" in item.parts or name.endswith((".pyc", ".pyo"))
+        if generated:
+            # Runtime/test imports may create bytecode in the source tree.
+            # Distribution packages themselves must never carry bytecode.
+            assert directory.parent != FREE, (
+                f"Free release contains generated Python bytecode: {item}"
+            )
+            continue
         files[name] = hashlib.sha256(item.read_bytes()).hexdigest()
     return files
 
