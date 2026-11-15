@@ -582,7 +582,7 @@ class ApiClient {
     }
   }
 
-  private async request<T>(endpoint: string, init: RequestInit = {}, skipAuth: boolean = false): Promise<T> {
+  private async request<T>(endpoint: string, init: RequestInit = {}, skipAuth: boolean = false, responseKind: "json" | "blob" = "json"): Promise<T> {
     const send = async (baseUrl: string | null): Promise<Response> => {
       const authHeaders = skipAuth ? {} : await this.getAuthHeaders();
       const requestHeaders = {
@@ -749,6 +749,7 @@ class ApiClient {
     }
 
     if (response.status === 204) return undefined as T;
+    if (responseKind === "blob") return await response.blob() as T;
     const text = await response.text();
     return (text ? JSON.parse(text) : undefined) as T;
   }
@@ -784,6 +785,35 @@ class ApiClient {
       throw new Error("Local transcription returned no verified transcript");
     }
     return response;
+  }
+
+  /**
+   * Audited local Piper synthesis, delegated through the existing authenticated
+   * request lifecycle. No new fetch/auth code, fallback provider or audio cache.
+   */
+  async synthesizeLocalSpeech(
+    text: string, voiceId: string, signal?: AbortSignal,
+  ): Promise<Blob> {
+    if (!text.trim() || text.length > 2000 ||
+        !voiceId.trim() || voiceId.length > 96) {
+      throw new Error("Invalid local synthesis request");
+    }
+    const audio = await this.request<Blob>(
+      "/api/voice/synthesis",
+      {
+        method: "POST",
+        headers: { Accept: "audio/wav" },
+        body: JSON.stringify({ text, voice_id: voiceId }),
+        signal,
+      },
+      false,
+      "blob",
+    );
+    if (!(audio instanceof Blob) || audio.size <= 0 || audio.size > 16 * 1024 * 1024 ||
+        (audio.type !== "audio/wav" && audio.type !== "audio/x-wav")) {
+      throw new Error("Local synthesis returned invalid audio");
+    }
+    return audio;
   }
 
   async get<T>(endpoint: string): Promise<T> {
