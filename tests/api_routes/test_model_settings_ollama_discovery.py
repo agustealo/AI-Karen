@@ -1018,7 +1018,9 @@ async def test_consumer_model_key_rejects_unverified_submission(
     )
     vault = SimpleNamespace(
         get_provider=AsyncMock(return_value=SimpleNamespace(
-            id=provider_id, enabled=True, provider_type="api_key",
+            id=provider_id, provider_id="openai", enabled=True,
+            is_system=True, provider_type="api_key",
+            config={"managed_for": "model_api_key"},
         )),
         create_owned_credential=AsyncMock(),
     )
@@ -1171,3 +1173,107 @@ async def test_consumer_model_key_denies_invalid_identity_and_unapproved_provide
             current_user={"tenant_id": str(tenant), "user_id": "alice"},
         )
     assert denied.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_admin_personal_model_key_provisioning_is_tenant_scoped_and_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uuid
+    from unittest.mock import AsyncMock
+
+    tenant = uuid.uuid4()
+    provider_uuid = uuid.uuid4()
+    registry = SimpleNamespace(
+        name="openai", display_name="OpenAI", enabled=True, chat_enabled=True,
+        provider_type=ProviderType.EXTERNAL,
+        authentication=SimpleNamespace(type=settings_routes.AuthenticationType.API_KEY),
+    )
+    created = SimpleNamespace(
+        id=provider_uuid, tenant_id=tenant, provider_id="openai",
+        enabled=True, is_system=True, provider_type="api_key",
+        config={"managed_for": "model_api_key"},
+    )
+    vault = SimpleNamespace(
+        get_provider=AsyncMock(return_value=None),
+        create_provider=AsyncMock(return_value=created),
+    )
+    monkeypatch.setattr(settings_routes, "get_credential_vault_service", lambda: vault)
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: registry if name == "openai" else None),
+    )
+    actor = {"tenant_id": str(tenant), "user_id": "administrator", "roles": ["admin"]}
+    result = await settings_routes.provision_consumer_model_key_provider(
+        "openai", current_user=actor
+    )
+    assert result.provider == "openai"
+    assert result.storage_enabled is True
+    assert result.runtime_authorized is False
+    vault.get_provider.assert_awaited_once_with("openai", tenant)
+    vault.create_provider.assert_awaited_once()
+    args = vault.create_provider.await_args.args
+    assert args[0].provider_id == "openai"
+    assert args[0].config == {"managed_for": "model_api_key"}
+    assert args[0].is_system is True
+    assert args[0].provider_type.value == "api_key"
+    assert args[1:] == (tenant, "administrator")
+
+    vault.get_provider.return_value = created
+    again = await settings_routes.provision_consumer_model_key_provider(
+        "openai", current_user=actor
+    )
+    assert again.storage_enabled is True
+    vault.create_provider.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_personal_key_provisioning_denies_collisions_and_unapproved_vendors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uuid
+    from unittest.mock import AsyncMock
+
+    tenant = uuid.uuid4()
+    actor = {"tenant_id": str(tenant), "user_id": "admin"}
+    registry = SimpleNamespace(
+        name="openai", display_name="OpenAI", enabled=True, chat_enabled=True,
+        provider_type=ProviderType.EXTERNAL,
+        authentication=SimpleNamespace(type=settings_routes.AuthenticationType.API_KEY),
+    )
+    vault = SimpleNamespace(
+        get_provider=AsyncMock(return_value=SimpleNamespace(
+            provider_id="openai", enabled=True, is_system=True,
+            provider_type="api_key", config={"managed_for": "plugin_credentials"},
+        )),
+        create_provider=AsyncMock(),
+        create_owned_credential=AsyncMock(),
+    )
+    monkeypatch.setattr(settings_routes, "get_credential_vault_service", lambda: vault)
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda name: registry if name == "openai" else None),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.provision_consumer_model_key_provider(
+            "openai", current_user=actor
+        )
+    assert exc.value.status_code == 409
+    vault.create_provider.assert_not_awaited()
+
+    from pydantic import SecretStr
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.create_consumer_model_key(
+            settings_routes.ConsumerModelKeyCreate(
+                provider="openai", api_key=SecretStr("private-test-key")
+            ), current_user=actor,
+        )
+    assert exc.value.status_code == 409
+    vault.create_owned_credential.assert_not_awaited()
+
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.provision_consumer_model_key_provider(
+            "custom", current_user=actor
+        )
+    assert exc.value.status_code == 403
+    vault.create_provider.assert_not_awaited()
