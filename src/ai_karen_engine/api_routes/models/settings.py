@@ -21,7 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from ai_karen_engine.auth.rbac_middleware import Permission, require_permission
@@ -460,6 +460,22 @@ class ConsumerModelKeyList(BaseModel):
     offset: int
 
 
+class ConsumerModelChatConsentRequest(BaseModel):
+    """One authenticated owner action, with no caller-supplied tenant or key."""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    model_id: Optional[str] = Field(default=None, max_length=255)
+
+
+class ConsumerModelChatConsentReceipt(BaseModel):
+    credential_id: uuid.UUID
+    consent_enabled: bool
+    model_id: Optional[str] = None
+    # Consent is not RuntimePolicy authorization or external model readiness.
+    runtime_authorized: bool = False
+
+
 def _consumer_key_identity(user: Any) -> tuple[uuid.UUID, str]:
     """Use the authenticated user and tenant from get_current_user only."""
     if not isinstance(user, dict):
@@ -676,6 +692,69 @@ async def create_consumer_model_key(
     except Exception as exc:
         raise _consumer_vault_error(exc) from None
     return _consumer_key_receipt(record, canonical)
+
+
+@router.post(
+    "/credentials/{credential_id}/chat-consent",
+    response_model=ConsumerModelChatConsentReceipt,
+)
+async def set_consumer_model_chat_consent(
+    credential_id: uuid.UUID,
+    payload: ConsumerModelChatConsentRequest,
+    request: Request,
+    current_user: Any = Depends(get_current_user),
+) -> ConsumerModelChatConsentReceipt:
+    """Persist a deliberately selected model for one owned personal key.
+
+    Storage remains separate from RuntimePolicy authorization. The credential
+    identifier is a resource locator only; the Vault checks its real owner,
+    tenant, purpose, lifecycle and system-managed provider before committing.
+    """
+    tenant, actor = _consumer_key_identity(current_user)
+    if payload.enabled and (
+        not payload.model_id
+        or payload.model_id != payload.model_id.strip()
+        or payload.model_id == "auto"
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="An explicit model is required for personal chat consent",
+        )
+    correlation_id = str(
+        getattr(request.state, "correlation_id", "") or uuid.uuid4()
+    )
+    try:
+        updated = await get_credential_vault_service().set_owned_personal_model_chat_consent(
+            credential_id=credential_id,
+            tenant_id=tenant,
+            user_id=actor,
+            model_id=payload.model_id,
+            enabled=payload.enabled,
+            correlation_id=correlation_id,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid personal model consent selection",
+        ) from None
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail="Personal model consent unavailable for this credential",
+        ) from None
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail="Personal credential not found",
+        )
+    return ConsumerModelChatConsentReceipt(
+        credential_id=credential_id,
+        consent_enabled=payload.enabled,
+        model_id=payload.model_id if payload.enabled else None,
+        runtime_authorized=False,
+    )
 
 
 @router.post("/credentials/{credential_id}/revoke")
