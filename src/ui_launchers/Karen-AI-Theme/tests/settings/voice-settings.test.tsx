@@ -5,6 +5,7 @@ import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
 
 const notifications = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => notifications }));
+vi.mock("@/components/settings/LocalVoiceEngineSettings", () => ({ default: () => null }));
 
 type TestVoice = { name: string; lang: string; default: boolean; voiceURI: string };
 
