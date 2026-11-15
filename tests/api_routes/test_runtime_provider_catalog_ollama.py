@@ -693,13 +693,13 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
     monkeypatch.setattr(model_settings, "_get_api_key_status", lambda *args: "not_required")
     monkeypatch.setattr(model_settings, "_supports_base_url_override", lambda *_: False)
     monkeypatch.setattr(model_settings, "get_provider_execution_spec", lambda *_: {})
-    monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", live_inventory)
-
     async def no_discovered_models(*, runtime: str) -> list[object]:
         return []
 
     async def live_inventory(_url: str) -> list[str]:
         return ["qwen3:4b"]
+
+    monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", live_inventory)
 
     probe_available = True
 
