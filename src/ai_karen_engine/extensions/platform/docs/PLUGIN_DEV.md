@@ -1,3 +1,14 @@
+# HISTORICAL: pre-consolidation plugin guide
+
+> **Do not use this page to implement new plugins.** Its root paths, handler
+> conventions, generic prompt.txt and implicit prompt injection are obsolete.
+> The current authoritative developer wiki is
+> [docs/plugins/README.md](../../../../../docs/plugins/README.md), based on
+> the canonical ExtensionManifest, PluginKernel and governed execution owner.
+> This file is retained only for archive/reference purposes.
+
+---
+
 # Plugin Development Guide: Prompt-First Modular Architecture
 
 This guide explains how to build and package plugins for the AI Karen Unified Modular Platform.
