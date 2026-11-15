@@ -2,13 +2,19 @@
 
 [Wiki index](README.md) · [Architecture](01-architecture.md)
 
-**Status: Partial runtime, proposed plugin integration.**
-The existing VoiceRuntime supports a registered, local synthesis engine,
-optional Faster-Whisper transcription, authenticated HTTP ingress and typed
-readiness. **It does not yet discover or execute arbitrary TTS plugins, offer
-a dynamic catalog of engines/voices, or stream Pocket TTS audio to the UI.**
+**Status: Implemented first-party source integration slice; proposed plugin integration
+for arbitrary untrusted/third-party engines and incremental streaming.**
+VoiceRuntime retains local Faster-Whisper STT and complete-WAV contracts.
+The first-party Pocket TTS integration adds a versioned voice modality
+declaration, permission-filtered plugin/voice inventory, authenticated local
+model synthesis, and durable per-user engine selection. **It does not yet
+discover or execute arbitrary TTS plugins** from untrusted uploads; those
+remain quarantined. Real model acceptance still requires separately installed
+gated model files, approved voices, optional runtime dependencies and hardware
+tests. Passing source CI does not prove spoken output on an actual device.
 
-This distinction is essential for the first Pocket TTS plugin.
+The shared runtime keeps conversation, playback selection, installation,
+lifecycle and authorization separate from the Pocket inference adapter.
 
 ## Responsibility split
 
@@ -47,6 +53,10 @@ Today the available authenticated endpoints include:
 | GET /api/voice/capabilities | Actual registered STT/TTS health and single engine/voice status |
 | POST /api/voice/transcriptions | Bounded WAV request to registered local STT |
 | POST /api/voice/synthesis | Bounded text to verified complete WAV, if local synthesis registered |
+| GET /api/voice/engines | Verified installed local TTS plugins/voices, scoped to authenticated principal |
+| POST /api/voice/engines/{engine_id}/synthesis | Chosen approved TTS plugin via PluginService, RuntimePolicy and VoiceRuntime, bounded private WAV |
+| GET /api/settings/voice | Durable user-level engine and voice selection plus current availability |
+| PUT /api/settings/voice | Validate against live engine catalog and persist on authenticated user record |
 
 "VoiceRuntime" currently holds one "LocalSynthesisEngine" interface with
 "engine_id", "voice_id", "is_ready()" and "synthesize(request)" and one
@@ -61,9 +71,12 @@ silently replaced by Pocket.
 
 ## Proposed common Voice Capability API v1
 
-This is a **design proposal, not an accepted JSON/Pydantic schema or live
-HTTP endpoint**. Its purpose is to prevent each future modality plugin from
-adding its own UI, router and settings persistence.
+The **first-party TTS inventory** has implemented a versioned
+`capabilities.voice_modality` manifest declaration and authenticated
+`/api/voice/engines` catalog. The more general multi-modal contract below
+remains a **design proposal**, not a published schema for uploaded third-party
+plugins, streaming media, cloning or arbitrary model inventory. Its purpose
+is to prevent future engines from adding their own router and settings store.
 
 ~~~json
 {
