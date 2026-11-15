@@ -69,6 +69,32 @@
         "ChatRuntime"
       ],
       "recommended": true
+    },
+    {
+      "id": "pocket-tts-english-18m-refl",
+      "model_id": "kyutai/pocket-tts",
+      "label": "Pocket TTS English 18.2M (REFL)",
+      "purpose": "Local CPU speech synthesis for Karen's first governed Pocket TTS plugin. Gated weights require explicit upstream license acceptance before installation.",
+      "tier": "optional",
+      "channel_id": "plugin_audio",
+      "expected_runtime": "pocket-tts",
+      "revision": "db04f0e653473e5c7333c69686ac92b7460b0c1d",
+      "license": "CC-BY-4.0",
+      "license_url": "https://huggingface.co/kyutai/pocket-tts",
+      "include_patterns": [
+        "languages/english_18m_refl_2026-10/model.safetensors",
+        "languages/english_18m_refl_2026-10/tokenizer.model",
+        "languages/english_18m_refl_2026-10/embeddings/**"
+      ],
+      "capabilities": [
+        "audio",
+        "text-to-speech",
+        "local-inference"
+      ],
+      "app_consumers": [
+        "pocket-tts"
+      ],
+      "recommended": false
     }
   ]
 }
