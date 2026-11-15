@@ -546,12 +546,14 @@ class PluginService:
     async def _execution_configuration_readiness(
         self, plugin_name: str, tenant_id: str
     ) -> Optional[str]:
-        """Check persisted tenant configuration and Vault status, never values.
+        """Verify canonical installation and tenant configuration before execution.
 
-        Admission is fail-closed for configured plugins. This is not a secret
-        resolution API: the executor never receives settings or credentials.
+        This single admission owner validates catalog provenance, persisted
+        nonsecret settings and Vault credential *status*. It never reads or
+        injects secret values into the plugin execution payload.
         """
-        record = self._get_kernel().get_record(plugin_name)
+        kernel = self._get_kernel()
+        record = kernel.get_record(plugin_name)
         if record is None or record.get("error_message") or record.get("is_valid") is False:
             return "plugin_manifest_invalid"
         if record.get("activation_blocked_reason"):
@@ -559,63 +561,127 @@ class PluginService:
         manifest = record.get("manifest")
         if manifest is None:
             return "plugin_manifest_invalid"
-        config = getattr(manifest, "config_schema", None)
-        if config is None:
+        schema = getattr(manifest, "config_schema", None)
+        if schema is None:
+            # Configuration-free, already-governed built-ins do not acquire a
+            # dependency on tenant settings or Vault credential status.
             return None
 
+        if (
+            getattr(manifest, "name", None) != plugin_name
+            or record.get("status") not in {"enabled", "active"}
+            or record.get("dependencies_resolved") is not True
+            or record.get("compatibility_checked") is not True
+        ):
+            return "plugin_installation_unverified"
+        try:
+            root = self._resolve_root()
+            package = root / plugin_name
+            source = Path(record["path"])
+            if (
+                root.is_symlink()
+                or package.is_symlink()
+                or source.is_symlink()
+                or not package.is_dir()
+                or source.resolve(strict=True) != package.resolve(strict=True)
+                or package.resolve(strict=True).parent != root.resolve(strict=True)
+                or kernel._is_uploaded_plugin(plugin_name)
+            ):
+                return "plugin_installation_unverified"
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return "plugin_installation_unverified"
+
+        properties = getattr(schema, "properties", None)
+        required_raw = getattr(schema, "required", ()) or ()
+        if (
+            not isinstance(properties, dict)
+            or not isinstance(required_raw, (list, tuple))
+            or any(not isinstance(key, str) for key in required_raw)
+        ):
+            return "plugin_configuration_invalid"
+        required = set(required_raw)
+        if (
+            len(properties) > 64
+            or not required.issubset(properties)
+            or any(
+                not isinstance(key, str) or not isinstance(definition, dict)
+                for key, definition in properties.items()
+            )
+        ):
+            return "plugin_configuration_invalid"
+        if not properties:
+            return None
+
+        secret_fields = {
+            key
+            for key, definition in properties.items()
+            if PluginSettingsRepository._is_secret(key, definition)
+        }
+        ordinary_fields = set(properties) - secret_fields
+        required_nonsecret = required - secret_fields
         try:
             contract = self._settings_contract(record)
         except PluginSettingsNotConfigured:
             return "plugin_configuration_invalid"
-        required = set(getattr(config, "required", ()) or ())
-        definitions = getattr(config, "properties", {}) or {}
-        if not isinstance(definitions, dict) or not required.issubset(definitions):
-            return "plugin_configuration_invalid"
-        required_secret = {
-            key for key in required
-            if isinstance(definitions[key], dict)
-            and PluginSettingsRepository._is_secret(key, definitions[key])
-        }
-        required_nonsecret = required - required_secret
-        # Required read-only/unsupported fields cannot be fulfilled by settings.
         if not required_nonsecret.issubset(contract.rules):
             return "plugin_configuration_invalid"
 
-        if required_nonsecret:
+        if ordinary_fields:
             try:
-                persisted = await self._settings_repository.get(tenant_id, plugin_name)
-                if int(persisted["revision"]) <= 0:
+                persisted = await self._settings_repository.get(
+                    tenant_id, plugin_name
+                )
+                revision = persisted.get("revision")
+                if (
+                    not isinstance(revision, int)
+                    or isinstance(revision, bool)
+                    or revision < 0
+                ):
+                    return "plugin_configuration_unavailable"
+                if required_nonsecret and revision == 0:
                     return "plugin_configuration_missing"
                 contract.validate(persisted["settings"], require_configured=True)
-            except PluginSettingsValidationError:
+            except (PluginSettingsValidationError, TypeError, ValueError, KeyError):
                 return "plugin_configuration_invalid"
-            except Exception:
-                logger.exception(
+            except Exception as exc:
+                logger.warning(
                     "plugin.configuration_readiness_unavailable",
-                    extra={"plugin_id": plugin_name},
+                    extra={
+                        "plugin_id": plugin_name,
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 return "plugin_configuration_unavailable"
 
-        if required_secret:
+        if secret_fields:
             try:
-                allowed = self._plugin_credential_field_keys(record)
-                if not required_secret.issubset(allowed):
-                    return "plugin_configuration_invalid"
                 states = await get_credential_vault_service().list_plugin_credential_status(
                     tenant_id=uuid.UUID(str(tenant_id)),
                     plugin_id=plugin_name,
-                    field_keys=frozenset(required_secret),
+                    field_keys=frozenset(secret_fields),
                 )
-                if any(
-                    not isinstance(states.get(key), dict)
-                    or states[key].get("status") != "active"
-                    for key in required_secret
-                ):
+                if not isinstance(states, dict):
                     return "plugin_credentials_unavailable"
-            except Exception:
-                logger.exception(
+                for field in secret_fields:
+                    status = states.get(field)
+                    if not isinstance(status, dict):
+                        return "plugin_credentials_unavailable"
+                    if field in required or status.get("status") != "missing":
+                        revision = status.get("revision")
+                        if (
+                            status.get("status") != "active"
+                            or not isinstance(revision, int)
+                            or isinstance(revision, bool)
+                            or revision < 1
+                        ):
+                            return "plugin_credentials_unavailable"
+            except Exception as exc:
+                logger.warning(
                     "plugin.credential_readiness_unavailable",
-                    extra={"plugin_id": plugin_name},
+                    extra={
+                        "plugin_id": plugin_name,
+                        "error_type": type(exc).__name__,
+                    },
                 )
                 return "plugin_credentials_unavailable"
         return None
