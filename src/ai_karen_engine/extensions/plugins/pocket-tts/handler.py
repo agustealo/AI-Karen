@@ -264,7 +264,17 @@ class MainExtension(ExtensionBase):
         return None
 
     async def _ensure_ready(self, tenant_id: str) -> bool:
-        authorized = await self._approved_snapshot(tenant_id)
+        try:
+            authorized = await self._approved_snapshot(tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "Pocket model readiness could not be verified",
+                extra={"engine_id": "pocket-tts", "error_type": type(exc).__name__},
+            )
+            self._model = None
+            self._voices = {}
+            self._loaded_key = None
+            return False
         if authorized is None:
             self._model = None
             self._voices = {}
@@ -345,9 +355,16 @@ class MainExtension(ExtensionBase):
             if state is None:
                 raise ValueError("pocket_voice_unavailable")
             model = self._model
-            audio = await self._exclusively(
-                lambda: asyncio.to_thread(_pcm16_wav, model, state, request.text)
-            )
+            try:
+                audio = await self._exclusively(
+                    lambda: asyncio.to_thread(_pcm16_wav, model, state, request.text)
+                )
+            except Exception as exc:
+                logger.error(
+                    "Pocket native synthesis failed",
+                    extra={"engine_id": self.manifest.name, "error_type": type(exc).__name__},
+                )
+                raise RuntimeError("pocket_synthesis_failed") from None
             return {
                 "engine": self.manifest.name,
                 "voice_id": voice_id,
