@@ -740,6 +740,135 @@ class PluginService:
             return True
         return False
 
+    async def _execution_readiness_failure(
+        self, plugin_id: str, tenant_id: str
+    ) -> Optional[str]:
+        """Fail closed on tenant configuration readiness before host invocation.
+
+        The canonical catalog owns installation provenance, Postgres owns
+        nonsecret settings, and Identity Vault owns secret *status*. This
+        method neither decrypts secrets nor injects settings into action data.
+        Only plugins declaring a configuration contract need this additional
+        readiness gate; existing configuration-free built-ins are unchanged.
+        """
+        kernel = self._get_kernel()
+        record = kernel.get_record(plugin_id)
+        if record is None:
+            return "plugin_installation_unverified"
+        manifest = record.get("manifest")
+        schema = getattr(manifest, "config_schema", None)
+        if schema is None:
+            return None
+
+        # A manifest is insufficient provenance: it must belong to the
+        # canonical installed package, with enabled and validated registration.
+        if (
+            str(getattr(manifest, "name", "")) != plugin_id
+            or record.get("status") not in {"enabled", "active"}
+            or record.get("dependencies_resolved") is not True
+            or record.get("compatibility_checked") is not True
+            or record.get("error_message")
+            or record.get("activation_blocked_reason")
+        ):
+            return "plugin_installation_unverified"
+        try:
+            root = self._resolve_root()
+            package = root / plugin_id
+            source = Path(record["path"])
+            if (
+                root.is_symlink() or package.is_symlink()
+                or source.is_symlink() or not package.is_dir()
+                or source.resolve(strict=True) != package.resolve(strict=True)
+                or package.resolve(strict=True).parent != root.resolve(strict=True)
+                or kernel._is_uploaded_plugin(plugin_id)
+            ):
+                return "plugin_installation_unverified"
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return "plugin_installation_unverified"
+
+        properties = getattr(schema, "properties", None)
+        required_raw = getattr(schema, "required", ()) or ()
+        if not isinstance(properties, dict) or not isinstance(required_raw, (list, tuple)):
+            return "plugin_configuration_contract_invalid"
+        if any(not isinstance(key, str) for key in required_raw):
+            return "plugin_configuration_contract_invalid"
+        required = set(required_raw)
+        if not required.issubset(properties):
+            return "plugin_configuration_contract_invalid"
+        if not properties:
+            return None
+
+        secret_fields = {
+            key for key, definition in properties.items()
+            if isinstance(key, str)
+            and isinstance(definition, dict)
+            and PluginSettingsRepository._is_secret(key, definition)
+        }
+        if (
+            len(properties) > 64
+            or any(not isinstance(key, str) or not isinstance(definition, dict)
+                   for key, definition in properties.items())
+        ):
+            return "plugin_configuration_contract_invalid"
+
+        ordinary_fields = set(properties) - secret_fields
+        try:
+            if ordinary_fields:
+                contract = PluginSettingsRepository.contract(manifest)
+                # Unsupported required read-only fields cannot be satisfied.
+                if not (required - secret_fields).issubset(contract.rules):
+                    return "plugin_configuration_contract_invalid"
+                persisted = await self._settings_repository.get(tenant_id, plugin_id)
+                revision = persisted.get("revision")
+                if not isinstance(revision, int) or isinstance(revision, bool):
+                    return "plugin_settings_unavailable"
+                if contract.required and revision < 1:
+                    return "plugin_settings_not_ready"
+                contract.validate(persisted["settings"], require_configured=True)
+            elif required - secret_fields:
+                return "plugin_configuration_contract_invalid"
+        except PluginSettingsNotConfigured:
+            return "plugin_configuration_contract_invalid"
+        except (TypeError, ValueError, KeyError):
+            return "plugin_settings_not_ready"
+        except Exception as exc:
+            logger.warning(
+                "plugin.execution_settings_unavailable",
+                extra={"plugin_id": plugin_id, "error_type": type(exc).__name__},
+            )
+            return "plugin_settings_unavailable"
+
+        if secret_fields:
+            try:
+                tenant_uuid = uuid.UUID(str(tenant_id))
+                credential_status = (
+                    await get_credential_vault_service().list_plugin_credential_status(
+                        tenant_id=tenant_uuid,
+                        plugin_id=plugin_id,
+                        field_keys=frozenset(secret_fields),
+                    )
+                )
+                for field in secret_fields:
+                    status = credential_status.get(field)
+                    if not isinstance(status, dict):
+                        return "plugin_credentials_unavailable"
+                    if field in required or status.get("status") != "missing":
+                        revision = status.get("revision")
+                        if (
+                            status.get("status") != "active"
+                            or not isinstance(revision, int)
+                            or isinstance(revision, bool) or revision < 1
+                        ):
+                            return "plugin_credentials_not_ready"
+            except Exception as exc:
+                logger.warning(
+                    "plugin.execution_credentials_unavailable",
+                    extra={"plugin_id": plugin_id, "error_type": type(exc).__name__},
+                )
+                return "plugin_credentials_unavailable"
+
+        return None
+
     async def execute_plugin(
         self,
         plugin_name: str,
@@ -892,6 +1021,18 @@ class PluginService:
             return failure(
                 "action_gate_denied",
                 "Plugin execution denied by ActionExecutionGate",
+            )
+
+        # RuntimePolicy/ActionGate authorize the action; independent persisted
+        # tenant configuration and verified installation must also be ready.
+        # Never hand Vault bytes to the plugin or the invocation payload.
+        readiness_failure = await self._execution_readiness_failure(
+            plugin_name, resolved_tenant
+        )
+        if readiness_failure:
+            return failure(
+                readiness_failure,
+                "Plugin execution is not ready for the current tenant",
             )
 
         context = ExtensionExecutionContext(
