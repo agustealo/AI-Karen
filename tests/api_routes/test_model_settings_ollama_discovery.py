@@ -1166,7 +1166,7 @@ async def test_consumer_model_key_denies_invalid_identity_and_unapproved_provide
     with pytest.raises(HTTPException) as denied:
         await settings_routes.create_consumer_model_key(
             settings_routes.ConsumerModelKeyCreate(
-                provider="openai", api_key=SecretStr("contains\\nnewline")
+                provider="openai", api_key=SecretStr("contains\nnewline")
             ),
             current_user={"tenant_id": str(tenant), "user_id": "alice"},
         )
