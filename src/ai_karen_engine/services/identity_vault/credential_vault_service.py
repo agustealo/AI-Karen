@@ -85,6 +85,8 @@ class PluginCredentialDenied(PermissionError):
 class CredentialVaultService(BaseService):
     """Canonical tenant-scoped runtime for credentials and external accounts."""
 
+    _OWNED_MODEL_CREDENTIAL_TYPE = "model_api_key"
+
     _REQUIRED_TABLES = {
         "identity_providers",
         "credentials",
@@ -186,6 +188,39 @@ class CredentialVaultService(BaseService):
         if tenant_id is None:
             raise ValueError("tenant_id is required")
         return select(model).where(model.tenant_id == tenant_id)
+
+    @staticmethod
+    def _require_credential_owner(user_id: str) -> str:
+        """Reject missing or ambiguous consumer owner identifiers."""
+        if (
+            not isinstance(user_id, str)
+            or not user_id
+            or user_id != user_id.strip()
+            or len(user_id) > 255
+        ):
+            raise ValueError("A valid credential owner user_id is required")
+        return user_id
+
+    @classmethod
+    def _credential_owner_clauses(
+        cls, owner_user_id: Optional[str]
+    ) -> tuple[Any, ...]:
+        """Add creator fencing without replacing the tenant query authority."""
+        if owner_user_id is None:
+            return ()
+        return (
+            Credential.created_by == cls._require_credential_owner(owner_user_id),
+            Credential.credential_type == cls._OWNED_MODEL_CREDENTIAL_TYPE,
+        )
+
+    @classmethod
+    def _require_matching_credential_actor(
+        cls, user_id: str, owner_user_id: Optional[str]
+    ) -> tuple[Any, ...]:
+        clauses = cls._credential_owner_clauses(owner_user_id)
+        if owner_user_id is not None and user_id != owner_user_id:
+            raise PermissionError("Credential owner does not match the actor")
+        return clauses
 
     @staticmethod
     def _enum_value(value: Any) -> Any:
@@ -959,11 +994,22 @@ class CredentialVaultService(BaseService):
                 revision=int(slot.revision),
             )
 
-    async def get_credential(self, credential_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[Credential]:
+    async def get_credential(
+        self,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        owner_user_id: Optional[str] = None,
+    ) -> Optional[Credential]:
+        owner_clauses = self._credential_owner_clauses(owner_user_id)
         async with self._session_scope() as session:
-            query = self._tenant_query(Credential, tenant_id).options(selectinload(Credential.secrets)).where(
-                Credential.id == credential_id
+            query = self._tenant_query(Credential, tenant_id).where(
+                Credential.id == credential_id, *owner_clauses
             )
+            # Consumer metadata reads must not eagerly fetch encrypted secrets.
+            # Trusted administrative tenant reads retain their existing shape.
+            if owner_user_id is None:
+                query = query.options(selectinload(Credential.secrets))
             result = await session.execute(query)
             return result.scalar_one_or_none()
 
@@ -974,9 +1020,14 @@ class CredentialVaultService(BaseService):
         status: Optional[CredentialStatus] = None,
         limit: int = 100,
         offset: int = 0,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> List[Credential]:
+        owner_clauses = self._credential_owner_clauses(owner_user_id)
         async with self._session_scope() as session:
-            query = self._tenant_query(Credential, tenant_id).options(selectinload(Credential.secrets))
+            query = self._tenant_query(Credential, tenant_id).where(*owner_clauses)
+            if owner_user_id is None:
+                query = query.options(selectinload(Credential.secrets))
             if provider_id:
                 provider = await self._tenant_entity(
                     session, ProviderDefinition, tenant_id, ProviderDefinition.provider_id == provider_id
@@ -995,10 +1046,13 @@ class CredentialVaultService(BaseService):
         update_data: CredentialUpdate,
         tenant_id: uuid.UUID,
         user_id: str,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> Optional[Credential]:
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
             )
             if credential is None:
                 return None
@@ -1021,11 +1075,17 @@ class CredentialVaultService(BaseService):
             return credential
 
     async def delete_credential(
-        self, credential_id: uuid.UUID, tenant_id: uuid.UUID, user_id: str
+        self,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: str,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> bool:
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
             )
             if credential is None:
                 return False
@@ -1057,12 +1117,15 @@ class CredentialVaultService(BaseService):
         new_secrets: List[CredentialSecretCreate],
         tenant_id: uuid.UUID,
         user_id: str,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> Optional[TokenRotationResult]:
         if not new_secrets:
             raise ValueError("At least one replacement secret is required")
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
             )
             if credential is None:
                 return None
@@ -1116,10 +1179,13 @@ class CredentialVaultService(BaseService):
         tenant_id: uuid.UUID,
         user_id: str,
         reason: Optional[str] = None,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> bool:
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
             )
             if credential is None:
                 return False
@@ -1138,6 +1204,102 @@ class CredentialVaultService(BaseService):
             )
             await session.commit()
             return True
+
+    # Consumer operations must use these explicit owner-bound entry points.
+    # Existing tenant-wide operations remain for authorized infrastructure.
+    async def create_owned_credential(
+        self,
+        credential_data: CredentialCreate,
+        secrets: List[CredentialSecretCreate],
+        tenant_id: uuid.UUID,
+        user_id: str,
+    ) -> Credential:
+        self._require_credential_owner(user_id)
+        if credential_data.credential_type != self._OWNED_MODEL_CREDENTIAL_TYPE:
+            raise ValueError("Consumer credential must be a model API key")
+        self._require_owned_model_secret(secrets)
+        return await self.create_credential(
+            credential_data, secrets, tenant_id, user_id
+        )
+
+    @staticmethod
+    def _require_owned_model_secret(secrets: List[CredentialSecretCreate]) -> None:
+        if (
+            len(secrets) != 1
+            or secrets[0].secret_type != "api_key"
+            or not isinstance(secrets[0].encrypted_value, str)
+            or not secrets[0].encrypted_value.strip()
+            or len(secrets[0].encrypted_value.encode("utf-8")) > 4096
+        ):
+            raise ValueError("Consumer model credentials require one bounded API key")
+
+    async def get_owned_credential(
+        self, credential_id: uuid.UUID, tenant_id: uuid.UUID, user_id: str
+    ) -> Optional[Credential]:
+        return await self.get_credential(
+            credential_id, tenant_id,
+            owner_user_id=self._require_credential_owner(user_id),
+        )
+
+    async def list_owned_credentials(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: str,
+        provider_id: Optional[str] = None,
+        status: Optional[CredentialStatus] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Credential]:
+        return await self.list_credentials(
+            tenant_id, provider_id=provider_id, status=status,
+            limit=limit, offset=offset,
+            owner_user_id=self._require_credential_owner(user_id),
+        )
+
+    async def update_owned_credential(
+        self,
+        credential_id: uuid.UUID,
+        update_data: CredentialUpdate,
+        tenant_id: uuid.UUID,
+        user_id: str,
+    ) -> Optional[Credential]:
+        return await self.update_credential(
+            credential_id, update_data, tenant_id, self._require_credential_owner(user_id),
+            owner_user_id=user_id,
+        )
+
+    async def delete_owned_credential(
+        self, credential_id: uuid.UUID, tenant_id: uuid.UUID, user_id: str
+    ) -> bool:
+        return await self.delete_credential(
+            credential_id, tenant_id, self._require_credential_owner(user_id),
+            owner_user_id=user_id,
+        )
+
+    async def rotate_owned_credential(
+        self,
+        credential_id: uuid.UUID,
+        new_secrets: List[CredentialSecretCreate],
+        tenant_id: uuid.UUID,
+        user_id: str,
+    ) -> Optional[TokenRotationResult]:
+        self._require_owned_model_secret(new_secrets)
+        return await self.rotate_credential(
+            credential_id, new_secrets, tenant_id, self._require_credential_owner(user_id),
+            owner_user_id=user_id,
+        )
+
+    async def revoke_owned_credential(
+        self,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        return await self.revoke_credential(
+            credential_id, tenant_id, self._require_credential_owner(user_id),
+            reason=reason, owner_user_id=user_id,
+        )
 
     async def create_external_account(
         self, account_data: ExternalAccountCreate, tenant_id: uuid.UUID, user_id: str

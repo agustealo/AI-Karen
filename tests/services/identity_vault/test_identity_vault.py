@@ -1555,3 +1555,149 @@ class TestIdentityVaultIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+# Consumer-owned credentials reuse the canonical Identity Vault and its
+# tenant-scoped SQL authority. These tests inspect the actual query predicates.
+@pytest.mark.asyncio
+async def test_owned_credential_reads_bind_tenant_and_actor_without_loading_secrets():
+    tenant_id = uuid.uuid4()
+    credential_id = uuid.uuid4()
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    session.execute.return_value.scalars.return_value.all.return_value = []
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    assert await service.get_owned_credential(credential_id, tenant_id, "alice") is None
+    query = session.execute.await_args.args[0]
+    compiled = query.compile()
+    assert "tenant_id" in str(compiled)
+    assert "created_by" in str(compiled)
+    assert tenant_id in compiled.params.values()
+    assert credential_id in compiled.params.values()
+    assert "alice" in compiled.params.values()
+    assert not query._with_options
+
+    session.execute.reset_mock()
+    assert await service.list_owned_credentials(tenant_id, "alice") == []
+    list_query = session.execute.await_args.args[0]
+    list_compiled = list_query.compile()
+    assert tenant_id in list_compiled.params.values()
+    assert "alice" in list_compiled.params.values()
+    assert not list_query._with_options
+
+    # Existing authorized infrastructure retains tenant-level read semantics.
+    session.execute.reset_mock()
+    assert await service.get_credential(credential_id, tenant_id) is None
+    admin_query = session.execute.await_args.args[0]
+    admin_compiled = admin_query.compile()
+    # ORM SELECT includes created_by as a projected column; only WHERE
+    # predicates determine whether the administrative read is owner-restricted.
+    assert "created_by" not in str(admin_query.whereclause)
+    assert tenant_id in admin_compiled.params.values()
+    assert admin_query._with_options
+
+
+@pytest.mark.asyncio
+async def test_owned_credential_mutations_fence_actor_and_creator_before_writes():
+    from ai_karen_engine.database.models.identity_vault import CredentialSecretCreate
+
+    tenant_id = uuid.uuid4()
+    credential_id = uuid.uuid4()
+    replacement = CredentialSecretCreate(
+        secret_type="api_key", encrypted_value="test-private-candidate"
+    )
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    mutations = (
+        service.update_owned_credential(
+            credential_id, CredentialUpdate(name="changed"), tenant_id, "alice"
+        ),
+        service.delete_owned_credential(credential_id, tenant_id, "alice"),
+        service.rotate_owned_credential(credential_id, [replacement], tenant_id, "alice"),
+        service.revoke_owned_credential(credential_id, tenant_id, "alice"),
+    )
+    for operation in mutations:
+        assert await operation in (None, False)
+        compiled = session.execute.await_args.args[0].compile()
+        assert tenant_id in compiled.params.values()
+        assert credential_id in compiled.params.values()
+        assert "alice" in compiled.params.values()
+        session.execute.reset_mock()
+    session.commit.assert_not_awaited()
+    session.delete.assert_not_awaited()
+
+    for invalid_owner in ("", " alice", "alice ", "x" * 256, None):
+        with pytest.raises(ValueError, match="credential owner"):
+            await service.get_owned_credential(credential_id, tenant_id, invalid_owner)
+    session.execute.assert_not_awaited()
+
+    with pytest.raises(PermissionError, match="owner"):
+        await service.rotate_credential(
+            credential_id, [replacement], tenant_id, "alice", owner_user_id="bob"
+        )
+    with pytest.raises(PermissionError, match="owner"):
+        await service.revoke_credential(
+            credential_id, tenant_id, "alice", owner_user_id="bob"
+        )
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owned_model_credential_cannot_manage_plugin_secret():
+    from ai_karen_engine.database.models.identity_vault import (
+        CredentialCreate,
+        CredentialSecretCreate,
+    )
+
+    tenant_id = uuid.uuid4()
+    credential_id = uuid.uuid4()
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    # SQL enforces purpose in addition to tenant and creator. Plugin secrets
+    # written by the same user are not part of the consumer model inventory.
+    assert await service.get_owned_credential(credential_id, tenant_id, "alice") is None
+    compiled = session.execute.await_args.args[0].compile()
+    assert "model_api_key" in compiled.params.values()
+    assert "alice" in compiled.params.values()
+    session.execute.reset_mock()
+
+    plugin_credential = CredentialCreate(
+        name="Plugin-managed secret",
+        provider_id=uuid.uuid4(),
+        credential_type="plugin_secret",
+    )
+    model_credential = CredentialCreate(
+        name="Personal model key",
+        provider_id=uuid.uuid4(),
+        credential_type="model_api_key",
+    )
+    valid_secret = CredentialSecretCreate(
+        secret_type="api_key", encrypted_value="private-test-key"
+    )
+    wrong_secret = CredentialSecretCreate(
+        secret_type="password", encrypted_value="private-test-password"
+    )
+    with pytest.raises(ValueError, match="model API key"):
+        await service.create_owned_credential(
+            plugin_credential, [valid_secret], tenant_id, "alice"
+        )
+    with pytest.raises(ValueError, match="bounded API key"):
+        await service.create_owned_credential(
+            model_credential, [wrong_secret], tenant_id, "alice"
+        )
+    with pytest.raises(ValueError, match="bounded API key"):
+        await service.rotate_owned_credential(
+            credential_id, [wrong_secret], tenant_id, "alice"
+        )
+    session.execute.assert_not_awaited()
+    session.commit.assert_not_awaited()
