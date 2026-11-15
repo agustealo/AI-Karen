@@ -150,7 +150,15 @@ async def _read_synthesis_input(request: Request) -> SynthesisInput:
 
 def _speech_response(result: object) -> Response:
     """Cache-safe WAV playback response, independently of engine implementation."""
-    return _speech_response(result)
+    return Response(
+        content=result.audio,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Karen-Voice-Engine": result.engine,
+        },
+    )
 
 
 @router.get("/engines")
@@ -264,12 +272,4 @@ async def synthesize_voice(
             extra={"error_type": type(exc).__name__},
         )
         raise HTTPException(status_code=503, detail="local_synthesis_failed") from None
-    return Response(
-        content=result.audio,
-        media_type="audio/wav",
-        headers={
-            "Cache-Control": "private, no-store, max-age=0",
-            "X-Content-Type-Options": "nosniff",
-            "X-Karen-Voice-Engine": result.engine,
-        },
-    )
+    return _speech_response(result)
