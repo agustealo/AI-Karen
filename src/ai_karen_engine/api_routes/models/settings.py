@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 from ai_karen_engine.database.models.identity_vault import (
     CredentialCreate,
     CredentialSecretCreate,
+    ProviderDefinitionCreate,
     ProviderType as VaultProviderType,
 )
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
@@ -426,6 +427,16 @@ CUSTOM_PROVIDER_TEMPLATES = [
 
 
 
+_MODEL_KEY_CREDENTIAL_TYPE = "model_api_key"
+_MODEL_KEY_PROVIDER_MARKER = {"managed_for": _MODEL_KEY_CREDENTIAL_TYPE}
+
+
+class ConsumerModelStorageReceipt(BaseModel):
+    provider: str
+    storage_enabled: bool
+    runtime_authorized: bool = False
+
+
 class ConsumerModelKeyCreate(BaseModel):
     """Personal credential ingress, with no caller-controlled tenant or endpoint."""
 
@@ -478,6 +489,91 @@ def _consumer_key_material(secret: SecretStr) -> str:
     ):
         raise HTTPException(status_code=422, detail="Invalid API key format")
     return key
+
+
+def _eligible_personal_key_provider(provider_name: str) -> tuple[str, ProviderConfig]:
+    """One configured-provider policy for admin provisioning and user key writes."""
+    canonical = _normalize_provider_id(provider_name)
+    provider = get_provider_config_manager().get_provider(canonical)
+    if (
+        canonical not in MODEL_SETTINGS_PROVIDER_ORDER
+        or canonical in {"custom", "fallback"}
+        or provider is None
+        or provider.name != canonical
+        or not provider.enabled
+        or not provider.chat_enabled
+        or provider.provider_type not in {ProviderType.EXTERNAL, ProviderType.HYBRID}
+        or provider.authentication is None
+        or provider.authentication.type != AuthenticationType.API_KEY
+    ):
+        raise HTTPException(
+            status_code=403, detail="Personal credentials not permitted for provider"
+        )
+    return canonical, provider
+
+
+def _provisioned_model_key_provider(definition: Any, provider_name: str) -> bool:
+    """Recognize only the canonical system-managed tenant provider namespace."""
+    return bool(
+        definition is not None
+        and definition.provider_id == provider_name
+        and definition.enabled is True
+        and definition.is_system is True
+        and str(getattr(definition.provider_type, "value", definition.provider_type))
+        == VaultProviderType.API_KEY.value
+        and definition.config == _MODEL_KEY_PROVIDER_MARKER
+    )
+
+
+@router.post(
+    "/credentials/providers/{provider_id}/provision",
+    response_model=ConsumerModelStorageReceipt,
+)
+async def provision_consumer_model_key_provider(
+    provider_id: str,
+    current_user: Any = Depends(require_permission(Permission.ADMIN_PROVIDERS_MANAGE)),
+) -> ConsumerModelStorageReceipt:
+    """Permit personal key storage only after an authorized tenant admin grants it.
+
+    This creates an Identity Vault provider definition only. It does not
+    authorize an external model, issue a key, or change chat runtime policy.
+    """
+    tenant, actor = _consumer_key_identity(current_user)
+    canonical, approved = _eligible_personal_key_provider(provider_id)
+    vault = get_credential_vault_service()
+    try:
+        existing = await vault.get_provider(canonical, tenant)
+        if existing is None:
+            existing = await vault.create_provider(
+                ProviderDefinitionCreate(
+                    provider_id=canonical,
+                    display_name=approved.display_name,
+                    provider_type=VaultProviderType.API_KEY,
+                    config=dict(_MODEL_KEY_PROVIDER_MARKER),
+                    supported_capabilities=["chat"],
+                    enabled=True,
+                    is_system=True,
+                ),
+                tenant,
+                actor,
+            )
+    except Exception as exc:
+        logger.warning(
+            "personal_model_provider_provisioning_unavailable",
+            extra={"provider": canonical, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Tenant credential provider could not be provisioned"
+        ) from None
+
+    if not _provisioned_model_key_provider(existing, canonical):
+        raise HTTPException(
+            status_code=409,
+            detail="Tenant provider definition conflicts with model key storage",
+        )
+    return ConsumerModelStorageReceipt(
+        provider=canonical, storage_enabled=True, runtime_authorized=False
+    )
 
 
 def _consumer_key_receipt(record: Any, provider: str) -> ConsumerModelKeyReceipt:
@@ -535,37 +631,20 @@ async def create_consumer_model_key(
 ) -> ConsumerModelKeyReceipt:
     tenant, actor = _consumer_key_identity(current_user)
     key = _consumer_key_material(payload.api_key)
-    canonical = _normalize_provider_id(payload.provider)
-
-    # The existing admin-owned provider registry controls eligibility.
-    # Consumer input cannot register vendors or override upstream endpoints.
-    provider = get_provider_config_manager().get_provider(canonical)
-    if (
-        canonical not in MODEL_SETTINGS_PROVIDER_ORDER
-        or canonical in {"custom", "fallback"}
-        or provider is None
-        or provider.name != canonical
-        or not provider.enabled
-        or not provider.chat_enabled
-        or provider.provider_type not in {ProviderType.EXTERNAL, ProviderType.HYBRID}
-        or provider.authentication is None
-        or provider.authentication.type != AuthenticationType.API_KEY
-    ):
-        raise HTTPException(status_code=403, detail="Personal credentials not permitted for provider")
+    # Reuse the exact provider policy enforced by the admin provisioning route.
+    canonical, _ = _eligible_personal_key_provider(payload.provider)
 
     vault = get_credential_vault_service()
     try:
         definition = await vault.get_provider(canonical, tenant)
     except Exception as exc:
         raise _consumer_vault_error(exc) from None
-    if (
-        definition is None
-        or not definition.enabled
-        or str(getattr(definition.provider_type, "value", definition.provider_type))
-        != VaultProviderType.API_KEY.value
-    ):
-        # Tenant provisioning is governed, not performed by user API calls.
-        raise HTTPException(status_code=409, detail="Tenant provider credential storage is not enabled")
+    if not _provisioned_model_key_provider(definition, canonical):
+        # A similarly named plugin or manually created Vault provider must
+        # never authorize consumer model credential storage.
+        raise HTTPException(
+            status_code=409, detail="Tenant provider credential storage is not enabled"
+        )
 
     try:
         result = await get_provider_auth_manager().validate_candidate_api_key(
@@ -587,7 +666,7 @@ async def create_consumer_model_key(
             CredentialCreate(
                 name=f"Personal {canonical} model API key",
                 provider_id=definition.id,
-                credential_type="model_api_key",
+                credential_type=_MODEL_KEY_CREDENTIAL_TYPE,
                 masked_hint=f"••••{key[-4:]}",
             ),
             [CredentialSecretCreate(secret_type="api_key", encrypted_value=key)],
