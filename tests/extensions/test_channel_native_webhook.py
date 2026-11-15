@@ -307,7 +307,7 @@ async def test_subscription_host_requires_exact_installed_active_connection():
 @pytest.mark.parametrize(
     ("url_suffix", "expected_code"),
     [
-        ("", 503),
+        ("", 403),
         ("?hub.mode=invalid&hub.verify_token=known-token&hub.challenge=1234", 403),
         ("?hub.mode=subscribe&hub.verify_token=bad&hub.challenge=1234", 403),
         ("?hub.mode=subscribe&hub.verify_token=known-token&hub.challenge=bad-value", 403),
