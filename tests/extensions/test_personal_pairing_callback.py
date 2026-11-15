@@ -130,3 +130,16 @@ def test_conflicting_case_variant_signature_headers_rejected():
             "X-Karen-Pairing-Signature": signature,
             "x-karen-pairing-signature": signature,
         })
+
+
+def test_signed_callback_freshness_boundary_matches_canonical_reducer():
+    from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+        PAIRING_EVIDENCE_MAX_AGE,
+    )
+    old = NOW - PAIRING_EVIDENCE_MAX_AGE
+    accepted = decode(envelope(observed_at=old.isoformat()))
+    assert accepted.observed_at == old
+    with pytest.raises(PairingEvidenceDenied, match="Expired or invalid"):
+        decode(envelope(
+            observed_at=(old - timedelta(microseconds=1)).isoformat(),
+        ))
