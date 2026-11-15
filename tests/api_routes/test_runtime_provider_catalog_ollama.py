@@ -633,3 +633,105 @@ async def test_admin_hidden_model_is_excluded_without_disabling_other_live_model
         "qwen2.5:7b": True,
     }
     assert catalog.default_model == "qwen2.5:7b"
+
+@pytest.mark.asyncio
+async def test_selected_ollama_native_probe_is_recorded_before_chat_availability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful selected-endpoint probe provides observed health, not static trust."""
+    from ai_karen_engine.api_routes.models import settings as model_settings
+    from ai_karen_engine.config.llm_provider_config import ProviderType
+    from ai_karen_engine.core.model_runtime import provider_registry_service
+    from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+        ProviderHealthMonitor,
+        HealthStatus,
+    )
+
+    provider = SimpleNamespace(
+        name="ollama",
+        display_name="Ollama",
+        description="Local runtime",
+        provider_type=ProviderType.LOCAL,
+        enabled=True,
+        priority=60,
+        models=[],
+        capabilities={"streaming"},
+        authentication=None,
+        endpoint=SimpleNamespace(base_url="http://host.docker.internal:11434/v1"),
+        default_model="qwen3:4b",
+        chat_enabled=True,
+        chat_model_visibility={},
+    )
+    manager = SimpleNamespace(list_providers=lambda: [provider])
+    monitor = ProviderHealthMonitor(
+        registry=SimpleNamespace(canonicalize_provider_id=lambda name: "ollama-local")
+    )
+    registry = SimpleNamespace(
+        canonicalize_provider_id=lambda name: "ollama-local",
+        health_monitor=monitor,
+    )
+    monkeypatch.setattr(
+        provider_registry_service, "get_provider_registry_service", lambda: registry
+    )
+    monkeypatch.setattr(model_settings, "get_provider_config_manager", lambda: manager)
+    monkeypatch.setattr(
+        model_settings, "get_settings_manager",
+        lambda: SimpleNamespace(
+            get_setting=lambda key, default=None: {
+                "provider": "ollama",
+                "model": "qwen3:4b",
+            }.get(key, default)
+        ),
+    )
+    monkeypatch.setattr(
+        model_settings, "get_model_discovery_service",
+        lambda: SimpleNamespace(get_models_async=no_discovered_models),
+    )
+    monkeypatch.setattr(model_settings, "_get_provider_override", lambda name: {
+        "runtime_source": "host", "last_model": "qwen3:4b"
+    })
+    monkeypatch.setattr(model_settings, "_get_api_key_status", lambda *args: "not_required")
+    monkeypatch.setattr(model_settings, "_supports_base_url_override", lambda *_: False)
+    monkeypatch.setattr(model_settings, "get_provider_execution_spec", lambda *_: {})
+    monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", live_inventory)
+
+    async def no_discovered_models(*, runtime: str) -> list[object]:
+        return []
+
+    async def live_inventory(_url: str) -> list[str]:
+        return ["qwen3:4b"]
+
+    probe_available = True
+
+    async def runtime_options() -> list[model_settings.RuntimeOptionPayload]:
+        return [
+            model_settings.RuntimeOptionPayload(
+                source="host",
+                label="Host",
+                available=probe_available,
+                base_url="http://host.docker.internal:11434/v1",
+                status="Online" if probe_available else "Offline",
+                message="Observed",
+            )
+        ]
+
+    monkeypatch.setattr(model_settings, "_get_ollama_runtime_options", runtime_options)
+    assert monitor.get_provider_health("ollama").health_status == HealthStatus.UNKNOWN
+
+    catalog = await runtime_api.get_runtime_provider_catalog(
+        current_user={"roles": ["user"]}
+    )
+    item = next(provider for provider in catalog.providers if provider.id == "ollama")
+    assert item.health.status == "healthy"
+    assert item.models[0].available is True
+    assert catalog.default_model == "qwen3:4b"
+    assert monitor.get_provider_health("ollama").health_status == HealthStatus.HEALTHY
+
+    probe_available = False
+    degraded = await runtime_api.get_runtime_provider_catalog(
+        current_user={"roles": ["user"]}
+    )
+    item = next(provider for provider in degraded.providers if provider.id == "ollama")
+    assert item.healthy is False
+    assert item.models[0].available is False
+    assert item.health.status == "unavailable"
