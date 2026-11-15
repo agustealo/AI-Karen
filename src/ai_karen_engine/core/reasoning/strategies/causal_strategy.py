@@ -1,6 +1,9 @@
-"""Causal reasoning strategy adapter.
+"""Conservative causal reasoning strategy within the canonical executor.
 
-Wraps CausalReasoningEngine so it participates as a typed reasoning strategy.
+The existing Core causal engine records observational evidence but has no
+validated identification procedure for causal effects or counterfactuals.
+This strategy must abstain until an evaluated implementation is promoted
+through the existing reasoning strategy and runtime authorization owners.
 """
 
 from __future__ import annotations
@@ -8,38 +11,35 @@ from __future__ import annotations
 from typing import Any, List
 
 from ai_karen_engine.core.reasoning.contracts import (
+    ReasoningAssessment,
     ReasoningBudget,
-    ReasoningContradiction,
+    ReasoningDisposition,
+    ReasoningErrorCode,
     ReasoningEvidence,
-    ReasoningHypothesis,
     ReasoningResult,
     ReasoningStatus,
 )
-from ai_karen_engine.core.reasoning.causal.engine import CausalReasoningEngine
 from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
 from ai_karen_engine.core.runtime.contracts import ExecutionContext
 
 
 class CausalReasoner(ReasoningStrategyEngine):
-    """Deterministic causal/counterfactual reasoning strategy."""
+    """Truthful causal capability boundary, not a synthetic estimator."""
 
     strategy_id = "causal"
-    version = "v1"
-    capabilities = ["causal", "counterfactual", "evidence_synthesis"]
+    version = "v2"
+    capabilities = ["causal", "counterfactual"]
     required_inputs = ["objective"]
     supports_model_calls = False
     supports_tools = False
     expected_cost = "low"
-    max_steps = 3
+    max_steps = 1
     output_contract = {
-        "hypotheses": True,
+        "hypotheses": False,
         "evidence": True,
-        "contradictions": True,
+        "contradictions": False,
     }
     determinism = "deterministic"
-
-    def __init__(self) -> None:
-        self._engine = CausalReasoningEngine()
 
     async def execute(
         self,
@@ -48,85 +48,39 @@ class CausalReasoner(ReasoningStrategyEngine):
         evidence: List[ReasoningEvidence],
         budget: ReasoningBudget,
     ) -> ReasoningResult:
+        """Abstain rather than call nonexistent methods or invent a cause."""
         objective = getattr(request, "objective", "")
-        if not objective:
-            return self._empty_result("No objective provided")
-
-        try:
-            self._engine.build_causal_graph(objective, evidence)
-            explanation = self._engine.explain_outcome(objective, objective)
-            counterfactuals = self._engine.generate_counterfactuals(
-                f"What if {objective}",
-                interventions=[],
-            )
-
-            hypotheses = [
-                ReasoningHypothesis(
-                    hypothesis_id=f"causal-{cause}",
-                    statement=f"{cause} contributes to {objective}",
-                    confidence=float(contribution),
-                    supporting_evidence_refs=[e.evidence_id for e in evidence[:3]],
-                    provenance="causal_engine",
-                )
-                for cause, contribution in explanation.actual_causes
-            ]
-
-            contradictions = []
-            if explanation.alternative_explanations:
-                contradictions.append(
-                    ReasoningContradiction(
-                        claim_a=explanation.outcome,
-                        claim_b="; ".join(explanation.alternative_explanations[:2]),
-                        severity="medium",
-                        resolvable=True,
-                        recommended_action="gather_more_evidence",
-                    )
-                )
-
-            return ReasoningResult(
-                reasoning_id="",
-                disposition="complete",
-                conclusion=explanation.outcome,
-                hypotheses=hypotheses,
-                evidence=evidence,
-                assumptions=[],
-                unknowns=[],
-                contradictions=contradictions,
-                assessment=__import__(
-                    "ai_karen_engine.core.reasoning.contracts",
-                    fromlist=["ReasoningAssessment"],
-                ).ReasoningAssessment(
-                    confidence=float(getattr(explanation, "confidence", 0.5)),
-                ),
-                evidence_needs=[],
-                suggested_next_actions=[],
-                status=ReasoningStatus.COMPLETED.value,
-                diagnostics={
-                    "strategy": "causal",
-                    "counterfactuals": len(counterfactuals),
-                },
-            )
-        except Exception as exc:
-            return self._empty_result(f"Causal reasoning failed: {exc}")
-
-    def _empty_result(self, reason: str) -> ReasoningResult:
-        contracts = __import__(
-            "ai_karen_engine.core.reasoning.contracts",
-            fromlist=["ReasoningAssessment", "ReasoningErrorCode"],
+        missing_objective = not isinstance(objective, str) or not objective.strip()
+        reason_code = (
+            ReasoningErrorCode.INVALID_REQUEST
+            if missing_objective
+            else ReasoningErrorCode.STRATEGY_UNAVAILABLE
         )
+        reason = (
+            "causal_objective_missing"
+            if missing_objective
+            else "causal_identification_unavailable"
+        )
+
         return ReasoningResult(
             reasoning_id="",
-            disposition="abstain",
+            disposition=ReasoningDisposition.ABSTAIN.value,
             conclusion=reason,
             hypotheses=[],
-            evidence=[],
+            evidence=list(evidence),
             assumptions=[],
-            unknowns=[],
+            unknowns=[reason],
             contradictions=[],
-            assessment=contracts.ReasoningAssessment(),
+            assessment=ReasoningAssessment(),
             evidence_needs=[],
             suggested_next_actions=[],
-            status=ReasoningStatus.FAILED.value,
-            error_code=contracts.ReasoningErrorCode.STRATEGY_FAILURE.value,
-            diagnostics={"error": reason},
+            status=ReasoningStatus.ABSTAINED.value,
+            error_code=reason_code.value,
+            diagnostics={
+                "strategy": self.strategy_id,
+                "strategy_version": self.version,
+                "reason_code": reason,
+                "model_calls": 0,
+                "tool_requests": 0,
+            },
         )
