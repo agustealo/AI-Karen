@@ -1592,7 +1592,9 @@ async def test_owned_credential_reads_bind_tenant_and_actor_without_loading_secr
     assert await service.get_credential(credential_id, tenant_id) is None
     admin_query = session.execute.await_args.args[0]
     admin_compiled = admin_query.compile()
-    assert "created_by" not in str(admin_compiled)
+    # ORM SELECT includes created_by as a projected column; only WHERE
+    # predicates determine whether the administrative read is owner-restricted.
+    assert "created_by" not in str(admin_query.whereclause)
     assert tenant_id in admin_compiled.params.values()
     assert admin_query._with_options
 
