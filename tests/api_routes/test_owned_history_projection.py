@@ -108,6 +108,30 @@ def test_attested_saved_presentation_and_execution_receipt_replay_without_raw_me
     assert "do-not-export" not in str(result)
 
 
+def test_attested_persona_execution_receipt_preserves_exact_runtime_identity():
+    """The live AG-UI producer and restored rich replay must agree on persona keys."""
+    original = saved([
+        Message(id="user-persona", conversation_id=THREAD, tenant_id=TENANT,
+                role="user", content="Use my active persona", metadata={}),
+        assistant({
+            **receipt(),
+            "persona_id": "tenant-persona-1",
+            "persona_selection_revision": 12,
+            "private_persona_profile": "never-forward-full-persona",
+        }),
+    ])
+    restored = project_owned_history(original, attestations=attested(original))
+    assert restored["messages"][-1]["content"] == "Verified original answer"
+    assert len(restored["replayEvents"]) == 1
+    assert restored["replayEvents"][0]["name"] == "karen.execution_receipt.v1"
+    assert restored["replayEvents"][0]["messageId"] == ASSISTANT_ID
+    receipt_value = restored["replayEvents"][0]["value"]
+    assert receipt_value["persona_id"] == "tenant-persona-1"
+    assert receipt_value["persona_selection_revision"] == 12
+    assert "never-forward-full-persona" not in str(restored)
+    assert "private_persona_profile" not in str(restored)
+
+
 def test_first_prompt_surface_from_runtime_structured_metadata_restores_without_409():
     """ChatRuntime saves structured_content alongside its verified replay capture."""
     surface = presentation()

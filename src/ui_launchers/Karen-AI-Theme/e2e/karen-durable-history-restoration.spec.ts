@@ -100,7 +100,7 @@ test("reopening an owned conversation preserves its saved answer and execution r
     "Acceptance fixture must contain a persisted allowlisted presentation").toBeTruthy();
   if (!kind || !presentationTestId[kind]) return;
 
-  const chat = page.getByTestId("karen-assistant-ui-chat");
+  const chat = page.getByTestId("karen-copilot-consumer-chat");
   await expect(chat).toBeVisible({ timeout: 30_000 });
   await chat.getByRole("button", { name: "Find conversations" }).click();
   await chat.getByPlaceholder("Search conversation titles").fill(stored.title || "");
@@ -108,7 +108,10 @@ test("reopening an owned conversation preserves its saved answer and execution r
   await expect(ownedConversation).toHaveCount(1);
   await ownedConversation.click();
 
+  // This acceptance must exercise the mounted CopilotKit consumer, not a
+  // retired assistant-ui host. A blocked rich restore cannot pass as text.
   await expect(chat.getByText(assistant.content, { exact: true })).toBeVisible();
+  await expect(chat.getByTestId("karen-read-only-transcript")).toHaveCount(0);
   const receipt = chat.getByTestId("karen-restored-execution-receipt");
   await expect(receipt.first()).toBeVisible();
   await expect(chat.getByTestId(presentationTestId[kind]).first()).toBeVisible();
@@ -132,7 +135,7 @@ test("reopening an owned conversation preserves its saved answer and execution r
 
   // Reload verifies API-backed restoration, not only in-memory thread state.
   await page.reload();
-  const reopened = page.getByTestId("karen-assistant-ui-chat");
+  const reopened = page.getByTestId("karen-copilot-consumer-chat");
   await expect(reopened).toBeVisible({ timeout: 30_000 });
   await reopened.getByRole("button", { name: "Find conversations" }).click();
   await reopened.getByPlaceholder("Search conversation titles").fill(stored.title || "");
