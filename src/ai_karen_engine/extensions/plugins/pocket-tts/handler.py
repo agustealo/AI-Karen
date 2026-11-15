@@ -165,7 +165,7 @@ def _pcm16_wav(model: Any, state: Any, text: str) -> bytes:
     # Torch converts finite float waveforms without a separate audio library.
     if not bool(samples.isfinite().all()):
         raise RuntimeError("pocket_speech_nonfinite_samples")
-    pcm = (samples.clamp(-1.0, 1.0) * 32767).to(dtype=audio.new_empty((), dtype=audio.dtype).short().dtype)
+    pcm = (samples.clamp(-1.0, 1.0) * 32767).short()
     # Keep the sample-rate and channel format stable for browser playback.
     output = io.BytesIO()
     with wave.open(output, "wb") as stream:
@@ -204,7 +204,7 @@ class MainExtension(ExtensionBase):
 
     def get_status(self) -> dict[str, Any]:
         return {
-            "status": "ready" if self._active and self._model is not None else "unavailable",
+            "status": "healthy" if self._active else "unavailable",
             "initialized": self._active,
             "version": self.manifest.version,
             "model_loaded": self._model is not None,
