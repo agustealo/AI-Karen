@@ -100,6 +100,21 @@ function verifiedTranscriptPage(
   };
 }
 
+// These are frontend descriptions of the proxy's fixed, non-sensitive
+// history failure categories. They provide a meaningful support diagnostic
+// without exposing raw provider errors, saved metadata or hidden card data.
+const HISTORY_REPLAY_DIAGNOSTICS: Readonly<Record<string, string>> = {
+  HISTORY_REPLAY_LIMIT: "Saved history exceeds the supported rich replay window.",
+  HISTORY_PRESENTATION_INCOMPLETE: "A saved presentation was not completely captured.",
+  HISTORY_PRESENTATION_INVALID: "A saved presentation failed verification.",
+  HISTORY_RICH_UNSUPPORTED: "A saved rich format is not supported for complete replay.",
+  HISTORY_MESSAGE_INVALID: "A saved message failed canonical validation.",
+  HISTORY_ATTESTATION_MISSING: "A saved runtime receipt lacks completed-run attestation.",
+  HISTORY_ATTESTATION_MISMATCH: "A saved runtime receipt or activity failed attestation.",
+  HISTORY_EVENT_INVALID: "A saved replay event failed validation.",
+  HISTORY_REPLAY_INVALID: "The saved rich replay payload failed validation.",
+};
+
 // The history gate owns the sole SDK agent registration for this conversation.
 // Children consume the same instance; a second useAgent call with the same ID
 // causes CopilotKitCore.registerProxiedAgent to reject the duplicate.
@@ -219,10 +234,17 @@ export function KarenCopilotHistoryGate({
   // Explicit click is required per mount. A normal history GET cannot enter
   // this mode or trigger a provider run.
   const textContinuationRequested = useRef(false);
+  const continuationConversationId = useRef(conversationId);
   const recoveryGeneration = useRef(0);
 
   useEffect(() => {
     recoveryGeneration.current += 1;
+    // A user's explicit decision to omit rich history is for exactly one
+    // conversation. Never carry that authorization into another thread.
+    if (continuationConversationId.current !== conversationId) {
+      continuationConversationId.current = conversationId;
+      textContinuationRequested.current = false;
+    }
     if (!isReady) return;
     let cancelled = false;
     setLoaded(null);
@@ -298,6 +320,15 @@ export function KarenCopilotHistoryGate({
             const errorCode = details && typeof details === "object" &&
               !Array.isArray(details) && "error_code" in details
               ? (details as { error_code?: unknown }).error_code : undefined;
+            const reason = typeof errorCode === "string" &&
+              Object.hasOwn(HISTORY_REPLAY_DIAGNOSTICS, errorCode)
+                ? HISTORY_REPLAY_DIAGNOSTICS[errorCode] : null;
+            const possibleCorrelation = details && typeof details === "object" &&
+              !Array.isArray(details) && "correlation_id" in details
+                ? (details as { correlation_id?: unknown }).correlation_id : null;
+            const supportId = typeof possibleCorrelation === "string" &&
+              /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(possibleCorrelation)
+                ? possibleCorrelation : null;
             // A proxy 502/503 is not evidence that saved rich content cannot
             // replay. Distinguish explicit connection failures from canonical
             // replay failures before offering a second, read-only history GET.
@@ -346,7 +377,9 @@ export function KarenCopilotHistoryGate({
               setError(backendUnavailable
                 ? "Karen's backend is unavailable. Saved conversation history could not be verified or opened. Retry when the connection returns."
                 : replayUnsupported
-                  ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available."
+                  ? "This conversation contains content that Karen cannot faithfully restore in this chat yet. No partial conversation was opened. Verified saved text may be viewed read-only below when available." +
+                    (reason ? " Reason: " + reason : "") +
+                    (reason && supportId ? " Support reference: " + supportId : "")
                   : "Karen could not verify or restore this conversation.");
               restored = false;
             }
