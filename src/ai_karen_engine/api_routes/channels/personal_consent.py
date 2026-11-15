@@ -6,11 +6,11 @@ from HTTP input. No QR, linked device, or provider session is created here.
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Literal, TypeVar
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError, field_validator, model_validator
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -263,11 +263,31 @@ async def place_personal_retirement_hold(
 
 
 class PersonalPairingStatus(BaseModel):
-    availability: str
-    last_observed_phase: str | None = None
-    live_connected: bool = False
-    qr_available: bool = False
-    provider_unlinked: bool = False
+    """Historical provider claims only; no live session or QR verifier exists."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    availability: Literal["configured", "unavailable"]
+    last_observed_phase: Literal[
+        "ready", "qr_available", "connected",
+        "disconnect_pending", "disconnected", "unknown",
+    ] | None = None
+    live_connected: StrictBool = False
+    qr_available: StrictBool = False
+    provider_unlinked: StrictBool = False
+
+    @model_validator(mode="after")
+    def require_honest_personal_provider_status(self) -> "PersonalPairingStatus":
+        # This contract currently has no live native provider health or QR
+        # retrieval capability. Persisted callbacks must never assert either.
+        if self.live_connected or self.qr_available:
+            raise ValueError("Live personal provider status is not independently available")
+        if self.provider_unlinked and (
+            self.availability != "configured"
+            or self.last_observed_phase != "disconnected"
+        ):
+            raise ValueError("Provider unlink claim does not match persisted state")
+        return self
 
 
 class PersonalChannelInventoryItem(PersonalPairingStatus):
@@ -279,6 +299,23 @@ class PersonalChannelInventoryItem(PersonalPairingStatus):
 
 class PersonalChannelInventoryResponse(BaseModel):
     connections: list[PersonalChannelInventoryItem]
+
+
+_PersonalStatusModel = TypeVar("_PersonalStatusModel", bound=BaseModel)
+
+
+def _validate_personal_status_projection(
+    model: type[_PersonalStatusModel], payload: object,
+) -> _PersonalStatusModel:
+    """Fail closed on contradictory host claims, with a redacted API error."""
+    try:
+        return model.model_validate(payload)
+    except ValidationError as exc:
+        logger.error(
+            "channel.personal_status.projection_invalid",
+            extra={"error_type": type(exc).__name__, "schema": model.__name__},
+        )
+        raise HTTPException(503, "Personal channel status unavailable") from None
 
 
 @router.get("/connections", response_model=PersonalChannelInventoryResponse)
@@ -298,7 +335,9 @@ async def list_personal_channel_connections(
         )
     except Exception as exc:
         raise _translate(exc) from None
-    return PersonalChannelInventoryResponse(connections=connections)
+    return _validate_personal_status_projection(
+        PersonalChannelInventoryResponse, {"connections": connections},
+    )
 
 
 class PersonalConsentRecoveryItem(BaseModel):
@@ -517,7 +556,7 @@ async def get_personal_whatsapp_pairing_status(
         )
     except Exception as exc:
         raise _translate(exc) from None
-    return PersonalPairingStatus(**result)
+    return _validate_personal_status_projection(PersonalPairingStatus, result)
 
 
 class ConsentStatus(BaseModel):
