@@ -330,7 +330,7 @@ jobs:
           pytest tests/memory/test_stm_closure_1b.py -q
           pytest tests/auth/test_tenant_scope_fail_closed.py -q
           pytest tests/architecture/test_identity_vault_tenant_contract.py -q
-          pytest tests/services/identity_vault/test_identity_vault.py -q -k 'owned_credential or owned_model_credential or personal_model_credential_resolution'
+          pytest tests/services/identity_vault/test_identity_vault.py -q -k 'owned_credential or owned_model_credential or personal_model_credential_resolution or personal_model_key_release or mutating_credential_locks or credential_metadata_read'
 
       - name: Reject retired provider authorities
         shell: bash
