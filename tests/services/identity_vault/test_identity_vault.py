@@ -2227,3 +2227,271 @@ async def test_personal_model_credential_candidate_rechecks_returned_row_integri
         ) is None
         setattr(record, field, originals[field])
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owned_model_chat_consent_is_audited_and_never_releases_a_secret():
+    """Only the owner can persist explicit use of one exact provider model."""
+    from types import SimpleNamespace
+
+    tenant, credential_id, context, _plan = _personal_model_resolution_fixture()
+    provider_id = uuid.uuid4()
+    record = SimpleNamespace(
+        id=credential_id, tenant_id=tenant, created_by="alice",
+        provider_id=provider_id, credential_type="model_api_key",
+        credential_metadata={"unrelated": "preserved"}, status="active",
+        expires_at=None, updated_at=None,
+    )
+    provider = SimpleNamespace(
+        id=provider_id, tenant_id=tenant, is_system=True, enabled=True,
+        provider_type="api_key", config={"managed_for": "model_api_key"},
+    )
+    session = AsyncMock()
+    first, second = MagicMock(), MagicMock()
+    first.scalar_one_or_none.return_value = record
+    second.scalar_one_or_none.return_value = provider
+    session.execute.side_effect = [first, second]
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    service._audit = AsyncMock()
+
+    result = await service.set_owned_personal_model_chat_consent(
+        credential_id=credential_id, tenant_id=tenant, user_id="alice",
+        model_id="gpt-4o-mini", enabled=True, correlation_id="correlation-1",
+    )
+    assert result is True
+    assert record.credential_metadata == {
+        "unrelated": "preserved",
+        "personal_model_chat_consent": {
+            "enabled": True, "model_id": "gpt-4o-mini",
+        },
+    }
+    assert session.execute.await_count == 2
+    assert session.execute.await_args_list[0].args[0]._for_update_arg is not None
+    session.commit.assert_awaited_once()
+    service._audit.assert_awaited_once()
+    audit = service._audit.await_args.kwargs
+    assert audit["action"] == "personal_model_chat_consent_enabled"
+    assert audit["credential_id"] == credential_id
+    assert audit["user_id"] == context.user_id
+    assert audit["tenant_id"] == tenant
+    assert audit["correlation_id"] == "correlation-1"
+    assert audit["metadata"] == {
+        "enabled": True, "model_id": "gpt-4o-mini",
+    }
+    assert "secret" not in str(audit).lower()
+
+
+@pytest.mark.asyncio
+async def test_owned_model_chat_consent_opt_out_succeeds_after_provider_disabled():
+    """An owner can opt out even after provisioning or health was disabled."""
+    from types import SimpleNamespace
+
+    tenant, credential_id, _context, _plan = _personal_model_resolution_fixture()
+    record = SimpleNamespace(
+        id=credential_id, credential_type="model_api_key",
+        credential_metadata={
+            "personal_model_chat_consent": {
+                "enabled": True, "model_id": "gpt-4o-mini",
+            },
+            "unrelated": "preserved",
+        }, updated_at=None,
+    )
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = record
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    service._audit = AsyncMock()
+
+    assert await service.set_owned_personal_model_chat_consent(
+        credential_id=credential_id, tenant_id=tenant, user_id="alice",
+        model_id=None, enabled=False, correlation_id="correlation-2",
+    ) is True
+    assert record.credential_metadata == {"unrelated": "preserved"}
+    session.execute.assert_awaited_once()
+    session.commit.assert_awaited_once()
+    assert service._audit.await_args.kwargs["action"] == (
+        "personal_model_chat_consent_disabled"
+    )
+
+
+@pytest.mark.asyncio
+async def test_owned_model_chat_consent_denies_forged_owner_and_invalid_selection():
+    tenant, credential_id, _context, _plan = _personal_model_resolution_fixture()
+    service = CredentialVaultService()
+    session = AsyncMock()
+    service.set_db_session(session)
+
+    bad = (
+        {"user_id": "", "model_id": "gpt-4o-mini", "enabled": True},
+        {"user_id": "alice", "model_id": "", "enabled": True},
+        {"user_id": "alice", "model_id": "auto", "enabled": True},
+        {"user_id": "alice", "model_id": "gpt-4o-mini\n", "enabled": True},
+        {"user_id": "alice", "model_id": "x" * 256, "enabled": True},
+        {"user_id": "alice", "model_id": None, "enabled": True},
+        {"user_id": "alice", "model_id": "gpt-4o-mini", "enabled": 1},
+    )
+    for entry in bad:
+        with pytest.raises(ValueError):
+            await service.set_owned_personal_model_chat_consent(
+                credential_id=credential_id, tenant_id=tenant,
+                correlation_id="corr", **entry,
+            )
+    session.execute.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_state", [
+    "revoked", "expired", "disabled_provider", "plugin_managed_provider",
+])
+async def test_owned_model_chat_consent_denies_inactive_or_wrong_purpose(
+    bad_state,
+):
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    tenant, credential_id, _context, _plan = _personal_model_resolution_fixture()
+    provider_id = uuid.uuid4()
+    record = SimpleNamespace(
+        id=credential_id, credential_type="model_api_key",
+        provider_id=provider_id, credential_metadata={},
+        status="revoked" if bad_state == "revoked" else "active",
+        expires_at=(
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+            if bad_state == "expired" else None
+        ),
+    )
+    provider = SimpleNamespace(
+        id=provider_id, tenant_id=tenant, is_system=True,
+        enabled=bad_state != "disabled_provider",
+        provider_type="api_key",
+        config={"managed_for": (
+            "plugin_credentials" if bad_state == "plugin_managed_provider"
+            else "model_api_key"
+        )},
+    )
+    session = AsyncMock()
+    first, second = MagicMock(), MagicMock()
+    first.scalar_one_or_none.return_value = record
+    second.scalar_one_or_none.return_value = provider
+    session.execute.side_effect = [first, second]
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    service._audit = AsyncMock()
+    with pytest.raises(PermissionError, match="consent denied"):
+        await service.set_owned_personal_model_chat_consent(
+            credential_id=credential_id, tenant_id=tenant, user_id="alice",
+            model_id="gpt-4o-mini", enabled=True,
+            correlation_id="correlation-1",
+        )
+    session.commit.assert_not_awaited()
+    service._audit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owned_model_chat_consent_audit_failure_does_not_claim_success():
+    from types import SimpleNamespace
+
+    tenant, credential_id, _context, _plan = _personal_model_resolution_fixture()
+    record = SimpleNamespace(
+        id=credential_id, credential_type="model_api_key",
+        credential_metadata={}, status="active", expires_at=None,
+        provider_id=uuid.uuid4(), updated_at=None,
+    )
+    provider = SimpleNamespace(
+        tenant_id=tenant, is_system=True, enabled=True,
+        provider_type="api_key", config={"managed_for": "model_api_key"},
+    )
+    session = AsyncMock()
+    first, second = MagicMock(), MagicMock()
+    first.scalar_one_or_none.return_value = record
+    second.scalar_one_or_none.return_value = provider
+    session.execute.side_effect = [first, second]
+    session.commit.side_effect = RuntimeError("durable audit write failed")
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    service._audit = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="durable audit"):
+        await service.set_owned_personal_model_chat_consent(
+            credential_id=credential_id, tenant_id=tenant, user_id="alice",
+            model_id="gpt-4o-mini", enabled=True,
+            correlation_id="correlation-1",
+        )
+    session.commit.assert_awaited_once()
+    service._audit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_owned_model_candidate_checks_persisted_exact_model_consent():
+    from types import SimpleNamespace
+
+    tenant, credential_id, context, _plan = _personal_model_resolution_fixture()
+    record = SimpleNamespace(
+        id=credential_id, tenant_id=tenant, created_by="alice",
+        credential_type="model_api_key", status="active",
+        credential_metadata={},
+    )
+    session = AsyncMock()
+    row = MagicMock()
+    row.scalars.return_value.all.return_value = [record]
+    session.execute.return_value = row
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+        consented_model_id="gpt-4o-mini",
+    ) is None
+    record.credential_metadata["personal_model_chat_consent"] = {
+        "enabled": True, "model_id": "gpt-4o-mini",
+    }
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+        consented_model_id="gpt-4o-mini",
+    ) == credential_id
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+        consented_model_id="different-model",
+    ) is None
+    record.credential_metadata["personal_model_chat_consent"]["enabled"] = False
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+        consented_model_id="gpt-4o-mini",
+    ) is None
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+    ) == credential_id
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generic_owned_credential_update_cannot_inject_chat_consent():
+    from types import SimpleNamespace
+
+    tenant, credential_id, _context, _plan = _personal_model_resolution_fixture()
+    record = SimpleNamespace(
+        id=credential_id, credential_type="model_api_key",
+        credential_metadata={"unrelated": "value"}, status="active",
+    )
+    session = AsyncMock()
+    row = MagicMock()
+    row.scalar_one_or_none.return_value = record
+    session.execute.return_value = row
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    with pytest.raises(PermissionError, match="owner confirmation"):
+        await service.update_owned_credential(
+            credential_id,
+            CredentialUpdate(metadata={
+                "unrelated": "value",
+                "personal_model_chat_consent": {
+                    "enabled": True,
+                    "model_id": "gpt-4o-mini",
+                },
+            }),
+            tenant, "alice",
+        )
+    session.commit.assert_not_awaited()
