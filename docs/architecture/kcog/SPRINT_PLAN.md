@@ -7,10 +7,13 @@
 
 ## Live S1 execution checkpoint (2026-11-15)
 
-- **KCOG wiki** is merged via [PR #863](https://github.com/agustealo/AI-Karen/pull/863), main merge `c18b3dfe3376a02e1c5de51e0195b9be7e0af182`.
-- **KCOG-00A / first containment** is [PR #864](https://github.com/agustealo/AI-Karen/pull/864), exact head `de689975a1fb661bb92df5fd1bbf4cdc6b0e5d25`, **OPEN / CI pending**, no merge or runtime acceptance claimed.
-- Verified exact-head **Cognitive Proof** and **Reasoning Smoke** checks passed in the initial observation. Other required checks remained in progress when recorded; refresh GitHub before acting.
-- GitHub Issues are disabled on this repository (creation returned HTTP 410). This versioned wiki and PR descriptions are the sprint tracker.
+- Wiki #863 merged to main `c18b3dfe3376a02e1c5de51e0195b9be7e0af182`.
+- First KCOG-00A containment #864 merged to main `2d8b0171b9f37f4eb1e2b32290b51d3ec36c916d`, all exact-head checks green.
+- Documentation checkpoint #866 merged `724edec8ec12425bc193510270e6bdbb04677f30` and post-merge Main Quality green at inspection.
+- KCOG-00A2 #868 (**OPEN**) head `92f10a63aee39735f8e4e2dca0423b9521eb2c67`: replace fabricated causal numerical effects with explicit abstention; First-Boot still pending at the recorded inspection.
+- KCOG-00B1 #869 (**OPEN**) head `6d3ccda84bf8495b0fc7080b42d480bd5e0cfb0b`: distinguish unknown calibration and attribution from zero; exact-head CI still pending.
+- GitHub Issues are disabled (HTTP 410); this wiki and PR descriptions retain sprint continuity. Verify live CI before acting.
+- **No claims yet** of validated causal-effect estimation, calibrated metacognition, specialist competence gain, or cross-task transfer.
 
 ## Scope, product acceptance and exit
 

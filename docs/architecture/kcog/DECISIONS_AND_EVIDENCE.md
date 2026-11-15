@@ -28,6 +28,12 @@
 | Date | Task | SHA / PR | Evidence | Status |
 | --- | --- | --- | --- | --- |
 | 2026-11-15 | KCOG wiki foundation | PR #863; main `c18b3dfe3376a02e1c5de51e0195b9be7e0af182` | Main Quality green at wiki exact head; GitHub merge reported success | MERGED; postmerge proof separate |
-| 2026-11-15 | KCOG-00A initial safety guard | PR #864; `de689975a1fb661bb92df5fd1bbf4cdc6b0e5d25` | Cognitive Proof + Reasoning Smoke green at initial inspection; remaining CI and runtime proof pending | IMPLEMENTING / NOT MERGED |
+| 2026-11-15 | KCOG-00A initial safety guard | PR #864; merged `2d8b0171b9f37f4eb1e2b32290b51d3ec36c916d` | All exact-head CI green including Cognitive Proof, Main Quality, Reasoning Smoke, Production First-Boot | MERGED, cognitive runtime acceptance still separate |
+
+| 2026-11-15 | KCOG S1 continuity checkpoint | PR #866; merged `724edec8ec12425bc193510270e6bdbb04677f30` | Exact-head and post-merge Main Quality green at inspection | MERGED |
+| 2026-11-15 | KCOG-00A2 identified causal inference containment | PR #868; head `92f10a63aee39735f8e4e2dca0423b9521eb2c67` | Cognitive Proof, Reasoning Smoke, Main Quality, Backend, Frontend and classifier green in latest inspection; First-Boot pending | OPEN, not merged |
+| 2026-11-15 | KCOG-00B1 truth semantics | PR #869; head `6d3ccda84bf8495b0fc7080b42d480bd5e0cfb0b` | Cognitive Proof and Reasoning Smoke green in latest inspection; remaining CI pending | OPEN, not merged |
+
+**Non-closure:** these safety slices do not implement causal identification, independently verified calibration or cross-domain transfer. A future real-model runtime trial is still required.
 
 Do not overwrite evidence when an earlier claim is corrected. Add a dated reconciliation entry with links and reason.

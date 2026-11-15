@@ -2,14 +2,16 @@
 
 > This is the primary cross-session handoff. Update after each slice and when a blocker changes the safe next action.
 
-## Current snapshot (initial wiki, 2026-11-15)
+## Current snapshot (S1 checkpoint, 2026-11-15)
 
-- **Baseline:** `272e23c4b5879771294e46c2d205e3b6f3909050` on `main` at wiki creation.
-- **Document status:** first review candidate, not merged until PR and exact-head checks are verified.
-- **Implementation status:** KCOG-00A first safety-containment candidate in [PR #864](https://github.com/agustealo/AI-Karen/pull/864), head `de689975a1fb661bb92df5fd1bbf4cdc6b0e5d25`; CI in progress, no merge/runtime acceptance yet.
-- **Known source-level hazards:** see [Capability Integrity](CAPABILITY_INTEGRITY.md).
-- **CI:** wiki [PR #863](https://github.com/agustealo/AI-Karen/pull/863) passed Main Quality and merged on main; code PR #864 had Cognitive Proof and Reasoning Smoke passing while other required checks remained pending when recorded. Refresh exact-head checks before merge.
-- **Runtime acceptance:** not completed for this sprint.
+- **Wiki and navigation:** [PR #863](https://github.com/agustealo/AI-Karen/pull/863) merged to `main` as `c18b3dfe3376a02e1c5de51e0195b9be7e0af182`.
+- **KCOG-00A first containment:** [PR #864](https://github.com/agustealo/AI-Karen/pull/864) passed every exact-head check and merged as `2d8b0171b9f37f4eb1e2b32290b51d3ec36c916d`.
+- **Continuity checkpoint:** [PR #866](https://github.com/agustealo/AI-Karen/pull/866) passed exact-head checks and merged as `724edec8ec12425bc193510270e6bdbb04677f30`. Post-merge Main Quality on this commit was green at inspection.
+- **KCOG-00A2 causal effects/counterfactuals:** [PR #868](https://github.com/agustealo/AI-Karen/pull/868), head `92f10a63aee39735f8e4e2dca0423b9521eb2c67`, OPEN / exact-head CI pending. The proposal abstains instead of emitting guessed causal effects, scenario probabilities or responsibility scores.
+- **KCOG-00B1 calibration/attribution:** [PR #869](https://github.com/agustealo/AI-Karen/pull/869), head `6d3ccda84bf8495b0fc7080b42d480bd5e0cfb0b`, OPEN / exact-head CI pending. The proposal distinguishes unknown error and unidentified causal contribution from numerical zero.
+- **Current verified production claim:** no real deployed causal inference, independent metacognitive calibration or cognitive improvement benchmark has been accepted as part of this sprint.
+- **Next:** verify all PR checks, merge green exact heads, then audit causal strategy reachability and tackle typed metacognitive evidence. Never fabricate success or merge against failed/pending required gates.
+- **Sprint tracker:** GitHub Issues are disabled; use this versioned wiki and linked PRs.
 
 ## Every new session starts here
 
