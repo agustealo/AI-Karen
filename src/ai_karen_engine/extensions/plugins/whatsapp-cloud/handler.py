@@ -79,6 +79,7 @@ class MainExtension(ExtensionBase):
             not isinstance(token, str) or not _ACCESS_TOKEN.fullmatch(token)
             or not isinstance(secret, str) or len(secret) < 16 or len(secret) > 512
             or not isinstance(phone_id, str) or not _PHONE_ID.fullmatch(phone_id)
+            or phone_id != connection.provider_account_id
             or not isinstance(version, str) or not _GRAPH_VERSION.fullmatch(version)
         ):
             raise PermissionError("WhatsApp credentials or Graph API version invalid")
