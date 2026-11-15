@@ -678,6 +678,23 @@ class CredentialVaultService(BaseService):
             "revision": revision,
         }
 
+    @staticmethod
+    def _plugin_effective_credential_status(
+        *, status: str, expires_at: datetime | None, secret_count: int
+    ) -> str:
+        """Project credential usability, including expiry, without disclosing secrets."""
+        if status != CredentialStatus.ACTIVE.value:
+            return status
+        if expires_at is not None:
+            if (
+                not isinstance(expires_at, datetime)
+                or expires_at.tzinfo is None
+                or expires_at.utcoffset() is None
+                or expires_at <= datetime.now(timezone.utc)
+            ):
+                return "expired"
+        return CredentialStatus.ACTIVE.value if secret_count == 1 else "unavailable"
+
     async def list_plugin_credential_status(
         self,
         *,
@@ -725,8 +742,18 @@ class CredentialVaultService(BaseService):
                 )
                 if provider is None or credential.provider_id != provider.id:
                     raise PluginCredentialDenied("Plugin credential binding integrity denied")
-                if credential.status == CredentialStatus.ACTIVE.value:
-                    # EXISTS projection does not return secret contents.
+                # Expired credentials cannot satisfy plugin execution readiness.
+                # Do not inspect secret contents; count only the scoped binding.
+                secret_count = 0
+                if credential.status == CredentialStatus.ACTIVE.value and (
+                    credential.expires_at is None
+                    or (
+                        isinstance(credential.expires_at, datetime)
+                        and credential.expires_at.tzinfo is not None
+                        and credential.expires_at.utcoffset() is not None
+                        and credential.expires_at > datetime.now(timezone.utc)
+                    )
+                ):
                     count = await session.execute(
                         text(
                             "SELECT count(*) FROM public.credential_secrets "
@@ -740,12 +767,12 @@ class CredentialVaultService(BaseService):
                             "field_key": slot.field_key,
                         },
                     )
-                    status = (
-                        CredentialStatus.ACTIVE.value
-                        if count.scalar_one() == 1 else "unavailable"
-                    )
-                else:
-                    status = str(credential.status)
+                    secret_count = count.scalar_one()
+                status = self._plugin_effective_credential_status(
+                    status=str(credential.status),
+                    expires_at=credential.expires_at,
+                    secret_count=secret_count,
+                )
                 result[slot.field_key] = self._plugin_secret_receipt(
                     status=status, revision=int(slot.revision),
                 )

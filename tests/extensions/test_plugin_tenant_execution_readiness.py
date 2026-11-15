@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
 from ai_karen_engine.services import plugin_service as service_module
 from ai_karen_engine.services.plugin_service import PluginService
+from ai_karen_engine.services.identity_vault.credential_vault_service import CredentialVaultService
 
 
 TENANT = "29f650a6-2c7f-4b22-b8ee-9b393ad7618d"
@@ -142,3 +144,25 @@ async def test_configuration_readiness_does_not_query_storage_for_legacy_plugin(
         "tenant-ready", TENANT
     ) is None
     service._settings_repository.get.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("status", "expires_at", "secret_count", "expected"),
+    [
+        ("active", None, 1, "active"),
+        ("active", None, 0, "unavailable"),
+        ("active", None, 2, "unavailable"),
+        ("revoked", None, 1, "revoked"),
+        ("active", datetime.now(timezone.utc) - timedelta(days=1), 1, "expired"),
+        ("active", datetime.now(timezone.utc), 1, "expired"),
+        ("active", datetime.now(timezone.utc) + timedelta(days=1), 1, "active"),
+        ("active", datetime.now(timezone.utc).replace(tzinfo=None), 1, "expired"),
+    ],
+)
+def test_plugin_vault_status_never_reports_expired_or_invalid_secret_as_active(
+    status, expires_at, secret_count, expected
+):
+    result = CredentialVaultService._plugin_effective_credential_status(
+        status=status, expires_at=expires_at, secret_count=secret_count
+    )
+    assert result == expected
