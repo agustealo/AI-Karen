@@ -198,6 +198,7 @@ def test_denied_memory_evidence_cannot_induce_verification() -> None:
 
     assert result.reasoning_modes == []
     assert result.cognitive_state.meta.status == "unassessed"
+    assert result.cognitive_state.context.selected_count == 0
     assert "memory.read" in result.forbidden_capabilities
 
 

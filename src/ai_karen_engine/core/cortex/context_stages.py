@@ -124,6 +124,25 @@ def build_context_requirements(
     )
 
 
+def scoped_authorized_evidence_ids(cognitive_context: CognitiveContext) -> list[str]:
+    """Select only evidence from resolved, policy-authorized identity scope."""
+    allowed = (
+        set(cognitive_context.authorized_sources)
+        - set(cognitive_context.denied_sources)
+        - set(cognitive_context.unresolved_sources)
+    )
+    return sorted({
+        item.evidence_id
+        for item in cognitive_context.evidence
+        if item.evidence_id
+        and item.source.value in allowed
+        and item.scope is not None
+        and item.scope.tenant_id == cognitive_context.tenant_id
+        and item.scope.user_id == cognitive_context.user_id
+        and item.provenance.resolver_id
+    })
+
+
 def scoped_conflict_evidence_ids(cognitive_context: CognitiveContext) -> list[str]:
     """Recognize explicitly linked source-reported conflicts in governed evidence.
 
@@ -132,31 +151,18 @@ def scoped_conflict_evidence_ids(cognitive_context: CognitiveContext) -> list[st
     causation, certainty, or to expand evidence access. Require both linked
     evidence items to be in an authorized, resolved, identity-scoped source.
     """
-    allowed = (
-        set(cognitive_context.authorized_sources)
-        - set(cognitive_context.denied_sources)
-        - set(cognitive_context.unresolved_sources)
-    )
-    scoped = {
-        item.evidence_id: item
-        for item in cognitive_context.evidence
-        if item.evidence_id
-        and item.source.value in allowed
-        and item.scope is not None
-        and item.scope.tenant_id == cognitive_context.tenant_id
-        and item.scope.user_id == cognitive_context.user_id
-        and item.provenance.resolver_id
-    }
-    return sorted(
+    scoped = set(scoped_authorized_evidence_ids(cognitive_context))
+    return sorted({
         item.evidence_id
-        for item in scoped.values()
-        if item.contradiction.status is EvidenceContradictionStatus.CONFIRMED
+        for item in cognitive_context.evidence
+        if item.evidence_id in scoped
+        and item.contradiction.status is EvidenceContradictionStatus.CONFIRMED
         and item.contradiction.resolution_ref is None
         and any(
             evidence_id != item.evidence_id and evidence_id in scoped
             for evidence_id in item.contradiction.conflicting_evidence_ids
         )
-    )
+    })
 
 
 def finalize_decision_with_context(
@@ -290,4 +296,4 @@ def finalize_decision_with_context(
     )
 
 
-__all__ = ["build_context_requirements", "finalize_decision_with_context", "scoped_conflict_evidence_ids"]
+__all__ = ["build_context_requirements", "finalize_decision_with_context", "scoped_authorized_evidence_ids", "scoped_conflict_evidence_ids"]

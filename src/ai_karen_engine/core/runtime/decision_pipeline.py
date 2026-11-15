@@ -28,6 +28,7 @@ from ai_karen_engine.core.context.contracts import CognitiveContext, ContextRequ
 from ai_karen_engine.core.cortex.context_stages import (
     build_context_requirements,
     finalize_decision_with_context,
+    scoped_authorized_evidence_ids,
     scoped_conflict_evidence_ids,
 )
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
@@ -122,7 +123,7 @@ class RuntimeDecisionPipeline:
             conversation_id=ctx.conversation_id,
             context=ContextSnapshot(
                 plan_id=cognitive_context.context_id,
-                selected_count=len(cognitive_context.evidence),
+                selected_count=len(scoped_authorized_evidence_ids(cognitive_context)),
                 policy_version=cognitive_context.policy_version or decision.policy_version,
                 metadata={
                     "authorized_sources": list(cognitive_context.authorized_sources),
