@@ -450,7 +450,9 @@ class ConsumerModelKeyReceipt(BaseModel):
     provider: str
     status: str
     masked_hint: Optional[str] = None
-    # Storage is not a grant to run an external model.
+    chat_consent_enabled: bool = False
+    chat_consent_model_id: Optional[str] = None
+    # Storage or consent is not a grant to run an external model.
     runtime_authorized: bool = False
 
 
@@ -593,11 +595,30 @@ async def provision_consumer_model_key_provider(
 
 
 def _consumer_key_receipt(record: Any, provider: str) -> ConsumerModelKeyReceipt:
+    """Show saved owner consent distinctly from the unavailable execution grant."""
+    metadata = getattr(record, "credential_metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    consent = metadata.get("personal_model_chat_consent")
+    selected_model = (
+        consent.get("model_id")
+        if isinstance(consent, dict) and consent.get("enabled") is True
+        else None
+    )
+    if (
+        not isinstance(selected_model, str)
+        or not selected_model
+        or selected_model != selected_model.strip()
+        or selected_model == "auto"
+        or len(selected_model) > 255
+    ):
+        selected_model = None
     return ConsumerModelKeyReceipt(
         id=record.id,
         provider=provider,
         status=str(getattr(record.status, "value", record.status)),
         masked_hint=record.masked_hint,
+        chat_consent_enabled=selected_model is not None,
+        chat_consent_model_id=selected_model,
         runtime_authorized=False,
     )
 
