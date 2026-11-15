@@ -52,7 +52,7 @@ src/ui_launchers/Karen-AI-Theme/src/
 
 ## Which documentation is authoritative?
 
-1. [PROJECT_DEV_MANIFEST.md](../../PROJECT_DEV_MANIFEST.md) is the
+1. [PROJECT_DEV_MANIFEST.md](../development/PROJECT_DEV_MANIFEST.md) is the
    platform-wide architectural rulebook.
 2. [Development architecture authority](../development/ARCHITECTURE_AUTHORITY.md)
    defines cross-subsystem responsibilities.
