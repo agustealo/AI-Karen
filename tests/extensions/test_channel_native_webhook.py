@@ -163,8 +163,10 @@ def isolated_app(ingress=None):
 
 def test_native_webhook_path_exemption_is_strict():
     assert is_native_channel_webhook_path(NATIVE, "POST")
+    assert is_native_channel_webhook_path(NATIVE, "GET")
     for path, method in [
-        (NATIVE, "GET"),
+        (NATIVE, "DELETE"),
+        (NATIVE, "PUT"),
         (NATIVE + "/", "POST"),
         ("/api/channels/webhooks/" + TENANT + "/arbitrary", "POST"),
         ("/api/channels/webhooks/" + TENANT + "/" + CONNECTION + "/execute", "POST"),
@@ -252,3 +254,106 @@ def test_global_auth_allows_only_exact_native_post_without_session(monkeypatch):
         assert unsigned_admin.status_code == 401
     authentication.assert_awaited_once()
     repo.admit_verified_inbound.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_subscription_host_requires_exact_installed_active_connection():
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+
+    conn = ChannelConnection(
+        tenant_id=TENANT, connection_id=CONNECTION,
+        installation_id="whatsapp-cloud",
+        provider_account_id="10987654321",
+        credential_handle="vault://reference",
+        revision=1, enabled=True,
+    )
+    adapter = SimpleNamespace(
+        verify_subscription=AsyncMock(return_value=True),
+    )
+    repo = SimpleNamespace(
+        get_enabled_connection=AsyncMock(return_value=conn),
+    )
+    kernel = SimpleNamespace(
+        get_channel_activation_manifest=lambda name: (
+            object() if name == "whatsapp-cloud" else None
+        ),
+        is_canonical_channel_adapter=lambda name, obj: (
+            name == "whatsapp-cloud" and obj is adapter
+        ),
+    )
+    host = object.__new__(ChannelHostServices)
+    host._initialized = True
+    host._closed = False
+    host.repository = repo
+    host.kernel = kernel
+    host._installed = {"whatsapp-cloud": adapter}
+
+    assert await host.verify_native_webhook_subscription(
+        tenant_id=TENANT, connection_id=CONNECTION,
+        verify_token="verified-subscriber-token",
+    ) is True
+    adapter.verify_subscription.assert_awaited_once_with(
+        connection=conn, verify_token="verified-subscriber-token",
+    )
+    repo.get_enabled_connection.return_value = None
+    with pytest.raises(PermissionError):
+        await host.verify_native_webhook_subscription(
+            tenant_id=TENANT, connection_id=CONNECTION,
+            verify_token="verified-subscriber-token",
+        )
+    adapter.verify_subscription.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("url_suffix", "expected_code"),
+    [
+        ("", 503),
+        ("?hub.mode=invalid&hub.verify_token=known-token&hub.challenge=1234", 403),
+        ("?hub.mode=subscribe&hub.verify_token=bad&hub.challenge=1234", 403),
+        ("?hub.mode=subscribe&hub.verify_token=known-token&hub.challenge=bad-value", 403),
+        ("?hub.mode=subscribe&hub.verify_token=known-token&hub.challenge=1234", 503),
+    ],
+)
+def test_subscription_challenge_fail_closed_without_host(
+    url_suffix, expected_code,
+):
+    with TestClient(isolated_app()) as client:
+        response = client.get(NATIVE + url_suffix)
+    assert response.status_code == expected_code
+    assert "known-token" not in response.text
+
+
+def test_subscription_challenge_echoes_only_after_host_verification():
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+
+    host = object.__new__(ChannelHostServices)
+    host.verify_native_webhook_subscription = AsyncMock(return_value=True)
+    app = isolated_app()
+    app.state.channel_host_services = host
+
+    with TestClient(app) as client:
+        valid = client.get(
+            NATIVE,
+            params={
+                "hub.mode": "subscribe",
+                "hub.verify_token": "meta-verify-token-123",
+                "hub.challenge": "123456789",
+            },
+        )
+        invalid = client.get(
+            NATIVE,
+            params={
+                "hub.mode": "subscribe",
+                "hub.verify_token": "bad",
+                "hub.challenge": "987654321",
+            },
+        )
+    assert valid.status_code == 200
+    assert valid.text == "123456789"
+    assert valid.headers["content-type"].startswith("text/plain")
+    assert valid.headers["cache-control"] == "no-store"
+    assert invalid.status_code == 403
+    host.verify_native_webhook_subscription.assert_awaited_once_with(
+        tenant_id=TENANT, connection_id=CONNECTION,
+        verify_token="meta-verify-token-123",
+    )
