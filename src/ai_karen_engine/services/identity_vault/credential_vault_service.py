@@ -1407,7 +1407,10 @@ class CredentialVaultService(BaseService):
                     ProviderDefinition.is_system.is_(True),
                     ProviderDefinition.enabled.is_(True),
                     ProviderDefinition.provider_type == ProviderType.API_KEY.value,
-                    ProviderDefinition.config == {"managed_for": "model_api_key"},
+                    # JSON (not JSONB) has no equality operator in PostgreSQL.
+                    # Compare the canonical managed-for marker as extracted text.
+                    ProviderDefinition.config["managed_for"].as_string()
+                    == "model_api_key",
                     or_(
                         Credential.expires_at.is_(None),
                         Credential.expires_at > datetime.now(timezone.utc),
