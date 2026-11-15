@@ -742,6 +742,7 @@ describe('KOC-05 read-only retirement evidence review', () => {
     { unresolved_pairing: false },
     { deletion_request_recorded: false },
     { unverified_deletion_request: false },
+    { deletion_request_recorded: false, unverified_deletion_request: true },
     { inbox_not_completed: true },
     { outbound_not_confirmed: false },
     { retirement_assessment: {
@@ -807,15 +808,16 @@ describe('KOC-05 read-only retirement evidence review', () => {
     expect(apiClient.post).not.toHaveBeenCalled();
   });
 
-  it('stays blocked even when every local observation appears complete', async () => {
+  it('stays blocked when local transport is quiet but deletion lacks independent proof', async () => {
     const localComplete = {
       ...evidence,
       unresolved_pairing: false,
-      unverified_deletion_request: false,
+      unverified_deletion_request: true,
       outbound_not_confirmed: false,
       retirement_assessment: {
         ...evidence.retirement_assessment,
         blocking_reasons: [
+          'credential_deletion_requests_unverified',
           'provider_unlink_independent_verification_unavailable',
           'credential_erasure_independent_verification_unavailable',
           'retention_and_backup_scope_verification_unavailable',
@@ -834,6 +836,7 @@ describe('KOC-05 read-only retirement evidence review', () => {
     }));
     expect(await screen.findByText('Final cleanup: blocked')).toBeTruthy();
     expect(screen.getByText('Governed final cleanup is unavailable')).toBeTruthy();
+    expect(screen.getByText('Credential-deletion request remains unverified')).toBeTruthy();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.delete).not.toHaveBeenCalled();
   });

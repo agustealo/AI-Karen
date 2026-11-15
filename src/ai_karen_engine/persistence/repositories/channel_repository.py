@@ -571,7 +571,9 @@ class SqlChannelRepository:
                                WHERE d.tenant_id = c.tenant_id
                                  AND d.connection_id = c.connection_id
                                  AND d.user_id = o.user_id
-                                 AND d.status <> 'verified'
+                                 -- No independent erasure verifier is installed.
+                                 -- Even legacy 'verified' labels have no
+                                 -- source-authenticated attestation in this ledger.
                            ) AS unverified_deletion_request,
                            EXISTS (
                                SELECT 1 FROM public.channel_inbox i

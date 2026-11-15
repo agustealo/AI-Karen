@@ -777,7 +777,10 @@ function parseRetirementEvidence(value: unknown): PersonalRetirementEvidence[] {
       row.connection_id.length > 256 || seen.has(row.connection_id) ||
       typeof row.connection_revision !== 'number' ||
       !Number.isSafeInteger(row.connection_revision) || row.connection_revision < 1 ||
-      booleanFields.some((field) => typeof row[field] !== 'boolean')
+      booleanFields.some((field) => typeof row[field] !== 'boolean') ||
+      row.deletion_request_recorded !== row.unverified_deletion_request ||
+      (row.credential_deletion_claim_recorded === true &&
+        row.deletion_request_recorded !== true)
     ) {
       throw new Error('Incomplete retirement evidence');
     }
@@ -936,7 +939,7 @@ function PersonalRetirementEvidenceReview({ authenticated }: { authenticated: bo
               <p className="text-xs">
                 {record.unverified_deletion_request
                   ? 'Credential deletion request not verified'
-                  : 'No pending unverified request observed'}
+                  : 'No credential-deletion request awaiting independent verification observed'}
               </p>
               <p className="text-xs">
                 {record.inbox_not_completed
