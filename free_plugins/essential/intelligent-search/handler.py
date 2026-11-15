@@ -3,6 +3,12 @@ from typing import Any, Dict
 
 from ai_karen_engine.services.tooling.internet_capability_service import (
     InternetCapabilityService,
+    InternetExecutionContext,
+)
+from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+from ai_karen_engine.services.database.repositories.repository_factory import (
+    get_runtime_search_article_service,
 )
 
 from ai_karen_engine.extensions.platform.core.host.base import (
@@ -63,7 +69,9 @@ class WebSearchDispatcher(ExtensionBase):
             # Search provider defaults/configuration are owned by the canonical
             # search registry plus central runtime config. Do not create a
             # second provider-config authority from legacy manifest metadata.
-            self._internet_service = InternetCapabilityService()
+            self._internet_service = InternetCapabilityService(
+                article_service=get_runtime_search_article_service()
+            )
 
             # Pre-initialize handlers to set up search clients
             for mode, handler_class in MODE_HANDLER_MAP.items():
@@ -110,11 +118,20 @@ class WebSearchDispatcher(ExtensionBase):
 
     def get_status(self) -> Dict[str, Any]:
         """Return the current status of the extension."""
+        initialized = bool(self._handlers)
+        all_modes_ready = len(self._handlers) == len(MODE_HANDLER_MAP)
+        internet_ready = self._internet_service is not None
         return {
-            "status": "healthy",
-            "initialized": True,
+            "status": (
+                "ready" if all_modes_ready and internet_ready
+                else "degraded" if initialized else "unavailable"
+            ),
+            "initialized": initialized,
             "version": getattr(self.manifest, "version", "unknown"),
             "handler_count": len(self._handlers),
+            "expected_handler_count": len(MODE_HANDLER_MAP),
+            "internet_service_initialized": internet_ready,
+            "live_search_verified": False,
         }
 
     async def execute_hook(
@@ -134,13 +151,19 @@ class WebSearchDispatcher(ExtensionBase):
         payload = self._extract_hook_payload(context)
         result = await self.run(self._extract_params(payload))
         return {
-            "success": bool(result.get("can_execute", False) or result.get("sources")),
+            "success": bool(
+                result.get("success") is not False
+                and result.get("status") != "error"
+                and (result.get("can_execute", False) or result.get("sources"))
+            ),
             "hook_point": hook_point.value,
             "result": result,
             "mode": result.get("mode"),
         }
 
-    async def run(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(
+        self, params: Dict[str, Any], execution_context: ExtensionExecutionContext | None = None
+    ) -> Dict[str, Any]:
         safe_params = params or {}
         query = safe_params.get("query", "") or ""
         context = safe_params.get("context", {}) or {}
@@ -163,6 +186,21 @@ class WebSearchDispatcher(ExtensionBase):
 
             if self._internet_service:
                 try:
+                    # Only the canonical executor's typed context may carry
+                    # user, tenant and permission authority into search.
+                    trusted_context = (
+                        InternetExecutionContext(
+                            user_id=execution_context.user_id,
+                            tenant_id=execution_context.tenant_id,
+                            session_id=execution_context.session_id,
+                            conversation_id=execution_context.conversation_id,
+                            correlation_id=execution_context.correlation_id,
+                            request_id=execution_context.request_id,
+                            permissions=tuple(execution_context.allowed_capabilities),
+                        )
+                        if isinstance(execution_context, ExtensionExecutionContext)
+                        else None
+                    )
                     internet_result = await self._internet_service.execute(
                         query,
                         config_override={
@@ -170,29 +208,56 @@ class WebSearchDispatcher(ExtensionBase):
                             "mode": mode,
                             "requested_mode": mode,
                         },
+                        context=trusted_context,
                     )
+                    if internet_result.get("status") == "error" or internet_result.get("success") is False:
+                        internet_result["can_execute"] = False
+                        internet_result["success"] = False
+                        internet_result.setdefault("sources", [])
+                        internet_result.setdefault("results", [])
+                        return internet_result
+
                     if internet_result.get("sources") or internet_result.get("results"):
                         internet_result.setdefault("mode", mode)
                         internet_result["can_execute"] = True
-                        internet_result.setdefault("provider", "crawl4ai")
+                        internet_result.setdefault("provider", "unknown")
                         internet_result.setdefault("results", [])
                         internet_result.setdefault("sources", [])
                         internet_result.setdefault("extractedData", None)
                         metadata = internet_result.get("metadata")
                         if isinstance(metadata, dict):
-                            metadata.setdefault("provider", "crawl4ai")
+                            metadata.setdefault("provider", "unknown")
                         return internet_result
 
                     self.logger.info(
                         "InternetCapabilityService returned no live results for mode %s",
                         mode,
                     )
+                    # A strategy-only handler is not a live search fallback.
+                    # Preserve the real diagnostics and expose the empty result.
+                    internet_result["can_execute"] = False
+                    internet_result["success"] = False
+                    internet_result.setdefault("sources", [])
+                    internet_result.setdefault("results", [])
+                    internet_result.setdefault("status", "no_results")
+                    return internet_result
                 except Exception as exc:
                     self.logger.warning(
                         "InternetCapabilityService failed for mode %s",
                         mode,
                         extra={"error": str(exc), "query": query},
                     )
+                    return {
+                        "success": False,
+                        "can_execute": False,
+                        "status": "error",
+                        "error": str(exc),
+                        "plugin_id": self._get_manifest_id(),
+                        "mode": mode,
+                        "query": query,
+                        "sources": [],
+                        "results": [],
+                    }
 
             result = await handler.execute(prepared, query)
             result.setdefault("mode", mode)
@@ -217,17 +282,36 @@ class WebSearchDispatcher(ExtensionBase):
     def _resolve_mode(self, params: Dict[str, Any]) -> str:
         mode = params.get("mode")
 
-        if mode:
-            normalized = mode.lower().replace("-", "_")
-            if normalized in MODE_HANDLER_MAP:
-                return normalized
+        if mode == "auto":
+            mode = None
+
+        if mode is not None:
+            # Explicit selection is a request contract, not a hint. Reject
+            # unsupported modes rather than silently executing General search.
+            return (
+                mode.strip().lower().replace("-", "_")
+                if isinstance(mode, str) and mode.strip()
+                else "invalid_explicit_mode"
+            )
 
         if "context" in params and isinstance(params["context"], dict):
             context_mode = params["context"].get("mode")
-            if context_mode:
-                normalized = context_mode.lower().replace("-", "_")
-                if normalized in MODE_HANDLER_MAP:
-                    return normalized
+            if context_mode == "auto":
+                context_mode = None
+            if context_mode is not None:
+                return (
+                    context_mode.strip().lower().replace("-", "_")
+                    if isinstance(context_mode, str) and context_mode.strip()
+                    else "invalid_explicit_mode"
+                )
+
+        # With no explicit user-selected mode, reuse CORTEX's canonical
+        # capability decision rather than a second plugin keyword classifier.
+        # Only modes this plugin can execute are translated here. Other
+        # capabilities remain under their own runtime execution authority.
+        decision = resolve_capability_decision(str(params.get("query") or ""))
+        if decision.intent == "search.weather":
+            return "weather"
 
         manifest_default = self._read_manifest_setting("default_mode")
         if manifest_default:
