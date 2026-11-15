@@ -15,7 +15,8 @@ This directory contains the current developer-facing architecture and engineerin
 - [`CORTEX_RUNTIME.md`](CORTEX_RUNTIME.md) — CORTEX decision authority, ChatRuntime execution authority, cognitive contracts, assistant profile boundaries.
 - [`MEMORY.md`](MEMORY.md) — STM, episodic, LTM, NeuroRecall, NeuroVault, PostgreSQL/Supabase, Redis, scope/governance.
 - [`REASONING_LANGGRAPH_MEDUSA.md`](REASONING_LANGGRAPH_MEDUSA.md) — canonical reasoning, LangChain usage rules, LangGraph boundaries, AgentMedusa topology.
-- [`EXTENSIONS_TOOLS.md`](EXTENSIONS_TOOLS.md) — extension manifests, permissions, ActionExecutionGate, credentials, lifecycle and APIs.
+- [`EXTENSIONS_TOOLS.md`](EXTENSIONS_TOOLS.md) — extension policy and platform authority boundaries.
+- [`../plugins/README.md`](../plugins/README.md) — canonical plugin developer wiki: full plugin implementation, manifests, prompt contracts, installation, settings/Vault, UI, VoiceRuntime, tests and release operations.
 - [`OLLAMA.md`](OLLAMA.md) — optional Ollama adapter contract, explicit enablement, health/readiness boundary, and remaining config debt.
 - [`SECURITY_OBSERVABILITY.md`](SECURITY_OBSERVABILITY.md) — auth/RBAC/tenant/security rules, telemetry, metrics, health/readiness, degraded truth.
 - [`REPOSITORY_ENGINEERING.md`](REPOSITORY_ENGINEERING.md) — file/folder rules, DRY methodology, cleanup classification, configuration, deletion process.
