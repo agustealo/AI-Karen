@@ -34,7 +34,8 @@ export type VerifiedHistoryParts = ReadonlyMap<string, readonly VerifiedPart[]>;
 const ALLOWED_RECEIPT = new Set([
   "requested_provider", "requested_model", "actual_provider", "actual_model",
   "response_source", "runtime_engine", "degradation_reason",
-  "degraded_mode", "fallback_level",
+  "degraded_mode", "fallback_level", "persona_id",
+  "persona_selection_revision",
 ]);
 const ALLOWED_INTEGRITY = new Set([
   "output_truncated", "cortex_intent", "personal_recall_grounded", "evidence_source",
@@ -50,6 +51,21 @@ function validReceipt(value: unknown): value is Record<string, unknown> {
     if (typeof value[key] !== "string" ||
         !(value[key] as string).trim() || (value[key] as string).length > 200) return false;
   }
+  // The runtime emits persona evidence only as a pair of a bounded
+  // identifier and its nonnegative, JS-safe revision. A legitimate completed
+  // run must not become unreplayable just because persona metadata exists.
+  // Never use these fields to select a persona or grant runtime authority.
+  const personaIdentity = Object.hasOwn(value, "persona_id");
+  const personaRevision = Object.hasOwn(value, "persona_selection_revision");
+  if (personaIdentity !== personaRevision) return false;
+  if (personaIdentity && (
+    typeof value.persona_id !== "string" ||
+    !value.persona_id.trim() ||
+    value.persona_id.length > 128 ||
+    typeof value.persona_selection_revision !== "number" ||
+    !Number.isSafeInteger(value.persona_selection_revision) ||
+    value.persona_selection_revision < 0
+  )) return false;
   // An automatic request has no explicitly requested provider or model.
   // Healthy responses may have no degradation reason or fallback level.
   // Null means absent for these optional fields, never for executor identity.
@@ -57,7 +73,7 @@ function validReceipt(value: unknown): value is Record<string, unknown> {
     "requested_provider", "requested_model", "runtime_engine", "degradation_reason",
   ]);
   for (const [key, val] of Object.entries(value)) {
-    if (["degraded_mode", "fallback_level"].includes(key)) continue;
+    if (["degraded_mode", "fallback_level", "persona_selection_revision"].includes(key)) continue;
     if (val === null && nullable.has(key)) continue;
     if (typeof val !== "string" || val.length > 200) return false;
   }
