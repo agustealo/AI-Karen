@@ -137,3 +137,47 @@ async def test_cross_account_and_mismatched_provider_receipt_fail_closed():
     with pytest.raises(PermissionError):
         await adapter.send(connection=other, delivery=delivery())
     assert client.post.await_count == 1
+
+
+def test_whatsapp_manifest_projects_backend_only_channel_not_ui():
+    """An installed channel must never be treated as a missing UI package."""
+    from ai_karen_engine.extensions.platform.core.manager import ExtensionCoreManager
+
+    kernel, _adapter, _account, _resolver, _client = adapter_components()
+    manifest = kernel.loader.load_manifest("whatsapp-cloud")
+    projected = ExtensionCoreManager._extension_capabilities(manifest)
+    assert projected["communication_channel"] is True
+    assert projected["provides_ui"] is False
+    assert projected["provides_webhooks"] is True
+
+    from ai_karen_engine.api_routes.extensions.extensions import ExtensionStatusAPI
+
+    serialized = ExtensionStatusAPI.model_validate(
+        ExtensionCoreManager._status_from_record({
+            "manifest": manifest, "status": "disabled",
+        })
+    ).model_dump()
+    assert serialized["status"] == "disabled"
+    assert serialized["capabilities"]["communication_channel"] is True
+    assert serialized["capabilities"]["provides_ui"] is False
+
+
+def test_non_channel_manifest_does_not_claim_transport_authority():
+    from types import SimpleNamespace
+
+    from ai_karen_engine.extensions.platform.core.manager import ExtensionCoreManager
+
+    generic = SimpleNamespace(capabilities=SimpleNamespace(
+        provides_ui=True,
+        provides_api=False,
+        provides_webhooks=False,
+        provides_background_tasks=False,
+        communication_channel=None,
+    ))
+    assert ExtensionCoreManager._extension_capabilities(generic) == {
+        "provides_ui": True,
+        "provides_api": False,
+        "provides_webhooks": False,
+        "provides_background_tasks": False,
+        "communication_channel": False,
+    }
