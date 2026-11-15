@@ -701,6 +701,7 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
 
     monkeypatch.setattr(runtime_api, "discover_installed_ollama_models", live_inventory)
 
+
     probe_available = True
 
     async def runtime_options() -> list[model_settings.RuntimeOptionPayload]:
