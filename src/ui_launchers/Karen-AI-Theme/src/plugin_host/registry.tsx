@@ -68,6 +68,7 @@ interface BackendPluginEntry {
     provides_api?: boolean;
     provides_background_tasks?: boolean;
     provides_webhooks?: boolean;
+    communication_channel?: boolean;
   };
   /** Whether the plugin has a UI component */
   has_component?: boolean;
@@ -142,6 +143,8 @@ export interface PluginCatalogEntry {
   enabled: boolean;
   /** Whether the plugin declares a GUI component */
   has_gui: boolean;
+  /** Backend-declared communication transport. Older catalog fixtures omit it. */
+  isCommunicationChannel?: boolean;
   /** Whether the plugin passes prompt-first validation */
   promptFirstValid: boolean;
   /** Normalised UI manifest (present when has_gui is true) */
@@ -258,6 +261,7 @@ function normaliseEntry(raw: BackendPluginEntry): PluginCatalogEntry {
     version: raw.version,
     enabled,
     has_gui,
+    isCommunicationChannel: raw.capabilities?.communication_channel === true,
     promptFirstValid: isPromptFirstValid(raw),
     rawStatus: raw.status,
     allowedRoles: raw.rbac?.allowed_roles || [],

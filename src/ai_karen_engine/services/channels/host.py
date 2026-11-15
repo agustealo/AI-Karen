@@ -135,6 +135,45 @@ class ChannelHostServices:
             await self.shutdown()
             raise
 
+    async def verify_native_webhook_subscription(
+        self, *, tenant_id: str, connection_id: str, verify_token: str,
+    ) -> bool:
+        """Check a tenant-bound installed adapter's provider subscription token.
+
+        This is the only host authority for public GET webhook verification.
+        A GET request cannot select an installation, read a Vault reference,
+        grant generic plugin execution, or activate an inactive connection.
+        """
+        if not self._initialized or self._closed:
+            raise PermissionError("Channel subscription host is unavailable")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+        ):
+            raise PermissionError("Channel subscription connection unavailable")
+        adapter = self._installed.get(connection.installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(
+                connection.installation_id
+            ) is None
+            or not self.kernel.is_canonical_channel_adapter(
+                connection.installation_id, adapter
+            )
+        ):
+            raise PermissionError("Channel subscription installation unavailable")
+        verifier = getattr(adapter, "verify_subscription", None)
+        if not callable(verifier):
+            raise PermissionError("Channel adapter does not implement subscription verification")
+        verified = await verifier(
+            connection=connection, verify_token=verify_token,
+        )
+        return verified is True
+
     async def authorize_reference(
         self, *, tenant_id: str, user_id: str, installation_id: str,
         credential_handle: str,

@@ -78,6 +78,12 @@ class ExtensionCoreManager:
 
     @staticmethod
     def _extension_capabilities(manifest: Any) -> Dict[str, bool]:
+        """Project manifest-declared capabilities, not inferred UI/install state.
+
+        Communication adapters remain disabled in generic plugin execution and
+        are governed by ChannelHost per tenant connection. The frontend needs
+        this distinction to avoid presenting a fictitious UI registration fix.
+        """
         capabilities = getattr(manifest, "capabilities", manifest)
         return {
             "provides_ui": bool(getattr(capabilities, "provides_ui", False)),
@@ -87,6 +93,9 @@ class ExtensionCoreManager:
             ),
             "provides_webhooks": bool(
                 getattr(capabilities, "provides_webhooks", False)
+            ),
+            "communication_channel": (
+                getattr(capabilities, "communication_channel", None) is not None
             ),
         }
 

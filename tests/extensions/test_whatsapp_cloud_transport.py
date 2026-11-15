@@ -137,3 +137,102 @@ async def test_cross_account_and_mismatched_provider_receipt_fail_closed():
     with pytest.raises(PermissionError):
         await adapter.send(connection=other, delivery=delivery())
     assert client.post.await_count == 1
+
+
+def test_whatsapp_manifest_projects_backend_only_channel_not_ui():
+    """An installed channel must never be treated as a missing UI package."""
+    from ai_karen_engine.extensions.platform.core.manager import ExtensionCoreManager
+
+    kernel, _adapter, _account, _resolver, _client = adapter_components()
+    manifest = kernel.loader.load_manifest("whatsapp-cloud")
+    projected = ExtensionCoreManager._extension_capabilities(manifest)
+    assert projected["communication_channel"] is True
+    assert projected["provides_ui"] is False
+    assert projected["provides_webhooks"] is True
+
+    from ai_karen_engine.api_routes.extensions.extensions import ExtensionStatusAPI
+
+    serialized = ExtensionStatusAPI.model_validate(
+        ExtensionCoreManager._status_from_record({
+            "manifest": manifest, "status": "disabled",
+        })
+    ).model_dump()
+    assert serialized["status"] == "disabled"
+    assert serialized["capabilities"]["communication_channel"] is True
+    assert serialized["capabilities"]["provides_ui"] is False
+
+
+def test_non_channel_manifest_does_not_claim_transport_authority():
+    from types import SimpleNamespace
+
+    from ai_karen_engine.extensions.platform.core.manager import ExtensionCoreManager
+
+    generic = SimpleNamespace(capabilities=SimpleNamespace(
+        provides_ui=True,
+        provides_api=False,
+        provides_webhooks=False,
+        provides_background_tasks=False,
+        communication_channel=None,
+    ))
+    assert ExtensionCoreManager._extension_capabilities(generic) == {
+        "provides_ui": True,
+        "provides_api": False,
+        "provides_webhooks": False,
+        "provides_background_tasks": False,
+        "communication_channel": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_meta_subscription_handshake_uses_host_vault_token_and_connection_scope():
+    _, adapter, account, resolver, client = adapter_components()
+    resolver.return_value = {
+        **resolver.return_value,
+        "webhook_verify_token": "meta-verify-token-123",
+    }
+    await adapter.start(connection=account)
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="meta-verify-token-123",
+    ) is True
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="different-token-123",
+    ) is False
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="\nmeta-verify-token-123",
+    ) is False
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="wrong",
+    ) is False
+    foreign_account = account.model_copy(update={
+        "provider_account_id": "99999999999",
+    })
+    with pytest.raises(PermissionError):
+        await adapter.verify_subscription(
+            connection=foreign_account, verify_token="meta-verify-token-123",
+        )
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_meta_subscription_does_not_accept_missing_host_secret_or_stale_revision():
+    _, adapter, account, resolver, client = adapter_components()
+    await adapter.start(connection=account)
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="meta-verify-token-123",
+    ) is False
+    stale = account.model_copy(update={"revision": 2})
+    with pytest.raises(PermissionError):
+        await adapter.verify_subscription(
+            connection=stale, verify_token="meta-verify-token-123",
+        )
+    resolver.return_value = {
+        **resolver.return_value,
+        "webhook_verify_token": "meta-verify-token-123",
+    }
+    wrong_phone = account.model_copy(update={"provider_account_id": "99999999999"})
+    adapter._started.add(adapter._key(wrong_phone))
+    with pytest.raises(PermissionError, match="credentials"):
+        await adapter.verify_subscription(
+            connection=wrong_phone, verify_token="meta-verify-token-123",
+        )
+    client.post.assert_not_awaited()
