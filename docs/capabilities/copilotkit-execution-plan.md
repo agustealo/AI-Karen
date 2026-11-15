@@ -725,10 +725,10 @@ canonical projection owner. Never bypass digest, tenant, owner, run
 completion, content-size or presentation validation to silence the UI.
 
 
-## KCON-540 / KCON-901: Browser voice selection and read-aloud, PR #850 (IN_PROGRESS)
+## KCON-540 / KCON-901: Browser voice selection and read-aloud, PR #850 (MERGED_UNVERIFIED)
 
 - 2026-11-15 source candidate `fix/voice-discovery-playback-20261115`: existing `VoiceSettings` now retries voice inventory and reacts to `voiceschanged` and visibility transitions, with truthful empty/unsupported states and explicit preview. Karen's canonical CopilotKit assistant-message slot gains user-click-only read-aloud/stop with browser voice preference, text-only extraction, no autoplay, and cancellation on unmount. No fake backend synthesis, second renderer, hidden vendor STT fallback, or semantic-memory write.
-- Current proof: exact-head CI on `0c797bd4864bbe053a0e028ad89c50fc6bb8e968` found a Radix Select test assertion that incorrectly expected a closed menu's options in the DOM; this branch corrects the test. The backend quality guard also required this existing KCON ledger update. Rerun full frontend/backend-quality, chat burn, presentation integrity and typed build at revised HEAD. User-visible browser audio at 390/768/1024/1440px, account switch and Linux zero/late-voice recovery remain NOT_RUN. Source work must not be promoted to DONE solely by CI.
+- Current proof: exact-head CI on `0c797bd4864bbe053a0e028ad89c50fc6bb8e968` found a Radix Select test assertion that incorrectly expected a closed menu's options in the DOM; this branch corrects the test. The backend quality guard also required this existing KCON ledger update. Source #850 subsequently merged; signed-in real browser/audio acceptance remains NOT_VERIFIED. Rerun full frontend/backend-quality, chat burn, presentation integrity and typed build at revised HEAD. User-visible browser audio at 390/768/1024/1440px, account switch and Linux zero/late-voice recovery remain NOT_RUN. Source work must not be promoted to DONE solely by CI.
 
 
 ## KCON-540 architecture correction: retire misselected Piper (2026-11-15)
