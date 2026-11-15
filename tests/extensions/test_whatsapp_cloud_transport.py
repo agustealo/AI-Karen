@@ -181,3 +181,58 @@ def test_non_channel_manifest_does_not_claim_transport_authority():
         "provides_background_tasks": False,
         "communication_channel": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_meta_subscription_handshake_uses_host_vault_token_and_connection_scope():
+    _, adapter, account, resolver, client = adapter_components()
+    resolver.return_value = {
+        **resolver.return_value,
+        "webhook_verify_token": "meta-verify-token-123",
+    }
+    await adapter.start(connection=account)
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="meta-verify-token-123",
+    ) is True
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="different-token-123",
+    ) is False
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="\nmeta-verify-token-123",
+    ) is False
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="wrong",
+    ) is False
+    foreign_account = account.model_copy(update={
+        "provider_account_id": "99999999999",
+    })
+    with pytest.raises(PermissionError):
+        await adapter.verify_subscription(
+            connection=foreign_account, verify_token="meta-verify-token-123",
+        )
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_meta_subscription_does_not_accept_missing_host_secret_or_stale_revision():
+    _, adapter, account, resolver, client = adapter_components()
+    await adapter.start(connection=account)
+    assert await adapter.verify_subscription(
+        connection=account, verify_token="meta-verify-token-123",
+    ) is False
+    stale = account.model_copy(update={"revision": 2})
+    with pytest.raises(PermissionError):
+        await adapter.verify_subscription(
+            connection=stale, verify_token="meta-verify-token-123",
+        )
+    resolver.return_value = {
+        **resolver.return_value,
+        "webhook_verify_token": "meta-verify-token-123",
+    }
+    wrong_phone = account.model_copy(update={"provider_account_id": "99999999999"})
+    adapter._started.add(adapter._key(wrong_phone))
+    with pytest.raises(PermissionError, match="credentials"):
+        await adapter.verify_subscription(
+            connection=wrong_phone, verify_token="meta-verify-token-123",
+        )
+    client.post.assert_not_awaited()
