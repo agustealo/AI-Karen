@@ -927,11 +927,22 @@ async def test_every_curated_recommended_model_queues_with_verified_license_and_
     from ai_karen_engine.config.config_asset_loaders import load_model_download_recommendations
 
     configured = load_model_download_recommendations()["recommendations"]
-    assert {item["id"] for item in configured} == {
+    ids = {item["id"] for item in configured}
+    assert {
         "spacy-english-core",
         "distilbert-semantic-encoder",
         "qwen3-lightweight-chat",
-    }
+        "pocket-tts-english-18m-refl",
+    } <= ids
+    assert len(ids) == len(configured), "Curated model IDs must be unique"
+    pocket = next(item for item in configured if item["id"] == "pocket-tts-english-18m-refl")
+    spec = json.loads(
+        Path("src/ai_karen_engine/extensions/plugins/pocket-tts/model_spec.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert pocket["revision"] == spec["revision"]
+    assert pocket["channel_id"] == spec["channel_id"] == "plugin_audio"
     repository = FakeModelDownloadRepository()
     service = _service(tmp_path, repository)
     revision = "0123456789abcdef0123456789abcdef01234567"
@@ -943,14 +954,18 @@ async def test_every_curated_recommended_model_queues_with_verified_license_and_
             storage_key="spacy" if item["channel_id"] == "core_spacy" else "transformers",
             license=item["license"],
             gated=False,
-            revision=revision,
+            revision=item.get("revision") or revision,
         )
         for item in configured
     }
 
     async def get_info(model_id: str, *args: object, **kwargs: object) -> ModelInfo:
         assert kwargs.get("refresh_remote") is True
-        assert not args or args[0] in (None, revision)
+        requested = kwargs.get("revision", args[0] if args else None)
+        if model_id == pocket["model_id"]:
+            assert requested == pocket["revision"]
+        else:
+            assert requested in (None, revision)
         return info_by_id[model_id]
 
     service._orchestrator.get_model_info = AsyncMock(side_effect=get_info)
@@ -961,7 +976,8 @@ async def test_every_curated_recommended_model_queues_with_verified_license_and_
     assert results["essential_total"] == 2
     for item in results["recommendations"]:
         assert item["metadata_verified"] is True
-        assert item["resolved_revision"] == revision
+        expected_revision = info_by_id[item["model_id"]].revision
+        assert item["resolved_revision"] == expected_revision
         job = await service.start_download(
             {
                 "model_id": item["model_id"],
@@ -974,13 +990,50 @@ async def test_every_curated_recommended_model_queues_with_verified_license_and_
         )
         assert job["status"] == "queued"
         assert job["model_id"] == item["model_id"]
-        assert job["revision"] == revision
+        assert job["revision"] == expected_revision
         assert job["license_accepted"] is True
         assert job["channel_id"] == item["channel_id"]
         assert job["requested_by"] == "authorized-test-user"
         assert job["include_patterns"] == (item.get("include_patterns") or None)
 
-    assert len(repository.jobs) == 3
+    assert len(repository.jobs) == len(configured)
+
+
+@pytest.mark.asyncio
+async def test_curated_pocket_pin_rejects_mismatched_remote_revision(
+    tmp_path: Path,
+) -> None:
+    from ai_karen_engine.config.config_asset_loaders import load_model_download_recommendations
+
+    curated = load_model_download_recommendations()["recommendations"]
+    pocket = next(item for item in curated if item["id"] == "pocket-tts-english-18m-refl")
+    service = _service(tmp_path, FakeModelDownloadRepository())
+
+    async def get_info(model_id: str, *args: object, **kwargs: object) -> ModelInfo:
+        if model_id != pocket["model_id"]:
+            raise RuntimeError("Other recommendations are not installed in this test")
+        assert kwargs.get("revision", args[0] if args else None) == pocket["revision"]
+        return ModelInfo(
+            model_id=model_id,
+            owner="kyutai",
+            repository="pocket-tts",
+            storage_key="transformers",
+            license="CC-BY-4.0",
+            gated=True,
+            revision="f" * 40,
+        )
+
+    service._orchestrator.get_model_info = AsyncMock(side_effect=get_info)
+    service._orchestrator.snapshot_registry_entry = AsyncMock(return_value=None)
+    recommendations = await service.get_recommendations()
+    item = next(
+        entry for entry in recommendations["recommendations"]
+        if entry["id"] == pocket["id"]
+    )
+    assert item["metadata_verified"] is False
+    assert item["verification_state"] == "unavailable"
+    assert item["resolved_revision"] is None
+    assert item["installed"] is False
 
 
 @pytest.mark.asyncio
