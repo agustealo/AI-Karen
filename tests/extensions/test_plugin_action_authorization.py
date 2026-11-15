@@ -345,3 +345,56 @@ async def test_plugin_service_awaits_action_gate_before_kernel(monkeypatch):
     assert result.correlation_id == "corr-1"
     assert result.policy_decision_id == "policy-1"
     assert kernel.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_blocks_unready_tenant_before_canonical_execution(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service, kernel = _service()
+    observed: list[tuple[str, str]] = []
+
+    async def readiness(plugin_id: str, tenant_id: str) -> str:
+        observed.append((plugin_id, tenant_id))
+        return "plugin_settings_not_ready"
+
+    monkeypatch.setattr(service, "_execution_readiness_failure", readiness)
+    result = await service.execute_plugin(
+        "echo",
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+        correlation_id="corr-1",
+        authorized_plan=_plan(),
+    )
+    assert result.status is ExecutionStatus.FAILED
+    assert result.error_code == "plugin_settings_not_ready"
+    assert result.tenant_id == "tenant-1"
+    assert result.policy_decision_id == "policy-1"
+    assert observed == [("echo", "tenant-1")]
+    assert kernel.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_denied_action_never_checks_private_tenant_plugin_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    service, kernel = _service()
+
+    async def forbidden_readiness(*_args):
+        pytest.fail("Policy-denied action must not inspect tenant stores")
+
+    async def deny(_plan, _action):
+        return False
+
+    monkeypatch.setattr(service, "_execution_readiness_failure", forbidden_readiness)
+    monkeypatch.setattr(ActionExecutionGate, "authorize", staticmethod(deny))
+    result = await service.execute_plugin(
+        "echo",
+        user_id="user-1",
+        tenant_id="tenant-1",
+        session_id="session-1",
+        authorized_plan=_plan(),
+    )
+    assert result.error_code == "action_gate_denied"
+    assert kernel.calls == 0
