@@ -339,7 +339,7 @@ def test_fresh_aged_qr_cannot_be_extended_another_five_minutes(age):
         advance(
             initial(), PairingEvent.QR_ISSUED,
             observed_at=NOW - age,
-            qr_expires_at=NOW + timedelta(minutes=5),
+            qr_expires_at=NOW + timedelta(minutes=4, seconds=1),
         )
 
 
