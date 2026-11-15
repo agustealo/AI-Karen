@@ -10,6 +10,10 @@ This directory contains the current developer-facing architecture and engineerin
 4. [`CONSUMER_EXPERIENCE_CONTRACT.md`](CONSUMER_EXPERIENCE_CONTRACT.md) — mandatory consumer journey, capability discovery, agent-navigation and end-to-end evidence contract for UI/UX and cross-surface work.
 5. Read the subsystem document matching the code you will change.
 
+## Active cognitive intelligence sprint
+
+- [KCOG Cognitive Intelligence Convergence Wiki](../architecture/kcog/README.md) - sprint ownership, integrity audit, execution handoffs, learning contracts, evaluation, and continuity. This roadmap does **not** mean cognitive capability has passed production acceptance.
+
 ## Subsystem docs
 
 - [`CORTEX_RUNTIME.md`](CORTEX_RUNTIME.md) — CORTEX decision authority, ChatRuntime execution authority, cognitive contracts, assistant profile boundaries.
