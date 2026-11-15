@@ -540,10 +540,13 @@ def _decode_stream_event(
             raise ProviderExecutionError("provider_stream_invalid_model")
         # An explicitly selected model is part of the execution contract.
         # Do not silently elevate a different reported executor to its receipt.
-        if expected_model is not None and reported != expected_model:
-            raise ProviderExecutionError("provider_stream_requested_model_mismatch")
+        # Once an initially verified model is observed, a later change is
+        # a mid-stream model switch. The first mismatching receipt remains a
+        # requested-model mismatch; both cases fail closed before projection.
         if observed_model is not None and reported != observed_model:
             raise ProviderExecutionError("provider_stream_model_switched")
+        if expected_model is not None and reported != expected_model:
+            raise ProviderExecutionError("provider_stream_requested_model_mismatch")
         observed_model = reported
 
     raw_usage = payload.get("usage")
