@@ -430,6 +430,90 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 qr_expires_at=expiry,
             )
 
+        # A disabled, non-retired owned connection may retain consent
+        # and a valid provider signature, but cannot create a QR or link.
+        # Use real SQL and owner/RLS checks, not a mocked repository result.
+        disabled_id = "disabled-" + uuid.uuid4().hex
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+                 (connection_id,tenant_id,installation_id,
+                  provider_account_id,credential_handle,enabled,revision)
+               VALUES ($1,$2,'telegram-bot','disabled-provider',
+                       'vault://disabled-test',false,1)""",
+            disabled_id, tenant_a,
+        )
+        assert await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=disabled_id,
+            user_id=str(user),
+        )
+        assert await owner_repo.acknowledge_personal_pairing_risk(
+            tenant_id=str(tenant_a), connection_id=disabled_id,
+            user_id=str(user), provider_id="approved-managed-connector",
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+
+        def disabled_event(sequence, kind, revision, *, receipt=None):
+            return PairingObservation(
+                tenant_id=str(tenant_a),
+                connection_id=disabled_id,
+                provider_id="approved-managed-connector",
+                connection_revision=revision,
+                sequence=sequence, event=kind,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+                authenticated=True,
+                provider_receipt_id=receipt,
+                qr_expires_at=(
+                    datetime.now(timezone.utc) + timedelta(seconds=90)
+                    if kind is PairingEvent.QR_ISSUED else None
+                ),
+            )
+
+        with pytest.raises(PairingEvidenceDenied, match="Disabled connection"):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=disabled_event(1, PairingEvent.QR_ISSUED, 1),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, disabled_id,
+        ) == 0
+
+        # Activate through the canonical revision-fenced owner. Then emulate
+        # historical direct SQL disabling at the *same* revision to prove
+        # that even a correct next-sequence link receipt cannot bypass the
+        # row's current enabled flag; normal lifecycle also bumps revision.
+        active = await owner_repo.set_connection_enabled(
+            tenant_id=str(tenant_a), connection_id=disabled_id,
+            expected_revision=1, enabled=True,
+        )
+        assert active is not None and active.revision == 2
+        qr_state = await owner_repo.commit_personal_pairing_observation(
+            observation=disabled_event(1, PairingEvent.QR_ISSUED, 2),
+            user_id=str(user), provider_vetted_and_enabled=True,
+        )
+        assert qr_state.phase is PairingPhase.QR_AVAILABLE
+        assert await raw.execute(
+            """UPDATE public.channel_connections SET enabled=false
+               WHERE tenant_id=$1 AND connection_id=$2 AND revision=2""",
+            tenant_a, disabled_id,
+        ) == "UPDATE 1"
+        with pytest.raises(PairingEvidenceDenied, match="Disabled connection"):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=disabled_event(
+                    2, PairingEvent.LINK_CONFIRMED, 2,
+                    receipt="not-an-accepted-link",
+                ),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        disabled_state = await raw.fetchrow(
+            """SELECT phase, sequence FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, disabled_id,
+        )
+        assert disabled_state["phase"] == "qr_available"
+        assert disabled_state["sequence"] == 1
+
         qr = pairing_event(
             1, PairingEvent.QR_ISSUED,
             expiry=datetime.now(timezone.utc) + timedelta(seconds=90),
