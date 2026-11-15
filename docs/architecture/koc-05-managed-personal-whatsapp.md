@@ -988,3 +988,41 @@ introduce an endpoint or change the v2 report contract.
 
 Independent vendor unlink/erasure verification and final destructive
 cleanup remain unavailable.
+
+## KOC-05 live owner status fence on pairing establishment
+
+Initial personal connection ownership and risk consent require an active,
+verified tenant user. However, a user's account can later become inactive
+or unverified while the historical owner and consent rows remain. The
+canonical `commit_personal_pairing_observation` previously checked
+the owner's existence, but not the current `auth_users` status when
+committing `QR_ISSUED` or `LINK_CONFIRMED`. An otherwise valid provider
+signature, unrevoked consent and matching sequence/revision could therefore
+create new pairing state on behalf of a former verified owner.
+
+The existing repository now reads the tenant-matched owner's
+`is_active` and `is_verified` flags in its connection-locked transaction,
+using an additional `FOR SHARE OF u` lock to serialize concurrent account
+status changes with pairing admission. Both flags must be exactly true for
+QR or link confirmation, independent of a retained signing secret,
+historic ownership and consent. The existing connection-enabled and
+retirement-held gates, native source verification, strictly fresh reducer,
+owner/tenant scoping and revision/sequence CAS remain in place.
+
+The source-authenticated terminal transitions
+`DISCONNECT_REQUESTED`, `UNLINK_CONFIRMED` and `FAILED` intentionally
+remain available to an inactive or unverified historical owner when the
+existing stored pairing and revision allow them. This prevents account
+deactivation from falsely attesting remote unlink or stranding previously
+linked sessions. No new account privilege is minted; a verified historical
+owner row remains required for scope, and the reducer enforces the terminal
+phase and fresh receipt requirements.
+
+The disposable live PostgreSQL integration tests an account-deactivation
+race behind an actual user-row `FOR UPDATE` lock, verifies that the
+waiting QR observes the newly inactive state, and checks that both
+inactive and unverified status block QR/link without advancing the
+persisted sequence. After restoring live verification, normal pairing
+succeeds; a later inactive owner can complete authenticated disconnect
+and provider-unlink *claims* only. No real provider was enabled, and
+none of this constitutes independently verified erasure or final cleanup.
