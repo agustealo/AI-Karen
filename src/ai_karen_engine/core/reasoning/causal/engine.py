@@ -260,36 +260,19 @@ class CausalReasoningEngine:
         self.interventions: List[CausalIntervention] = []
 
     def learn_from_observations(self, observations: List[Dict[str, Any]]) -> None:
-        """
-        Learn causal structure from observational data
+        """Record observational evidence without inventing causal structure.
 
-        Uses constraint-based and score-based methods
+        Observational correlation and temporal precedence alone cannot
+        establish a causal direction. In particular, this method must not
+        write to ``causal_graph`` until a separately evaluated causal
+        identification contract exists. Explicitly supplied graph edges are
+        preserved, not silently overwritten by correlation estimates.
         """
         self.observations.extend(observations)
-
-        if len(self.observations) < 10:
-            logger.warning("Insufficient data for causal discovery")
-            return
-
-        # Extract variables
-        variables = set()
-        for obs in self.observations:
-            variables.update(obs.keys())
-
-        # Compute correlations and conditional independencies
-        correlations = self._compute_correlations(list(variables))
-
-        # Build initial graph from strong correlations
-        for (var1, var2), correlation in correlations.items():
-            if abs(correlation) > 0.5:  # Threshold
-                # Determine direction using temporal information or other heuristics
-                if self._determine_direction(var1, var2):
-                    self.causal_graph.add_edge(
-                        cause=var1,
-                        effect=var2,
-                        strength=abs(correlation),
-                        confidence=0.7  # Moderate confidence from correlation
-                    )
+        logger.debug(
+            "causal.observations_recorded_without_discovery",
+            extra={"observation_count": len(self.observations)},
+        )
 
     def _compute_correlations(self, variables: List[str]) -> Dict[Tuple[str, str], float]:
         """Compute pairwise correlations"""
@@ -326,9 +309,9 @@ class CausalReasoningEngine:
                 else:
                     return False
 
-        # Use domain knowledge (can be extended)
-        # For now, return True (assume var1 causes var2)
-        return True
+        # Unknown temporal precedence is not evidence of causal direction.
+        # Even a known temporal order is not sufficient for identification.
+        return False
 
     def estimate_causal_effect(
         self,
