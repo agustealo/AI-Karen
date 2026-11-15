@@ -17,11 +17,12 @@ from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
     PairingEvent,
     PairingEvidenceDenied,
     PairingObservation,
+    PAIRING_EVIDENCE_MAX_AGE,
+    PAIRING_QR_MAX_LIFETIME,
 )
 
 
 _MAX_CALLBACK_BYTES = 16_384
-_MAX_CLOCK_SKEW_SECONDS = 300
 _REQUIRED = frozenset({
     "tenant_id", "connection_id", "provider_id", "connection_revision",
     "sequence", "event", "observed_at", "provider_receipt_id", "qr_expires_at",
@@ -108,7 +109,12 @@ def verify_personal_pairing_callback(
     if (
         observed_at.tzinfo is None
         or (qr_expires_at is not None and qr_expires_at.tzinfo is None)
-        or abs((now - observed_at).total_seconds()) > _MAX_CLOCK_SKEW_SECONDS
+        or abs(now - observed_at) > PAIRING_EVIDENCE_MAX_AGE
+        # Authenticated source evidence cannot extend the original QR life.
+        # Check this again in the reducer at the SQL admission boundary.
+        or (event is PairingEvent.QR_ISSUED
+            and qr_expires_at is not None
+            and qr_expires_at - observed_at > PAIRING_QR_MAX_LIFETIME)
         or parsed["connection_revision"] < 1
         or parsed["sequence"] < 1
         or (parsed["provider_receipt_id"] is not None

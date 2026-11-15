@@ -375,3 +375,35 @@ describe('consumer provider health presentation', () => {
     })).toBe('Unverified');
   });
 });
+
+describe('administrator chat publication contracts', () => {
+  it('does not resurrect a provider or a model hidden by backend admin flags', () => {
+    const hidden = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'zai',
+      default_model: 'glm-4.5',
+      providers: [{
+        id: 'zai', label: 'Z.ai', enabled: true, chat_enabled: false,
+        configured: true, healthy: true, health: { status: 'healthy' },
+        models: [{ id: 'glm-4.5', label: 'GLM', available: true, chat_enabled: true }],
+      }],
+    });
+    expect(hidden.providers[0].chat_enabled).toBe(false);
+    expect(hidden.selectableProviders).toHaveLength(0);
+    expect(resolveChatProviderModelSelection(hidden, 'zai', 'glm-4.5').model).toBe('');
+
+    const partlyVisible = normalizeRuntimeProviderCatalogResponse({
+      default_provider: 'zai',
+      default_model: 'glm-4.5',
+      providers: [{
+        id: 'zai', label: 'Z.ai', enabled: true, chat_enabled: true,
+        configured: true, healthy: true, health: { status: 'healthy' },
+        models: [
+          { id: 'glm-4.5', label: 'GLM 4.5', available: true, chat_enabled: false },
+          { id: 'glm-4.7', label: 'GLM 4.7', available: true, chat_enabled: true },
+        ],
+      }],
+    });
+    expect(partlyVisible.selectableProviders[0].models.map((model) => model.id)).toEqual(['glm-4.7']);
+    expect(resolveChatProviderModelSelection(partlyVisible, 'zai', 'glm-4.5').model).toBe('glm-4.7');
+  });
+});

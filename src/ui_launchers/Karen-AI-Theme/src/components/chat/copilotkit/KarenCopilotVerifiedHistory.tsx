@@ -10,6 +10,7 @@ import {
   CopilotChatUserMessage,
 } from "@copilotkit/react-core/v2";
 import { useAuth } from "@/lib/useAuth";
+import { KarenBrowserSpeechPlayback } from "@/components/chat/KarenBrowserSpeechPlayback";
 import { createContext, useContext } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import type { AgentStepEvent } from "@/lib/types";
@@ -311,6 +312,7 @@ export function KarenCopilotAssistantMessage(
         Karen
       </p>
       <CopilotChatAssistantMessage {...props} />
+      <KarenBrowserSpeechPlayback message={props.message} />
       {parts.map((part, index) => (
         <div key={index} data-testid="karen-copilot-verified-part">
           {part.type === "presentation" &&

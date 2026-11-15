@@ -31,6 +31,11 @@ function Surface() {
     <button onClick={() => {
       void draft.prepareSubmission(draft.draft).then(setClearConfirmed);
     }}>Submit with pending changes</button>
+    <button onClick={() => {
+      const text = draft.draft;
+      void draft.prepareSubmission(text).then(setClearConfirmed);
+      draft.setText("");
+    }}>Submit then optimistic clear</button>
     <button onClick={() => draft.setText(draft.draft)}>
       Replay unchanged controlled value
     </button>
@@ -86,6 +91,24 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     expect(backend.put).toHaveBeenCalledTimes(2);
     expect(backend.put.mock.calls[0][1]).toEqual({
       text: "Send immediately without repeated Enter", expected_revision: 4,
+    });
+    expect(backend.put.mock.calls[1][1]).toEqual({
+      text: "", expected_revision: 5,
+    });
+    expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("safely saves and clears when input is optimistically cleared during submit gesture", async () => {
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved draft" }), {
+      target: { value: "Tell me about myself" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Submit then optimistic clear" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
+    expect(backend.put).toHaveBeenCalledTimes(2);
+    expect(backend.put.mock.calls[0][1]).toEqual({
+      text: "Tell me about myself", expected_revision: 4,
     });
     expect(backend.put.mock.calls[1][1]).toEqual({
       text: "", expected_revision: 5,

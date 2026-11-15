@@ -244,19 +244,27 @@ class SqlChannelRepository:
             connection = (await session.execute(
                 text("""
                     SELECT c.revision, c.enabled, c.retirement_locked, o.user_id,
+                           u.is_active AS owner_active,
+                           u.is_verified AS owner_verified,
                            h.requested_revision AS held_revision,
                            h.fenced_revision AS held_fenced_revision
                     FROM public.channel_connections c
                     JOIN public.channel_connection_owners o
                       ON o.tenant_id = c.tenant_id
                      AND o.connection_id = c.connection_id
+                    JOIN public.auth_users u
+                      ON u.tenant_id = o.tenant_id
+                     AND u.user_id = o.user_id
                     LEFT JOIN public.channel_personal_retirement_holds h
                       ON h.tenant_id = c.tenant_id
                      AND h.connection_id = c.connection_id
                     WHERE c.tenant_id = CAST(:tenant AS uuid)
                       AND c.connection_id = :connection
                       AND o.user_id = CAST(:user AS uuid)
+                    -- Serialize changes to owner verification with new
+                    -- pairing admission while keeping teardown possible.
                     FOR UPDATE OF c
+                    FOR SHARE OF u
                 """),
                 {"tenant": tenant_id, "connection": observation.connection_id,
                  "user": user_id},
@@ -284,6 +292,22 @@ class SqlChannelRepository:
                 or connection["revision"] != observation.connection_revision
             ):
                 raise PairingEvidenceDenied("Connection owner or revision has changed")
+            # Source-of-truth owner status is checked on every new pairing,
+            # not just when ownership or consent was originally recorded.
+            # Inactive/unverified owners retain only authenticated terminal
+            # teardown, which is necessary to revoke existing remote sessions.
+            establishing = observation.event in (
+                PairingEvent.QR_ISSUED, PairingEvent.LINK_CONFIRMED,
+            )
+            if establishing and (
+                connection["owner_active"] is not True
+                or connection["owner_verified"] is not True
+            ):
+                raise PairingEvidenceDenied(
+                    "Inactive or unverified owner cannot establish pairing"
+                )
+            if establishing and connection["enabled"] is not True:
+                raise PairingEvidenceDenied("Disabled connection cannot establish pairing")
             consent = (await session.execute(
                 text("""
                     SELECT accepted_at

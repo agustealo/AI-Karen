@@ -2845,7 +2845,14 @@ class ChatRuntime:
                 else str(decision.risk_level)
             ),
         )
-        allowed_caps = list(decision.required_capabilities)
+        # Cognitive capability hints are not Identity Vault execution grants.
+        # The privileged personal-key capability must be minted only by a
+        # separate, verified RuntimePolicy/host admission path. A model/user
+        # request cannot acquire it through required_capabilities.
+        allowed_caps = [
+            capability for capability in decision.required_capabilities
+            if capability != "model.personal_key.execute"
+        ]
         if decision.memory_write_allowed and "memory.write" not in allowed_caps:
             allowed_caps.append("memory.write")
 

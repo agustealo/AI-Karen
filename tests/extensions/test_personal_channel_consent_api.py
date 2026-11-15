@@ -285,6 +285,59 @@ async def test_pairing_status_never_promotes_saved_receipt_to_live_connected():
     assert kwargs["authorized_plan"] == "trusted-plan"
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forged", [
+    {"live_connected": True},
+    {"live_connected": 1},
+    {"qr_available": True},
+    {"qr_available": 0},
+    {"availability": "available"},
+    {"last_observed_phase": "remotely_verified"},
+    {"provider_unlinked": True},
+    {"provider_unlinked": "true"},
+    {"session_reference": "vendor-private-session"},
+])
+async def test_pairing_status_rejects_unsupported_live_or_malformed_host_claims(forged):
+    host, request = host_context()
+    host.get_personal_pairing_status.return_value = {
+        "availability": "unavailable",
+        "last_observed_phase": "connected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": False,
+        **forged,
+    }
+    with pytest.raises(HTTPException) as error:
+        await api.get_personal_whatsapp_pairing_status(
+            connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+            request=request, user=actor(),
+        )
+    assert error.value.status_code == 503
+    assert error.value.detail == "Personal channel status unavailable"
+    assert "vendor-private-session" not in error.value.detail
+    host.get_personal_pairing_status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pairing_status_keeps_vendor_unlink_claim_without_asserting_live_erasure():
+    host, request = host_context()
+    host.get_personal_pairing_status.return_value = {
+        "availability": "configured",
+        "last_observed_phase": "disconnected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": True,
+    }
+    result = await api.get_personal_whatsapp_pairing_status(
+        connection_id=api.UUID(CONNECTION), provider_id=PROVIDER,
+        request=request, user=actor(),
+    )
+    assert result.provider_unlinked is True
+    assert result.live_connected is False
+    assert result.qr_available is False
+
+
 @pytest.mark.asyncio
 async def test_foreign_owner_cannot_query_pairing_status():
     host, request = host_context(owner=False)
@@ -520,6 +573,45 @@ async def test_owner_inventory_uses_authenticated_principal_only():
     assert channel.qr_available is False
     assert "credential_handle" not in channel.model_dump()
     assert "provider_account_id" not in channel.model_dump()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forged", [
+    {"live_connected": True},
+    {"live_connected": "true"},
+    {"qr_available": True},
+    {"qr_available": 0},
+    {"availability": "operational"},
+    {"last_observed_phase": "verified_connected"},
+    {"provider_unlinked": True},
+    {"provider_unlinked": 1},
+    {"provider_receipt_id": "private-vendor-receipt"},
+])
+async def test_owner_inventory_denies_forged_live_status_without_exposing_secrets(forged):
+    host, request = host_context()
+    host.list_owned_personal_channels.return_value = [{
+        "connection_id": CONNECTION,
+        "installation_id": "whatsapp-cloud",
+        "provider_id": PROVIDER,
+        "active_consent_provider_ids": [],
+        "availability": "unavailable",
+        "last_observed_phase": "connected",
+        "live_connected": False,
+        "qr_available": False,
+        "provider_unlinked": False,
+        **forged,
+    }]
+    with pytest.raises(HTTPException) as error:
+        await api.list_personal_channel_connections(
+            request=request, user=actor(),
+        )
+    assert error.value.status_code == 503
+    assert error.value.detail == "Personal channel status unavailable"
+    assert "private-vendor-receipt" not in error.value.detail
+    host.list_owned_personal_channels.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
 
 
 @pytest.mark.asyncio

@@ -990,7 +990,14 @@ async def get_ag_ui_owned_history(
             else 409
         )
         raise HTTPException(
-            status_code=status, detail="Complete governed replay is unavailable",
+            status_code=status,
+            detail="Complete governed replay is unavailable",
+            headers={
+                # This is a fixed, allow-listed classification from the
+                # canonical projection owner, never user content or metadata.
+                "X-Karen-History-Replay-Reason": reason_code,
+                "X-Correlation-Id": correlation_id,
+            },
         ) from exc
     except Exception as exc:
         logger.exception("History attestation unavailable", extra={

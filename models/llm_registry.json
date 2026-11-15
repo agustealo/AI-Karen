@@ -240,6 +240,18 @@
     "error_message": null
   },
   {
+    "name": "nous",
+    "provider_class": "OpenAICompatibleProvider",
+    "description": "Execution adapter for Nous Portal (Hermes)",
+    "supports_streaming": true,
+    "supports_embeddings": false,
+    "requires_api_key": true,
+    "default_model": "Hermes-4.3-36B",
+    "health_status": "unknown",
+    "last_health_check": null,
+    "error_message": null
+  },
+  {
     "name": "cohere",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Cohere",

@@ -918,3 +918,180 @@ historical-status projection rules and no-request behavior; the existing
 disposable live PostgreSQL suite continues to exercise real pending and
 provider-claimed requests under tenant isolation, without disabling the
 ledger integrity trigger or pretending a third-party verifier exists.
+
+## KOC-05 canonical pairing reducer evidence freshness and type guards
+
+The signed callback decoder already enforced HMAC integrity, strict JSON type
+contracts, tenant/provider/connection scope and a five-minute observation age
+window, but the canonical `apply_pairing_observation` reducer previously
+accepted any truthy `authenticated` flag and typed Python dataclasses did not
+perform runtime validation. Internal invocation with a correct sequence and
+revision could also submit an arbitrarily old unlink observation.
+
+The reducer now enforces strict native booleans for authentication and
+approval flags, strict integer revision and sequence types (excluding bool),
+actual `PairingEvent` values, timezone-aware timestamps and a
+`PAIRING_EVIDENCE_MAX_AGE` of five minutes. The signed callback imports
+this same age contract instead of maintaining an independent constant.
+Malformed QR timestamps fail closed with a `PairingEvidenceDenied` error,
+not an unhandled `AttributeError`/type error.
+
+This is a **secondary validation boundary**, not an alternative callback
+authentication path. HMAC source authentication, vetted installation lookup,
+vault-resolved signing secrets, owner/tenant isolation, serializable revision
+and sequence fencing, retired-session terminal-only transitions, and the
+independent-erasure blockers remain in their existing owners. Local consent
+revocation still allows timely authenticated teardown, without asserting
+remote credential erasure.
+
+Canonical unit tests cover truthy type coercions, exact five-minute edge
+behavior, old QR/unlink observations, malformed timestamp data and legitimate
+consent-revoked teardown. The existing real PostgreSQL integration now
+attempts a stale, otherwise correct next-sequence disconnect and verifies the
+stored pairing sequence cannot advance before continuing the valid teardown.
+No provider was activated, no migration or new route added, and final
+retirement cleanup remains unauthorized.
+
+## KOC-05 disabled-connection pairing admission fence
+
+`SqlChannelRepository.commit_personal_pairing_observation` is the
+canonical transaction owner for admitted, provider-authenticated pairing
+events. It already locks the owning connection, checks tenant/owner,
+original revision, consent, stored event sequence and the irreversible
+retirement hold. However, a **non-retired connection with
+`enabled=false`** could previously accept `QR_ISSUED` or
+`LINK_CONFIRMED` when the callback signature, consent, revision and
+sequence otherwise matched.
+
+The existing connection-row lock now also checks `enabled is True`
+before allowing either pairing-establishment event. Thus a disabled
+connection cannot mint a new QR observation or confirm a link, regardless
+of a retained signing secret or active consent row. Terminal
+`DISCONNECT_REQUESTED`, `UNLINK_CONFIRMED` and `FAILED` transitions
+retain their established reducer, timestamp and sequence requirements,
+so disabling a transport does not misrepresent a live remote session as
+unlinked or trap timely authenticated teardown of a still-current
+revision. Retirement holds continue to accept only original-revision
+terminal evidence, as before.
+
+The disposable live PostgreSQL channel suite now creates an owned,
+non-retired disabled connection with an accepted consent row, proves
+that a valid next-sequence QR cannot be stored, activates it through
+`set_connection_enabled`, then explicitly simulates a legacy direct
+SQL disable without revision change. A correctly scoped next-sequence
+link receipt is rejected and the pairing row remains at the prior
+`qr_available` sequence. This deliberately stronger test bypasses
+the *test fixture's* normal revision bump, never the production
+admission gate. It does not change any real provider configuration,
+grant erasure authority, mutate historical retirement evidence,
+introduce an endpoint or change the v2 report contract.
+
+Independent vendor unlink/erasure verification and final destructive
+cleanup remain unavailable.
+
+## KOC-05 live owner status fence on pairing establishment
+
+Initial personal connection ownership and risk consent require an active,
+verified tenant user. However, a user's account can later become inactive
+or unverified while the historical owner and consent rows remain. The
+canonical `commit_personal_pairing_observation` previously checked
+the owner's existence, but not the current `auth_users` status when
+committing `QR_ISSUED` or `LINK_CONFIRMED`. An otherwise valid provider
+signature, unrevoked consent and matching sequence/revision could therefore
+create new pairing state on behalf of a former verified owner.
+
+The existing repository now reads the tenant-matched owner's
+`is_active` and `is_verified` flags in its connection-locked transaction,
+using an additional `FOR SHARE OF u` lock to serialize concurrent account
+status changes with pairing admission. Both flags must be exactly true for
+QR or link confirmation, independent of a retained signing secret,
+historic ownership and consent. The existing connection-enabled and
+retirement-held gates, native source verification, strictly fresh reducer,
+owner/tenant scoping and revision/sequence CAS remain in place.
+
+The source-authenticated terminal transitions
+`DISCONNECT_REQUESTED`, `UNLINK_CONFIRMED` and `FAILED` intentionally
+remain available to an inactive or unverified historical owner when the
+existing stored pairing and revision allow them. This prevents account
+deactivation from falsely attesting remote unlink or stranding previously
+linked sessions. No new account privilege is minted; a verified historical
+owner row remains required for scope, and the reducer enforces the terminal
+phase and fresh receipt requirements.
+
+The disposable live PostgreSQL integration tests an account-deactivation
+race behind an actual user-row `FOR UPDATE` lock, verifies that the
+waiting QR observes the newly inactive state, and checks that both
+inactive and unverified status block QR/link without advancing the
+persisted sequence. After restoring live verification, normal pairing
+succeeds; a later inactive owner can complete authenticated disconnect
+and provider-unlink *claims* only. No real provider was enabled, and
+none of this constitutes independently verified erasure or final cleanup.
+
+## KOC-05 pairing status and inventory truth boundary
+
+The current ChannelHost deliberately reports `live_connected=false` and
+`qr_available=false` because no reviewed, current source-authenticated
+remote session probe or QR retrieval capability is enabled. Only
+`last_observed_phase` and a scoped `provider_unlinked` boolean represent
+**historical provider claims**, not independently verified live state or
+credential erasure. However, the prior API `PersonalPairingStatus` model
+and settings inventory parser accepted arbitrary boolean `true` values
+for the two unsupported capabilities. A stale/mock/malformed host result
+could therefore display a fabricated live connection or QR.
+
+The existing pairing status API and owner inventory now reuse one strict
+`PersonalPairingStatus` contract: enumerated availability and persisted
+phase, strict booleans, and a model-level prohibition on either live-health
+or QR success until a separately authenticated source capability exists.
+A persisted `provider_unlinked=true` is accepted only for a configured
+provider whose last accepted phase is `disconnected`, without upgrading
+it to independently verified unlink or credential deletion.
+
+Both API responses validate the host output before serialization and
+return a redacted HTTP 503 on contradictory or extra fields, rather than
+silently converting a false source claim to success or disclosing vendor
+receipt/session metadata. The Channels settings parser mirrors the
+negative live-status invariants and rejects invalid phase/unlink
+correlations, dropping the previous inventory on a failed refresh.
+Regression tests cover forged booleans, numeric/string coercion, invented
+phases, unsafe extra provider fields, post-refresh failure, and a
+legitimate scoped historical unlink observation.
+
+The response field names, consent/revocation actions, ownership,
+tenant/RBAC enforcement, original-session retirement holds, and the
+mandatory independent verification blockers are unchanged. This
+validation does **not** implement remote session health, pairing QR,
+device unlink verification, credential erasure or final cleanup.
+
+## KOC-05 original QR issuance lifetime fence
+
+The canonical reducer and the signed callback share two **independent** time
+limits. A provider observation must be authenticated and no older than
+`PAIRING_EVIDENCE_MAX_AGE` (five minutes); an issued QR must expire no more
+than `PAIRING_QR_MAX_LIFETIME` (five minutes) after the observation's original
+provider timestamp. The previously implemented QR reducer checked expiry
+against SQL processing time, not the provider's `observed_at`. An authenticated
+observation that was four minutes old could therefore be accepted with another
+four minutes of QR validity, expanding the effective eight-minute lifetime.
+
+`personal_pairing_lifecycle.apply_pairing_observation` now fences expiry by
+`qr_expires_at - observed_at <= PAIRING_QR_MAX_LIFETIME` as well as requiring a
+still-unexpired aware timestamp. The HMAC-protected callback independently
+rejects an overlong `QR_ISSUED` payload before handing it to the repository;
+the existing managed-provider QR evidence validator reuses the same maximum
+instead of defining a second lifetime constant. The connection-locked SQL
+repository remains the only persistence authority, and its reducer retains
+the final defense even if an internal source bypasses the callback adapter.
+
+Boundary tests preserve equality at five minutes and reject just one
+microsecond more. The disposable live PostgreSQL suite attempts a valid
+tenant/owner/consent/revision/next-sequence QR observation with a fresh
+four-minute-old issuance timestamp and an expiry another four minutes in the
+future, verifies no pairing state is stored, then proves a normal QR can
+commit on the same original sequence. Event freshness and QR validity
+are tested separately; a terminal event can be five minutes old without
+manufacturing a live QR.
+
+No QR payload is persisted or returned, no provider is enabled, and these
+guards do not claim remote session health, independent unlink/credential
+erasure, or final retirement cleanup.

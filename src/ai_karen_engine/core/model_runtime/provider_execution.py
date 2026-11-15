@@ -11,13 +11,22 @@ import asyncio
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Literal, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from uuid import UUID
 
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
-from ai_karen_engine.core.model_runtime.runtime_engine import EndpointProtocol, RuntimeEngine
+from ai_karen_engine.core.model_runtime.runtime_engine import (
+    EndpointKind,
+    EndpointProtocol,
+    RuntimeEngine,
+)
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 
 
 @dataclass(frozen=True)
@@ -32,6 +41,128 @@ class ProviderExecutionResult:
 
 class ProviderExecutionError(RuntimeError):
     """Raised when a canonical provider endpoint cannot execute a request."""
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PersonalModelTransportGrant:
+    """Host-only execution identity. No secret or client-supplied bearer.
+
+    This is an invocation descriptor, not a grant issuer. Identity Vault still
+    validates the exact RuntimePolicy plan and commits its secret-access audit.
+    The canonical chat runtime does not issue such grants yet.
+    """
+
+    context: "ChatExecutionContext"
+    plan: "AuthorizedExecutionPlan"
+    credential_id: UUID
+    provider_id: str
+    model_id: str
+
+
+async def _resolve_personal_transport_key(
+    endpoint: ProviderEndpoint,
+    model: str | None,
+    grant: PersonalModelTransportGrant,
+) -> str:
+    """Resolve a fresh personal credential for exactly this host invocation.
+
+    Never trust a supplied endpoint URL. Only the registered HTTPS external
+    vendor endpoint may receive personal credentials, and never a local,
+    custom, plugin-owned, redirected or fallback endpoint.
+    """
+    denial = "personal_model_transport_denied"
+    if (
+        not isinstance(grant, PersonalModelTransportGrant)
+        or not isinstance(model, str)
+        or not model
+        or model == "auto"
+        or model != grant.model_id
+        or endpoint.provider_id != grant.provider_id
+        or not endpoint.enabled
+        or endpoint.tenant_scoped is not True
+        or endpoint.fallback_eligible is not False
+        or endpoint.kind is not EndpointKind.CLOUD_PROVIDER
+        or endpoint.runtime_engine is not RuntimeEngine.REMOTE_API
+        or endpoint.protocol is not EndpointProtocol.OPENAI_COMPATIBLE
+        or endpoint.metadata.get("configuration_owner") != "llm_provider_config"
+        or not endpoint.api_key_env
+    ):
+        raise ProviderExecutionError(denial)
+
+    try:
+        from ai_karen_engine.config.llm_provider_config import (
+            AuthenticationType,
+            OPENAI_COMPATIBLE_PROVIDER_DEFAULTS,
+            ProviderType,
+            get_provider_config_manager,
+        )
+        from ai_karen_engine.services.identity_vault.credential_vault_service import (
+            get_credential_vault_service,
+        )
+
+        approved = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS.get(endpoint.provider_id)
+        if not isinstance(approved, dict):
+            raise ProviderExecutionError(denial)
+        approved_url = str(approved.get("base_url") or "").rstrip("/")
+        base_url = str(endpoint.base_url or "").rstrip("/")
+        parsed = urlsplit(base_url)
+        if (
+            not approved_url
+            or base_url != approved_url
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or endpoint.api_key_env != approved.get("api_key_env")
+        ):
+            raise ProviderExecutionError(denial)
+
+        # The registry endpoint may have been obtained before an administrator
+        # disabled or changed its provider. Re-read the canonical current
+        # provider definition immediately before the Vault resolution.
+        # Unlike workspace credential resolution, a personal key does not
+        # require an unrelated workspace API key to be configured.
+        config = get_provider_config_manager().get_provider(endpoint.provider_id)
+        if (
+            config is None
+            or not config.enabled
+            or config.provider_type != ProviderType.EXTERNAL
+            or config.authentication is None
+            or config.authentication.type != AuthenticationType.API_KEY
+            or config.authentication.api_key_env_var != endpoint.api_key_env
+            or config.endpoint is None
+            or str(config.endpoint.base_url or "").rstrip("/") != approved_url
+        ):
+            raise ProviderExecutionError(denial)
+
+        key = await get_credential_vault_service().resolve_authorized_personal_model_key(
+            context=grant.context,
+            plan=grant.plan,
+            credential_id=grant.credential_id,
+            provider_id=grant.provider_id,
+            model_id=grant.model_id,
+        )
+        if not isinstance(key, str) or not key or key != key.strip():
+            raise ProviderExecutionError(denial)
+        return key
+    except Exception:
+        # Includes an audit-commit failure. Never surface raw Vault/transport
+        # exceptions or secret contents to a model, consumer, log or receipt.
+        raise ProviderExecutionError(denial) from None
+
+
+class _RejectProviderRedirect(HTTPRedirectHandler):
+    """Prevent urllib from forwarding bearer headers to redirect targets."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_provider_request(request: Request, timeout: float):
+    """Use a fresh no-redirect opener without modifying global urllib state."""
+    return build_opener(_RejectProviderRedirect()).open(request, timeout=timeout)
 
 
 def _inherit_registered_api_path(
@@ -138,10 +269,12 @@ def _post_chat_completions(
     endpoint: ProviderEndpoint,
     base_url: str,
     payload: dict[str, Any],
+    *,
+    personal_key: str | None = None,
 ) -> dict[str, Any]:
     """Single OpenAI-compatible HTTP transport for text and tool-call models."""
     headers = {"Content-Type": "application/json"}
-    api_key = _resolve_api_key(endpoint)
+    api_key = personal_key if personal_key is not None else _resolve_api_key(endpoint)
     if endpoint.api_key_env and not api_key:
         raise ProviderExecutionError(
             f"provider_credential_unavailable:{endpoint.provider_id}"
@@ -155,7 +288,7 @@ def _post_chat_completions(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=endpoint.timeout_seconds) as response:
+        with _open_provider_request(request, timeout=endpoint.timeout_seconds) as response:
             body = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         # Do not echo a potentially sensitive provider response into telemetry.
@@ -191,6 +324,7 @@ def _sync_structured_chat_request(
     tools: Sequence[Mapping[str, Any]],
     max_tokens: int,
     temperature: float,
+    personal_key: str | None = None,
 ) -> StructuredChatResult:
     """Emit only explicitly registered tools, never model-side fake calls."""
     if endpoint.protocol is not EndpointProtocol.OPENAI_COMPATIBLE:
@@ -210,7 +344,7 @@ def _sync_structured_chat_request(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    body = _post_chat_completions(endpoint, base_url, payload)
+    body = _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
     choices = body.get("choices")
     if not isinstance(choices, list) or not choices:
         raise ProviderExecutionError("tool_call_response_has_no_choices")
@@ -283,8 +417,13 @@ async def execute_structured_provider_endpoint(
     tools: Sequence[Mapping[str, Any]],
     max_tokens: int,
     temperature: float,
+    personal_model_grant: PersonalModelTransportGrant | None = None,
 ) -> StructuredChatResult:
     """Canonical provider transport used by governed LangChain adapters."""
+    personal_key = (
+        await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
+        if personal_model_grant is not None else None
+    )
     return await asyncio.to_thread(
         _sync_structured_chat_request,
         endpoint,
@@ -293,6 +432,7 @@ async def execute_structured_provider_endpoint(
         tools=tools,
         max_tokens=max_tokens,
         temperature=temperature,
+        personal_key=personal_key,
     )
 
 
@@ -303,6 +443,7 @@ def _sync_openai_compatible_request(
     model: str | None,
     max_tokens: int,
     temperature: float,
+    personal_key: str | None = None,
 ) -> ProviderExecutionResult:
     base_url = _resolve_base_url(endpoint)
     if not base_url:
@@ -323,7 +464,7 @@ def _sync_openai_compatible_request(
     if request_model:
         payload["model"] = request_model
 
-    body = _post_chat_completions(endpoint, base_url, payload)
+    body = _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
 
     choices = body.get("choices") or []
     if not choices:
@@ -369,6 +510,7 @@ async def execute_provider_endpoint(
     model: str | None,
     max_tokens: int,
     temperature: float,
+    personal_model_grant: PersonalModelTransportGrant | None = None,
 ) -> ProviderExecutionResult:
     """Execute a canonical endpoint without importing extension implementations."""
 
@@ -377,6 +519,10 @@ async def execute_provider_endpoint(
             f"unsupported_core_provider_protocol:{endpoint.provider_id}:{endpoint.protocol.value}"
         )
 
+    personal_key = (
+        await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
+        if personal_model_grant is not None else None
+    )
     return await asyncio.to_thread(
         _sync_openai_compatible_request,
         endpoint,
@@ -384,6 +530,7 @@ async def execute_provider_endpoint(
         model=model,
         max_tokens=max_tokens,
         temperature=temperature,
+        personal_key=personal_key,
     )
 
 
@@ -416,10 +563,13 @@ def _decode_stream_event(
             raise ProviderExecutionError("provider_stream_invalid_model")
         # An explicitly selected model is part of the execution contract.
         # Do not silently elevate a different reported executor to its receipt.
-        if expected_model is not None and reported != expected_model:
-            raise ProviderExecutionError("provider_stream_requested_model_mismatch")
+        # Once an initially verified model is observed, a later change is
+        # a mid-stream model switch. The first mismatching receipt remains a
+        # requested-model mismatch; both cases fail closed before projection.
         if observed_model is not None and reported != observed_model:
             raise ProviderExecutionError("provider_stream_model_switched")
+        if expected_model is not None and reported != expected_model:
+            raise ProviderExecutionError("provider_stream_requested_model_mismatch")
         observed_model = reported
 
     raw_usage = payload.get("usage")
@@ -468,6 +618,7 @@ async def stream_provider_endpoint(
     max_tokens: int,
     temperature: float,
     timeout_ms: int,
+    personal_model_grant: PersonalModelTransportGrant | None = None,
 ) -> AsyncIterator[ProviderStreamEvent]:
     """Stream actual provider tokens from the existing canonical endpoint.
 
@@ -504,8 +655,12 @@ async def stream_provider_endpoint(
     if selected_model:
         payload["model"] = selected_model
 
+    personal_key = (
+        await _resolve_personal_transport_key(endpoint, selected_model, personal_model_grant)
+        if personal_model_grant is not None else None
+    )
     headers = {"Accept": "text/event-stream", "Content-Type": "application/json"}
-    api_key = _resolve_api_key(endpoint)
+    api_key = personal_key if personal_key is not None else _resolve_api_key(endpoint)
     if endpoint.api_key_env and not api_key:
         raise ProviderExecutionError(
             f"provider_credential_unavailable:{endpoint.provider_id}"

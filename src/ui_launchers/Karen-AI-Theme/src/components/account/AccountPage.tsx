@@ -81,8 +81,6 @@ function verifySessions(payload: unknown): AccountSession[] {
   });
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 function isTheme(value: unknown): value is Theme {
   return value === "light" || value === "dark" || value === "system";
 }
@@ -170,7 +168,6 @@ export default function AccountPage() {
   const [account, setAccount] = useState<AccountUser | null>(null);
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
@@ -194,7 +191,6 @@ export default function AccountPage() {
     setAccount(verified);
     setUsername(verified.username);
     setFullName(verified.full_name);
-    setEmail(verified.email);
     // AuthProvider and the theme provider observe the canonical owned user
     // event. Preserve existing permissions while updating account-owned fields.
     authService.updateCurrentUser({
@@ -295,19 +291,15 @@ export default function AccountPage() {
 
   const cleanUsername = username.trim();
   const cleanName = fullName.trim();
-  const cleanEmail = email.trim().toLowerCase();
   const profileError =
     !cleanUsername || cleanUsername.length > 64 || /\s/.test(cleanUsername)
       ? "Enter a username without spaces (maximum 64 characters)."
       : !cleanName || cleanName.length > 128
         ? "Enter your display name (maximum 128 characters)."
-        : cleanEmail.length > 254 || !EMAIL_PATTERN.test(cleanEmail)
-          ? "Enter a valid email address."
-          : null;
+        : null;
   const profileDirty = !!account && (
     cleanUsername !== account.username ||
-    cleanName !== account.full_name ||
-    cleanEmail !== account.email.toLowerCase()
+    cleanName !== account.full_name
   );
   const isMutating = isProfileSaving || pendingTheme !== null || isPasswordSaving || isLoggingOut || revokingSession !== null;
   const accountReady = !!principal && !!account && !loadError && !isLoading;
@@ -317,12 +309,12 @@ export default function AccountPage() {
     if (!principal || !accountReady || !profileDirty || profileError || isMutating) return;
     setIsProfileSaving(true);
     try {
-      const wanted = { username: cleanUsername, full_name: cleanName, email: cleanEmail };
+      const wanted = { username: cleanUsername, full_name: cleanName };
       const receipt = verifyAccount(await apiClient.put<unknown>("/api/auth/me", wanted), principal);
       if (
         receipt.username !== wanted.username ||
         receipt.full_name !== wanted.full_name ||
-        receipt.email.toLowerCase() !== wanted.email
+        receipt.email !== account?.email
       ) throw new Error("Karen did not confirm the requested account changes.");
 
       // Verify read-after-write before showing a successful save.
@@ -330,7 +322,7 @@ export default function AccountPage() {
       if (
         verified.username !== wanted.username ||
         verified.full_name !== wanted.full_name ||
-        verified.email.toLowerCase() !== wanted.email
+        verified.email !== account?.email
       ) throw new Error("The saved account details could not be verified. Refresh before retrying.");
       requireCurrentPrincipal(principal);
       applyAccount(verified);
@@ -530,9 +522,12 @@ export default function AccountPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="account-email">Email address</Label>
-                  <Input id="account-email" type="email" value={email} maxLength={254}
-                    onChange={(event) => setEmail(event.target.value)}
-                    autoComplete="email" disabled={isMutating} />
+                  <Input id="account-email" type="email" value={account.email}
+                    autoComplete="email" readOnly aria-describedby="account-email-notice"
+                    className="cursor-not-allowed bg-muted/40" />
+                  <p id="account-email-notice" className="text-xs text-muted-foreground">
+                    Email changes are unavailable until Karen can independently verify ownership of the new address.
+                  </p>
                 </div>
                 {profileDirty && (
                   <p role="status" className="text-xs text-muted-foreground">You have unsaved profile changes.</p>

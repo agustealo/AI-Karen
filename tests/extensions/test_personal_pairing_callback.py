@@ -130,3 +130,51 @@ def test_conflicting_case_variant_signature_headers_rejected():
             "X-Karen-Pairing-Signature": signature,
             "x-karen-pairing-signature": signature,
         })
+
+
+def test_signed_callback_freshness_boundary_matches_canonical_reducer():
+    from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+        PAIRING_EVIDENCE_MAX_AGE,
+    )
+    old = NOW - PAIRING_EVIDENCE_MAX_AGE
+    # This tests the signed evidence age boundary independent of QR expiry:
+    # a QR issued five minutes ago cannot still have positive lifetime.
+    terminal = dict(event="failed", qr_expires_at=None)
+    accepted = decode(envelope(observed_at=old.isoformat(), **terminal))
+    assert accepted.observed_at == old
+    with pytest.raises(PairingEvidenceDenied, match="Expired or invalid"):
+        decode(envelope(
+            observed_at=(old - timedelta(microseconds=1)).isoformat(),
+            **terminal,
+        ))
+
+
+def test_signed_qr_expiry_must_be_within_five_minutes_of_original_event():
+    from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+        PAIRING_QR_MAX_LIFETIME,
+    )
+
+    issued_at = NOW - timedelta(minutes=4)
+    last_allowed = issued_at + PAIRING_QR_MAX_LIFETIME
+    assert last_allowed == NOW + timedelta(minutes=1)
+    accepted = decode(envelope(
+        observed_at=issued_at.isoformat(),
+        qr_expires_at=last_allowed.isoformat(),
+    ))
+    assert accepted.qr_expires_at == last_allowed
+
+    with pytest.raises(PairingEvidenceDenied, match="Expired or invalid"):
+        decode(envelope(
+            observed_at=issued_at.isoformat(),
+            qr_expires_at=(
+                last_allowed + timedelta(microseconds=1)
+            ).isoformat(),
+        ))
+
+    # The previous callback accepted this recent signed event even though
+    # the QR would last eight minutes from its reported issuance.
+    with pytest.raises(PairingEvidenceDenied, match="Expired or invalid"):
+        decode(envelope(
+            observed_at=issued_at.isoformat(),
+            qr_expires_at=(NOW + timedelta(minutes=4)).isoformat(),
+        ))

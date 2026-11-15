@@ -41,6 +41,7 @@ class RuntimeModel(BaseModel):
     id: str
     label: str
     available: bool = False
+    chat_enabled: bool = True
     source: str = "configured_catalog"
     default: bool = False
     capabilities: List[str] = Field(default_factory=list)
@@ -52,6 +53,7 @@ class RuntimeProvider(BaseModel):
     provider_label: Optional[str] = None
     category: str  # builtin, local, external, custom
     enabled: bool
+    chat_enabled: bool = True
     configured: bool
     healthy: bool
     runtime_engine: str
@@ -195,6 +197,7 @@ async def get_runtime_provider_catalog(
             # Reuse the same live discovery implementation as Settings.
             provider_ready = (
                 provider.get("enabled", True) is True
+                and provider.get("chat_enabled", True) is True
                 and provider.get("is_configured") is True
                 and provider.get("healthy") is True
                 # Legacy test/inventory callers may omit a health status,
@@ -219,6 +222,7 @@ async def get_runtime_provider_catalog(
                         extra={"provider_id": provider_id, "error_type": type(exc).__name__},
                     )
 
+            model_visibility = provider.get("chat_model_visibility") or {}
             models = []
             for model_obj in raw_models:
                 model = model_obj.model_dump() if hasattr(model_obj, "model_dump") else (model_obj.dict() if hasattr(model_obj, "dict") else model_obj)
@@ -228,6 +232,7 @@ async def get_runtime_provider_catalog(
                         label=str(model.get("name") or model.get("label") or model.get("id") or ""),
                         available=bool(
                             provider_ready
+                            and model_visibility.get(str(model.get("id") or ""), True) is not False
                             and (
                                 model.get("source") == "provider_live"
                                 or (
@@ -237,6 +242,7 @@ async def get_runtime_provider_catalog(
                             )
                         ),
                         source=str(model.get("source") or "configured_catalog"),
+                        chat_enabled=model_visibility.get(str(model.get("id") or ""), True) is not False,
                         default=str(model.get("id") or "") == str(provider.get("selected_model") or ""),
                         capabilities=list(model.get("capabilities") or []),
                     ))
@@ -267,6 +273,7 @@ async def get_runtime_provider_catalog(
                 provider_label=str(provider.get("display_name") or provider_id),
                 category=category,
                 enabled=bool(provider.get("enabled", True)),
+                chat_enabled=bool(provider.get("chat_enabled", True)),
                 configured=bool(provider.get("is_configured", False)),
                 healthy=provider_ready and discovery_error is None,
                 runtime_engine=runtime_engine,
@@ -297,7 +304,11 @@ async def get_runtime_provider_catalog(
                     latency_ms=None,
                     last_checked_at=provider.get("health_last_checked_at"),
                 ),
-                degradation_reason=discovery_error or provider.get("degraded_reason"),
+                degradation_reason=(
+                    "Chat selection disabled by administrator"
+                    if provider.get("chat_enabled", True) is False
+                    else discovery_error or provider.get("degraded_reason")
+                ),
                 allowed_for_current_user=bool(provider.get("user_selectable", True) and provider.get("policy_allowed", True)),
                 requires_api_key=bool(provider.get("api_key_env_var") or provider.get("requires_api_key")),
                 requires_base_url=bool(provider.get("supports_base_url_override")),

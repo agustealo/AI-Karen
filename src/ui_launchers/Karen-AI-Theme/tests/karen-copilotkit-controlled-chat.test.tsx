@@ -244,6 +244,24 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores CopilotKit optimistic onChange empty string during onSubmitMessage dispatch", async () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Who am I?");
+      input().onSubmitMessage("Who am I?");
+      // CopilotChatInput send() invokes onChange("") synchronously right after onSubmitMessage
+      input().onChange("");
+    });
+    await waitFor(() => expect(sdk.clearDraft).toHaveBeenCalledWith("Who am I?"));
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    expect(sdk.agent.addMessage).toHaveBeenCalledWith(expect.objectContaining({
+      role: "user",
+      content: "Who am I?",
+    }));
+    // Empty value was not pushed to draft writes while submit was pending
+    expect(sdk.draftWrites).not.toContain("");
+  });
+
   it("rejects rapid duplicate submits until the previous SDK run settles", async () => {
     let resolveRun!: () => void;
     sdk.runAgent.mockImplementationOnce(() => new Promise<void>((resolve) => {

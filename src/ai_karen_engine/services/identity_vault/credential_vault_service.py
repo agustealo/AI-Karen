@@ -15,7 +15,11 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -84,6 +88,8 @@ class PluginCredentialDenied(PermissionError):
 
 class CredentialVaultService(BaseService):
     """Canonical tenant-scoped runtime for credentials and external accounts."""
+
+    _OWNED_MODEL_CREDENTIAL_TYPE = "model_api_key"
 
     _REQUIRED_TABLES = {
         "identity_providers",
@@ -188,6 +194,39 @@ class CredentialVaultService(BaseService):
         return select(model).where(model.tenant_id == tenant_id)
 
     @staticmethod
+    def _require_credential_owner(user_id: str) -> str:
+        """Reject missing or ambiguous consumer owner identifiers."""
+        if (
+            not isinstance(user_id, str)
+            or not user_id
+            or user_id != user_id.strip()
+            or len(user_id) > 255
+        ):
+            raise ValueError("A valid credential owner user_id is required")
+        return user_id
+
+    @classmethod
+    def _credential_owner_clauses(
+        cls, owner_user_id: Optional[str]
+    ) -> tuple[Any, ...]:
+        """Add creator fencing without replacing the tenant query authority."""
+        if owner_user_id is None:
+            return ()
+        return (
+            Credential.created_by == cls._require_credential_owner(owner_user_id),
+            Credential.credential_type == cls._OWNED_MODEL_CREDENTIAL_TYPE,
+        )
+
+    @classmethod
+    def _require_matching_credential_actor(
+        cls, user_id: str, owner_user_id: Optional[str]
+    ) -> tuple[Any, ...]:
+        clauses = cls._credential_owner_clauses(owner_user_id)
+        if owner_user_id is not None and user_id != owner_user_id:
+            raise PermissionError("Credential owner does not match the actor")
+        return clauses
+
+    @staticmethod
     def _enum_value(value: Any) -> Any:
         return getattr(value, "value", value)
 
@@ -264,10 +303,19 @@ class CredentialVaultService(BaseService):
         model: Any,
         tenant_id: uuid.UUID,
         *clauses: Any,
+        for_update: bool = False,
     ) -> Any:
+        """Read a tenant entity, locking its row for mutable operations.
+
+        The optional PostgreSQL row lock is shared by credential mutations
+        and personal model-key access. It is deliberately opt-in so metadata
+        lookups do not acquire write locks or alter existing read contracts.
+        """
         query = self._tenant_query(model, tenant_id)
         if clauses:
             query = query.where(*clauses)
+        if for_update:
+            query = query.with_for_update(of=model)
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
@@ -643,6 +691,23 @@ class CredentialVaultService(BaseService):
             "revision": revision,
         }
 
+    @staticmethod
+    def _plugin_effective_credential_status(
+        *, status: str, expires_at: datetime | None, secret_count: int
+    ) -> str:
+        """Project credential usability, including expiry, without disclosing secrets."""
+        if status != CredentialStatus.ACTIVE.value:
+            return status
+        if expires_at is not None:
+            if (
+                not isinstance(expires_at, datetime)
+                or expires_at.tzinfo is None
+                or expires_at.utcoffset() is None
+                or expires_at <= datetime.now(timezone.utc)
+            ):
+                return "expired"
+        return CredentialStatus.ACTIVE.value if secret_count == 1 else "unavailable"
+
     async def list_plugin_credential_status(
         self,
         *,
@@ -690,8 +755,18 @@ class CredentialVaultService(BaseService):
                 )
                 if provider is None or credential.provider_id != provider.id:
                     raise PluginCredentialDenied("Plugin credential binding integrity denied")
-                if credential.status == CredentialStatus.ACTIVE.value:
-                    # EXISTS projection does not return secret contents.
+                # Expired credentials cannot satisfy plugin execution readiness.
+                # Do not inspect secret contents; count only the scoped binding.
+                secret_count = 0
+                if credential.status == CredentialStatus.ACTIVE.value and (
+                    credential.expires_at is None
+                    or (
+                        isinstance(credential.expires_at, datetime)
+                        and credential.expires_at.tzinfo is not None
+                        and credential.expires_at.utcoffset() is not None
+                        and credential.expires_at > datetime.now(timezone.utc)
+                    )
+                ):
                     count = await session.execute(
                         text(
                             "SELECT count(*) FROM public.credential_secrets "
@@ -705,12 +780,12 @@ class CredentialVaultService(BaseService):
                             "field_key": slot.field_key,
                         },
                     )
-                    status = (
-                        CredentialStatus.ACTIVE.value
-                        if count.scalar_one() == 1 else "unavailable"
-                    )
-                else:
-                    status = str(credential.status)
+                    secret_count = count.scalar_one()
+                status = self._plugin_effective_credential_status(
+                    status=str(credential.status),
+                    expires_at=credential.expires_at,
+                    secret_count=secret_count,
+                )
                 result[slot.field_key] = self._plugin_secret_receipt(
                     status=status, revision=int(slot.revision),
                 )
@@ -959,11 +1034,22 @@ class CredentialVaultService(BaseService):
                 revision=int(slot.revision),
             )
 
-    async def get_credential(self, credential_id: uuid.UUID, tenant_id: uuid.UUID) -> Optional[Credential]:
+    async def get_credential(
+        self,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        *,
+        owner_user_id: Optional[str] = None,
+    ) -> Optional[Credential]:
+        owner_clauses = self._credential_owner_clauses(owner_user_id)
         async with self._session_scope() as session:
-            query = self._tenant_query(Credential, tenant_id).options(selectinload(Credential.secrets)).where(
-                Credential.id == credential_id
+            query = self._tenant_query(Credential, tenant_id).where(
+                Credential.id == credential_id, *owner_clauses
             )
+            # Consumer metadata reads must not eagerly fetch encrypted secrets.
+            # Trusted administrative tenant reads retain their existing shape.
+            if owner_user_id is None:
+                query = query.options(selectinload(Credential.secrets))
             result = await session.execute(query)
             return result.scalar_one_or_none()
 
@@ -974,9 +1060,14 @@ class CredentialVaultService(BaseService):
         status: Optional[CredentialStatus] = None,
         limit: int = 100,
         offset: int = 0,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> List[Credential]:
+        owner_clauses = self._credential_owner_clauses(owner_user_id)
         async with self._session_scope() as session:
-            query = self._tenant_query(Credential, tenant_id).options(selectinload(Credential.secrets))
+            query = self._tenant_query(Credential, tenant_id).where(*owner_clauses)
+            if owner_user_id is None:
+                query = query.options(selectinload(Credential.secrets))
             if provider_id:
                 provider = await self._tenant_entity(
                     session, ProviderDefinition, tenant_id, ProviderDefinition.provider_id == provider_id
@@ -995,10 +1086,14 @@ class CredentialVaultService(BaseService):
         update_data: CredentialUpdate,
         tenant_id: uuid.UUID,
         user_id: str,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> Optional[Credential]:
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return None
@@ -1021,11 +1116,18 @@ class CredentialVaultService(BaseService):
             return credential
 
     async def delete_credential(
-        self, credential_id: uuid.UUID, tenant_id: uuid.UUID, user_id: str
+        self,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: str,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> bool:
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return False
@@ -1057,12 +1159,16 @@ class CredentialVaultService(BaseService):
         new_secrets: List[CredentialSecretCreate],
         tenant_id: uuid.UUID,
         user_id: str,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> Optional[TokenRotationResult]:
         if not new_secrets:
             raise ValueError("At least one replacement secret is required")
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return None
@@ -1116,10 +1222,14 @@ class CredentialVaultService(BaseService):
         tenant_id: uuid.UUID,
         user_id: str,
         reason: Optional[str] = None,
+        *,
+        owner_user_id: Optional[str] = None,
     ) -> bool:
+        owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return False
@@ -1138,6 +1248,297 @@ class CredentialVaultService(BaseService):
             )
             await session.commit()
             return True
+
+    # Consumer operations must use these explicit owner-bound entry points.
+    # Existing tenant-wide operations remain for authorized infrastructure.
+    async def create_owned_credential(
+        self,
+        credential_data: CredentialCreate,
+        secrets: List[CredentialSecretCreate],
+        tenant_id: uuid.UUID,
+        user_id: str,
+    ) -> Credential:
+        self._require_credential_owner(user_id)
+        if credential_data.credential_type != self._OWNED_MODEL_CREDENTIAL_TYPE:
+            raise ValueError("Consumer credential must be a model API key")
+        self._require_owned_model_secret(secrets)
+        return await self.create_credential(
+            credential_data, secrets, tenant_id, user_id
+        )
+
+    @staticmethod
+    def _require_owned_model_secret(secrets: List[CredentialSecretCreate]) -> None:
+        if (
+            len(secrets) != 1
+            or secrets[0].secret_type != "api_key"
+            or not isinstance(secrets[0].encrypted_value, str)
+            or not secrets[0].encrypted_value.strip()
+            or len(secrets[0].encrypted_value.encode("utf-8")) > 4096
+        ):
+            raise ValueError("Consumer model credentials require one bounded API key")
+
+    async def get_owned_credential(
+        self, credential_id: uuid.UUID, tenant_id: uuid.UUID, user_id: str
+    ) -> Optional[Credential]:
+        return await self.get_credential(
+            credential_id, tenant_id,
+            owner_user_id=self._require_credential_owner(user_id),
+        )
+
+    async def list_owned_credentials(
+        self,
+        tenant_id: uuid.UUID,
+        user_id: str,
+        provider_id: Optional[str] = None,
+        status: Optional[CredentialStatus] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Credential]:
+        return await self.list_credentials(
+            tenant_id, provider_id=provider_id, status=status,
+            limit=limit, offset=offset,
+            owner_user_id=self._require_credential_owner(user_id),
+        )
+
+    async def update_owned_credential(
+        self,
+        credential_id: uuid.UUID,
+        update_data: CredentialUpdate,
+        tenant_id: uuid.UUID,
+        user_id: str,
+    ) -> Optional[Credential]:
+        return await self.update_credential(
+            credential_id, update_data, tenant_id, self._require_credential_owner(user_id),
+            owner_user_id=user_id,
+        )
+
+    async def delete_owned_credential(
+        self, credential_id: uuid.UUID, tenant_id: uuid.UUID, user_id: str
+    ) -> bool:
+        return await self.delete_credential(
+            credential_id, tenant_id, self._require_credential_owner(user_id),
+            owner_user_id=user_id,
+        )
+
+    async def rotate_owned_credential(
+        self,
+        credential_id: uuid.UUID,
+        new_secrets: List[CredentialSecretCreate],
+        tenant_id: uuid.UUID,
+        user_id: str,
+    ) -> Optional[TokenRotationResult]:
+        self._require_owned_model_secret(new_secrets)
+        return await self.rotate_credential(
+            credential_id, new_secrets, tenant_id, self._require_credential_owner(user_id),
+            owner_user_id=user_id,
+        )
+
+    async def revoke_owned_credential(
+        self,
+        credential_id: uuid.UUID,
+        tenant_id: uuid.UUID,
+        user_id: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        return await self.revoke_credential(
+            credential_id, tenant_id, self._require_credential_owner(user_id),
+            reason=reason, owner_user_id=user_id,
+        )
+
+    async def resolve_authorized_personal_model_key(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        plan: "AuthorizedExecutionPlan",
+        credential_id: uuid.UUID,
+        provider_id: str,
+        model_id: str,
+    ) -> str:
+        """Resolve one personal model key inside the trusted runtime host only.
+
+        This method is not an HTTP or plugin capability. RuntimePolicy must
+        explicitly authorize the exact user, tenant, session, provider, model,
+        and credential in an AuthorizedExecutionPlan before the runtime invokes
+        this method. A consumer-supplied credential ID or provider/model choice
+        is never sufficient. As of this boundary, the current ChatRuntime does
+        not mint these grants, so unapproved executions remain denied.
+
+        Audit persistence is committed before plaintext leaves the Vault.
+        Never include the returned key in logs, traces, receipts or fallbacks.
+        """
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
+        from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+
+        denial = "Personal model credential execution denied"
+        if (
+            not isinstance(context, ChatExecutionContext)
+            or not isinstance(plan, AuthorizedExecutionPlan)
+        ):
+            raise PermissionError(denial)
+        try:
+            principal = context.require_authenticated_user()
+            tenant_id = uuid.UUID(str(context.tenant_id))
+            if (
+                not isinstance(credential_id, uuid.UUID)
+                or str(tenant_id) != context.tenant_id
+                or not context.user_id
+                or context.user_id != context.user_id.strip()
+                or len(context.user_id) > 255
+                or not isinstance(provider_id, str)
+                or not provider_id
+                or provider_id != provider_id.strip()
+                or len(provider_id) > 128
+                or not isinstance(model_id, str)
+                or not model_id
+                or model_id != model_id.strip()
+                or len(model_id) > 255
+                or not isinstance(context.correlation_id, str)
+                or not context.correlation_id
+                or len(context.correlation_id) > 128
+                or any(
+                    ord(char) < 32 or ord(char) == 127
+                    for char in provider_id + model_id + context.correlation_id
+                )
+                or not principal.is_active
+                or not principal.is_verified
+            ):
+                raise PermissionError(denial)
+        except (ValueError, TypeError, AttributeError, PermissionError):
+            raise PermissionError(denial) from None
+
+        constraints = plan.provider_constraints
+        exact_grant = {
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "credential_id": str(credential_id),
+        }
+        if (
+            not plan.execution_id
+            or not plan.policy_decision_id
+            or not plan.matches_execution_scope(
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                session_id=context.session_id,
+            )
+            or "model.personal_key.execute" not in plan.allowed_capabilities
+            or not isinstance(constraints, dict)
+            or constraints.get("personal_model_credential") != exact_grant
+            or constraints.get("external_allowed") is not True
+            or constraints.get("local_only") is not False
+            or not isinstance(constraints.get("eligible_providers"), (list, tuple, set))
+            or not isinstance(constraints.get("forbidden_providers"), (list, tuple, set))
+            or provider_id not in constraints["eligible_providers"]
+            or provider_id in constraints["forbidden_providers"]
+        ):
+            raise PermissionError(denial)
+
+        async with self._session_scope() as session:
+            statement = (
+                self._tenant_query(Credential, tenant_id)
+                .join(
+                    ProviderDefinition,
+                    Credential.provider_id == ProviderDefinition.id,
+                )
+                .add_columns(ProviderDefinition)
+                .options(selectinload(Credential.secrets))
+                .where(
+                    Credential.id == credential_id,
+                    Credential.tenant_id == tenant_id,
+                    Credential.created_by == context.user_id,
+                    Credential.credential_type == self._OWNED_MODEL_CREDENTIAL_TYPE,
+                    Credential.status == CredentialStatus.ACTIVE.value,
+                    ProviderDefinition.tenant_id == tenant_id,
+                    ProviderDefinition.provider_id == provider_id,
+                    ProviderDefinition.is_system.is_(True),
+                    ProviderDefinition.enabled.is_(True),
+                    ProviderDefinition.provider_type == ProviderType.API_KEY.value,
+                    or_(
+                        Credential.expires_at.is_(None),
+                        Credential.expires_at > datetime.now(timezone.utc),
+                    ),
+                )
+                # Keep the credential and provider definitions stable until
+                # the encrypted secret has been audited and the transaction
+                # commits. All credential mutations lock the same parent row
+                # before editing its status or secret children.
+                .with_for_update(of=(Credential, ProviderDefinition))
+            )
+            row = (await session.execute(statement)).one_or_none()
+            if row is None:
+                raise PermissionError(denial)
+            credential, provider = row
+            if (
+                credential.tenant_id != tenant_id
+                or credential.created_by != context.user_id
+                or credential.credential_type != self._OWNED_MODEL_CREDENTIAL_TYPE
+                or credential.status != CredentialStatus.ACTIVE.value
+                or credential.provider_id != provider.id
+                or provider.tenant_id != tenant_id
+                or provider.provider_id != provider_id
+                or not provider.enabled
+                or not provider.is_system
+                or provider.provider_type != ProviderType.API_KEY.value
+                or provider.config != {"managed_for": "model_api_key"}
+                or (
+                    credential.expires_at is not None
+                    and (
+                        not isinstance(credential.expires_at, datetime)
+                        or credential.expires_at.tzinfo is None
+                        or credential.expires_at.utcoffset() is None
+                        or credential.expires_at <= datetime.now(timezone.utc)
+                    )
+                )
+                or len(credential.secrets) != 1
+            ):
+                raise PermissionError(denial)
+
+            secret = credential.secrets[0]
+            if (
+                secret.tenant_id != tenant_id
+                or secret.credential_id != credential.id
+                or secret.secret_type != "api_key"
+                or not isinstance(secret.encrypted_value, str)
+                or not secret.encrypted_value
+            ):
+                raise PermissionError(denial)
+            try:
+                plaintext = decrypt_data(secret.encrypted_value.encode("ascii"))
+            except Exception:
+                raise PermissionError(denial) from None
+            if (
+                not isinstance(plaintext, str)
+                or not plaintext
+                or plaintext != plaintext.strip()
+                or len(plaintext.encode("utf-8")) > 4096
+            ):
+                raise PermissionError(denial)
+
+            try:
+                await self._audit(
+                    session,
+                    tenant_id=tenant_id,
+                    user_id=context.user_id,
+                    event_type=AuditEventType.ACCESS,
+                    action="personal_model_credential_resolved",
+                    resource_type="credential",
+                    resource_id=str(credential.id),
+                    credential_id=credential.id,
+                    provider_id=provider.id,
+                    correlation_id=context.correlation_id,
+                    metadata={
+                        "provider_id": provider_id,
+                        "model_id": model_id,
+                        "execution_id": plan.execution_id,
+                        "policy_decision_id": plan.policy_decision_id,
+                    },
+                )
+                # A failed durable audit denies the secret to the transport.
+                await session.commit()
+            except Exception:
+                raise PermissionError(denial) from None
+            return plaintext
 
     async def create_external_account(
         self, account_data: ExternalAccountCreate, tenant_id: uuid.UUID, user_id: str

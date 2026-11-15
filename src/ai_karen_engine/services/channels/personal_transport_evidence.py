@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+    PAIRING_QR_MAX_LIFETIME,
+)
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection,
     PersonalCredentialErasureReceipt,
@@ -75,7 +78,7 @@ def validate_pairing_qr(
         actual_session_reference=qr.session_reference,
     )
     _require_time(qr.issued_at, now=now, max_age=max_age)
-    if qr.expires_at <= now or qr.expires_at - qr.issued_at > timedelta(minutes=5):
+    if qr.expires_at <= now or qr.expires_at - qr.issued_at > PAIRING_QR_MAX_LIFETIME:
         raise PersonalTransportEvidenceDenied("QR expired or exceeded maximum lifetime")
 
 

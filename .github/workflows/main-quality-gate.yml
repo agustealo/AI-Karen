@@ -126,6 +126,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q src server scripts
 
+      - name: Voice Runtime STT and engine-neutral synthesis contracts
+        run: pytest tests/core/voice -q
+
       - name: Verify authentication and training route imports
         run: |
           python -m py_compile src/ai_karen_engine/auth/models.py src/ai_karen_engine/auth/rbac_middleware.py src/ai_karen_engine/auth/session.py src/ai_karen_engine/api_routes/admin/training.py
@@ -296,6 +299,7 @@ jobs:
       - name: Ollama live inventory and provider settings contracts
         run: |
           pytest tests/core/model_runtime/test_provider_registry_endpoints.py -q
+          pytest tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_structured_tool_provider_execution.py tests/core/model_runtime/test_personal_model_transport_grant.py -q
           pytest tests/core/expression/test_gateway_selected_provider_precedence.py -q
           pytest tests/core/model_runtime/test_ollama_native_inventory.py -q
           pytest tests/core/model_runtime/test_ollama_inference_endpoint.py -q
@@ -305,6 +309,7 @@ jobs:
           pytest tests/api_routes/test_runtime_provider_catalog_ollama.py -q
           pytest tests/core/model_runtime/test_ollama_model_inventory_contract.py -q
           pytest tests/core/runtime/test_chat_runtime_settings_selection.py -q
+          pytest tests/core/runtime/test_personal_model_credential_authority.py -q
           pytest tests/core/runtime/test_chat_runtime_graph_provenance.py -q
           pytest tests/core/reasoning/test_chat_runtime_reasoning_activation.py -q
           pytest tests/core/runtime/test_reasoning_model_attribution_truth.py -q
@@ -324,6 +329,8 @@ jobs:
           pytest tests/platform/memory/test_semantic_user_state_projection.py -q
           pytest tests/memory/test_stm_closure_1b.py -q
           pytest tests/auth/test_tenant_scope_fail_closed.py -q
+          pytest tests/architecture/test_identity_vault_tenant_contract.py -q
+          pytest tests/services/identity_vault/test_identity_vault.py -q -k 'owned_credential or owned_model_credential or personal_model_credential_resolution or personal_model_key_release or mutating_credential_locks or credential_metadata_read'
 
       - name: Reject retired provider authorities
         shell: bash

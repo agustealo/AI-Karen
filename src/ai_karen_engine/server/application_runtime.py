@@ -197,6 +197,22 @@ async def initialize_application_runtime(app: FastAPI) -> None:
         # Startup failure must not leak the already-started model download worker.
         await shutdown_application_runtime(app)
         raise
+    # This is the canonical production lifespan. The older startup helper's
+    # optional voice hook is not invoked through create_application_lifespan.
+    # Register only explicitly opted-in, locally healthy engines here.
+    from ai_karen_engine.services.voice_runtime import configure_local_voice_runtime
+
+    try:
+        await configure_local_voice_runtime()
+    except Exception as exc:
+        # Transcription remains an optional host-configured engine. Synthesis
+        # must be authorized through the chosen governed modality owner;
+        # the retired Piper implementation must not be initialized here.
+        logger.warning(
+            "Optional local voice transcription initialization unavailable",
+            extra={"voice_mode": "transcription", "error_type": type(exc).__name__},
+        )
+
     setattr(app.state, _RUNTIME_ATTACHED_STATE_KEY, True)
 
     logger.info("Canonical application Runtime services attached")
@@ -227,6 +243,18 @@ async def shutdown_application_runtime(app: FastAPI) -> None:
         app.state.credential_vault_service = None
     app.state._channel_host_owns_kernel = False
     app.state._channel_host_owns_vault = False
+
+    # Revoke both local engines and wait for in-flight model inference before
+    # process resources are torn down. No voice capability survives shutdown.
+    try:
+        from ai_karen_engine.services.voice_runtime import shutdown_local_voice_runtime
+
+        await shutdown_local_voice_runtime()
+    except Exception as exc:
+        logger.warning(
+            "Local voice shutdown degraded",
+            extra={"error_type": type(exc).__name__},
+        )
 
     model_download_worker = getattr(app.state, "model_download_worker", None)
     if model_download_worker is not None:

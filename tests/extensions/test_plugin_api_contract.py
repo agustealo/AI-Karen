@@ -20,7 +20,7 @@ from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
 from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
 
-def _manifest(*, with_schema: bool = True) -> ExtensionManifest:
+def _manifest(*, with_schema: bool = True, with_config: bool = True) -> ExtensionManifest:
     schema = None
     if with_schema:
         schema = {
@@ -50,7 +50,7 @@ def _manifest(*, with_schema: bool = True) -> ExtensionManifest:
             },
             "required": ["region", "api_key"],
             "additional_properties": False,
-        },
+        } if with_config else None,
         execution_input_schema=schema,
     )
 
@@ -239,6 +239,9 @@ async def test_parameter_validation_uses_catalog_manifest_schema():
 @pytest.mark.asyncio
 async def test_execution_delegates_typed_request_to_canonical_kernel():
     service, kernel = _service()
+    # This test isolates delegation for a plugin without durable tenant config.
+    # Configured plugins must instead satisfy the separate fail-closed readiness tests.
+    kernel.record["manifest"] = _manifest(with_config=False)
     policy = _Policy()
     service._policy_enforcer = policy
 

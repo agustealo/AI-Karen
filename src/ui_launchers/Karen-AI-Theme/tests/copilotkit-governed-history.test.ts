@@ -322,6 +322,49 @@ describe("CK-07D governed CopilotKit history and reconnect", () => {
     }
   });
 
+  it.each([
+    ["unsupported_rich_history", "HISTORY_RICH_UNSUPPORTED"],
+    ["incomplete_presentation_capture", "HISTORY_PRESENTATION_INCOMPLETE"],
+    ["unattested_runtime_metadata", "HISTORY_ATTESTATION_MISSING"],
+    ["modified_attested_message", "HISTORY_ATTESTATION_MISMATCH"],
+    ["history_message_limit", "HISTORY_REPLAY_LIMIT"],
+  ])("forwards only a safe replay classification for %s", async (reason, category) => {
+    const correlation = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    setup(() => Response.json({ detail: "private-token-never-returned" }, {
+      status: reason === "history_message_limit" ? 502 : 409,
+      headers: {
+        "x-karen-history-replay-reason": reason,
+        "x-correlation-id": correlation,
+      },
+    }));
+    const response = await GET(req("history"));
+    expect(response.status).toBe(reason === "history_message_limit" ? 502 : 409);
+    expect(await response.json()).toEqual({
+      detail: reason === "history_message_limit"
+        ? "Complete governed replay could not be verified"
+        : "Complete governed replay is unavailable",
+      error_code: category,
+      correlation_id: correlation,
+    });
+  });
+
+  it("rejects untrusted replay error metadata and never echoes private diagnostics", async () => {
+    setup(() => Response.json({ detail: "secret-content" }, {
+      status: 409,
+      headers: {
+        "x-karen-history-replay-reason": "private-bearer-token",
+        "x-correlation-id": "untrusted-session-secret",
+      },
+    }));
+    const response = await GET(req("history"));
+    expect(response.status).toBe(409);
+    const text = JSON.stringify(await response.json());
+    expect(text).not.toContain("secret-content");
+    expect(text).not.toContain("private-bearer-token");
+    expect(text).not.toContain("untrusted-session-secret");
+    expect(text).not.toContain("error_code");
+  });
+
   it("fails atomically when canonical replay returns 409 or a truncated history", async () => {
     setup(() => Response.json({ detail: "private unsupported data" }, { status: 409 }));
     const unsupported = await POST(req("connect"));

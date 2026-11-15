@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import asyncio
+import uuid
 import json
 import logging
 import os
@@ -21,7 +22,10 @@ from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+
+from ai_karen_engine.auth.rbac_middleware import Permission, require_permission
+from ai_karen_engine.services.admin.admin_provider_service import AdminProviderService
 
 from ai_karen_engine.auth.session import get_current_user
 
@@ -60,6 +64,16 @@ from ai_karen_engine.config.provider_authentication import (
 )
 
 logger = logging.getLogger(__name__)
+
+from ai_karen_engine.database.models.identity_vault import (
+    CredentialCreate,
+    CredentialSecretCreate,
+    ProviderDefinitionCreate,
+    ProviderType as VaultProviderType,
+)
+from ai_karen_engine.services.identity_vault.credential_vault_service import (
+    get_credential_vault_service,
+)
 
 router = APIRouter(prefix="/settings/model", tags=["model-settings"])
 LEGACY_OLLAMA_IN_STACK_URL = "http://ollama:11434"
@@ -158,6 +172,8 @@ class ProviderPayload(BaseModel):
     health_last_checked_at: Optional[datetime] = None
     user_selectable: bool = True
     enabled: bool = True
+    chat_enabled: bool = True
+    chat_model_visibility: Dict[str, bool] = Field(default_factory=dict)
     policy_allowed: bool = True
     policy_rejection_reason: Optional[str] = None
     runtime_engine: Optional[str] = None
@@ -191,6 +207,16 @@ class ModelSettingsUpdateRequest(BaseModel):
     custom_headers: Optional[Dict[str, str]] = None
     runtime_source: Optional[Literal["host", "container"]] = None
     chat_response_mode: Optional[Literal["streaming_first", "auto", "non_streaming"]] = None
+
+
+class ProviderChatAccessRequest(BaseModel):
+    """Workspace administrator's explicit chat picker publication settings."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider_enabled: Optional[bool] = None
+    chat_enabled: Optional[bool] = None
+    model_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    model_enabled: Optional[bool] = None
 
 
 class ProviderModelsResponse(BaseModel):
@@ -400,6 +426,295 @@ CUSTOM_PROVIDER_TEMPLATES = [
 ]
 
 
+
+_MODEL_KEY_CREDENTIAL_TYPE = "model_api_key"
+_MODEL_KEY_PROVIDER_MARKER = {"managed_for": _MODEL_KEY_CREDENTIAL_TYPE}
+
+
+class ConsumerModelStorageReceipt(BaseModel):
+    provider: str
+    storage_enabled: bool
+    runtime_authorized: bool = False
+
+
+class ConsumerModelKeyCreate(BaseModel):
+    """Personal credential ingress, with no caller-controlled tenant or endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(min_length=2, max_length=64)
+    api_key: SecretStr = Field(repr=False)
+
+
+class ConsumerModelKeyReceipt(BaseModel):
+    id: uuid.UUID
+    provider: str
+    status: str
+    masked_hint: Optional[str] = None
+    # Storage is not a grant to run an external model.
+    runtime_authorized: bool = False
+
+
+class ConsumerModelKeyList(BaseModel):
+    credentials: List[ConsumerModelKeyReceipt]
+    limit: int
+    offset: int
+
+
+def _consumer_key_identity(user: Any) -> tuple[uuid.UUID, str]:
+    """Use the authenticated user and tenant from get_current_user only."""
+    if not isinstance(user, dict):
+        raise HTTPException(status_code=403, detail="Authenticated identity required")
+    actor = user.get("user_id")
+    if (
+        not isinstance(actor, str)
+        or not actor
+        or actor != actor.strip()
+        or len(actor) > 255
+    ):
+        raise HTTPException(status_code=403, detail="Authenticated owner required")
+    try:
+        tenant = uuid.UUID(str(user.get("tenant_id") or ""))
+    except (TypeError, AttributeError, ValueError):
+        raise HTTPException(status_code=403, detail="Explicit UUID tenant required") from None
+    return tenant, actor
+
+
+def _consumer_key_material(secret: SecretStr) -> str:
+    key = secret.get_secret_value()
+    if (
+        not key
+        or key != key.strip()
+        or len(key.encode("utf-8")) > 4096
+        or any(ord(char) < 32 or ord(char) == 127 for char in key)
+    ):
+        raise HTTPException(status_code=422, detail="Invalid API key format")
+    return key
+
+
+def _eligible_personal_key_provider(provider_name: str) -> tuple[str, ProviderConfig]:
+    """One configured-provider policy for admin provisioning and user key writes."""
+    canonical = _normalize_provider_id(provider_name)
+    provider = get_provider_config_manager().get_provider(canonical)
+    if (
+        canonical not in MODEL_SETTINGS_PROVIDER_ORDER
+        or canonical in {"custom", "fallback"}
+        or provider is None
+        or provider.name != canonical
+        or not provider.enabled
+        or not provider.chat_enabled
+        or provider.provider_type not in {ProviderType.EXTERNAL, ProviderType.HYBRID}
+        or provider.authentication is None
+        or provider.authentication.type != AuthenticationType.API_KEY
+    ):
+        raise HTTPException(
+            status_code=403, detail="Personal credentials not permitted for provider"
+        )
+    return canonical, provider
+
+
+def _provisioned_model_key_provider(definition: Any, provider_name: str) -> bool:
+    """Recognize only the canonical system-managed tenant provider namespace."""
+    return bool(
+        definition is not None
+        and definition.provider_id == provider_name
+        and definition.enabled is True
+        and definition.is_system is True
+        and str(getattr(definition.provider_type, "value", definition.provider_type))
+        == VaultProviderType.API_KEY.value
+        and definition.config == _MODEL_KEY_PROVIDER_MARKER
+    )
+
+
+@router.post(
+    "/credentials/providers/{provider_id}/provision",
+    response_model=ConsumerModelStorageReceipt,
+)
+async def provision_consumer_model_key_provider(
+    provider_id: str,
+    current_user: Any = Depends(require_permission(Permission.ADMIN_PROVIDERS_MANAGE)),
+) -> ConsumerModelStorageReceipt:
+    """Permit personal key storage only after an authorized tenant admin grants it.
+
+    This creates an Identity Vault provider definition only. It does not
+    authorize an external model, issue a key, or change chat runtime policy.
+    """
+    tenant, actor = _consumer_key_identity(current_user)
+    canonical, approved = _eligible_personal_key_provider(provider_id)
+    vault = get_credential_vault_service()
+    try:
+        existing = await vault.get_provider(canonical, tenant)
+        if existing is None:
+            existing = await vault.create_provider(
+                ProviderDefinitionCreate(
+                    provider_id=canonical,
+                    display_name=approved.display_name,
+                    provider_type=VaultProviderType.API_KEY,
+                    config=dict(_MODEL_KEY_PROVIDER_MARKER),
+                    supported_capabilities=["chat"],
+                    enabled=True,
+                    is_system=True,
+                ),
+                tenant,
+                actor,
+            )
+    except Exception as exc:
+        logger.warning(
+            "personal_model_provider_provisioning_unavailable",
+            extra={"provider": canonical, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Tenant credential provider could not be provisioned"
+        ) from None
+
+    if not _provisioned_model_key_provider(existing, canonical):
+        raise HTTPException(
+            status_code=409,
+            detail="Tenant provider definition conflicts with model key storage",
+        )
+    return ConsumerModelStorageReceipt(
+        provider=canonical, storage_enabled=True, runtime_authorized=False
+    )
+
+
+def _consumer_key_receipt(record: Any, provider: str) -> ConsumerModelKeyReceipt:
+    return ConsumerModelKeyReceipt(
+        id=record.id,
+        provider=provider,
+        status=str(getattr(record.status, "value", record.status)),
+        masked_hint=record.masked_hint,
+        runtime_authorized=False,
+    )
+
+
+def _consumer_vault_error(exc: Exception) -> HTTPException:
+    logger.warning(
+        "consumer_model_vault_unavailable",
+        extra={"error_type": type(exc).__name__},
+    )
+    return HTTPException(status_code=503, detail="Credential Vault unavailable")
+
+
+@router.get("/credentials", response_model=ConsumerModelKeyList)
+async def list_consumer_model_keys(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: Any = Depends(get_current_user),
+) -> ConsumerModelKeyList:
+    tenant, actor = _consumer_key_identity(current_user)
+    vault = get_credential_vault_service()
+    try:
+        owned = await vault.list_owned_credentials(
+            tenant, actor, limit=limit, offset=offset
+        )
+        providers = await vault.list_providers(tenant, limit=1000)
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    provider_names = {provider.id: provider.provider_id for provider in providers}
+    return ConsumerModelKeyList(
+        credentials=[
+            _consumer_key_receipt(
+                record, provider_names.get(record.provider_id, "unavailable")
+            )
+            for record in owned
+        ],
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/credentials", response_model=ConsumerModelKeyReceipt, status_code=201
+)
+async def create_consumer_model_key(
+    payload: ConsumerModelKeyCreate,
+    current_user: Any = Depends(get_current_user),
+) -> ConsumerModelKeyReceipt:
+    tenant, actor = _consumer_key_identity(current_user)
+    key = _consumer_key_material(payload.api_key)
+    # Reuse the exact provider policy enforced by the admin provisioning route.
+    canonical, _ = _eligible_personal_key_provider(payload.provider)
+
+    vault = get_credential_vault_service()
+    try:
+        definition = await vault.get_provider(canonical, tenant)
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    if not _provisioned_model_key_provider(definition, canonical):
+        # A similarly named plugin or manually created Vault provider must
+        # never authorize consumer model credential storage.
+        raise HTTPException(
+            status_code=409, detail="Tenant provider credential storage is not enabled"
+        )
+
+    try:
+        result = await get_provider_auth_manager().validate_candidate_api_key(
+            canonical, key
+        )
+    except Exception as exc:
+        logger.warning(
+            "consumer_model_key_probe_unavailable",
+            extra={"provider": canonical, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=503, detail="Provider validation unavailable") from None
+    if result.status != AuthenticationStatus.VALID:
+        raise HTTPException(
+            status_code=422, detail="Provider did not verify the API key; nothing was saved"
+        )
+
+    try:
+        record = await vault.create_owned_credential(
+            CredentialCreate(
+                name=f"Personal {canonical} model API key",
+                provider_id=definition.id,
+                credential_type=_MODEL_KEY_CREDENTIAL_TYPE,
+                masked_hint=f"••••{key[-4:]}",
+            ),
+            [CredentialSecretCreate(secret_type="api_key", encrypted_value=key)],
+            tenant,
+            actor,
+        )
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    return _consumer_key_receipt(record, canonical)
+
+
+@router.post("/credentials/{credential_id}/revoke")
+async def revoke_consumer_model_key(
+    credential_id: uuid.UUID,
+    current_user: Any = Depends(get_current_user),
+) -> Dict[str, bool]:
+    tenant, actor = _consumer_key_identity(current_user)
+    try:
+        revoked = await get_credential_vault_service().revoke_owned_credential(
+            credential_id, tenant, actor, reason="consumer_request"
+        )
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Personal credential not found")
+    return {"locally_revoked": True, "provider_revocation_verified": False}
+
+
+@router.delete("/credentials/{credential_id}")
+async def delete_consumer_model_key(
+    credential_id: uuid.UUID,
+    current_user: Any = Depends(get_current_user),
+) -> Dict[str, bool]:
+    tenant, actor = _consumer_key_identity(current_user)
+    try:
+        deleted = await get_credential_vault_service().delete_owned_credential(
+            credential_id, tenant, actor
+        )
+    except Exception as exc:
+        raise _consumer_vault_error(exc) from None
+    if not deleted:
+        # The Vault refuses deletion while active references still exist.
+        raise HTTPException(
+            status_code=409, detail="Credential unavailable or has active bindings"
+        )
+    return {"locally_deleted": True, "provider_revocation_verified": False}
+
+
 @router.get("", response_model=ModelSettingsResponse)
 async def get_model_settings(
     current_user: Any = Depends(get_current_user),
@@ -594,6 +909,81 @@ async def update_model_settings(
             get_registry().invalidate_provider_cache(_normalize_provider_id(request.provider))
         except: pass
 
+    return await build_model_settings_payload()
+
+
+@router.patch("/providers/{provider_id}/chat-access", response_model=ModelSettingsResponse)
+async def update_provider_chat_access(
+    provider_id: str,
+    request: ProviderChatAccessRequest,
+    current_user: Any = Depends(require_permission(Permission.ADMIN_PROVIDERS_MANAGE)),
+) -> Dict[str, Any]:
+    """Publish administrator-approved provider/model choices for chat selection.
+
+    Publication is distinct from provider health, credentials, available
+    inventory, and RuntimePolicy. No secret material enters this endpoint.
+    """
+    normalized_id = _normalize_provider_id(provider_id)
+    manager = get_provider_config_manager()
+    provider = manager.get_provider(normalized_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Unknown model provider")
+    if (request.model_id is None) != (request.model_enabled is None):
+        raise HTTPException(status_code=422, detail="Model ID and selection flag are required together")
+    if request.provider_enabled is None and request.chat_enabled is None and request.model_id is None:
+        raise HTTPException(status_code=422, detail="Choose a provider or model control to update")
+
+    if request.model_id is not None:
+        # Only an inventory-backed or registered ID can receive a chat toggle.
+        # A client must not populate arbitrary model identifiers via this route.
+        known_models = {model.id for model in (provider.models or [])}
+        if request.model_id not in known_models:
+            if not provider.enabled:
+                raise HTTPException(status_code=409, detail="Enable provider before selecting its models")
+            try:
+                live = await get_provider_models(normalized_id, current_user=current_user)
+            except HTTPException as exc:
+                raise HTTPException(status_code=409, detail="Model inventory is not verified") from exc
+            known_models.update(
+                model.id for model in live["models"]
+                if model.source in {"provider_live", "local_runtime", "ollama_native"}
+            )
+            if request.model_id not in known_models:
+                raise HTTPException(status_code=422, detail="Model is not in the configured or live inventory")
+
+    try:
+        updated = manager.set_chat_controls(
+            normalized_id,
+            provider_enabled=request.provider_enabled,
+            chat_enabled=request.chat_enabled,
+            model_id=request.model_id,
+            model_enabled=request.model_enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        logger.exception("Provider chat access persistence unavailable")
+        raise HTTPException(status_code=503, detail="Provider chat access persistence unavailable") from exc
+
+    # Reuse the existing administrative audit authority, never secret values.
+    AdminProviderService()._audit_mutation(
+        action="chat_access_changed",
+        provider_id=normalized_id,
+        operator_id=(
+            current_user.get("user_id") if isinstance(current_user, dict)
+            else getattr(current_user, "user_id", None)
+        ),
+        metadata={
+            "provider_enabled": updated.enabled,
+            "chat_enabled": updated.chat_enabled,
+            "model_id": request.model_id,
+            "model_enabled": request.model_enabled,
+        },
+    )
+    try:
+        get_registry().invalidate_provider_cache(normalized_id)
+    except Exception:
+        logger.warning("Provider cache invalidation unavailable for %s", normalized_id)
     return await build_model_settings_payload()
 
 
@@ -957,6 +1347,21 @@ async def build_model_settings_payload() -> Dict[str, Any]:
 
         api_key_status = _get_api_key_status(provider.name, provider)
         
+        # Ollama runtime options are measured with a native /api/tags probe.
+        # Publish only the selected endpoint's actual observation through the
+        # existing canonical health monitor, before reading its status. This
+        # is not an authorization grant or proof that any model is installed.
+        if provider.name == "ollama" and provider.enabled and runtime_options:
+            selected_source = override.get("runtime_source") or OLLAMA_HOST_RUNTIME
+            selected_option = next(
+                (option for option in runtime_options if option.source == selected_source),
+                None,
+            )
+            if selected_option is not None:
+                health_monitor.update_provider_health(
+                    provider.name, is_healthy=bool(selected_option.available)
+                )
+
         # Read the registry-owned observed health record by canonical ID.
         # Registration and configured keys never stand in for a successful
         # provider probe. This projection cannot grant RuntimePolicy access.
@@ -1044,6 +1449,8 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             health_last_checked_at=health_last_checked_at,
             user_selectable=bool(provider.priority > 0),
             enabled=bool(provider.enabled),
+            chat_enabled=bool(getattr(provider, 'chat_enabled', True)),
+            chat_model_visibility=dict(getattr(provider, 'chat_model_visibility', {}) or {}),
             policy_allowed=True,
             policy_rejection_reason=None,
             runtime_engine=runtime_engine,
