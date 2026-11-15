@@ -901,3 +901,100 @@ async def test_candidate_validation_refuses_http_and_non_model_json(
     unknown = await manager.validate_candidate_api_key("openai", "private-candidate")
     assert unknown.status == AuthenticationStatus.UNKNOWN
     assert "private-candidate" not in unknown.message
+
+def test_zai_admin_enablement_and_chat_visibility_survive_provider_restart(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config.llm_provider_config import LLMProviderConfigManager
+
+    monkeypatch.delenv("ZAI_ENABLED", raising=False)
+    monkeypatch.delenv("KARI_ZAI_ENABLED", raising=False)
+    first = LLMProviderConfigManager(config_dir=tmp_path)
+    assert first.get_provider("zai").enabled is False
+
+    enabled = first.set_chat_controls("zai", provider_enabled=True, chat_enabled=True)
+    assert enabled.enabled is True
+    assert first.set_chat_controls(
+        "zai", model_id="glm-4.5", model_enabled=False
+    ).chat_model_visibility["glm-4.5"] is False
+
+    restarted = LLMProviderConfigManager(config_dir=tmp_path)
+    config = restarted.get_provider("zai")
+    assert config.enabled is True
+    assert config.chat_enabled is True
+    assert config.chat_model_visibility["glm-4.5"] is False
+    restarted.set_chat_controls("zai", model_id="glm-4.5", model_enabled=True)
+    assert "glm-4.5" not in restarted.get_provider("zai").chat_model_visibility
+
+
+def test_admin_cannot_override_explicit_environment_disable(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config.llm_provider_config import LLMProviderConfigManager
+
+    monkeypatch.setenv("KARI_ZAI_ENABLED", "false")
+    manager = LLMProviderConfigManager(config_dir=tmp_path)
+    with pytest.raises(ValueError, match="environment"):
+        manager.set_chat_controls("zai", provider_enabled=True)
+    with pytest.raises(ValueError, match="Built-in"):
+        manager.set_chat_controls("builtin_transformers", chat_enabled=False)
+    with pytest.raises(ValueError, match="Model ID"):
+        manager.set_chat_controls("zai", model_id="not-a-model", model_enabled=None)
+
+
+@pytest.mark.asyncio
+async def test_admin_chat_visibility_endpoint_has_audited_backend_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = SimpleNamespace(
+        name="zai", enabled=False, chat_enabled=True, chat_model_visibility={},
+        provider_type=ProviderType.EXTERNAL, models=[SimpleNamespace(id="glm-4.5")],
+    )
+    writes = []
+    audit = []
+
+    def save(name, **kwargs):
+        assert name == "zai"
+        writes.append(kwargs)
+        current.enabled = kwargs["provider_enabled"]
+        current.chat_enabled = kwargs["chat_enabled"]
+        return current
+
+    manager = SimpleNamespace(
+        get_provider=lambda name: current if name == "zai" else None,
+        set_chat_controls=save,
+    )
+    monkeypatch.setattr(settings_routes, "get_provider_config_manager", lambda: manager)
+    monkeypatch.setattr(settings_routes, "AdminProviderService", lambda: SimpleNamespace(
+        _audit_mutation=lambda **kwargs: audit.append(kwargs)
+    ))
+    monkeypatch.setattr(settings_routes, "get_registry", lambda: SimpleNamespace(
+        invalidate_provider_cache=lambda provider: None
+    ))
+    async def confirmed():
+        return {"providers": [{"id": "zai", "enabled": current.enabled, "chat_enabled": current.chat_enabled}]}
+
+    monkeypatch.setattr(settings_routes, "build_model_settings_payload", confirmed)
+    result = await settings_routes.update_provider_chat_access(
+        "zai",
+        settings_routes.ProviderChatAccessRequest(provider_enabled=True, chat_enabled=False),
+        current_user={"user_id": "administrator", "roles": ["admin"]},
+    )
+    assert result["providers"][0]["enabled"] is True
+    assert result["providers"][0]["chat_enabled"] is False
+    assert writes[0]["provider_enabled"] is True
+    assert audit[0]["operator_id"] == "administrator"
+
+    async def no_unlisted_models(*_args, **_kwargs):
+        return {"models": []}
+
+    monkeypatch.setattr(settings_routes, "get_provider_models", no_unlisted_models)
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.update_provider_chat_access(
+            "zai",
+            settings_routes.ProviderChatAccessRequest(
+                model_id="injected-unlisted-model", model_enabled=True
+            ),
+            current_user={"user_id": "administrator", "roles": ["admin"]},
+        )
+    assert exc.value.status_code == 422

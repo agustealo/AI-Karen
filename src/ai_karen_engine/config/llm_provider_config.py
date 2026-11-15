@@ -13,6 +13,7 @@ import os
 import json
 import logging
 import threading
+from copy import deepcopy
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
@@ -350,6 +351,9 @@ class ProviderConfig:
     provider_type: ProviderType = ProviderType.REMOTE
     enabled: bool = True
     priority: int = 50
+    # Controls chat picker visibility, not RuntimePolicy execution grants.
+    chat_enabled: bool = True
+    chat_model_visibility: Dict[str, bool] = field(default_factory=dict)
 
     # Connection and authentication
     endpoint: Optional[ProviderEndpoint] = None
@@ -525,6 +529,78 @@ class LLMProviderConfigManager:
 
             logger.info(f"Updated LLM provider configuration: {name}")
             return config
+
+    def set_chat_controls(
+        self,
+        name: str,
+        *,
+        provider_enabled: Optional[bool] = None,
+        chat_enabled: Optional[bool] = None,
+        model_id: Optional[str] = None,
+        model_enabled: Optional[bool] = None,
+    ) -> ProviderConfig:
+        """Persist administrator-governed chat visibility in the provider registry.
+
+        Selection flags do not certify credentials, health, or live models.
+        Built-in runtimes and environment-managed enablement cannot be
+        changed through this console.
+        """
+        if (model_id is None) != (model_enabled is None):
+            raise ValueError("Model ID and model visibility must be supplied together")
+        if provider_enabled is None and chat_enabled is None and model_id is None:
+            raise ValueError("A provider or model control is required")
+        if provider_enabled is not None and type(provider_enabled) is not bool:
+            raise ValueError("Provider enablement must be a boolean")
+        if chat_enabled is not None and type(chat_enabled) is not bool:
+            raise ValueError("Chat visibility must be a boolean")
+        if model_enabled is not None and type(model_enabled) is not bool:
+            raise ValueError("Model visibility must be a boolean")
+        if model_id is not None and (
+            not isinstance(model_id, str)
+            or not model_id.strip()
+            or model_id != model_id.strip()
+            or len(model_id) > 256
+            or any(ord(character) < 32 for character in model_id)
+        ):
+            raise ValueError("Invalid model ID")
+
+        with self._config_lock:
+            existing = self._providers.get(name)
+            if existing is None:
+                raise ValueError("Unknown model provider")
+            if existing.provider_type == ProviderType.BUILTIN or name == "fallback":
+                raise ValueError("Built-in runtime controls are managed by the host")
+            if provider_enabled is not None and os.getenv(
+                f"KARI_{name.upper()}_ENABLED"
+            ) is not None:
+                raise ValueError("Provider enablement is managed by environment")
+
+            candidate = deepcopy(existing)
+            if provider_enabled is not None:
+                candidate.enabled = provider_enabled
+            if chat_enabled is not None:
+                candidate.chat_enabled = chat_enabled
+            if model_id is not None and model_enabled is not None:
+                visibility = dict(candidate.chat_model_visibility)
+                if len(visibility) >= 256 and model_id not in visibility:
+                    raise ValueError("Too many model visibility rules")
+                # Absent entries preserve legacy enabled-by-default behavior.
+                if model_enabled:
+                    visibility.pop(model_id, None)
+                else:
+                    visibility[model_id] = False
+                candidate.chat_model_visibility = visibility
+            candidate.updated_at = datetime.now()
+            self._validate_provider_config(candidate)
+            if not candidate.is_valid:
+                raise ValueError("Provider configuration is invalid")
+
+            # Save before publication: the in-memory registry must not claim a
+            # successful mutation that was lost on disk.
+            self._save_provider_config(candidate)
+            self._providers[name] = candidate
+            self._notify_change_listeners(name, candidate)
+            return candidate
 
     def remove_provider(self, name: str) -> bool:
         """Remove a provider configuration"""
@@ -765,10 +841,8 @@ class LLMProviderConfigManager:
         enabled = os.getenv(f"{env_prefix}_ENABLED")
         if enabled is not None:
             config.enabled = enabled.lower() in ("true", "1", "yes", "on")
-        elif config.name == "zai":
-            # Z.ai is opt-in only. Keep it out of the active provider list unless
-            # the environment explicitly enables it.
-            config.enabled = False
+        # Z.ai's default configuration is opt-in. Do not overwrite an admin's
+        # persisted enablement just because no environment override exists.
 
         # Priority override
         priority = os.getenv(f"{env_prefix}_PRIORITY")
@@ -1025,17 +1099,23 @@ class LLMProviderConfigManager:
         logger.info(f"Loaded {len(self._providers)} provider configurations")
 
     def _save_provider_config(self, config: ProviderConfig) -> None:
-        """Save a provider configuration to disk"""
+        """Atomically persist provider settings; a failed save is never success."""
         if config.provider_type == ProviderType.BUILTIN or config.name == "fallback":
             return
 
         config_file = self.config_dir / f"{config.name}.json"
-
+        temporary_file = self.config_dir / f".{config.name}.{os.getpid()}.tmp"
         try:
-            with open(config_file, "w") as f:
-                json.dump(config.to_dict(), f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save provider config {config.name}: {e}")
+            with open(temporary_file, "w", encoding="utf-8") as handle:
+                json.dump(config.to_dict(), handle, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_file, config_file)
+        except Exception:
+            logger.exception("Provider configuration persistence failed for %s", config.name)
+            raise
+        finally:
+            temporary_file.unlink(missing_ok=True)
 
     def save_all_configs(self) -> int:
         """Save all provider configurations to disk"""
