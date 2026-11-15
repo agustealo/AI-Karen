@@ -80,7 +80,7 @@ def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
     def fake_urlopen(request, timeout):
         yield Response()
 
-    monkeypatch.setattr(provider_execution, "urlopen", fake_urlopen)
+    monkeypatch.setattr(provider_execution, "_open_provider_request", fake_urlopen)
     result = provider_execution._sync_openai_compatible_request(
         _endpoint("ollama-local"),
         messages=[{"role": "user", "content": "Explain"}],
@@ -167,7 +167,7 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
         requests.append(request)
         yield Response()
 
-    monkeypatch.setattr(provider_execution, "urlopen", fake_urlopen)
+    monkeypatch.setattr(provider_execution, "_open_provider_request", fake_urlopen)
     result = provider_execution._sync_openai_compatible_request(
         endpoint,
         messages=[{"role": "user", "content": "Hello Hermes"}],
@@ -207,6 +207,6 @@ def test_streaming_uses_same_governed_credential_resolver_as_sync_transport() ->
         Path(__file__).resolve().parents[3]
         / "src/ai_karen_engine/core/model_runtime/provider_execution.py"
     ).read_text(encoding="utf-8")
-    assert "api_key = _resolve_api_key(endpoint)" in source
+    assert "personal_key if personal_key is not None else _resolve_api_key(endpoint)" in source
     assert source.count("provider_credential_unavailable") == 2
     assert "get_provider_config_manager()" in source
