@@ -23,6 +23,13 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
+class CausalIdentificationError(ValueError):
+    """Raised when current evidence cannot identify a causal estimand.
+
+    This is a governed abstention, not a numerical zero effect, and must
+    never be silently replaced with an observational association.
+    """
+
 class CausalRelationType(Enum):
     """Types of causal relationships"""
     DIRECT_CAUSE = "direct_cause"        # A → B
@@ -317,240 +324,62 @@ class CausalReasoningEngine:
         self,
         treatment: str,
         outcome: str,
-        adjustment_set: Optional[Set[str]] = None
+        adjustment_set: Optional[Set[str]] = None,
     ) -> float:
+        """Refuse an unidentified causal effect instead of returning a mean difference.
+
+        Observations have neither verified treatment assignment nor an
+        identification/positivity contract. Passing an adjustment_set alone
+        cannot establish exchangeability, identifiability or estimation.
         """
-        Estimate causal effect of treatment on outcome
-
-        Uses backdoor adjustment to account for confounding
-        """
-        # Find confounders if adjustment set not provided
-        if adjustment_set is None:
-            adjustment_set = self.causal_graph.find_confounders(treatment, outcome)
-
-        # Simplified effect estimation
-        # In practice, would use more sophisticated methods (regression, matching, etc.)
-
-        treated_outcomes = []
-        control_outcomes = []
-
-        for obs in self.observations:
-            if treatment in obs and outcome in obs:
-                try:
-                    outcome_val = float(obs[outcome])
-                    if obs[treatment]:
-                        treated_outcomes.append(outcome_val)
-                    else:
-                        control_outcomes.append(outcome_val)
-                except (ValueError, TypeError):
-                    continue
-
-        if not treated_outcomes or not control_outcomes:
-            return 0.0
-
-        # Average treatment effect
-        ate = np.mean(treated_outcomes) - np.mean(control_outcomes)
-        return float(ate)
+        raise CausalIdentificationError("causal_effect_unidentifiable")
 
     def do_intervention(
         self,
         variable: str,
         value: Any,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Abstain rather than infer intervention effects from edge weights.
+
+        No intervention is recorded because this engine has not executed a
+        real intervention or fitted a validated structural causal model.
         """
-        Model intervention (do-operator)
-
-        Predicts effects of setting variable to value
-        """
-        import time
-
-        intervention = CausalIntervention(
-            variable=variable,
-            value=value,
-            timestamp=time.time(),
-            context=context or {}
-        )
-
-        self.interventions.append(intervention)
-
-        # Predict downstream effects
-        effects = self.causal_graph.get_descendants(variable)
-
-        predicted_outcomes = {variable: value}
-
-        # Propagate effect through causal graph
-        for effect_var in effects:
-            # Get direct causes
-            causes = self.causal_graph.get_direct_causes(effect_var)
-
-            # Estimate effect
-            effect_strength = 0.0
-            for cause in causes:
-                edge = self.causal_graph.edges.get((cause, effect_var))
-                if edge and cause == variable:
-                    effect_strength = edge.strength
-
-            # Simplified prediction
-            predicted_outcomes[effect_var] = {
-                'expected_change': effect_strength,
-                'confidence': 0.6
-            }
-
-        return predicted_outcomes
+        raise CausalIdentificationError("intervention_effect_unidentifiable")
 
     def generate_counterfactual(
         self,
         scenario_description: str,
         interventions: List[Tuple[str, Any]],
-        observed_outcome: Optional[Dict[str, Any]] = None
+        observed_outcome: Optional[Dict[str, Any]] = None,
     ) -> CounterfactualScenario:
+        """Abstain until a validated counterfactual estimator is installed.
+
+        A fixed probability (previously 0.5) is not a calibrated estimate.
         """
-        Generate counterfactual scenario
-
-        Answers "what if" questions by imagining alternative worlds
-        """
-        import uuid
-
-        scenario_id = str(uuid.uuid4())[:8]
-
-        # Create intervention objects
-        intervention_objs = [
-            CausalIntervention(variable=var, value=val, timestamp=0.0)
-            for var, val in interventions
-        ]
-
-        # Predict outcomes under counterfactual scenario
-        predicted_outcomes = {}
-        for var, val in interventions:
-            outcomes = self.do_intervention(var, val)
-            predicted_outcomes.update(outcomes)
-
-        # Estimate probability of scenario
-        # Simplified: based on how different from observations
-        probability = 0.5  # Placeholder
-
-        # List assumptions
-        assumptions = [
-            "Causal structure remains stable",
-            "No unmeasured confounding",
-            "SUTVA (Stable Unit Treatment Value Assumption)"
-        ]
-
-        return CounterfactualScenario(
-            scenario_id=scenario_id,
-            description=scenario_description,
-            interventions=intervention_objs,
-            predicted_outcomes=predicted_outcomes,
-            probability=probability,
-            assumptions=assumptions
-        )
+        raise CausalIdentificationError("counterfactual_unidentifiable")
 
     def explain_outcome(
         self,
         outcome_variable: str,
         outcome_value: Any,
-        context: Dict[str, Any]
+        context: Dict[str, Any],
     ) -> CausalExplanation:
+        """Refuse invented actual, necessary, or sufficient causes.
+
+        A directed graph alone, even when externally supplied, does not
+        identify each cause's contribution or individual necessity.
         """
-        Generate causal explanation for why an outcome occurred
-
-        Identifies actual causes, necessary causes, and sufficient causes
-        """
-        # Find all potential causes
-        all_causes = self.causal_graph.get_ancestors(outcome_variable)
-
-        # Compute contribution of each cause
-        actual_causes = []
-        for cause in all_causes:
-            # Estimate contribution
-            if cause in context:
-                effect = self.estimate_causal_effect(cause, outcome_variable)
-                if effect != 0:
-                    actual_causes.append((cause, abs(effect)))
-
-        # Sort by contribution
-        actual_causes.sort(key=lambda x: x[1], reverse=True)
-
-        # Identify necessary causes (outcome wouldn't happen without them)
-        necessary_causes = []
-        for cause, _ in actual_causes[:3]:  # Top 3
-            # Check if removing cause prevents outcome
-            counterfactual = self.generate_counterfactual(
-                f"Remove {cause}",
-                [(cause, None)],
-                {outcome_variable: outcome_value}
-            )
-            # Simplified check
-            if outcome_variable in counterfactual.predicted_outcomes:
-                necessary_causes.append(cause)
-
-        # Identify sufficient causes (alone can cause outcome)
-        sufficient_causes = []
-        for cause, contribution in actual_causes:
-            if contribution > 0.7:  # High contribution threshold
-                sufficient_causes.append(cause)
-
-        # Contributing factors (lower contribution)
-        contributing_factors = [(c, contrib) for c, contrib in actual_causes
-                              if 0.2 < contrib < 0.7]
-
-        # Alternative explanations
-        alternative_explanations = [
-            "Random chance",
-            "Unmeasured factors",
-            "Complex interactions"
-        ]
-
-        return CausalExplanation(
-            outcome=f"{outcome_variable} = {outcome_value}",
-            actual_causes=actual_causes,
-            necessary_causes=necessary_causes,
-            sufficient_causes=sufficient_causes,
-            contributing_factors=contributing_factors,
-            alternative_explanations=alternative_explanations
-        )
+        raise CausalIdentificationError("causal_explanation_unidentifiable")
 
     def assess_responsibility(
         self,
         outcome: str,
         agents: List[str],
-        context: Dict[str, Any]
+        context: Dict[str, Any],
     ) -> Dict[str, float]:
-        """
-        Assess causal responsibility of different agents for an outcome
-
-        Returns responsibility scores (0-1) for each agent
-        """
-        responsibility = {}
-
-        for agent in agents:
-            # Check if agent is in causal graph
-            if agent in self.causal_graph.nodes:
-                # Compute degree of responsibility
-                # Based on: 1) causal contribution, 2) necessity, 3) sufficiency
-
-                # Causal contribution
-                contribution = abs(self.estimate_causal_effect(agent, outcome))
-
-                # Check necessity (would outcome occur without agent?)
-                counterfactual = self.generate_counterfactual(
-                    f"Remove {agent}",
-                    [(agent, None)]
-                )
-
-                # Responsibility score combines multiple factors
-                responsibility[agent] = min(contribution, 1.0)
-            else:
-                responsibility[agent] = 0.0
-
-        # Normalize
-        total = sum(responsibility.values())
-        if total > 0:
-            responsibility = {k: v / total for k, v in responsibility.items()}
-
-        return responsibility
-
+        """Refuse unverified responsibility scores, including false zeros."""
+        raise CausalIdentificationError("causal_responsibility_unidentifiable")
 
 # Global causal reasoning instance
 _global_causal_engine: Optional[CausalReasoningEngine] = None
