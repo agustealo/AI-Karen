@@ -310,6 +310,32 @@ async def test_live_plugin_secret_enrollment_rotation_revoke_and_audit_rollback(
             context=owner_a, provider_id="openai",
         ) == credential_a
         await raw.execute(
+            "UPDATE public.identity_providers SET enabled = false "
+            "WHERE id = $1 AND tenant_id = $2",
+            provider_uuid, tenant_a,
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) is None
+        await raw.execute(
+            "UPDATE public.identity_providers SET enabled = true, "
+            "config = $3::json WHERE id = $1 AND tenant_id = $2",
+            provider_uuid, tenant_a,
+            json.dumps({"managed_for": "plugin_credentials"}),
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) is None
+        await raw.execute(
+            "UPDATE public.identity_providers SET config = $3::json "
+            "WHERE id = $1 AND tenant_id = $2",
+            provider_uuid, tenant_a,
+            json.dumps({"managed_for": "model_api_key"}),
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) == credential_a
+        await raw.execute(
             "UPDATE public.credentials "
             "SET expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second' "
             "WHERE id = $1 AND tenant_id = $2",
