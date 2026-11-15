@@ -27,7 +27,7 @@
 
 | Date | Task | SHA / PR | Evidence | Status |
 | --- | --- | --- | --- | --- |
-| 2026-11-15 | KCOG wiki foundation | `272e23c4b5879771294e46c2d205e3b6f3909050` as inspected main baseline | GitHub source inspection, wiki plan drafted | DOCUMENTATION PROPOSED |
-| 2026-11-15 | KCOG-00A | pending | no test/CI/runtime result claimed | NOT_STARTED |
+| 2026-11-15 | KCOG wiki foundation | PR #863; main `c18b3dfe3376a02e1c5de51e0195b9be7e0af182` | Main Quality green at wiki exact head; GitHub merge reported success | MERGED; postmerge proof separate |
+| 2026-11-15 | KCOG-00A initial safety guard | PR #864; `de689975a1fb661bb92df5fd1bbf4cdc6b0e5d25` | Cognitive Proof + Reasoning Smoke green at initial inspection; remaining CI and runtime proof pending | IMPLEMENTING / NOT MERGED |
 
 Do not overwrite evidence when an earlier claim is corrected. Add a dated reconciliation entry with links and reason.

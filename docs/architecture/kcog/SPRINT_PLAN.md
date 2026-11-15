@@ -1,9 +1,16 @@
 # KCOG Sprint Execution Plan
 
 > **Sprint:** KCOG-S1 ("Cognitive Integrity → Executive Control").
-> **Stage:** PLAN / no completed implementation claimed.
+> **Stage:** IMPLEMENTING, first KCOG-00A PR in exact-head CI; not yet accepted.
 > **Start baseline:** `272e23c4b5879771294e46c2d205e3b6f3909050`. Rebase/compare against live main before each implementation branch.
 > **Order:** audit → contain invalid outputs → prove safety → integrate cognitive state → measure decisions.
+
+## Live S1 execution checkpoint (2026-11-15)
+
+- **KCOG wiki** is merged via [PR #863](https://github.com/agustealo/AI-Karen/pull/863), main merge `c18b3dfe3376a02e1c5de51e0195b9be7e0af182`.
+- **KCOG-00A / first containment** is [PR #864](https://github.com/agustealo/AI-Karen/pull/864), exact head `de689975a1fb661bb92df5fd1bbf4cdc6b0e5d25`, **OPEN / CI pending**, no merge or runtime acceptance claimed.
+- Verified exact-head **Cognitive Proof** and **Reasoning Smoke** checks passed in the initial observation. Other required checks remained in progress when recorded; refresh GitHub before acting.
+- GitHub Issues are disabled on this repository (creation returned HTTP 410). This versioned wiki and PR descriptions are the sprint tracker.
 
 ## Scope, product acceptance and exit
 

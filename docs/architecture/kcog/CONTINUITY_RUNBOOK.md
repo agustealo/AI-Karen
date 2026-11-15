@@ -6,9 +6,9 @@
 
 - **Baseline:** `272e23c4b5879771294e46c2d205e3b6f3909050` on `main` at wiki creation.
 - **Document status:** first review candidate, not merged until PR and exact-head checks are verified.
-- **Implementation status:** KCOG-S1 00A source inventory and safety containment NEXT. No new cognitive inference capability claimed from wiki creation.
+- **Implementation status:** KCOG-00A first safety-containment candidate in [PR #864](https://github.com/agustealo/AI-Karen/pull/864), head `de689975a1fb661bb92df5fd1bbf4cdc6b0e5d25`; CI in progress, no merge/runtime acceptance yet.
 - **Known source-level hazards:** see [Capability Integrity](CAPABILITY_INTEGRITY.md).
-- **CI:** not executed as part of wiki authoring. A PR must carry its own exact-head verification.
+- **CI:** wiki [PR #863](https://github.com/agustealo/AI-Karen/pull/863) passed Main Quality and merged on main; code PR #864 had Cognitive Proof and Reasoning Smoke passing while other required checks remained pending when recorded. Refresh exact-head checks before merge.
 - **Runtime acceptance:** not completed for this sprint.
 
 ## Every new session starts here
