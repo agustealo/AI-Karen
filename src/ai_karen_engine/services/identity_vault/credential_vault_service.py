@@ -303,10 +303,19 @@ class CredentialVaultService(BaseService):
         model: Any,
         tenant_id: uuid.UUID,
         *clauses: Any,
+        for_update: bool = False,
     ) -> Any:
+        """Read a tenant entity, locking its row for mutable operations.
+
+        The optional PostgreSQL row lock is shared by credential mutations
+        and personal model-key access. It is deliberately opt-in so metadata
+        lookups do not acquire write locks or alter existing read contracts.
+        """
         query = self._tenant_query(model, tenant_id)
         if clauses:
             query = query.where(*clauses)
+        if for_update:
+            query = query.with_for_update(of=model)
         result = await session.execute(query)
         return result.scalar_one_or_none()
 
@@ -1083,7 +1092,8 @@ class CredentialVaultService(BaseService):
         owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return None
@@ -1116,7 +1126,8 @@ class CredentialVaultService(BaseService):
         owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return False
@@ -1156,7 +1167,8 @@ class CredentialVaultService(BaseService):
         owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return None
@@ -1216,7 +1228,8 @@ class CredentialVaultService(BaseService):
         owner_clauses = self._require_matching_credential_actor(user_id, owner_user_id)
         async with self._session_scope() as session:
             credential = await self._tenant_entity(
-                session, Credential, tenant_id, Credential.id == credential_id, *owner_clauses
+                session, Credential, tenant_id, Credential.id == credential_id,
+                *owner_clauses, for_update=True,
             )
             if credential is None:
                 return False
@@ -1446,6 +1459,11 @@ class CredentialVaultService(BaseService):
                         Credential.expires_at > datetime.now(timezone.utc),
                     ),
                 )
+                # Keep the credential and provider definitions stable until
+                # the encrypted secret has been audited and the transaction
+                # commits. All credential mutations lock the same parent row
+                # before editing its status or secret children.
+                .with_for_update(of=(Credential, ProviderDefinition))
             )
             row = (await session.execute(statement)).one_or_none()
             if row is None:

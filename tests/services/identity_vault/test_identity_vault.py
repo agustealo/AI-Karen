@@ -1956,3 +1956,116 @@ async def test_personal_model_credential_resolution_rejects_invalid_row_integrit
     with pytest.raises(PermissionError, match="execution denied"):
         await service.resolve_authorized_personal_model_key(**kwargs)
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_personal_model_key_release_locks_credential_and_provider_rows():
+    """PostgreSQL must serialize release/audit with revoke, rotate, disable."""
+    from sqlalchemy.dialects import postgresql
+
+    tenant, credential_id, context, plan = _personal_model_resolution_fixture()
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.one_or_none.return_value = None
+
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(
+            context=context,
+            plan=plan,
+            credential_id=credential_id,
+            provider_id="openai",
+            model_id="gpt-4o-mini",
+        )
+
+    statement = session.execute.await_args.args[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE OF" in compiled
+    locked = compiled.split("FOR UPDATE OF", 1)[1].split("\n", 1)[0]
+    assert "credentials" in locked
+    assert "identity_providers" in locked
+    assert "credentials.tenant_id" in compiled
+    assert "credentials.created_by" in compiled
+    assert "identity_providers.tenant_id" in compiled
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["update", "delete", "rotate", "revoke"])
+async def test_mutating_credential_locks_parent_before_secret_or_status_write(
+    operation,
+):
+    """Every canonical mutation participates in the read/audit lock order."""
+    from sqlalchemy.dialects import postgresql
+    from ai_karen_engine.database.models.identity_vault import CredentialSecretCreate
+
+    credential_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = None
+
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    if operation == "update":
+        result = await service.update_credential(
+            credential_id, CredentialUpdate(), tenant_id, "alice",
+            owner_user_id="alice",
+        )
+        assert result is None
+    elif operation == "delete":
+        result = await service.delete_credential(
+            credential_id, tenant_id, "alice", owner_user_id="alice",
+        )
+        assert result is False
+    elif operation == "rotate":
+        result = await service.rotate_credential(
+            credential_id,
+            [CredentialSecretCreate(
+                secret_type="api_key", encrypted_value="replacement-only",
+            )],
+            tenant_id, "alice", owner_user_id="alice",
+        )
+        assert result is None
+    else:
+        result = await service.revoke_credential(
+            credential_id, tenant_id, "alice",
+            owner_user_id="alice",
+        )
+        assert result is False
+
+    # The SELECT must contain the tenant+owner constraints, and it must lock
+    # the same parent row protected by personal-model access until commit.
+    session.execute.assert_awaited_once()
+    statement = session.execute.await_args.args[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "FOR UPDATE OF credentials" in compiled
+    assert "credentials.tenant_id" in compiled
+    assert "credentials.id" in compiled
+    assert "credentials.created_by" in compiled
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_credential_metadata_read_does_not_lock_mutable_parent_row():
+    """Ordinary tenant-scoped reads remain nonmutating and nonblocking."""
+    from sqlalchemy.dialects import postgresql
+
+    tenant_id = uuid.uuid4()
+    credential_id = uuid.uuid4()
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    result = await service.get_owned_credential(
+        credential_id, tenant_id, "alice"
+    )
+    assert result is None
+    statement = session.execute.await_args.args[0]
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+    assert "credentials.tenant_id" in compiled
+    assert "credentials.created_by" in compiled
+    assert "FOR UPDATE" not in compiled
