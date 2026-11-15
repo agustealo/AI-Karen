@@ -343,7 +343,7 @@ export default function VoiceSettings() {
           )}
           {localStatus === "error" && (
             <p role="alert" className="text-xs text-destructive">
-              Karen's authenticated local voice capability check failed.
+              Karen&apos;s authenticated local voice capability check failed.
             </p>
           )}
         </section>
