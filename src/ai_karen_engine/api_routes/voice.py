@@ -1,9 +1,13 @@
 """Authenticated and bounded voice ingress. Runtime owns local transcription."""
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from math import isfinite
+import json
 import logging
 
-from ai_karen_engine.core.voice.contracts import AudioInput, MAX_AUDIO_BYTES, VoiceContractError
+from ai_karen_engine.core.voice.contracts import (
+    AudioInput, MAX_AUDIO_BYTES, MAX_SYNTHESIS_TEXT_CHARS,
+    SynthesisInput, VoiceContractError,
+)
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.session import get_current_user
@@ -25,6 +29,8 @@ async def get_voice_capabilities(
         "synthesis_available": capabilities.synthesis_available,
         "streaming_available": capabilities.streaming_available,
         "engine": capabilities.engine,
+        "synthesis_engine": capabilities.synthesis_engine,
+        "synthesis_voice_id": capabilities.synthesis_voice_id,
     }
 
 
@@ -101,3 +107,93 @@ async def transcribe_voice(
         logger.error("Local transcription inference failed", extra={"error_type": type(exc).__name__})
         raise HTTPException(status_code=503, detail="local_transcription_failed") from None
     return {"text": result.text, "engine": result.engine, "language": result.language}
+
+
+
+@router.post("/synthesis")
+async def synthesize_voice(
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> Response:
+    """Synthesize one bounded reply with a verified, explicitly enabled local engine.
+
+    API ingress performs authentication and body validation only. It cannot
+    choose a voice engine, download models or invoke browser-vendor services.
+    """
+    runtime = get_voice_runtime()
+    capabilities = await runtime.capabilities()
+    if not capabilities.synthesis_available:
+        raise HTTPException(status_code=503, detail="local_synthesis_unavailable")
+    if runtime.synthesis_busy():
+        raise HTTPException(
+            status_code=429,
+            detail="local_synthesis_busy",
+            headers={"Retry-After": "1"},
+        )
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise HTTPException(status_code=415, detail="json_required")
+
+    # 2,000 Unicode characters can require up to 8 KB of UTF-8 JSON.
+    # Never buffer arbitrary unbounded speech requests in the API.
+    max_request_bytes = 12 * 1024
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            size = int(declared)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid_content_length") from None
+        if size <= 0 or size > max_request_bytes:
+            raise HTTPException(status_code=413, detail="synthesis_request_too_large")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > max_request_bytes:
+            raise HTTPException(status_code=413, detail="synthesis_request_too_large")
+        chunks.append(chunk)
+    try:
+        payload = json.loads(b"".join(chunks))
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=422, detail="invalid_synthesis_json") from None
+    if not isinstance(payload, dict) or set(payload) - {"text", "voice_id"}:
+        raise HTTPException(status_code=422, detail="invalid_synthesis_payload")
+    text = payload.get("text")
+    voice_id = payload.get("voice_id")
+    if not isinstance(text, str) or len(text) > MAX_SYNTHESIS_TEXT_CHARS or (
+        voice_id is not None and not isinstance(voice_id, str)
+    ):
+        raise HTTPException(status_code=422, detail="invalid_synthesis_payload")
+    try:
+        synthesis_input = SynthesisInput(text=text, voice_id=voice_id)
+        result = await runtime.synthesize(synthesis_input)
+    except VoiceContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except RuntimeError as exc:
+        if str(exc) == "local_synthesis_busy":
+            raise HTTPException(
+                status_code=429, detail="local_synthesis_busy",
+                headers={"Retry-After": "1"},
+            ) from None
+        if str(exc) == "local_synthesis_unavailable":
+            raise HTTPException(status_code=503, detail="local_synthesis_unavailable") from None
+        logger.error(
+            "Local synthesis failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=503, detail="local_synthesis_failed") from None
+    except Exception as exc:
+        logger.error(
+            "Local synthesis failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=503, detail="local_synthesis_failed") from None
+    return Response(
+        content=result.audio,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Karen-Voice-Engine": result.engine,
+        },
+    )
