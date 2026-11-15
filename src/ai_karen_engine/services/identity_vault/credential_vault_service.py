@@ -1345,6 +1345,93 @@ class CredentialVaultService(BaseService):
             reason=reason, owner_user_id=user_id,
         )
 
+    async def find_unambiguous_owned_model_key_candidate(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        provider_id: str,
+    ) -> Optional[uuid.UUID]:
+        """Find an owner's sole active personal model key, without reading secrets.
+
+        This is a host-only metadata lookup, NOT user consent, an execution
+        grant, model availability, or permission to send a request externally.
+        RuntimePolicy must independently authorize exact subject/provider/model
+        execution. The canonical transport must subsequently resolve and audit
+        the selected credential through resolve_authorized_personal_model_key.
+
+        Fail closed when no active credential exists or multiple keys match:
+        never silently choose between credentials and never accept a caller-
+        supplied credential identifier from chat metadata or a plugin payload.
+        """
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
+
+        denial = "Personal model credential candidate denied"
+        if not isinstance(context, ChatExecutionContext):
+            raise PermissionError(denial)
+        try:
+            context.require_authenticated_user()
+            tenant_id = uuid.UUID(str(context.tenant_id))
+            if (
+                str(tenant_id) != context.tenant_id
+                or not isinstance(context.user_id, str)
+                or not context.user_id
+                or context.user_id != context.user_id.strip()
+                or len(context.user_id) > 255
+                or not isinstance(provider_id, str)
+                or not provider_id
+                or provider_id != provider_id.strip()
+                or len(provider_id) > 128
+                or any(ord(char) < 32 or ord(char) == 127 for char in provider_id)
+            ):
+                raise PermissionError(denial)
+        except (TypeError, ValueError, AttributeError, PermissionError):
+            raise PermissionError(denial) from None
+
+        async with self._session_scope() as session:
+            # Tenant, subject, verified system provider and lifecycle state
+            # must all match. No eager secret relationship and no decrypt.
+            statement = (
+                self._tenant_query(Credential, tenant_id)
+                .join(
+                    ProviderDefinition,
+                    Credential.provider_id == ProviderDefinition.id,
+                )
+                .where(
+                    Credential.created_by == context.user_id,
+                    Credential.credential_type == self._OWNED_MODEL_CREDENTIAL_TYPE,
+                    Credential.status == CredentialStatus.ACTIVE.value,
+                    ProviderDefinition.tenant_id == tenant_id,
+                    ProviderDefinition.provider_id == provider_id,
+                    ProviderDefinition.is_system.is_(True),
+                    ProviderDefinition.enabled.is_(True),
+                    ProviderDefinition.provider_type == ProviderType.API_KEY.value,
+                    # JSON (not JSONB) has no equality operator in PostgreSQL.
+                    # Compare the canonical managed-for marker as extracted text.
+                    ProviderDefinition.config["managed_for"].as_string()
+                    == "model_api_key",
+                    or_(
+                        Credential.expires_at.is_(None),
+                        Credential.expires_at > datetime.now(timezone.utc),
+                    ),
+                )
+                .limit(2)
+            )
+            rows = list((await session.execute(statement)).scalars().all())
+            if len(rows) != 1:
+                return None
+            record = rows[0]
+            if (
+                record.tenant_id != tenant_id
+                or record.created_by != context.user_id
+                or record.credential_type != self._OWNED_MODEL_CREDENTIAL_TYPE
+                or record.status != CredentialStatus.ACTIVE.value
+                or not isinstance(record.id, uuid.UUID)
+            ):
+                return None
+            return record.id
+
     async def resolve_authorized_personal_model_key(
         self,
         *,

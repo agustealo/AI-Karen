@@ -2069,3 +2069,161 @@ async def test_credential_metadata_read_does_not_lock_mutable_parent_row():
     assert "credentials.tenant_id" in compiled
     assert "credentials.created_by" in compiled
     assert "FOR UPDATE" not in compiled
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_candidate_requires_unique_owned_active_record():
+    """Only an unambiguous owner record is exposed; a key is never read."""
+    from types import SimpleNamespace
+
+    tenant, credential_id, context, _plan = _personal_model_resolution_fixture()
+    service = CredentialVaultService()
+    session = AsyncMock()
+    service.set_db_session(session)
+    record = SimpleNamespace(
+        id=credential_id,
+        tenant_id=tenant,
+        created_by="alice",
+        credential_type="model_api_key",
+        status=CredentialStatus.ACTIVE.value,
+    )
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [record]
+    session.execute.return_value = result
+
+    candidate = await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+    )
+    assert candidate == credential_id
+    session.execute.assert_awaited_once()
+    session.commit.assert_not_awaited()
+    service._audit = AsyncMock()
+    # Metadata lookup did not read encrypted children or attempt to decrypt.
+    assert not hasattr(record, "secrets")
+    service._audit.assert_not_awaited()
+
+    result.scalars.return_value.all.return_value = []
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+    ) is None
+    result.scalars.return_value.all.return_value = [
+        record,
+        SimpleNamespace(id=uuid.uuid4()),
+    ]
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+    ) is None
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_candidate_sql_is_tenant_owner_provider_fenced():
+    """The query itself proves scope and limits matches to two, not a first key."""
+    from sqlalchemy.dialects import postgresql
+
+    _tenant, _credential_id, context, _plan = _personal_model_resolution_fixture()
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session.execute.return_value = result
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    assert await service.find_unambiguous_owned_model_key_candidate(
+        context=context, provider_id="openai",
+    ) is None
+    statement = session.execute.await_args.args[0]
+    compiled = statement.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    where = str(statement.whereclause)
+    assert "credentials.tenant_id" in where
+    assert "credentials.created_by" in where
+    assert "credentials.credential_type" in where
+    assert "credentials.status" in where
+    assert "credentials.expires_at" in where
+    assert "identity_providers.tenant_id" in where
+    assert "identity_providers.provider_id" in where
+    assert "identity_providers.is_system" in where
+    assert "identity_providers.enabled" in where
+    assert "identity_providers.provider_type" in where
+    assert "identity_providers.config" in where
+    assert "LIMIT" in sql
+    assert context.user_id in compiled.params.values()
+    assert context.tenant_id in {str(value) for value in compiled.params.values()}
+    assert "openai" in compiled.params.values()
+    assert "managed_for" in compiled.params.values()
+    assert "model_api_key" in compiled.params.values()
+    assert "->>" in sql  # PostgreSQL JSON scalar extraction, never json=json equality.
+    assert "identity_providers.config =" not in sql
+    assert 2 in compiled.params.values()
+    assert not statement._with_options
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_candidate_denies_unverified_or_forged_subject():
+    from ai_karen_engine.auth.models import UserData
+
+    tenant, _credential_id, context, _plan = _personal_model_resolution_fixture()
+    session = AsyncMock()
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    cases = [
+        (None, "openai"),
+        (UserData(user_id="bob", tenant_id=str(tenant)), "openai"),
+        (UserData(user_id="alice", tenant_id=str(uuid.uuid4())), "openai"),
+        (UserData(user_id="alice", tenant_id=str(tenant), is_verified=False), "openai"),
+        (UserData(user_id="alice", tenant_id=str(tenant), is_active=False), "openai"),
+        (UserData(user_id="alice", tenant_id=str(tenant)), "openai\nInjected"),
+        (UserData(user_id="alice", tenant_id=str(tenant)), " openai"),
+        (UserData(user_id="alice", tenant_id=str(tenant)), ""),
+    ]
+    for principal, provider in cases:
+        context.authenticated_user = principal
+        with pytest.raises(PermissionError, match="candidate denied"):
+            await service.find_unambiguous_owned_model_key_candidate(
+                context=context, provider_id=provider,
+            )
+    session.execute.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_candidate_rechecks_returned_row_integrity():
+    """Corrupt/invalid ORM rows must never become execution candidates."""
+    from types import SimpleNamespace
+
+    tenant, credential_id, context, _plan = _personal_model_resolution_fixture()
+    record = SimpleNamespace(
+        id=credential_id, tenant_id=tenant, created_by="alice",
+        credential_type="model_api_key", status=CredentialStatus.ACTIVE.value,
+    )
+    service = CredentialVaultService()
+    session = AsyncMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [record]
+    session.execute.return_value = result
+    service.set_db_session(session)
+
+    originals = {
+        "id": credential_id,
+        "tenant_id": tenant,
+        "created_by": "alice",
+        "credential_type": "model_api_key",
+        "status": CredentialStatus.ACTIVE.value,
+    }
+    mismatches = {
+        "id": str(credential_id),
+        "tenant_id": uuid.uuid4(),
+        "created_by": "bob",
+        "credential_type": "plugin_secret",
+        "status": CredentialStatus.REVOKED.value,
+    }
+    for field, bad in mismatches.items():
+        setattr(record, field, bad)
+        assert await service.find_unambiguous_owned_model_key_candidate(
+            context=context, provider_id="openai",
+        ) is None
+        setattr(record, field, originals[field])
+    session.commit.assert_not_awaited()

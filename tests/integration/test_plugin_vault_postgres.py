@@ -232,6 +232,124 @@ async def test_live_plugin_secret_enrollment_rotation_revoke_and_audit_rollback(
             ).get("plugin_id") == plugin_id
             for row in audit
         )
+
+        # Host-only personal key candidate proof runs in the same disposable
+        # PostgreSQL database, under the same restricted tenant role. This
+        # metadata read must never decrypt, grant execution, or use another
+        # tenant's credential.
+        from ai_karen_engine.auth.models import UserData
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
+        from ai_karen_engine.core.security.encryption_utils import encrypt_data
+
+        owner = "personal-owner"
+        provider_uuid = uuid.uuid4()
+        credential_a = uuid.uuid4()
+        credential_b = uuid.uuid4()
+        await raw.execute(
+            "INSERT INTO public.identity_providers "
+            "(id, tenant_id, provider_id, display_name, provider_type, "
+            "config, supported_capabilities, enabled, is_system) "
+            "VALUES ($1, $2, 'openai', 'Registered OpenAI', 'api_key', "
+            "$3::json, '[]'::json, true, true)",
+            provider_uuid, tenant_a,
+            json.dumps({"managed_for": "model_api_key"}),
+        )
+        await raw.execute(
+            "INSERT INTO public.credentials "
+            "(id, tenant_id, name, provider_id, status, "
+            "credential_type, created_by) "
+            "VALUES ($1, $2, 'Test personal key', $3, 'active', "
+            "'model_api_key', $4)",
+            credential_a, tenant_a, provider_uuid, owner,
+        )
+        await raw.execute(
+            "INSERT INTO public.credential_secrets "
+            "(id, tenant_id, credential_id, secret_type, encrypted_value) "
+            "VALUES ($1, $2, $3, 'api_key', $4)",
+            uuid.uuid4(), tenant_a, credential_a,
+            encrypt_data("non-production-personal-test-key").decode("ascii"),
+        )
+
+        def owner_context(tenant_id):
+            return ChatExecutionContext(
+                user_id=owner, tenant_id=str(tenant_id),
+                request_id="candidate-integration",
+                session_id="candidate-session",
+                correlation_id="candidate-correlation",
+                authenticated_user=UserData(
+                    user_id=owner, tenant_id=str(tenant_id),
+                    is_active=True, is_verified=True,
+                ),
+            )
+
+        owner_a = owner_context(tenant_a)
+        owner_b = owner_context(tenant_b)
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) == credential_a
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_b, provider_id="openai",
+        ) is None
+        await raw.execute(
+            "INSERT INTO public.credentials "
+            "(id, tenant_id, name, provider_id, status, "
+            "credential_type, created_by) "
+            "VALUES ($1, $2, 'Second personal key', $3, 'active', "
+            "'model_api_key', $4)",
+            credential_b, tenant_a, provider_uuid, owner,
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) is None
+        assert await vault.revoke_owned_credential(
+            credential_b, tenant_a, owner, reason="integration_test",
+        ) is True
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) == credential_a
+        await raw.execute(
+            "UPDATE public.identity_providers SET enabled = false "
+            "WHERE id = $1 AND tenant_id = $2",
+            provider_uuid, tenant_a,
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) is None
+        await raw.execute(
+            "UPDATE public.identity_providers SET enabled = true, "
+            "config = $3::json WHERE id = $1 AND tenant_id = $2",
+            provider_uuid, tenant_a,
+            json.dumps({"managed_for": "plugin_credentials"}),
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) is None
+        await raw.execute(
+            "UPDATE public.identity_providers SET config = $3::json "
+            "WHERE id = $1 AND tenant_id = $2",
+            provider_uuid, tenant_a,
+            json.dumps({"managed_for": "model_api_key"}),
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) == credential_a
+        await raw.execute(
+            "UPDATE public.credentials "
+            "SET expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second' "
+            "WHERE id = $1 AND tenant_id = $2",
+            credential_a, tenant_a,
+        )
+        assert await vault.find_unambiguous_owned_model_key_candidate(
+            context=owner_a, provider_id="openai",
+        ) is None
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.credential_audit_events "
+            "WHERE tenant_id = $1 AND action = 'personal_model_credential_resolved'",
+            tenant_a,
+        ) == 0
+
     finally:
         if engine is not None:
             await engine.dispose()
