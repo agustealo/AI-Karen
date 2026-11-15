@@ -475,6 +475,24 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert connected.phase is PairingPhase.CONNECTED
         assert connected.sequence == 2
         assert connected.provider_link_receipt_id == "provider-link-evidence"
+        # The repository reducer must reject a stale, previously unseen
+        # internal terminal event even when its sequence is next and the
+        # connection owner/provider/revision all match.
+        from dataclasses import replace
+        stale_disconnect = replace(
+            pairing_event(3, PairingEvent.DISCONNECT_REQUESTED),
+            observed_at=datetime.now(timezone.utc) - timedelta(minutes=6),
+        )
+        with pytest.raises(PairingEvidenceDenied):
+            await SqlChannelRepository().commit_personal_pairing_observation(
+                observation=stale_disconnect, user_id=str(user),
+                provider_vetted_and_enabled=False,
+            )
+        assert await raw.fetchval(
+            """SELECT sequence FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == 2
         # Revoking consent must deny another QR, but never trap an existing
         # linked device: authenticated teardown must still commit.
         assert await SqlChannelRepository().revoke_personal_pairing_consent(
