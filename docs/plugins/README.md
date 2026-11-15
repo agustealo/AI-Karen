@@ -70,7 +70,7 @@ behavior**.
 
 ## Other documentation
 
-The [project development manifest](../../PROJECT_DEV_MANIFEST.md) and
+The [project development manifest](../development/PROJECT_DEV_MANIFEST.md) and
 [architecture authority](../development/ARCHITECTURE_AUTHORITY.md) govern
 cross-project decisions. [Extensions and Tools](../development/EXTENSIONS_TOOLS.md)
 covers policy-level extension requirements. The older
