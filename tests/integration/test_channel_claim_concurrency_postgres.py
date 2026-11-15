@@ -430,10 +430,34 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 qr_expires_at=expiry,
             )
 
+        # Even when the callback has a valid owner, active consent,
+        # matching revision and fresh event timestamp, a QR whose expiry
+        # exceeds five minutes from source issuance must not consume the
+        # first pairing sequence. Run this at the actual SQL admission path.
+        from dataclasses import replace
         qr = pairing_event(
             1, PairingEvent.QR_ISSUED,
             expiry=datetime.now(timezone.utc) + timedelta(seconds=90),
         )
+        received_at = datetime.now(timezone.utc)
+        overlong_qr = replace(
+            qr,
+            observed_at=received_at - timedelta(minutes=4),
+            qr_expires_at=received_at + timedelta(minutes=4),
+        )
+        with pytest.raises(PairingEvidenceDenied, match="QR"):
+            await consent_repo.commit_personal_pairing_observation(
+                observation=overlong_qr, user_id=str(user),
+                provider_vetted_and_enabled=True,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND provider_id='approved-managed-connector'""",
+            tenant_a, connection_id,
+        ) == 0
+        # A correctly bounded event at the same sequence still wins the
+        # normal serialized commit, without creating a synthetic QR.
         attempts = await asyncio.gather(
             SqlChannelRepository().commit_personal_pairing_observation(
                 observation=qr, user_id=str(user),
@@ -478,7 +502,6 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         # The repository reducer must reject a stale, previously unseen
         # internal terminal event even when its sequence is next and the
         # connection owner/provider/revision all match.
-        from dataclasses import replace
         stale_disconnect = replace(
             pairing_event(3, PairingEvent.DISCONNECT_REQUESTED),
             observed_at=datetime.now(timezone.utc) - timedelta(minutes=6),

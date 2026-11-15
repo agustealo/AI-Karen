@@ -277,18 +277,70 @@ def test_reducer_freshness_boundary_matches_signed_callback():
 
     assert PAIRING_EVIDENCE_MAX_AGE == timedelta(minutes=5)
     state = initial()
+    # Event freshness and QR lifetime are independent limits. A five-minute
+    # old QR cannot still have positive lifetime; a terminal failure can.
+    accepted = apply_pairing_observation(
+        state,
+        event(
+            state, PairingEvent.FAILED,
+            observed_at=NOW - PAIRING_EVIDENCE_MAX_AGE,
+        ),
+        now=NOW,
+        consent_current=True,
+        provider_vetted_and_enabled=True,
+    )
+    assert accepted.phase is PairingPhase.UNKNOWN
+
+
+def test_qr_lifetime_is_capped_from_original_signed_event_timestamp():
+    from ai_karen_engine.services.channels.personal_pairing_lifecycle import (
+        PAIRING_QR_MAX_LIFETIME,
+    )
+
+    assert PAIRING_QR_MAX_LIFETIME == timedelta(minutes=5)
+    state = initial()
+    observed_at = NOW - timedelta(minutes=4)
+    # A legitimate QR has one minute left at admission. Exactly five
+    # minutes end-to-end is accepted; one microsecond beyond is rejected.
     accepted = apply_pairing_observation(
         state,
         event(
             state, PairingEvent.QR_ISSUED,
-            observed_at=NOW - PAIRING_EVIDENCE_MAX_AGE,
-            qr_expires_at=NOW + timedelta(minutes=1),
+            observed_at=observed_at,
+            qr_expires_at=observed_at + PAIRING_QR_MAX_LIFETIME,
         ),
         now=NOW,
         consent_current=True,
         provider_vetted_and_enabled=True,
     )
     assert accepted.phase is PairingPhase.QR_AVAILABLE
+    assert accepted.qr_expires_at == NOW + timedelta(minutes=1)
+
+    with pytest.raises(PairingEvidenceDenied, match="QR"):
+        apply_pairing_observation(
+            state,
+            event(
+                state, PairingEvent.QR_ISSUED,
+                observed_at=observed_at,
+                qr_expires_at=observed_at + PAIRING_QR_MAX_LIFETIME
+                + timedelta(microseconds=1),
+            ),
+            now=NOW,
+            consent_current=True,
+            provider_vetted_and_enabled=True,
+        )
+
+
+@pytest.mark.parametrize("age", [
+    timedelta(minutes=1), timedelta(minutes=2), timedelta(minutes=4),
+])
+def test_fresh_aged_qr_cannot_be_extended_another_five_minutes(age):
+    with pytest.raises(PairingEvidenceDenied, match="QR"):
+        advance(
+            initial(), PairingEvent.QR_ISSUED,
+            observed_at=NOW - age,
+            qr_expires_at=NOW + timedelta(minutes=4, seconds=1),
+        )
 
 
 @pytest.mark.parametrize("invalid", [
