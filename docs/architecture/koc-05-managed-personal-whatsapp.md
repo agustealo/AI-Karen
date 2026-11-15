@@ -1062,3 +1062,36 @@ tenant/RBAC enforcement, original-session retirement holds, and the
 mandatory independent verification blockers are unchanged. This
 validation does **not** implement remote session health, pairing QR,
 device unlink verification, credential erasure or final cleanup.
+
+## KOC-05 original QR issuance lifetime fence
+
+The canonical reducer and the signed callback share two **independent** time
+limits. A provider observation must be authenticated and no older than
+`PAIRING_EVIDENCE_MAX_AGE` (five minutes); an issued QR must expire no more
+than `PAIRING_QR_MAX_LIFETIME` (five minutes) after the observation's original
+provider timestamp. The previously implemented QR reducer checked expiry
+against SQL processing time, not the provider's `observed_at`. An authenticated
+observation that was four minutes old could therefore be accepted with another
+four minutes of QR validity, expanding the effective eight-minute lifetime.
+
+`personal_pairing_lifecycle.apply_pairing_observation` now fences expiry by
+`qr_expires_at - observed_at <= PAIRING_QR_MAX_LIFETIME` as well as requiring a
+still-unexpired aware timestamp. The HMAC-protected callback independently
+rejects an overlong `QR_ISSUED` payload before handing it to the repository;
+the existing managed-provider QR evidence validator reuses the same maximum
+instead of defining a second lifetime constant. The connection-locked SQL
+repository remains the only persistence authority, and its reducer retains
+the final defense even if an internal source bypasses the callback adapter.
+
+Boundary tests preserve equality at five minutes and reject just one
+microsecond more. The disposable live PostgreSQL suite attempts a valid
+tenant/owner/consent/revision/next-sequence QR observation with a fresh
+four-minute-old issuance timestamp and an expiry another four minutes in the
+future, verifies no pairing state is stored, then proves a normal QR can
+commit on the same original sequence. Event freshness and QR validity
+are tested separately; a terminal event can be five minutes old without
+manufacturing a live QR.
+
+No QR payload is persisted or returned, no provider is enabled, and these
+guards do not claim remote session health, independent unlink/credential
+erasure, or final retirement cleanup.
