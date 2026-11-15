@@ -93,9 +93,34 @@ def _grant(
     )
 
 
+def _configured_provider():
+    from ai_karen_engine.config.llm_provider_config import (
+        AuthenticationType,
+        ProviderType,
+    )
+
+    return SimpleNamespace(
+        enabled=True,
+        provider_type=ProviderType.EXTERNAL,
+        authentication=SimpleNamespace(
+            type=AuthenticationType.API_KEY,
+            api_key_env_var="OPENAI_API_KEY",
+        ),
+        endpoint=SimpleNamespace(base_url="https://api.openai.com/v1"),
+    )
+
+
 def _fake_vault(monkeypatch: pytest.MonkeyPatch, *, secret="personal-only-token"):
+    from ai_karen_engine.config import llm_provider_config
     from ai_karen_engine.services.identity_vault import credential_vault_service
 
+    # A personal key must not require a workspace key, but the provider must
+    # remain currently enabled and point to its registered vendor endpoint.
+    monkeypatch.setattr(
+        llm_provider_config,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda _provider: _configured_provider()),
+    )
     calls = []
 
     async def resolve(**kwargs):
@@ -290,6 +315,39 @@ async def test_personal_grant_refuses_other_target_before_vault_and_network(
     monkeypatch.setattr(transport, "_open_provider_request", forbidden)
     with pytest.raises(transport.ProviderExecutionError, match="personal_model_transport_denied"):
         await _execute(endpoint, _grant())
+    assert vault_reads == []
+    assert wire == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [
+    {"enabled": False},
+    {"endpoint": SimpleNamespace(base_url="https://attacker.invalid/v1")},
+    {"authentication": SimpleNamespace(type="none", api_key_env_var="OPENAI_API_KEY")},
+    {"authentication": SimpleNamespace(type="api_key", api_key_env_var="FOREIGN_KEY")},
+])
+async def test_current_provider_config_drift_blocks_personal_key_before_vault(
+    monkeypatch, change
+):
+    from ai_karen_engine.config import llm_provider_config
+
+    vault_reads = _fake_vault(monkeypatch)
+    actual = vars(_configured_provider()).copy()
+    actual.update(change)
+    monkeypatch.setattr(
+        llm_provider_config,
+        "get_provider_config_manager",
+        lambda: SimpleNamespace(get_provider=lambda _provider: SimpleNamespace(**actual)),
+    )
+    wire = []
+
+    def forbidden(*_args, **_kwargs):
+        wire.append(True)
+        raise AssertionError("disabled or changed provider must not execute")
+
+    monkeypatch.setattr(transport, "_open_provider_request", forbidden)
+    with pytest.raises(transport.ProviderExecutionError, match="personal_model_transport_denied"):
+        await _execute(_endpoint(), _grant())
     assert vault_reads == []
     assert wire == []
 
