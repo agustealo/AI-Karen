@@ -690,3 +690,33 @@ Merge / rollout / rollback:
 
 | 2026-11-14 | PR [#814](https://github.com/agustealo/AI-Karen/pull/814), consumer provider/model controls and truthful setup | The authenticated CopilotKit consumer had a per-message backend-owned model preference contract but hid it behind a Model preferences disclosure. Only Automatic appeared when backend provider credentials or local runtime health were unverified, with no direct setup handoff. Keep existing `KarenCopilotConsumerChat.modelRequest` scoped to the conversation and existing CopilotKit `preferred_llm_provider`/`preferred_model` properties; expose labeled Provider and Model controls directly, use only backend-authorized, configured, observed-operational providers and explicitly available models, refuse unverified choices, and allow backend inventory refresh/retry with stale-request clearing. Route setup to existing Settings > Models & Runtime > Providers, without constructing credentials or runtime decisions in the UI. Provider configuration `PUT /settings/model` is admin-only; non-admin settings show a read-only owner notice and disabled credential field, not a fake consumer save. Preserve persona revision-fenced selector and automatic default; no duplicate provider registry, router, or second settings store. Source tests cover selection, unavailable/unauthorized models, refresh, setup and transport. | KCON-770 / consumer UX | SOURCE_CANDIDATE; exact-head CI pending; actual configured-model, signed-in run, deployed SHA and backend health NOT_RUN; external consumer packaging non-blocking |
 | 2026-11-14 | PR [#820](https://github.com/agustealo/AI-Karen/pull/820), verified provider/model readiness and distinct admin connection/default actions | Follow-on to merged #814: the existing Settings normalized model selection could pick a first catalog model even when the workspace default was Automatic, creating a misleading unsaved-change banner; the chat selector exposed unconfigured providers as dropdown options with diagnostic labels, and runtime catalog treated model catalog entries as potentially available without model-level live evidence. Reuse canonical Settings, `ProviderAuthenticationManager`, `get_provider_models`, runtime catalog and CopilotKit model request. Require authenticated candidate key probes instead of catalog-as-validation; keep admin-only credentials and honest unverified/invalid states. Project only enabled, configured, healthy providers with installed/local or provider-live model evidence into selectable chat options, retaining other authorized providers in Settings/advanced diagnostics. Split admin `Save provider connection` from `Set as workspace default` so inspection/credential edits do not silently replace model routing. Fail closed on secret write failure. Exact-head CI first attempt exposed missing TypeScript `health_status` contract and canonical ledger guard; both corrected in existing owners. No new vault, user BYOK, route family, orchestration or consumer package. | KCON-770 / KCON-490 | IN_PROGRESS; source candidate and exact-head CI rerun pending; healthy signed-in browser, deployment SHA, actual provider/model execution and consumer BYOK NOT_RUN |
+
+## KCON: Fail-closed saved-history rejection diagnostics
+
+When the authenticated canonical `/api/chat/ag-ui/threads/{thread_id}/history`
+projection rejects a stored transcript, it keeps the exact source-owned
+rejection classification in structured logs with a correlation ID. The
+runtime returns the allow-listed projection reason and correlation ID in
+**HTTP response headers only**, without the saved message, secret, SQL
+detail, or raw provider error. The existing Next.js owned-thread proxy
+maps known values to a fixed public failure category, validates the
+correlation identifier, and retains the generic denial status. The
+CopilotKit history gate displays an actionable category and support
+reference when available. Unknown or forged error-header values are
+never echoed to the user.
+
+The existing `view=transcript` read-only fallback stays independent and
+owner-verified. `view=continuation` remains an explicit per-conversation
+choice and is reset when the selected conversation changes. A failed
+rich-restoration attempt cannot automatically open a partial thread,
+replay unsupported cards, fabricate attestation or invoke a model.
+Back-end projection, Next.js boundary and history gate tests cover
+reason propagation, redaction, no partial SDK state, opt-in isolation,
+and unaffected 404/503 authentication/availability responses.
+
+This is diagnostic wiring and conversation isolation, **not proof that
+every legacy rich format can replay**. To close an observed unsupported
+conversation, inspect its safe reason and correlation against the live
+request, then implement that specific format or evidence repair in the
+canonical projection owner. Never bypass digest, tenant, owner, run
+completion, content-size or presentation validation to silence the UI.
