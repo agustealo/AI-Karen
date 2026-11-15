@@ -308,6 +308,7 @@ jobs:
           pytest tests/api_routes/test_runtime_provider_catalog_ollama.py -q
           pytest tests/core/model_runtime/test_ollama_model_inventory_contract.py -q
           pytest tests/core/runtime/test_chat_runtime_settings_selection.py -q
+          pytest tests/core/runtime/test_personal_model_credential_authority.py -q
           pytest tests/core/runtime/test_chat_runtime_graph_provenance.py -q
           pytest tests/core/reasoning/test_chat_runtime_reasoning_activation.py -q
           pytest tests/core/runtime/test_reasoning_model_attribution_truth.py -q
