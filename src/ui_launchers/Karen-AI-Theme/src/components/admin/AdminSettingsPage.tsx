@@ -94,6 +94,7 @@ import AdminAnalyticsPanel from "./AdminAnalyticsPanel";
 import AdminDatabasePanel from "./AdminDatabasePanel";
 import AuditLogPanel from "./AuditLogPanel";
 import FallbackModelSettings from "./FallbackModelSettings";
+import ModelSettings from "@/components/settings/ModelSettings";
 import MaintenancePanel from "./MaintenancePanel";
 import SystemConfigPanel from "./SystemConfigPanel";
 import TrainingSettingsPanel from "./TrainingSettingsPanel";
@@ -794,6 +795,10 @@ export default function AdminSettingsPage() {
               <Bot className="mr-1.5 h-4 w-4" />
               Fallback Models
             </TabsTrigger>
+            <TabsTrigger value="chat-models">
+              <Bot className="mr-1.5 h-4 w-4" />
+              Chat Models
+            </TabsTrigger>
             <TabsTrigger value="training">
               <GraduationCap className="mr-1.5 h-4 w-4" />
               Training
@@ -1260,6 +1265,10 @@ export default function AdminSettingsPage() {
 
           <TabsContent value="models" className="mt-6">
             <FallbackModelSettings />
+          </TabsContent>
+
+          <TabsContent value="chat-models" className="mt-6">
+            <ModelSettings />
           </TabsContent>
 
           <TabsContent value="training" className="mt-6">

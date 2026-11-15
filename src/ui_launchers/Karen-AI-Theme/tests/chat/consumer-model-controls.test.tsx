@@ -145,4 +145,39 @@ describe("consumer provider and model controls", () => {
     expect((screen.getByRole("combobox", { name: "Requested model" }) as HTMLSelectElement).disabled).toBe(true);
     expect(change).not.toHaveBeenCalled();
   });
+
+  it("does not list provider or models excluded by administrator chat controls", async () => {
+    api.getRuntimeProviderCatalog.mockResolvedValueOnce({
+      catalog_version: "live",
+      providers: [
+        {
+          id: "hidden-provider", label: "Hidden Cloud", enabled: true,
+          chat_enabled: false, configured: true, healthy: true,
+          health: { status: "healthy" }, allowed_for_current_user: true,
+          models: [{ id: "hidden-model", label: "Hidden", available: true }],
+        },
+        {
+          id: "visible-provider", label: "Visible Cloud", enabled: true,
+          chat_enabled: true, configured: true, healthy: true,
+          health: { status: "healthy" }, allowed_for_current_user: true,
+          models: [
+            { id: "admin-hidden", label: "Admin hidden", available: false, chat_enabled: false },
+            { id: "live-model", label: "Live", available: true, chat_enabled: true },
+          ],
+        },
+      ],
+    });
+    const changed = vi.fn();
+    render(<KarenComposerRuntimeCatalog selection={null} onSelectionChange={changed} />);
+    const provider = await screen.findByRole("combobox", { name: "Requested model provider" });
+    await waitFor(() => expect((provider as HTMLSelectElement).disabled).toBe(false));
+    expect(screen.queryByRole("option", { name: /Hidden Cloud/ })).toBeNull();
+    fireEvent.change(provider, { target: { value: "visible-provider" } });
+    expect(screen.queryByRole("option", { name: "Admin hidden" })).toBeNull();
+    fireEvent.change(screen.getByRole("combobox", { name: "Requested model" }), {
+      target: { value: "live-model" },
+    });
+    expect(changed).toHaveBeenLastCalledWith({ provider: "visible-provider", model: "live-model" });
+  });
+
 });
