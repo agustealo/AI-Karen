@@ -67,7 +67,7 @@ describe("browser voice settings lifecycle", () => {
     expect(screen.queryByText(/will use the default system voice/i)).toBeNull();
     voiceList = [{ name: "Local speech", lang: "en-US", default: true, voiceURI: "local:en" }];
     act(() => listeners.get("voiceschanged")?.forEach((handler) => handler()));
-    expect(screen.getByText(/Local speech/)).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Browser voice" })).toBeTruthy();
     fireEvent.click(screen.getByText("Preview voice"));
     expect(speak).toHaveBeenCalledTimes(1);
     expect(utterances[0].voice?.voiceURI).toBe("local:en");
@@ -83,7 +83,7 @@ describe("browser voice settings lifecycle", () => {
       ttsVoiceURI: voice.voiceURI, notifications: { enabled: true }, memoryDepth: "long",
     }));
     render(<VoiceSettings />);
-    expect(screen.getByText(/Local speech/)).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Browser voice" })).toBeTruthy();
     // Simulate another settings panel writing after the Voice panel loaded.
     localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify({
       ttsVoiceURI: voice.voiceURI, notifications: { enabled: false }, memoryDepth: "medium",
