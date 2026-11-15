@@ -219,3 +219,122 @@ class TestProviderRegistryServiceEndpoints:
             healthy_only=False,
         )
         assert selected is None or selected.provider_id != "text-only-test"
+
+
+@pytest.fixture
+def personal_provider_without_workspace_key(monkeypatch):
+    """A registered vendor with no workspace API key still has trusted config."""
+    from types import SimpleNamespace
+
+    configured = {"workspace_key": False}
+    endpoint = SimpleNamespace(
+        base_url="https://api.openai.com/v1",
+        timeout=30,
+        models_endpoint=True,
+    )
+    settings = SimpleNamespace(
+        enabled=True,
+        provider_type="external",
+        authentication=SimpleNamespace(
+            type="api_key", api_key_env_var="OPENAI_API_KEY",
+        ),
+        endpoint=endpoint,
+        capabilities=("streaming",),
+        default_model="registered-model",
+        display_name="Registered OpenAI",
+        priority=80,
+    )
+    manager = SimpleNamespace(
+        get_provider=lambda provider: settings if provider == "openai" else None,
+        is_provider_configured=lambda provider: (
+            provider == "openai" and configured["workspace_key"]
+        ),
+    )
+    fake = types.ModuleType("ai_karen_engine.config.llm_provider_config")
+    fake.OPENAI_COMPATIBLE_PROVIDER_DEFAULTS = {
+        "openai": {
+            "base_url": "https://api.openai.com/v1",
+            "api_key_env": "OPENAI_API_KEY",
+        },
+    }
+    fake.AuthenticationType = SimpleNamespace(API_KEY="api_key")
+    fake.ProviderType = SimpleNamespace(EXTERNAL="external")
+    fake.get_provider_config_manager = lambda: manager
+    monkeypatch.setitem(
+        sys.modules, "ai_karen_engine.config.llm_provider_config", fake
+    )
+    return configured, settings
+
+
+def test_personal_vendor_projection_does_not_claim_workspace_availability(
+    provider_registry_service_module, personal_provider_without_workspace_key
+):
+    configured, _ = personal_provider_without_workspace_key
+    registry = provider_registry_service_module.ProviderRegistryService()
+
+    # General chat remains unconfigured; no secret-free cloud fallback.
+    assert registry.get_provider_endpoint("openai") is None
+    assert "openai" not in registry._provider_endpoints
+    assert "openai" not in registry._provider_status_cache
+
+    candidate = registry.get_personal_model_provider_endpoint("openai")
+    assert candidate is not None
+    assert candidate.provider_id == "openai"
+    assert candidate.base_url == "https://api.openai.com/v1"
+    assert candidate.api_key_env == "OPENAI_API_KEY"
+    assert candidate.tenant_scoped is True
+    assert candidate.fallback_eligible is False
+    assert candidate.metadata["configuration_owner"] == "llm_provider_config"
+
+    # A projection is NOT registration, readiness, model availability,
+    # credential authorization, secret resolution, or a fallback candidate.
+    assert "openai" not in registry._provider_endpoints
+    assert "openai" not in registry._provider_status_cache
+    assert registry.get_provider_endpoint("openai") is None
+
+    # Ordinary workspace execution is unchanged when a shared key is present.
+    configured["workspace_key"] = True
+    workspace = registry.get_provider_endpoint("openai")
+    assert workspace is not None
+    assert workspace.provider_id == candidate.provider_id
+
+
+@pytest.mark.parametrize("field,value", [
+    ("enabled", False),
+    ("provider_type", "local"),
+    ("authentication", None),
+    ("authentication", types.SimpleNamespace(
+        type="none", api_key_env_var="OPENAI_API_KEY",
+    )),
+    ("authentication", types.SimpleNamespace(
+        type="api_key", api_key_env_var="UNREGISTERED_KEY",
+    )),
+    ("endpoint_url", "http://api.openai.com/v1"),
+    ("endpoint_url", "https://attacker.invalid/v1"),
+    ("endpoint_url", "https://api.openai.com/v1/other"),
+    ("endpoint_url", "https://user:password@api.openai.com/v1"),
+    ("endpoint_url", "https://api.openai.com/v1?token=leak"),
+])
+def test_personal_vendor_projection_rejects_disallowed_config(
+    provider_registry_service_module,
+    personal_provider_without_workspace_key,
+    field, value,
+):
+    _state, settings = personal_provider_without_workspace_key
+    if field == "endpoint_url":
+        settings.endpoint.base_url = value
+    else:
+        setattr(settings, field, value)
+    registry = provider_registry_service_module.ProviderRegistryService()
+    assert registry.get_personal_model_provider_endpoint("openai") is None
+    assert registry.get_provider_endpoint("openai") is None
+    assert "openai" not in registry._provider_endpoints
+
+
+def test_personal_vendor_projection_does_not_include_local_or_unknown_targets(
+    provider_registry_service_module, personal_provider_without_workspace_key
+):
+    registry = provider_registry_service_module.ProviderRegistryService()
+    assert registry.get_personal_model_provider_endpoint("ollama-local") is None
+    assert registry.get_personal_model_provider_endpoint("made-up-provider") is None
+    assert registry.get_provider_endpoint("ollama-local") is not None
