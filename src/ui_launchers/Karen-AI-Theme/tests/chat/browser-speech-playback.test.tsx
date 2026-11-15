@@ -121,8 +121,10 @@ describe("canonical assistant speech playback", () => {
       voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
     });
     api.synthesizeLocalVoice.mockResolvedValue(new Blob([new Uint8Array(48)], { type: "audio/wav" }));
-    const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:karen");
-    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const create = vi.fn(() => "blob:karen");
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: create });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
     const pause = vi.fn();
     const play = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("Audio", class {
@@ -144,8 +146,6 @@ describe("canonical assistant speech playback", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop reading Karen's reply" }));
     expect(pause).toHaveBeenCalled();
     expect(revoke).toHaveBeenCalledWith("blob:karen");
-    create.mockRestore();
-    revoke.mockRestore();
   });
 
   it("never falls back to vendor speech when selected model is unavailable", async () => {
