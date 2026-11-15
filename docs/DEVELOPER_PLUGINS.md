@@ -246,5 +246,43 @@ keys; plugins with configuration must have a closed action-input schema.
 Existing plugins with no config_schema and no execution_input_schema retain
 their historical permissive action-parameter path. The canonical input
 contract does NOT load, apply or expose stored settings or Vault credentials.
-Executable configuration-readiness verification and secret injection are
-separate host-owned gates; neither is inferred from a request payload.
+Execution readiness is verified by the canonical host before calling the
+extension executor. Secret release remains a separate, disabled boundary.
+
+
+## 12. Tenant-scoped plugin execution readiness
+
+A plugin that declares `config_schema` is not executable solely because it
+was discovered, enabled, or given a stored credential. After RuntimePolicy
+authorizes an exact user, tenant, action and capability plan, the existing
+`PluginService.execute_plugin` checks its canonical registration and
+installed package provenance, including any quarantine/upload restriction.
+No new orchestrator, plugin store, or alternate execution route is introduced.
+
+For declared nonsecret settings, readiness uses only the tenant-isolated
+`PluginSettingsRepository.get` transaction. Required settings must be
+durably saved and validated against the current manifest, not copied from
+caller-supplied action parameters. For declared secret fields, the host reads
+only Identity Vault's tenant-scoped `status` and `revision` receipts.
+Required credentials must be active and nonzero-revision. Revoked, unavailable,
+cross-tenant or corrupt bindings block execution before the plugin runs.
+
+Readiness denials produce stable error codes
+(`plugin_installation_unverified`, `plugin_settings_not_ready`,
+`plugin_settings_unavailable`, `plugin_credentials_not_ready`, and
+`plugin_credentials_unavailable`) with scoped structured logging and no
+secret values. Configuration-free built-in plugins retain their previously
+governed execution path.
+
+**This does not release a secret to any plugin.** A separate audited host-only
+credential lease will be required to atomically fence credential rotation and
+revocation at the actual use boundary. Plugin settings and credential revisions
+are not runtime permissions; disabling a plugin or denying an action still
+wins. The follow-on strict built-in manifest migration must preserve already
+registered capabilities and prove tests rather than changing invocation
+defaults silently.
+
+Proof:
+`PYTHONPATH=src pytest tests/extensions/test_plugin_config_invocation_boundary.py tests/extensions/test_plugin_action_authorization.py -q`
+and the existing Plugin Backend, Plugin Security Reports and Main Quality Gate
+against the exact candidate head.
