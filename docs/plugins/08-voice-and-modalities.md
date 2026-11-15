@@ -181,6 +181,48 @@ shared HTTP caches. Failure must not reuse audio from another user's session.
 The existing complete-WAV route remains the compatibility transport until
 a streaming protocol is actually implemented and tested.
 
+## First-class Copilot consumer voice controls
+
+The CopilotKit v2 chat now mounts its speech controls in one
+[Copilot voice dock](../../src/ui_launchers/Karen-AI-Theme/src/components/chat/copilotkit/KarenCopilotVoiceDock.tsx),
+rather than a disconnected two-microphone footer. This dock is a **consumer UI
+slice**, not another runtime or model registry.
+
+- Shows independently verified `/api/voice/capabilities` listening readiness
+  and the authorized `/api/voice/engines` speaking catalog. Neither
+  advertises an uninstalled model.
+- Uses the existing
+  [durable user voice preference](../../src/ai_karen_engine/api_routes/system/settings.py)
+  and `/api/settings/voice` for inline engine and voice selection.
+  The UI confirms a save **only after server acknowledgement and readback**;
+  failed readback is not a saved setting.
+- A previously saved but revoked or missing model is visibly unavailable.
+  Browser speech is an explicitly saved selection, never an automatic
+  replacement for an unavailable local model.
+- Reuses KarenLocalDictationCapture and opt-in KarenBrowserDictationCapture.
+  Their output only edits the verified Copilot composer draft; it cannot
+  submit messages or bypass the draft CAS workflow.
+- Disables/unmounts microphone capture while the chat run or draft is locked.
+  Read-aloud remains an explicit action on a Copilot assistant message and
+  resolves its selected voice at playback time.
+- Applies responsive, browser-standard HTML controls and the existing design
+  system. No operating-system-specific executable or packaged speech binary
+  is shipped by the UI slice.
+
+**Source proof:**
+[Copilot voice dock tests](../../src/ui_launchers/Karen-AI-Theme/tests/chat/copilotkit-voice-dock.test.tsx)
+cover no-engine truth, separate STT readiness, backend-acknowledged settings,
+revocation, readback mismatch, error sanitization, and disabled capture.
+The existing local dictation and speech playback tests remain authoritative
+for microphone teardown and audio cancellation.
+
+**Acceptance still open:** real Pocket model installation, CPU synthesis and
+browser playback must pass on supported target hardware. Unit/UI contract
+proof does not establish native quality, hardware performance, consent, or
+release readiness. See the
+[Pocket acceptance ledger](12-pocket-tts-native-acceptance.md) when available
+on the release branch.
+
 ## UI behavior
 
 User settings should offer separate *speech output* and *speech input*
