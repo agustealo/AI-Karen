@@ -36,6 +36,13 @@ class NotificationSettings(BaseModel):
     alertOnSummaryReady: bool
 
 
+class VoiceSelectionSettings(BaseModel):
+    """Per-user model-backed spoken reply preference, not plugin admin config."""
+
+    engine_id: str | None = Field(default=None, max_length=50)
+    voice_id: str | None = Field(default=None, max_length=96)
+
+
 DEFAULT_BEHAVIOR_SETTINGS = BehaviorSettings(
     memoryDepth="medium",
     personalityTone="friendly",
@@ -182,6 +189,83 @@ async def update_behavior_settings(
         "message": "Behavior settings updated successfully",
         "behavior": payload,
     }
+
+
+@router.get("/settings/voice")
+async def get_voice_settings(
+    current_user: UserData = Depends(get_current_user),
+):
+    """Read one authenticated user's durable voice choice without inventing readiness."""
+    _, account = await _load_authoritative_user(current_user)
+    stored = (account.preferences or {}).get("voice")
+    if not isinstance(stored, dict):
+        stored = {}
+    try:
+        requested = VoiceSelectionSettings(
+            engine_id=stored.get("engine_id"),
+            voice_id=stored.get("voice_id"),
+        )
+    except Exception:
+        logger.warning(
+            "settings.voice_invalid_persisted_value",
+            extra={"user_id": current_user.user_id, "tenant_id": current_user.tenant_id},
+        )
+        return {"voice": {"engine_id": None, "voice_id": None}, "available": False}
+    available = False
+    if requested.engine_id and requested.voice_id:
+        from ai_karen_engine.services.voice_runtime import get_voice_runtime
+
+        catalog = await get_voice_runtime().engine_catalog(current_user)
+        available = any(
+            engine["engine_id"] == requested.engine_id
+            and any(voice["id"] == requested.voice_id for voice in engine["voices"])
+            for engine in catalog["engines"]
+        )
+    return {"voice": _model_dump(requested), "available": available}
+
+
+@router.put("/settings/voice")
+async def update_voice_settings(
+    selection: VoiceSelectionSettings,
+    current_user: UserData = Depends(get_current_user),
+):
+    """Persist a verified local engine/voice pair, scoped to the authenticated user."""
+    auth_service, _ = await _load_authoritative_user(current_user)
+    if (selection.engine_id is None) != (selection.voice_id is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Engine and voice must be selected or cleared together",
+        )
+    if selection.engine_id is not None:
+        from ai_karen_engine.services.voice_runtime import get_voice_runtime
+
+        catalog = await get_voice_runtime().engine_catalog(current_user)
+        allowed = any(
+            engine["engine_id"] == selection.engine_id
+            and any(voice["id"] == selection.voice_id for voice in engine["voices"])
+            for engine in catalog["engines"]
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Selected speech engine or voice is not verified and authorized",
+            )
+    payload = _model_dump(selection)
+    updated = await auth_service.update_user_preferences(
+        user_id=str(current_user.user_id),
+        preferences={"voice": payload},
+        merge=True,
+    )
+    if str(updated.tenant_id or "").strip() != str(current_user.tenant_id).strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Updated user tenant scope is invalid",
+        )
+    logger.info(
+        "settings.voice_updated",
+        extra={"user_id": current_user.user_id, "tenant_id": current_user.tenant_id},
+    )
+    return {"status": "success", "voice": payload, "available": bool(selection.engine_id)}
 
 
 @router.get("/settings/notifications", response_model=NotificationSettings)

@@ -162,6 +162,39 @@ class CommunicationChannelDeclaration(BaseModel):
         return mode
 
 
+class VoiceModalityDeclaration(BaseModel):
+    """Versioned speech intent, never an execution grant or readiness claim.
+
+    The running VoiceRuntime derives availability from the governed executor
+    and real model health. Plugins may not declare arbitrary capability IDs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(default="1.0.0", pattern=SEMVER_PATTERN)
+    modalities: List[str] = Field(min_length=1, max_length=3)
+    languages: List[str] = Field(min_length=1, max_length=24)
+    streaming: bool = False
+    voice_cloning: bool = False
+
+    @field_validator("modalities")
+    @classmethod
+    def validate_modalities(cls, value: List[str]) -> List[str]:
+        if len(value) != len(set(value)) or not set(value) <= {"tts", "stt", "vad"}:
+            raise ValueError("Unsupported or repeated voice modality")
+        return value
+
+    @field_validator("languages")
+    @classmethod
+    def validate_languages(cls, value: List[str]) -> List[str]:
+        if len(value) != len(set(value)) or any(
+            not re.fullmatch(r"[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?", language)
+            for language in value
+        ):
+            raise ValueError("Invalid or duplicate language codes")
+        return value
+
+
 class ExtensionCapabilities(BaseModel):
     """Extension capability declarations."""
 
@@ -170,6 +203,7 @@ class ExtensionCapabilities(BaseModel):
     provides_background_tasks: bool = False
     provides_webhooks: bool = False
     communication_channel: Optional[CommunicationChannelDeclaration] = None
+    voice_modality: Optional[VoiceModalityDeclaration] = None
     prompt_first: bool = True
     allowed_prompt_overrides: List[str] = Field(default_factory=list)
 

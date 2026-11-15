@@ -6,13 +6,21 @@ The runtime is the single capability and concurrency authority for both modes.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import io
 from dataclasses import dataclass, field
 import logging
 import os
+import re
+import uuid
+import wave
+from typing import Any, Mapping
 from typing import Awaitable, Callable, Protocol, TypeVar
 
 from ai_karen_engine.core.voice.contracts import (
     AudioInput,
+    MAX_AUDIO_BYTES,
     SynthesisInput,
     SynthesizedSpeech,
     TranscriptionResult,
@@ -169,6 +177,208 @@ class VoiceRuntime:
             if result.engine != engine.engine_id or result.voice_id != engine.voice_id:
                 raise VoiceContractError("synthesis_engine_result_mismatch")
             return result
+
+        return await _execute_exclusively(
+            self._synthesis_lock, "local_synthesis_busy", infer
+        )
+
+
+    @staticmethod
+    def _voice_principal(principal: Mapping[str, Any]) -> dict[str, Any]:
+        """Project trusted authenticated identity, never user-provided action JSON."""
+        from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
+
+        user_id = str(principal.get("user_id") or "").strip()
+        tenant_id = str(principal.get("tenant_id") or "").strip()
+        if not user_id:
+            raise VoiceContractError("voice_identity_required")
+        try:
+            uuid.UUID(tenant_id)
+        except (TypeError, AttributeError, ValueError):
+            raise VoiceContractError("voice_tenant_scope_required") from None
+        rbac = get_rbac_manager()
+        permissions = {item.value for item in rbac.get_user_permissions(dict(principal))}
+        permissions.update(str(p) for p in (principal.get("permissions") or []))
+        return {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "roles": [str(role) for role in (principal.get("roles") or [])],
+            "permissions": sorted(permissions),
+        }
+
+    @staticmethod
+    async def _invoke_voice_plugin(
+        plugin_id: str,
+        payload: dict[str, Any],
+        identity: Mapping[str, Any],
+        correlation_id: str | None,
+    ) -> dict[str, Any] | None:
+        """Run the existing kernel, policy and executor; never import plugin code."""
+        from ai_karen_engine.services.plugin_service import (
+            ExecutionStatus,
+            get_plugin_service,
+        )
+
+        service = get_plugin_service()
+        result = await service.execute_plugin(
+            plugin_name=plugin_id,
+            parameters=payload,
+            user_id=str(identity["user_id"]),
+            tenant_id=str(identity["tenant_id"]),
+            correlation_id=correlation_id,
+            roles=list(identity["roles"]),
+            permissions=list(identity["permissions"]),
+            timeout_seconds=120,
+        )
+        if result.status is not ExecutionStatus.COMPLETED:
+            return None
+        return result.result if isinstance(result.result, dict) else None
+
+    async def engine_catalog(
+        self,
+        principal: Mapping[str, Any],
+        *,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Only verified, authorized plugin engines appear as selectable.
+
+        Manifest voice declarations are intent, not readiness. Every candidate
+        is probed through PluginService's real execution admission gate.
+        """
+        from ai_karen_engine.services.plugin_service import get_plugin_service
+
+        identity = self._voice_principal(principal)
+        service = get_plugin_service()
+        installed = await service.list_plugins(enabled_only=True)
+        engines: list[dict[str, Any]] = []
+        for record in installed:
+            manifest = record.get("manifest")
+            declaration = getattr(getattr(manifest, "capabilities", None), "voice_modality", None)
+            plugin_id = str(getattr(manifest, "name", "") or "")
+            if (
+                not plugin_id
+                or not re.fullmatch(r"[a-z][a-z0-9-]{0,49}", plugin_id)
+                or record.get("status") not in {"enabled", "active"}
+                or declaration is None
+                or "tts" not in declaration.modalities
+                or str(declaration.version) != "1.0.0"
+            ):
+                continue
+            try:
+                result = await self._invoke_voice_plugin(
+                    plugin_id, {"operation": "catalog"}, identity, correlation_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Governed voice catalog probe failed",
+                    extra={"plugin_id": plugin_id, "error_type": type(exc).__name__},
+                )
+                continue
+            if (
+                result is None
+                or result.get("engine_id") != plugin_id
+                or result.get("status") != "ready"
+                or not isinstance(result.get("voices"), list)
+                or not isinstance(result.get("features"), dict)
+                or result["features"].get("synthesis") is not True
+            ):
+                continue
+            voices: list[dict[str, str]] = []
+            for raw in result["voices"][:32]:
+                if not isinstance(raw, dict):
+                    continue
+                voice_id = raw.get("id")
+                voice_name = raw.get("name")
+                if not isinstance(voice_id, str) or not re.fullmatch(
+                    r"[A-Za-z][A-Za-z0-9_-]{0,95}", voice_id
+                ):
+                    continue
+                if not isinstance(voice_name, str) or not 0 < len(voice_name) <= 80:
+                    continue
+                voices.append({
+                    "id": voice_id,
+                    "name": voice_name,
+                    "language": str(raw.get("language", "en"))[:12],
+                })
+            if not voices:
+                continue
+            engines.append({
+                "engine_id": plugin_id,
+                "display_name": str(getattr(manifest, "display_name", plugin_id))[:80],
+                "plugin_version": str(getattr(manifest, "version", "")),
+                "modality": "tts",
+                "status": "ready",
+                "model_id": str(result.get("model_id") or "")[:128],
+                "model_revision": str(result.get("model_revision") or "")[:64],
+                "features": {
+                    "synthesis": True,
+                    "streaming": bool(
+                        declaration.streaming and result["features"].get("streaming") is True
+                    ),
+                    "voice_cloning": bool(
+                        declaration.voice_cloning and result["features"].get("voice_cloning") is True
+                    ),
+                },
+                "voices": voices,
+            })
+        return {"contract_version": "1.0.0", "engines": engines}
+
+    async def synthesize_with_plugin(
+        self,
+        request: SynthesisInput,
+        *,
+        engine_id: str,
+        principal: Mapping[str, Any],
+        correlation_id: str | None = None,
+    ) -> SynthesizedSpeech:
+        """One authorized capability path for all plugin-backed TTS engines."""
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,49}", engine_id):
+            raise VoiceContractError("invalid_synthesis_engine")
+        identity = self._voice_principal(principal)
+        catalog = await self.engine_catalog(identity, correlation_id=correlation_id)
+        chosen = next(
+            (entry for entry in catalog["engines"] if entry["engine_id"] == engine_id),
+            None,
+        )
+        if chosen is None:
+            raise RuntimeError("local_synthesis_unavailable")
+        valid_voices = {voice["id"] for voice in chosen["voices"]}
+        if request.voice_id is not None and request.voice_id not in valid_voices:
+            raise VoiceContractError("local_synthesis_voice_unavailable")
+        voice_id = request.voice_id or chosen["voices"][0]["id"]
+
+        async def infer() -> SynthesizedSpeech:
+            data = await self._invoke_voice_plugin(
+                engine_id,
+                {"operation": "synthesize", "text": request.text, "voice_id": voice_id},
+                identity,
+                correlation_id,
+            )
+            if (
+                data is None
+                or data.get("engine") != engine_id
+                or data.get("voice_id") != voice_id
+                or data.get("content_type") != "audio/wav"
+                or not isinstance(data.get("audio_base64"), str)
+                or len(data["audio_base64"]) > (MAX_AUDIO_BYTES * 4 // 3 + 8)
+            ):
+                raise RuntimeError("local_synthesis_failed")
+            try:
+                decoded = base64.b64decode(data["audio_base64"], validate=True)
+                if not 44 <= len(decoded) <= MAX_AUDIO_BYTES:
+                    raise ValueError("invalid_wav_bounds")
+                with wave.open(io.BytesIO(decoded), "rb") as stream:
+                    if (
+                        stream.getnchannels() != 1
+                        or stream.getsampwidth() != 2
+                        or not 8_000 <= stream.getframerate() <= 96_000
+                        or stream.getnframes() <= 0
+                        or stream.getnframes() * 2 + 44 > MAX_AUDIO_BYTES
+                    ):
+                        raise ValueError("invalid_audio_format")
+            except (binascii.Error, ValueError, wave.Error, EOFError):
+                raise RuntimeError("local_synthesis_failed") from None
+            return SynthesizedSpeech(audio=decoded, engine=engine_id, voice_id=voice_id)
 
         return await _execute_exclusively(
             self._synthesis_lock, "local_synthesis_busy", infer

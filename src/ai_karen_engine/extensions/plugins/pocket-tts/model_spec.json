@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "plugin_id": "pocket-tts",
+  "runtime_package": "pocket-tts",
+  "runtime_version": "4.0.1",
+  "model_id": "kyutai/pocket-tts",
+  "revision": "db04f0e653473e5c7333c69686ac92b7460b0c1d",
+  "channel_id": "plugin_audio",
+  "language": "english_18m_refl_2026-10",
+  "model_subdirectory": "languages/english_18m_refl_2026-10",
+  "weights": "model.safetensors",
+  "tokenizer": "tokenizer.model",
+  "voice_dir": "embeddings",
+  "model_license": "CC-BY-4.0",
+  "features": {
+    "tts": true,
+    "stt": false,
+    "streaming": false,
+    "voice_cloning": false
+  }
+}

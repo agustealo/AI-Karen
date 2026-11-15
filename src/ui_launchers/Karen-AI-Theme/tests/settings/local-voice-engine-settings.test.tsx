@@ -1,0 +1,137 @@
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import LocalVoiceEngineSettings from "@/components/settings/LocalVoiceEngineSettings";
+
+const api = vi.hoisted(() => ({
+  getVoiceEngineCatalog: vi.fn(),
+  getVoiceSelection: vi.fn(),
+  setVoiceSelection: vi.fn(),
+  synthesizeLocalVoice: vi.fn(),
+  toast: vi.fn(),
+}));
+
+vi.mock("@/lib/api", () => ({
+  apiClient: api,
+  ApiError: class ApiError extends Error {
+    constructor(public status: number, message: string) { super(message); }
+  },
+}));
+vi.mock("@/hooks/use-toast", () => ({
+  useToast: () => ({ toast: api.toast }),
+}));
+
+const catalog = {
+  contract_version: "1.0.0",
+  engines: [{
+    engine_id: "pocket-tts",
+    display_name: "Pocket TTS",
+    plugin_version: "1.0.0",
+    modality: "tts",
+    status: "ready",
+    model_id: "kyutai/pocket-tts",
+    model_revision: "approved-revision",
+    features: { synthesis: true, streaming: false, voice_cloning: false },
+    voices: [{ id: "alba", name: "Alba", language: "en" }],
+  }],
+};
+
+beforeEach(() => {
+  api.getVoiceEngineCatalog.mockReset();
+  api.getVoiceSelection.mockReset();
+  api.setVoiceSelection.mockReset();
+  api.synthesizeLocalVoice.mockReset();
+  api.toast.mockReset();
+  api.getVoiceEngineCatalog.mockResolvedValue(catalog);
+  api.getVoiceSelection.mockResolvedValue({
+    voice: { engine_id: null, voice_id: null }, available: false,
+  });
+  api.setVoiceSelection.mockImplementation(async (engine_id, voice_id) => ({
+    status: "success", voice: { engine_id, voice_id }, available: Boolean(engine_id),
+  }));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+describe("governed local engine voice settings", () => {
+  it("renders no fabricated engine when backend inventory is empty", async () => {
+    api.getVoiceEngineCatalog.mockResolvedValue({ contract_version: "1.0.0", engines: [] });
+    render(<LocalVoiceEngineSettings />);
+    expect(screen.getByText(/Verifying installed local speech engines/)).toBeTruthy();
+    await screen.findByText("No Local TTS Plugin Ready");
+    expect(screen.queryByText("Pocket TTS")).toBeNull();
+    expect(screen.queryByText("Preview local voice")).toBeNull();
+  });
+
+  it("persists only a verified engine and voice with an acknowledged result", async () => {
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Browser speech \(device-dependent\)/);
+    fireEvent.click(screen.getByRole("combobox", { name: "Speech output source" }));
+    fireEvent.click(screen.getByText("Pocket TTS · TTS · Local"));
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    fireEvent.click(screen.getByText("Save speech engine"));
+    await waitFor(() => expect(api.setVoiceSelection).toHaveBeenCalledWith("pocket-tts", "alba"));
+    await waitFor(() => expect(api.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Speech engine preference saved",
+    })));
+  });
+
+  it("does not claim save success when backend rejects persistence", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    api.setVoiceSelection.mockRejectedValue(new Error("revision conflict"));
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    fireEvent.click(screen.getByText("Save speech engine"));
+    await waitFor(() => expect(api.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Speech engine preference not saved",
+      variant: "destructive",
+    })));
+  });
+
+  it("shows stored engine revocation instead of substituting another voice", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "retired-local", voice_id: "old" }, available: false,
+    });
+    render(<LocalVoiceEngineSettings />);
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent",
+      expect.stringMatching(/saved local speech engine or voice is no longer available/i));
+    expect(screen.getByText("Save speech engine").closest("button")?.disabled).toBe(true);
+  });
+
+  it("previews WAV only after explicit user action, without sending a chat message", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    const createUrl = vi.fn(() => "blob:authorized-audio");
+    const revokeUrl = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createUrl });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeUrl });
+    const play = vi.fn(async () => undefined);
+    const pause = vi.fn();
+    vi.stubGlobal("Audio", class {
+      src: string;
+      onended?: () => void;
+      onerror?: () => void;
+      play = play;
+      pause = pause;
+      constructor(url: string) { this.src = url; }
+    });
+    api.synthesizeLocalVoice.mockResolvedValue(new Blob([new Uint8Array(44)], { type: "audio/wav" }));
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Preview local voice"));
+    await waitFor(() => expect(api.synthesizeLocalVoice).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(api.synthesizeLocalVoice.mock.calls[0][0]).toBe("pocket-tts");
+    expect(api.synthesizeLocalVoice.mock.calls[0][1]).toBe("alba");
+    fireEvent.click(screen.getByText("Stop local preview"));
+    expect(pause).toHaveBeenCalledOnce();
+    expect(revokeUrl).toHaveBeenCalledWith("blob:authorized-audio");
+    vi.unstubAllGlobals();
+  });
+});

@@ -110,32 +110,10 @@ async def transcribe_voice(
 
 
 
-@router.post("/synthesis")
-async def synthesize_voice(
-    request: Request,
-    user: UserData = Depends(get_current_user),
-) -> Response:
-    """Synthesize one bounded reply with a verified, explicitly enabled local engine.
-
-    API ingress performs authentication and body validation only. It cannot
-    choose a voice engine, download models or invoke browser-vendor services.
-    """
-    runtime = get_voice_runtime()
-    capabilities = await runtime.capabilities()
-    if not capabilities.synthesis_available:
-        raise HTTPException(status_code=503, detail="local_synthesis_unavailable")
-    if runtime.synthesis_busy():
-        raise HTTPException(
-            status_code=429,
-            detail="local_synthesis_busy",
-            headers={"Retry-After": "1"},
-        )
-    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if media_type != "application/json":
+async def _read_synthesis_input(request: Request) -> SynthesisInput:
+    """One bounded, typed JSON ingestion path for all TTS engines."""
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(status_code=415, detail="json_required")
-
-    # 2,000 Unicode characters can require up to 8 KB of UTF-8 JSON.
-    # Never buffer arbitrary unbounded speech requests in the API.
     max_request_bytes = 12 * 1024
     declared = request.headers.get("content-length")
     if declared:
@@ -165,7 +143,113 @@ async def synthesize_voice(
     ):
         raise HTTPException(status_code=422, detail="invalid_synthesis_payload")
     try:
-        synthesis_input = SynthesisInput(text=text, voice_id=voice_id)
+        return SynthesisInput(text=text, voice_id=voice_id)
+    except VoiceContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+def _speech_response(result: object) -> Response:
+    """Cache-safe WAV playback response, independently of engine implementation."""
+    return Response(
+        content=result.audio,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "private, no-store, max-age=0",
+            "X-Content-Type-Options": "nosniff",
+            "X-Karen-Voice-Engine": result.engine,
+        },
+    )
+
+
+@router.get("/engines")
+async def list_voice_engines(
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> dict[str, object]:
+    """List backend-verified local speech engines permitted to this actor."""
+    try:
+        return await get_voice_runtime().engine_catalog(
+            user, correlation_id=getattr(request.state, "correlation_id", None)
+        )
+    except VoiceContractError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from None
+    except Exception as exc:
+        logger.error("Voice catalog unavailable", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="voice_catalog_unavailable") from None
+
+
+@router.post("/engines/{engine_id}/synthesis")
+async def synthesize_with_voice_engine(
+    engine_id: str,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> Response:
+    """Thin ingress to the one VoiceRuntime and governed plugin executor."""
+    runtime = get_voice_runtime()
+    if runtime.synthesis_busy():
+        raise HTTPException(
+            status_code=429, detail="local_synthesis_busy",
+            headers={"Retry-After": "1"},
+        )
+    try:
+        catalog = await runtime.engine_catalog(
+            user, correlation_id=getattr(request.state, "correlation_id", None)
+        )
+    except VoiceContractError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from None
+    except Exception as exc:
+        logger.error("Voice catalog unavailable", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="voice_catalog_unavailable") from None
+    if not any(item["engine_id"] == engine_id for item in catalog["engines"]):
+        raise HTTPException(status_code=503, detail="local_synthesis_unavailable")
+    synthesis_input = await _read_synthesis_input(request)
+    try:
+        result = await runtime.synthesize_with_plugin(
+            synthesis_input,
+            engine_id=engine_id,
+            principal=user,
+            correlation_id=getattr(request.state, "correlation_id", None),
+        )
+    except VoiceContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except RuntimeError as exc:
+        if str(exc) == "local_synthesis_busy":
+            raise HTTPException(
+                status_code=429, detail="local_synthesis_busy",
+                headers={"Retry-After": "1"},
+            ) from None
+        if str(exc) == "local_synthesis_unavailable":
+            raise HTTPException(status_code=503, detail="local_synthesis_unavailable") from None
+        logger.error("Plugin synthesis failed", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="local_synthesis_failed") from None
+    except Exception as exc:
+        logger.error("Plugin synthesis failed", extra={"error_type": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="local_synthesis_failed") from None
+    return _speech_response(result)
+
+
+@router.post("/synthesis")
+async def synthesize_voice(
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> Response:
+    """Synthesize one bounded reply with a verified, explicitly enabled local engine.
+
+    API ingress performs authentication and body validation only. It cannot
+    choose a voice engine, download models or invoke browser-vendor services.
+    """
+    runtime = get_voice_runtime()
+    capabilities = await runtime.capabilities()
+    if not capabilities.synthesis_available:
+        raise HTTPException(status_code=503, detail="local_synthesis_unavailable")
+    if runtime.synthesis_busy():
+        raise HTTPException(
+            status_code=429,
+            detail="local_synthesis_busy",
+            headers={"Retry-After": "1"},
+        )
+    synthesis_input = await _read_synthesis_input(request)
+    try:
         result = await runtime.synthesize(synthesis_input)
     except VoiceContractError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
@@ -188,12 +272,4 @@ async def synthesize_voice(
             extra={"error_type": type(exc).__name__},
         )
         raise HTTPException(status_code=503, detail="local_synthesis_failed") from None
-    return Response(
-        content=result.audio,
-        media_type="audio/wav",
-        headers={
-            "Cache-Control": "private, no-store, max-age=0",
-            "X-Content-Type-Options": "nosniff",
-            "X-Karen-Voice-Engine": result.engine,
-        },
-    )
+    return _speech_response(result)

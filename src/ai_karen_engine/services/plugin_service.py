@@ -19,7 +19,7 @@ import tempfile
 import zipfile
 import uuid
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -870,7 +870,32 @@ class PluginService:
         )
 
     def _record_result(self, result: PluginExecutionResult) -> PluginExecutionResult:
-        self._history.append(result)
+        """Retain bounded metadata, not private binary media, in execution history.
+
+        The current authorized caller still receives the original complete
+        result. History projections are separate objects so that observability
+        cannot accidentally retain WAV/image buffers across chat sessions.
+        """
+        history_entry = result
+        if isinstance(result.result, dict) and isinstance(result.result.get("audio_base64"), str):
+            original = result.result
+            history_entry = replace(
+                result,
+                result={
+                    "engine": str(original.get("engine") or "")[:80],
+                    "voice_id": str(original.get("voice_id") or "")[:96],
+                    "content_type": str(original.get("content_type") or "")[:80],
+                    "media_payload_redacted": True,
+                },
+                metadata={**result.metadata, "media_payload_redacted": True},
+            )
+        elif isinstance(result.result, (bytes, bytearray, memoryview)):
+            history_entry = replace(
+                result,
+                result={"media_payload_redacted": True},
+                metadata={**result.metadata, "media_payload_redacted": True},
+            )
+        self._history.append(history_entry)
         if len(self._history) > 1000:
             del self._history[:-1000]
         return result
