@@ -367,6 +367,7 @@ class AGUIEventProjection:
             if (
                 isinstance(persona_id, str)
                 and 0 < len(persona_id) <= 128
+                and persona_id.strip()
                 and type(persona_revision) is int
                 and 0 <= persona_revision <= 2**53 - 1
             ):
