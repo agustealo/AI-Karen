@@ -113,8 +113,9 @@ def test_success_attribution_can_remain_uncertain():
         ExperienceObservation(observation_id="e1", what_was_tried="t", why_chosen="c"),
         OutcomeAssessment(status=OutcomeAssessmentStatus.SUCCESS, task_completion=0.5),
     )
-    assert attribution.uncertainty > 0.0
+    assert attribution.uncertainty is None
     assert attribution.primary_driver == "unknown"
+    assert attribution.metadata["status"] == "unidentified"
 
 
 def test_one_sample_cannot_produce_strong_global_learning():

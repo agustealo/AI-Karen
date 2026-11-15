@@ -21,8 +21,21 @@ class CalibrationTracker:
     def observations(self) -> list[CalibrationObservation]:
         return list(self._observations)
 
-    def accuracy(self) -> float:
+    def correction_free_rate(self) -> float | None:
+        """Observational correction-free fraction, NOT verified model accuracy."""
         if not self._observations:
-            return 0.0
-        correct = sum(1 for o in self._observations if not o.correction_required)
-        return correct / len(self._observations)
+            return None
+        without_correction = sum(
+            1 for observation in self._observations
+            if not observation.correction_required
+        )
+        return without_correction / len(self._observations)
+
+    def accuracy(self) -> float:
+        """Legacy compatibility: correction-free rate, not calibrated accuracy.
+
+        Existing callers retain the historical return contract. This method
+        must not be used to promote a model or report calibrated confidence.
+        """
+        rate = self.correction_free_rate()
+        return rate if rate is not None else 0.0

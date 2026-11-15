@@ -181,13 +181,21 @@ class CalibrationObservation:
     context: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def calibration_error(self) -> float:
+    def calibration_error(self) -> float | None:
+        """Single-observation discrepancy, not a population calibration score.
+
+        Absence of an observed target is unknown, not zero error. Aggregate
+        calibration requires separately verified labels and the existing
+        Intelligence ML evaluation metrics.
+        """
         if self.actual_confidence is None:
-            return 0.0
+            return None
         return abs(self.predicted_confidence - self.actual_confidence)
 
     def is_well_calibrated(self, tolerance: float = 0.2) -> bool:
-        return self.calibration_error() <= tolerance
+        """Return False when no target exists; never claim perfect by default."""
+        error = self.calibration_error()
+        return error is not None and error <= tolerance
 
 
 @dataclass(slots=True)
