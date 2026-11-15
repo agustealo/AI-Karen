@@ -1491,6 +1491,139 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert disabled_state["phase"] == "qr_available"
         assert disabled_state["sequence"] == 1
 
+        # Personal owner verification is mutable after initial assignment
+        # and after risk consent. It must be checked again under the pairing
+        # transaction, rather than trusting the historical owner row.
+        owner_status_id = "owner-status-" + uuid.uuid4().hex
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+                 (connection_id,tenant_id,installation_id,
+                  provider_account_id,credential_handle,enabled,revision)
+               VALUES ($1,$2,'telegram-bot','owner-status-provider',
+                       'vault://owner-status-test',true,1)""",
+            owner_status_id, tenant_a,
+        )
+        assert await owner_repo.assign_personal_connection_owner(
+            tenant_id=str(tenant_a), connection_id=owner_status_id,
+            user_id=str(user),
+        )
+        assert await owner_repo.acknowledge_personal_pairing_risk(
+            tenant_id=str(tenant_a), connection_id=owner_status_id,
+            user_id=str(user), provider_id="approved-managed-connector",
+            policy_version=PERSONAL_WHATSAPP_CONSENT_VERSION,
+        )
+
+        def owner_status_event(sequence, kind, *, receipt=None):
+            return PairingObservation(
+                tenant_id=str(tenant_a),
+                connection_id=owner_status_id,
+                provider_id="approved-managed-connector",
+                connection_revision=1, sequence=sequence, event=kind,
+                observed_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+                authenticated=True,
+                provider_receipt_id=receipt,
+                qr_expires_at=(
+                    datetime.now(timezone.utc) + timedelta(seconds=90)
+                    if kind is PairingEvent.QR_ISSUED else None
+                ),
+            )
+
+        # Race against account deactivation: a pending pairing commit must
+        # wait for the owner row lock and then observe the *new* status.
+        async with raw.transaction():
+            await raw.fetchrow(
+                """SELECT user_id FROM public.auth_users
+                   WHERE user_id=$1 FOR UPDATE""", user,
+            )
+            delayed_qr = asyncio.create_task(
+                owner_repo.commit_personal_pairing_observation(
+                    observation=owner_status_event(1, PairingEvent.QR_ISSUED),
+                    user_id=str(user), provider_vetted_and_enabled=True,
+                )
+            )
+            await asyncio.sleep(0.1)
+            assert not delayed_qr.done()
+            assert await raw.execute(
+                "UPDATE public.auth_users SET is_active=false WHERE user_id=$1",
+                user,
+            ) == "UPDATE 1"
+        with pytest.raises(PairingEvidenceDenied, match="Inactive or unverified"):
+            await delayed_qr
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, owner_status_id,
+        ) == 0
+
+        assert await raw.execute(
+            """UPDATE public.auth_users
+               SET is_active=true, is_verified=false WHERE user_id=$1""",
+            user,
+        ) == "UPDATE 1"
+        with pytest.raises(PairingEvidenceDenied, match="Inactive or unverified"):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=owner_status_event(1, PairingEvent.QR_ISSUED),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        assert await raw.execute(
+            "UPDATE public.auth_users SET is_verified=true WHERE user_id=$1",
+            user,
+        ) == "UPDATE 1"
+        assert (await owner_repo.commit_personal_pairing_observation(
+            observation=owner_status_event(1, PairingEvent.QR_ISSUED),
+            user_id=str(user), provider_vetted_and_enabled=True,
+        )).phase is PairingPhase.QR_AVAILABLE
+        assert await raw.execute(
+            "UPDATE public.auth_users SET is_active=false WHERE user_id=$1",
+            user,
+        ) == "UPDATE 1"
+        with pytest.raises(PairingEvidenceDenied, match="Inactive or unverified"):
+            await owner_repo.commit_personal_pairing_observation(
+                observation=owner_status_event(
+                    2, PairingEvent.LINK_CONFIRMED,
+                    receipt="unaccepted-owner-link",
+                ),
+                user_id=str(user), provider_vetted_and_enabled=True,
+            )
+        assert await raw.fetchval(
+            """SELECT sequence FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, owner_status_id,
+        ) == 1
+        assert await raw.execute(
+            "UPDATE public.auth_users SET is_active=true WHERE user_id=$1",
+            user,
+        ) == "UPDATE 1"
+        assert (await owner_repo.commit_personal_pairing_observation(
+            observation=owner_status_event(
+                2, PairingEvent.LINK_CONFIRMED, receipt="accepted-owner-link",
+            ),
+            user_id=str(user), provider_vetted_and_enabled=True,
+        )).phase is PairingPhase.CONNECTED
+
+        # Inactive owners must still allow authenticated terminal teardown,
+        # otherwise deactivation could strand an existing remote session.
+        assert await raw.execute(
+            "UPDATE public.auth_users SET is_active=false WHERE user_id=$1",
+            user,
+        ) == "UPDATE 1"
+        assert (await owner_repo.commit_personal_pairing_observation(
+            observation=owner_status_event(3, PairingEvent.DISCONNECT_REQUESTED),
+            user_id=str(user), provider_vetted_and_enabled=False,
+        )).phase is PairingPhase.DISCONNECT_PENDING
+        assert (await owner_repo.commit_personal_pairing_observation(
+            observation=owner_status_event(
+                4, PairingEvent.UNLINK_CONFIRMED,
+                receipt="unlinked-owner-session-claim",
+            ),
+            user_id=str(user), provider_vetted_and_enabled=False,
+        )).phase is PairingPhase.DISCONNECTED
+        assert await raw.fetchval(
+            """SELECT sequence FROM public.channel_personal_pairing_state
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, owner_status_id,
+        ) == 4
+
     finally:
         if engine is not None:
             await engine.dispose()
