@@ -15,7 +15,11 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1327,6 +1331,196 @@ class CredentialVaultService(BaseService):
             credential_id, tenant_id, self._require_credential_owner(user_id),
             reason=reason, owner_user_id=user_id,
         )
+
+    async def resolve_authorized_personal_model_key(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        plan: "AuthorizedExecutionPlan",
+        credential_id: uuid.UUID,
+        provider_id: str,
+        model_id: str,
+    ) -> str:
+        """Resolve one personal model key inside the trusted runtime host only.
+
+        This method is not an HTTP or plugin capability. RuntimePolicy must
+        explicitly authorize the exact user, tenant, session, provider, model,
+        and credential in an AuthorizedExecutionPlan before the runtime invokes
+        this method. A consumer-supplied credential ID or provider/model choice
+        is never sufficient. As of this boundary, the current ChatRuntime does
+        not mint these grants, so unapproved executions remain denied.
+
+        Audit persistence is committed before plaintext leaves the Vault.
+        Never include the returned key in logs, traces, receipts or fallbacks.
+        """
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
+        from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+
+        denial = "Personal model credential execution denied"
+        if (
+            not isinstance(context, ChatExecutionContext)
+            or not isinstance(plan, AuthorizedExecutionPlan)
+        ):
+            raise PermissionError(denial)
+        try:
+            principal = context.require_authenticated_user()
+            tenant_id = uuid.UUID(str(context.tenant_id))
+            if (
+                not isinstance(credential_id, uuid.UUID)
+                or str(tenant_id) != context.tenant_id
+                or not context.user_id
+                or context.user_id != context.user_id.strip()
+                or len(context.user_id) > 255
+                or not isinstance(provider_id, str)
+                or not provider_id
+                or provider_id != provider_id.strip()
+                or len(provider_id) > 128
+                or not isinstance(model_id, str)
+                or not model_id
+                or model_id != model_id.strip()
+                or len(model_id) > 255
+                or not isinstance(context.correlation_id, str)
+                or not context.correlation_id
+                or len(context.correlation_id) > 128
+                or any(
+                    ord(char) < 32 or ord(char) == 127
+                    for char in provider_id + model_id + context.correlation_id
+                )
+                or not principal.is_active
+                or not principal.is_verified
+            ):
+                raise PermissionError(denial)
+        except (ValueError, TypeError, AttributeError, PermissionError):
+            raise PermissionError(denial) from None
+
+        constraints = plan.provider_constraints
+        exact_grant = {
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "credential_id": str(credential_id),
+        }
+        if (
+            not plan.execution_id
+            or not plan.policy_decision_id
+            or not plan.matches_execution_scope(
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                session_id=context.session_id,
+            )
+            or "model.personal_key.execute" not in plan.allowed_capabilities
+            or not isinstance(constraints, dict)
+            or constraints.get("personal_model_credential") != exact_grant
+            or constraints.get("external_allowed") is not True
+            or constraints.get("local_only") is not False
+            or not isinstance(constraints.get("eligible_providers"), (list, tuple, set))
+            or not isinstance(constraints.get("forbidden_providers"), (list, tuple, set))
+            or provider_id not in constraints["eligible_providers"]
+            or provider_id in constraints["forbidden_providers"]
+        ):
+            raise PermissionError(denial)
+
+        async with self._session_scope() as session:
+            statement = (
+                self._tenant_query(Credential, tenant_id)
+                .join(
+                    ProviderDefinition,
+                    Credential.provider_id == ProviderDefinition.id,
+                )
+                .add_columns(ProviderDefinition)
+                .options(selectinload(Credential.secrets))
+                .where(
+                    Credential.id == credential_id,
+                    Credential.tenant_id == tenant_id,
+                    Credential.created_by == context.user_id,
+                    Credential.credential_type == self._OWNED_MODEL_CREDENTIAL_TYPE,
+                    Credential.status == CredentialStatus.ACTIVE.value,
+                    ProviderDefinition.tenant_id == tenant_id,
+                    ProviderDefinition.provider_id == provider_id,
+                    ProviderDefinition.is_system.is_(True),
+                    ProviderDefinition.enabled.is_(True),
+                    ProviderDefinition.provider_type == ProviderType.API_KEY.value,
+                    or_(
+                        Credential.expires_at.is_(None),
+                        Credential.expires_at > datetime.now(timezone.utc),
+                    ),
+                )
+            )
+            row = (await session.execute(statement)).one_or_none()
+            if row is None:
+                raise PermissionError(denial)
+            credential, provider = row
+            if (
+                credential.tenant_id != tenant_id
+                or credential.created_by != context.user_id
+                or credential.credential_type != self._OWNED_MODEL_CREDENTIAL_TYPE
+                or credential.status != CredentialStatus.ACTIVE.value
+                or credential.provider_id != provider.id
+                or provider.tenant_id != tenant_id
+                or provider.provider_id != provider_id
+                or not provider.enabled
+                or not provider.is_system
+                or provider.provider_type != ProviderType.API_KEY.value
+                or provider.config != {"managed_for": "model_api_key"}
+                or (
+                    credential.expires_at is not None
+                    and (
+                        not isinstance(credential.expires_at, datetime)
+                        or credential.expires_at.tzinfo is None
+                        or credential.expires_at.utcoffset() is None
+                        or credential.expires_at <= datetime.now(timezone.utc)
+                    )
+                )
+                or len(credential.secrets) != 1
+            ):
+                raise PermissionError(denial)
+
+            secret = credential.secrets[0]
+            if (
+                secret.tenant_id != tenant_id
+                or secret.credential_id != credential.id
+                or secret.secret_type != "api_key"
+                or not isinstance(secret.encrypted_value, str)
+                or not secret.encrypted_value
+            ):
+                raise PermissionError(denial)
+            try:
+                plaintext = decrypt_data(secret.encrypted_value.encode("ascii"))
+            except Exception:
+                raise PermissionError(denial) from None
+            if (
+                not isinstance(plaintext, str)
+                or not plaintext
+                or plaintext != plaintext.strip()
+                or len(plaintext.encode("utf-8")) > 4096
+            ):
+                raise PermissionError(denial)
+
+            try:
+                await self._audit(
+                    session,
+                    tenant_id=tenant_id,
+                    user_id=context.user_id,
+                    event_type=AuditEventType.ACCESS,
+                    action="personal_model_credential_resolved",
+                    resource_type="credential",
+                    resource_id=str(credential.id),
+                    credential_id=credential.id,
+                    provider_id=provider.id,
+                    correlation_id=context.correlation_id,
+                    metadata={
+                        "provider_id": provider_id,
+                        "model_id": model_id,
+                        "execution_id": plan.execution_id,
+                        "policy_decision_id": plan.policy_decision_id,
+                    },
+                )
+                # A failed durable audit denies the secret to the transport.
+                await session.commit()
+            except Exception:
+                raise PermissionError(denial) from None
+            return plaintext
 
     async def create_external_account(
         self, account_data: ExternalAccountCreate, tenant_id: uuid.UUID, user_id: str
