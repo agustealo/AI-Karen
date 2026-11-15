@@ -1701,3 +1701,258 @@ async def test_owned_model_credential_cannot_manage_plugin_secret():
         )
     session.execute.assert_not_awaited()
     session.commit.assert_not_awaited()
+
+
+def _personal_model_resolution_fixture():
+    """A trusted-runtime grant and a matching authenticated request subject."""
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+
+    tenant = uuid.uuid4()
+    credential_id = uuid.uuid4()
+    principal = UserData(user_id="alice", tenant_id=str(tenant))
+    context = ChatExecutionContext(
+        user_id="alice",
+        tenant_id=str(tenant),
+        session_id="session-1",
+        request_id="request-1",
+        correlation_id="correlation-1",
+        authenticated_user=principal,
+    )
+    plan = AuthorizedExecutionPlan(
+        execution_id="exec-request-1",
+        policy_decision_id="policy-1",
+        authorized_user_id="alice",
+        authorized_tenant_id=str(tenant),
+        authorized_session_id="session-1",
+        allowed_capabilities=["model.personal_key.execute"],
+        provider_constraints={
+            "external_allowed": True,
+            "local_only": False,
+            "eligible_providers": ["openai"],
+            "forbidden_providers": [],
+            "personal_model_credential": {
+                "provider_id": "openai",
+                "model_id": "gpt-4o-mini",
+                "credential_id": str(credential_id),
+            },
+        },
+    )
+    return tenant, credential_id, context, plan
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_resolution_denies_unminted_or_replayed_plans():
+    """A personal key cannot be resolved via client-supplied IDs or generic plans."""
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+
+    tenant, credential_id, context, plan = _personal_model_resolution_fixture()
+    session = AsyncMock()
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    kwargs = {
+        "context": context, "plan": plan, "credential_id": credential_id,
+        "provider_id": "openai", "model_id": "gpt-4o-mini",
+    }
+
+    unsupported = [
+        ("provider_id", "anthropic"),
+        ("model_id", "unapproved-model"),
+        ("credential_id", uuid.uuid4()),
+    ]
+    for key, value in unsupported:
+        with pytest.raises(PermissionError, match="execution denied"):
+            await service.resolve_authorized_personal_model_key(
+                **{**kwargs, key: value}
+            )
+    session.execute.assert_not_awaited()
+
+    for missing_grant in (
+        AuthorizedExecutionPlan(
+            execution_id="exec-request-1",
+            policy_decision_id="policy-1",
+            authorized_user_id="alice",
+            authorized_tenant_id=str(tenant),
+        ),
+        AuthorizedExecutionPlan(
+            execution_id="exec-request-1",
+            policy_decision_id="policy-1",
+            authorized_user_id="bob",
+            authorized_tenant_id=str(tenant),
+            allowed_capabilities=plan.allowed_capabilities,
+            provider_constraints=plan.provider_constraints,
+        ),
+    ):
+        with pytest.raises(PermissionError, match="execution denied"):
+            await service.resolve_authorized_personal_model_key(
+                **{**kwargs, "plan": missing_grant}
+            )
+    session.execute.assert_not_awaited()
+
+    context.authenticated_user = UserData(user_id="bob", tenant_id=str(tenant))
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(**kwargs)
+    session.execute.assert_not_awaited()
+
+    context.authenticated_user = UserData(
+        user_id="alice", tenant_id=str(tenant), is_verified=False
+    )
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(**kwargs)
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_resolution_sql_fences_tenant_owner_provider_and_status():
+    """Even a policy grant cannot read another owner, tenant or credential type."""
+    tenant, credential_id, context, plan = _personal_model_resolution_fixture()
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.one_or_none.return_value = None
+    service = CredentialVaultService()
+    service.set_db_session(session)
+
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(
+            context=context, plan=plan, credential_id=credential_id,
+            provider_id="openai", model_id="gpt-4o-mini",
+        )
+    statement = session.execute.await_args.args[0]
+    compiled = statement.compile()
+    sql = str(statement.whereclause)
+    assert "credentials.tenant_id" in sql
+    assert "credentials.created_by" in sql
+    assert "credentials.credential_type" in sql
+    assert "credentials.status" in sql
+    assert "identity_providers.tenant_id" in sql
+    assert "identity_providers.provider_id" in sql
+    assert "identity_providers.enabled" in sql
+    assert tenant in compiled.params.values()
+    assert credential_id in compiled.params.values()
+    assert "alice" in compiled.params.values()
+    assert "model_api_key" in compiled.params.values()
+    assert "openai" in compiled.params.values()
+    assert statement._with_options
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_resolution_audit_commit_precedes_plaintext_release(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Only the trusted host receives plaintext after a durable access audit."""
+    from datetime import timezone
+    from types import SimpleNamespace
+    from ai_karen_engine.services.identity_vault import credential_vault_service as vault_module
+
+    tenant, credential_id, context, plan = _personal_model_resolution_fixture()
+    provider_db_id = uuid.uuid4()
+    secret = SimpleNamespace(
+        tenant_id=tenant, credential_id=credential_id,
+        secret_type="api_key", encrypted_value="opaque-encrypted-text",
+    )
+    record = SimpleNamespace(
+        id=credential_id, tenant_id=tenant, provider_id=provider_db_id,
+        created_by="alice", credential_type="model_api_key", status="active",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        secrets=[secret],
+    )
+    provider = SimpleNamespace(
+        id=provider_db_id, tenant_id=tenant, provider_id="openai",
+        enabled=True, is_system=True, provider_type="api_key",
+        config={"managed_for": "model_api_key"},
+    )
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.one_or_none.return_value = (record, provider)
+    events = []
+    monkeypatch.setattr(
+        vault_module, "decrypt_data",
+        lambda encrypted: (
+            events.append("decrypt") or "private-model-key-not-for-logs"
+        ),
+    )
+    session.commit.side_effect = lambda: events.append("commit")
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    service._audit = AsyncMock(side_effect=lambda *a, **kw: events.append("audit"))
+
+    plaintext = await service.resolve_authorized_personal_model_key(
+        context=context, plan=plan, credential_id=credential_id,
+        provider_id="openai", model_id="gpt-4o-mini",
+    )
+    assert plaintext == "private-model-key-not-for-logs"
+    assert events == ["decrypt", "audit", "commit"]
+    assert service._audit.await_count == 1
+    args = service._audit.await_args.kwargs
+    assert args["tenant_id"] == tenant
+    assert args["user_id"] == "alice"
+    assert args["action"] == "personal_model_credential_resolved"
+    assert args["correlation_id"] == "correlation-1"
+    assert args["credential_id"] == credential_id
+    assert "private-model-key-not-for-logs" not in str(args)
+
+    # A failed durable audit commit must deny output, not return the secret.
+    session.commit.side_effect = RuntimeError("simulated audit persistence failure")
+    with pytest.raises(RuntimeError, match="simulated audit persistence failure"):
+        await service.resolve_authorized_personal_model_key(
+            context=context, plan=plan, credential_id=credential_id,
+            provider_id="openai", model_id="gpt-4o-mini",
+        )
+
+
+@pytest.mark.asyncio
+async def test_personal_model_credential_resolution_rejects_invalid_row_integrity():
+    """Expired, revoked, plugin-owned or multi-secret records cannot execute."""
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    tenant, credential_id, context, plan = _personal_model_resolution_fixture()
+    provider_db_id = uuid.uuid4()
+    secret = SimpleNamespace(
+        tenant_id=tenant, credential_id=credential_id,
+        secret_type="api_key", encrypted_value="opaque-encrypted-text",
+    )
+    record = SimpleNamespace(
+        id=credential_id, tenant_id=tenant, provider_id=provider_db_id,
+        created_by="alice", credential_type="model_api_key", status="active",
+        expires_at=None, secrets=[secret],
+    )
+    provider = SimpleNamespace(
+        id=provider_db_id, tenant_id=tenant, provider_id="openai",
+        enabled=True, is_system=True, provider_type="api_key",
+        config={"managed_for": "model_api_key"},
+    )
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    session.execute.return_value.one_or_none.return_value = (record, provider)
+    service = CredentialVaultService()
+    service.set_db_session(session)
+    kwargs = {
+        "context": context, "plan": plan, "credential_id": credential_id,
+        "provider_id": "openai", "model_id": "gpt-4o-mini",
+    }
+
+    original = record.status
+    record.status = "revoked"
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(**kwargs)
+    record.status = original
+    record.expires_at = datetime.utcnow()  # Naive timestamps are not trusted.
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(**kwargs)
+    record.expires_at = None
+    provider.config = {"managed_for": "plugin_credentials"}
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(**kwargs)
+    provider.config = {"managed_for": "model_api_key"}
+    record.secrets = [secret, secret]
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(**kwargs)
+    record.secrets = [secret]
+    secret.tenant_id = uuid.uuid4()
+    with pytest.raises(PermissionError, match="execution denied"):
+        await service.resolve_authorized_personal_model_key(**kwargs)
+    session.commit.assert_not_awaited()
