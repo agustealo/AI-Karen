@@ -346,7 +346,9 @@ class RuntimeDecisionPipeline:
         )
         allowed_capabilities = list(policy.allowed_capabilities)
         memory_write_allowed = (
-            memory_write_requested and "memory.write" in allowed_capabilities
+            memory_write_requested
+            and "memory.write" in cognitive.required_capabilities
+            and "memory.write" in allowed_capabilities
         )
 
         topology = cognitive.topology
