@@ -4,6 +4,8 @@ import VoiceSettings from "@/components/settings/VoiceSettings";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
 
 const notifications = vi.hoisted(() => ({ toast: vi.fn() }));
+const voiceApi = vi.hoisted(() => ({ get: vi.fn() }));
+vi.mock("@/lib/api", () => ({ apiClient: { get: voiceApi.get } }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => notifications }));
 
 type TestVoice = { name: string; lang: string; default: boolean; voiceURI: string };
@@ -19,6 +21,9 @@ describe("browser voice settings lifecycle", () => {
     vi.useFakeTimers();
     localStorage.clear();
     notifications.toast.mockReset();
+    voiceApi.get.mockReset().mockResolvedValue({
+      synthesis_available: false, synthesis_engine: null, synthesis_voice_id: null,
+    });
     voiceList = [];
     listeners = new Map();
     speak = vi.fn();
@@ -106,6 +111,31 @@ describe("browser voice settings lifecycle", () => {
     expect(screen.getByText(/previously selected voice is no longer available/)).toBeTruthy();
     expect(screen.getByText("Save Settings").closest("button")?.disabled).toBe(true);
     expect(JSON.parse(localStorage.getItem(KAREN_SETTINGS_LS_KEY) || "{}").ttsVoiceURI).toBe("missing-voice");
+  });
+
+  it("never fabricates a local voice from browser inventory", async () => {
+    voiceList = [{ name: "Browser", lang: "en-US", default: true, voiceURI: "browser:en" }];
+    render(<VoiceSettings />);
+    expect(voiceApi.get).not.toHaveBeenCalled();
+    expect(screen.getByText("Karen local speech engine")).toBeTruthy();
+    fireEvent.click(screen.getByText("Check local voice engine"));
+    await act(async () => { await Promise.resolve(); });
+    expect(voiceApi.get).toHaveBeenCalledWith("/api/voice/capabilities");
+    expect(screen.getByText(/No verified local synthesis engine is ready/)).toBeTruthy();
+    expect(screen.queryByText(/Local synthesis ready:/)).toBeNull();
+  });
+
+  it("only displays backend-attested local Piper identity", async () => {
+    voiceApi.get.mockResolvedValue({
+      synthesis_available: true,
+      synthesis_engine: "piper-onnx-local",
+      synthesis_voice_id: "en_US-karen",
+    });
+    render(<VoiceSettings />);
+    fireEvent.click(screen.getByText("Check local voice engine"));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText(/Local synthesis ready: piper-onnx-local/)).toBeTruthy();
+    expect(screen.getByText(/en_US-karen/)).toBeTruthy();
   });
 
   it("clears discovery listeners and pending retries when unmounted", () => {
