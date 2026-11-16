@@ -247,6 +247,10 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(voiceDock).toContain("apiClient.getVoiceEngineCatalog()");
     expect(voiceDock).toContain("apiClient.getVoiceSelection()");
     expect(voiceDock).toContain("apiClient.setVoiceSelection(");
+    expect(voiceDock).toContain("useAssistantPlaybackPhase()");
+    expect(voiceDock).toContain("onClick={stopAssistantPlayback}");
+    expect(voiceDock).toContain('aria-label="Stop Karen speech playback"');
+    expect(voiceDock).not.toContain("synthesizeLocalVoice(");
     expect(voiceDock).not.toContain("runAgent(");
     expect(voiceDock).not.toContain("transcribeLocalAudio(");
     expect(controller).not.toContain("@assistant-ui/");
