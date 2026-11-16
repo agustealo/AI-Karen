@@ -35,6 +35,7 @@ export default function LocalVoiceEngineSettings() {
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const mountedRef = useRef(false);
   const revisionRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -79,9 +80,11 @@ export default function LocalVoiceEngineSettings() {
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     const epoch = ++revisionRef.current;
     void refresh(epoch);
     return () => {
+      mountedRef.current = false;
       revisionRef.current += 1;
       abortRef.current?.abort();
       if (audioRef.current) {
@@ -200,7 +203,15 @@ export default function LocalVoiceEngineSettings() {
       }
     } finally {
       savingRef.current = false;
-      if (revisionRef.current === generation) setSaving(false);
+      if (mountedRef.current) {
+        // A refresh invalidates the old save response, but must not leave the
+        // Save button disabled. Re-read after the in-flight write finishes so
+        // an earlier refresh cannot present a stale persisted preference.
+        setSaving(false);
+        if (revisionRef.current !== generation) {
+          void refresh(++revisionRef.current);
+        }
+      }
     }
   };
 
