@@ -263,6 +263,119 @@ class GovernedMLLearningEvidence:
             restored.append(item)
         return restored
 
+    async def evaluate_verified_confidence(
+        self,
+        *,
+        task: PredictionTask,
+        model_id: str,
+        model_version: str,
+        feature_version: str,
+        minimum_samples: int,
+        limit: int = 500,
+        n_bins: int = 10,
+    ) -> "GovernedConfidenceEvaluation":
+        """Evaluate *observed* correctness calibration without changing policy.
+
+        Only records returned by the tenant/user-scoped OutcomeStore loader are
+        eligible. Explicit model and feature versions prevent cross-version
+        pooling, and fallback generations cannot masquerade as predictor
+        executions. This is bounded-window, shadow evaluation, not a model
+        promotion receipt or evidence that verification is worth its cost.
+        """
+        from ai_karen_engine.core.intelligence.ml.contracts import Prediction
+        from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
+            GovernedConfidenceEvaluation,
+            PredictionOutcome,
+        )
+        from ai_karen_engine.core.intelligence.ml.evaluation.metrics import (
+            compute_brier_score,
+            compute_ece,
+        )
+
+        if not isinstance(task, PredictionTask):
+            raise ValueError("Confidence evaluation requires a typed prediction task")
+        for field_name, value in (
+            ("model_id", model_id),
+            ("model_version", model_version),
+            ("feature_version", feature_version),
+        ):
+            if not isinstance(value, str) or not 1 <= len(value.strip()) <= 256:
+                raise ValueError(f"Confidence evaluation requires {field_name}")
+        if (
+            isinstance(limit, bool) or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
+            raise ValueError("Confidence evidence window must be 1-1000")
+        if (
+            isinstance(minimum_samples, bool)
+            or not isinstance(minimum_samples, int)
+            or not 1 <= minimum_samples <= limit
+        ):
+            raise ValueError("Minimum confidence sample count must fit the window")
+        if (
+            isinstance(n_bins, bool) or not isinstance(n_bins, int)
+            or not 2 <= n_bins <= 20
+        ):
+            raise ValueError("Confidence calibration bins must be 2-20")
+
+        verified = await self.load_verified(limit=limit, task=task)
+        eligible = [
+            row for row in verified
+            if row.model_id == model_id
+            and row.model_version == model_version
+            and row.feature_version == feature_version
+            and row.fallback_used is False
+        ]
+        sufficient = len(eligible) >= minimum_samples
+        evaluation = {
+            "task": task,
+            "model_id": model_id,
+            "model_version": model_version,
+            "feature_version": feature_version,
+            "status": (
+                "evaluated_shadow" if sufficient else "insufficient_evidence"
+            ),
+            "sample_count": len(eligible),
+            "minimum_samples": minimum_samples,
+            "window_limit": limit,
+            "evidence_version": _ML_SCHEMA,
+        }
+        if not sufficient:
+            return GovernedConfidenceEvaluation(**evaluation)
+
+        # The confidence of the predicted label is scored against the
+        # independently attested correctness bit, not a model self-rating of
+        # reasoning quality. Retain exact 0.0 and 1.0 values. Reuse the
+        # canonical Intelligence Brier/ECE metrics, no second calculator.
+        outcomes = [
+            PredictionOutcome(
+                case_id=row.outcome_id,
+                task=task,
+                prediction=Prediction(
+                    task=task,
+                    model_id=row.model_id,
+                    model_version=row.model_version,
+                    feature_version=row.feature_version,
+                    probability=row.confidence,
+                    confidence=row.confidence,
+                ),
+                expected_label="",
+                correct=row.correct,
+                raw_probability=row.confidence,
+                calibrated_probability=row.calibrated_probability,
+                latency_ms=row.latency_ms,
+                fallback_used=False,
+            )
+            for row in eligible
+        ]
+        brier_score = compute_brier_score(outcomes)
+        expected_calibration_error, _ = compute_ece(outcomes, n_bins=n_bins)
+        return GovernedConfidenceEvaluation(
+            **evaluation,
+            brier_score=brier_score,
+            expected_calibration_error=expected_calibration_error,
+        )
+
     async def build_adaptive_layer(
         self, *, limit: int = 500, task: PredictionTask | None = None,
     ) -> AdaptiveLayer:
