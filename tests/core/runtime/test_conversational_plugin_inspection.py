@@ -76,6 +76,7 @@ def _catalog():
     telegram = SimpleNamespace(
         name="telegram-bot", display_name="Telegram Bot Channel",
         category="communication", tags=["telegram", "messaging", "channel"],
+        rbac=SimpleNamespace(allowed_roles=["admin"]),
         capabilities=SimpleNamespace(
             communication_channel=SimpleNamespace(
                 inbound={"text"}, outbound={"text"},
@@ -85,7 +86,10 @@ def _catalog():
     generic = SimpleNamespace(
         name="timezone-clock", display_name="Timezone Clock",
         category="utility", tags=["clock"],
-        capabilities=SimpleNamespace(communication_channel=None),
+        rbac=SimpleNamespace(allowed_roles=["user", "admin"]),
+        capabilities=SimpleNamespace(
+            communication_channel=None, provides_api=True, provides_ui=True,
+        ),
     )
     records = [
         {"manifest": telegram, "status": "disabled", "is_valid": True},
@@ -111,6 +115,12 @@ def _catalog():
     ("What can my Telegram plugin do?", "features", "Telegram"),
     ("Show my plugins", "list", None),
     ("Which plugins can you use?", "list", None),
+    ("Enable my Timezone Clock plugin", "manage", "Timezone Clock"),
+    ("Disable my Timezone Clock plugin", "manage", "Timezone Clock"),
+    ("Uninstall the Telegram Bot Channel integration", "manage", "Telegram Bot Channel"),
+    ("Use my Timezone Clock plugin to tell me the time", "use", "Timezone Clock"),
+    ("Run my ArticleButtler plugin to draft an article", "use", "ArticleButtler"),
+    ("Which installed plugins can I use to write articles?", "discover", None),
 ])
 def test_plugin_intents_have_typed_read_only_discovery(phrase, operation, target):
     parsed = parse_plugin_inspection_request(phrase)
@@ -285,3 +295,129 @@ async def test_unscoped_resume_requires_target_without_guessing_plugin():
     assert result.payload["status"] == "needs_input"
     assert result.payload["next_action"] == "ask_plugin_target"
     service.list_plugins.assert_not_awaited()
+
+
+@pytest.mark.parametrize("phrase,action", [
+    ("Enable my Timezone Clock plugin", "enable"),
+    ("Disable my Timezone Clock plugin", "disable"),
+    ("Uninstall the Telegram Bot Channel integration", "uninstall"),
+    ("Use my Timezone Clock plugin to tell me the time", "execute"),
+    ("Run my ArticleButtler plugin to draft an article", "execute"),
+])
+def test_generic_interaction_request_preserves_operation_not_authority(phrase, action):
+    parsed = parse_plugin_inspection_request(phrase)
+    assert parsed is not None
+    assert parsed.requested_action == action
+    assert parsed.operation in {"manage", "use"}
+    routed = resolve_capability_decision(phrase)
+    assert routed.capability == "plugin.inspect"
+    assert routed.preferred_plugin is None
+    assert routed.handler is None
+    assert not routed.allow_llm_only
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phrase,expected_action", [
+    ("Use my Timezone Clock plugin to tell me the time", "execute"),
+    ("Enable my Timezone Clock plugin", "enable"),
+    ("Disable my Timezone Clock plugin", "disable"),
+])
+async def test_every_plugin_action_first_inspects_without_executing(phrase, expected_action):
+    service = _catalog()
+    service.execute_plugin = AsyncMock()
+    service.enable_plugin = AsyncMock()
+    service.disable_plugin = AsyncMock()
+    plan = _plan()
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=service,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=_request(phrase),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success and result.source == "plugin_catalog"
+    assert "has NOT been performed" in result.text
+    assert result.payload["requested_action"] == expected_action
+    assert result.payload["requested_action_executed"] is False
+    assert result.payload["requires_fresh_action_authorization"] is True
+    assert result.payload["plugin_inspection"]["mutation_performed"] is False
+    assert result.payload["plugin_inspection"]["matches"][0]["installation_id"] == "timezone-clock"
+    service.execute_plugin.assert_not_awaited()
+    service.enable_plugin.assert_not_awaited()
+    service.disable_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generic_plugin_features_and_role_eligibility_are_manifest_sourced():
+    service = _catalog()
+    generic = await service.inspect_for_conversation(
+        tenant_id=TENANT, target="timezone-clock", caller_roles=["user"],
+    )
+    record = generic["matches"][0]
+    assert record["role_eligible"] is True
+    assert record["role_check_source"] == "manifest_rbac"
+    assert record["authorized_to_execute"] is False
+    assert record["declared_features"] == ["plugin.api", "plugin.ui"]
+
+    channel = await service.inspect_for_conversation(
+        tenant_id=TENANT, target="telegram", caller_roles=["user"],
+    )
+    item = channel["matches"][0]
+    assert item["role_eligible"] is False
+    assert item["authorized_to_execute"] is False
+    assert item["execution_route"] == "channel_host"
+    assert "plugin.api" not in item["declared_features"]
+
+
+@pytest.mark.asyncio
+async def test_generic_feature_request_reports_manifest_not_live_execution():
+    service = _catalog()
+    plan = _plan()
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=service,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=_request("What can my Timezone Clock plugin do?"),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success
+    assert "plugin.api" in result.text
+    assert "plugin.ui" in result.text
+    assert "not verified execution" in result.text
+    assert result.payload["requested_operation"] == "features"
+    assert result.payload["requested_action_executed"] is False
+
+
+@pytest.mark.asyncio
+async def test_generic_plugin_inventory_does_not_claim_ability_to_invoke():
+    service = _catalog()
+    plan = _plan()
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=service,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=_request("Show my plugins"),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success
+    assert "Telegram Bot Channel" in result.text
+    assert "Timezone Clock" in result.text
+    assert "Package inventory does not prove permission" in result.text
+    assert result.payload["requested_operation"] == "list"
+    assert result.payload["requested_action_executed"] is False
+
+
+@pytest.mark.parametrize("phrase", [
+    "Enable my Timezone Clock plugin and delete all messages",
+    "Disable my Timezone Clock plugin then restart the server",
+    "Use my plugin to",
+    "Use my Timezone Clock plugin with password secret",
+])
+def test_generic_plugin_intent_does_not_approve_compound_or_unbounded_requests(phrase):
+    assert parse_plugin_inspection_request(phrase) is None
