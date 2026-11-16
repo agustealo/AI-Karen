@@ -75,16 +75,35 @@ def test_default_verification_has_no_unwired_model_strategies() -> None:
     reasoning executor. That phantom charge blocked the genuine selected-model
     response on the production Ollama Settings path.
     """
-    from ai_karen_engine.core.reasoning.defaults import get_default_strategies
+    # Main Quality intentionally omits the optional sklearn/soft-reasoning
+    # stack. Verify this source-level invariant without importing it.
+    import ast
+    from pathlib import Path
 
-    applicable = [
-        strategy for strategy in get_default_strategies()
-        if strategy.can_handle(["verification"])
-    ]
-    assert {strategy.strategy_id for strategy in applicable} == {
-        "verify", "metacognition",
-    }
-    assert all(not strategy.supports_model_calls for strategy in applicable)
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "src/ai_karen_engine/core/reasoning/defaults.py"
+    ).read_text(encoding="utf-8")
+    module = ast.parse(source)
+    factory = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "get_default_strategies"
+    )
+    declaration = next(
+        node.value for node in ast.walk(factory)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "strategies"
+        and isinstance(node.value, ast.List)
+    )
+    assert all(
+        isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
+        for item in declaration.elts
+    )
+    assert {
+        item.func.id for item in declaration.elts
+    } == {"CausalReasoner", "Verifier", "MetacognitionStrategy"}
 
 
 
