@@ -238,7 +238,7 @@ async def test_direct_runtime_authorized_inspection_never_executes_plugin():
         )
     assert result.handled and result.success
     assert result.source == "plugin_catalog"
-    assert "has not been verified" in result.text
+    assert "have not been verified" in result.text
     assert result.payload["plugin_inspection"]["matches"][0]["installation_id"] == "telegram-bot"
     assert result.normalized_metadata()["structured_content"]["plugin_inspection"]["mutation_performed"] is False
     service.execute_plugin.assert_not_awaited()
