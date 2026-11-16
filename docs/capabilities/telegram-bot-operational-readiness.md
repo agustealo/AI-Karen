@@ -495,3 +495,45 @@ ambiguous outbound delivery. Idempotent SQL claims continue to prevent
 concurrent recovery workers from executing the same inbox receipt twice.
 An observed signed inbound-to-provider-confirmed outbound round trip remains
 a separate live acceptance gate.
+
+## Full-path acceptance evidence, not transport optimism
+
+The offline regression in
+`tests/extensions/test_telegram_channel_transport.py::test_signed_telegram_http_to_runtime_and_provider_outcome`
+bridges the real installed Telegram adapter, public FastAPI webhook,
+canonical ingress, supervised inbox worker, ChatRuntime execution service,
+delivery authorization, and adapter provider-response interpretation.
+Its SQL and HTTP provider boundaries are controlled test doubles. It proves
+application wiring and rejection semantics, **not** PostgreSQL durability,
+a reachable deployed webhook, or observed delivery to a real Telegram account.
+
+Live channel acceptance is a separately operated, consented round-trip on
+one enabled tenant-owned connection and one verified, linked private chat:
+
+1. Record the exact deployment revision, tenant and connection identifiers,
+   current connection revision, bot-owner verification and reconciled webhook
+   URL. Redact credentials, chat IDs, message text and webhook secrets.
+2. Submit a single unique test nonce from the linked Telegram account.
+   Observe a provider-authenticated webhook, durable inbox admission, one
+   atomic inbox claim, active principal/binding check, and ChatRuntime
+   execution with the same correlation and inbox identifiers.
+3. Observe a model/tool/plugin/agent/workflow response from the canonical
+   ChatRuntime, with no degraded or emergency response misrepresented as AI.
+   Verify its lease-fenced SQL outbox commit and fresh outbound authorization.
+4. Observe Telegram's HTTP success with an actual message ID and exact
+   destination chat from the host-bound adapter. Verify the finalized SQL
+   outbox state is `sent`, not merely `accepted` or `scheduled`.
+   A provider send acknowledgement is **not** a Telegram read receipt.
+5. Re-deliver the same webhook update and verify exactly one ChatRuntime
+   execution and no duplicate Telegram send. Separately submit an invalid
+   secret and verify HTTP denial with no DB admission or execution.
+6. Record outcome, timestamp, deployment SHA, redacted correlation/inbox/
+   delivery references, and precise observed provider message ID through
+   access-controlled evidence storage. A timeout, HTTP 429, missing message
+   ID, revision change, or revoked binding fails the acceptance gate and
+   must never trigger a blind retry of an ambiguous outbound send.
+
+No fixture, offline test or operator scheduling response may set
+`live_connected=true`. Keep the live-readiness claim
+unverified until the deployed provider round trip and durable SQL evidence
+are both independently observed.
