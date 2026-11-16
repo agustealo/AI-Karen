@@ -130,3 +130,128 @@ def test_policy_never_invents_reasoning_mode() -> None:
         assert result.to_authorized_plan().reasoning_modes == []
 
     asyncio.run(run())
+
+
+def test_optional_verification_probe_is_policy_permission_not_execution() -> None:
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        request = PolicyEvaluationRequest(
+            user_id="subject",
+            tenant_id="tenant-a",
+            session_id="session-a",
+            requested_reasoning_modes=[],
+            max_model_calls=10,
+            runtime_level=RuntimeLevel.FULL,
+        )
+        selected = await policy.evaluate(request)
+        original_modes = list(request.requested_reasoning_modes)
+        probe = await policy.probe_optional_verification(
+            request, selected, direct_plan_authorized=True,
+        )
+
+        assert selected.allowed is True
+        assert selected.allowed_reasoning_modes == []
+        assert request.requested_reasoning_modes == original_modes
+        assert probe.policy_permitted_actions == (
+            "respond_direct", "verify_then_respond",
+        )
+        assert probe.source_decision_id == selected.decision_id
+        assert probe.source_policy_version == selected.policy_version
+        assert probe.status == "alternative_reasoning_mode_policy_permitted"
+        assert probe.to_metadata()["execution_eligibility_established"] is False
+        assert probe.to_metadata()["randomized_selection"] is False
+        assert probe.to_metadata()["ope_eligible"] is False
+
+    asyncio.run(run())
+
+
+def test_optional_verification_probe_rejects_unsafe_alternatives() -> None:
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        requests = [
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=1,
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10, runtime_level=RuntimeLevel.SAFE,
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10, risk_signals={"score": 0.7},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10, tool_id="web",
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                execution_topology={"plugin_candidates": ["private-tool"]},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                execution_topology={"agent_delegation": True},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                execution_topology={"requires_human_gate": True},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                requested_reasoning_modes=["verification"],
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                requested_capabilities=["memory.write"],
+            ),
+        ]
+        for request in requests:
+            selected = await policy.evaluate(request)
+            result = await policy.probe_optional_verification(
+                request, selected, direct_plan_authorized=True,
+            )
+            assert result.policy_permitted_actions == ("respond_direct",)
+            assert result.alternative_policy_decision_id is None
+            assert result.to_metadata()["ope_eligible"] is False
+
+        # The caller may never turn a denied CORTEX plan into proof.
+        direct = requests[0]
+        selected = await policy.evaluate(direct)
+        rejected = await policy.probe_optional_verification(
+            direct, selected, direct_plan_authorized=False,
+        )
+        assert rejected.status == "selected_only"
+
+    asyncio.run(run())
+
+
+def test_optional_verification_probe_requires_independent_policy_grant() -> None:
+    from dataclasses import replace
+
+    class DenyAlternativePolicy(RuntimePolicyEnforcer):
+        async def evaluate(self, request: PolicyEvaluationRequest):
+            decision = await super().evaluate(request)
+            if request.requested_reasoning_modes == ["verification"]:
+                return replace(decision, allowed=False)
+            return decision
+
+    async def run() -> None:
+        policy = DenyAlternativePolicy()
+        request = PolicyEvaluationRequest(
+            user_id="subject", tenant_id="tenant-a",
+            session_id="session-a", max_model_calls=10,
+        )
+        selected = await policy.evaluate(request)
+        result = await policy.probe_optional_verification(
+            request, selected, direct_plan_authorized=True,
+        )
+        assert result.policy_permitted_actions == ("respond_direct",)
+        assert result.alternative_policy_decision_id is None
+
+    asyncio.run(run())
