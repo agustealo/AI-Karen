@@ -186,3 +186,35 @@ registration, identity-linking, and full round-trip acceptance.
 The path reuses the already registered Channels router and does not create
 a parallel administrative service. Later operator UI should use this same
 endpoint and display the returned disabled status without inferring health.
+
+## Governed operator activation
+
+After provisioning a disabled connection with its canonical Vault reference,
+a verified channel operator may request **local activation only** using:
+
+`POST /api/channels/personal/operator/telegram/connections/{connection_id}/activate`
+
+The request body is `{"expected_revision": 1}` for a newly provisioned
+connection. The API derives tenant, principal and one-action session context
+from authenticated Karen state. It rejects foreign, mismatched, already
+enabled, non-Telegram or stale-revision connections before asking
+RuntimePolicy for `channel.activate`. ChannelHost retrieves the installed
+canonical Telegram adapter, fixes the transport configuration to private
+text chats, and invokes the existing ChannelActivationService rather than
+starting a plugin in the route.
+
+Successful activation runs the transport's live read-only Telegram bot
+identity probe, then commits a tenant-scoped revision CAS. The response
+contains connection ID, `enabled=true`, the committed revision, and
+`provider_identity_verified_at_activation=true`. It explicitly reports
+`webhook_registration_verified=false` and `live_connected=false`.
+Those two false values are **verification states**, not assertions that
+the external webhook is absent or that a provider failed.
+
+Activation is not a remote `setWebhook` operation, a durable guarantee of
+process-local adapter readiness across restarts, an account link or an
+end-to-end delivery acceptance. The webhook's expected public origin must be
+obtained from canonical deployment configuration before implementing any
+provider mutation. There is no automatic Telegram retry or webhook
+registration in this slice. Failure and revision conflicts never return a
+token, provider response body, native URL or Vault reference.

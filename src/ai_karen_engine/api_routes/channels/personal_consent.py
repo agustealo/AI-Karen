@@ -503,6 +503,92 @@ async def provision_telegram_connection(
         raise HTTPException(503, "Telegram provisioning unavailable") from None
 
 
+class TelegramActivationRequest(BaseModel):
+    """Optimistic source revision only, never a caller-defined provider plan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: StrictInt = Field(ge=1)
+
+
+class TelegramActivationResult(BaseModel):
+    """Locally activated, not a provider-webhook or conversation claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: UUID
+    installation_id: Literal["telegram-bot"]
+    enabled: Literal[True]
+    revision: StrictInt = Field(ge=2)
+    provider_identity_verified_at_activation: Literal[True]
+    webhook_registration_verified: Literal[False]
+    live_connected: Literal[False]
+
+
+@router.post(
+    "/operator/telegram/connections/{connection_id}/activate",
+    response_model=TelegramActivationResult,
+)
+async def activate_telegram_connection(
+    connection_id: UUID,
+    payload: TelegramActivationRequest,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> TelegramActivationResult:
+    """Delegate activation to ChannelHost with a fresh one-action policy plan."""
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        connection = await host.repository.get_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != str(connection_id)
+            or connection.installation_id != "telegram-bot"
+            or connection.enabled
+            or connection.revision != payload.expected_revision
+        ):
+            raise PermissionError("Telegram activation denied")
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.activate",
+        )
+        result = await host.activate_telegram_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            user_id=user_id, session_id=session_id,
+            authorized_plan=plan, expected_revision=payload.expected_revision,
+        )
+    except PermissionError:
+        raise HTTPException(403, "Telegram activation denied") from None
+    except Exception as exc:
+        logger.error(
+            "channel.telegram.activation_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "Telegram activation unavailable") from None
+    try:
+        if (
+            result.tenant_id != tenant_id
+            or result.connection_id != str(connection_id)
+            or result.installation_id != "telegram-bot"
+            or result.enabled is not True
+            or result.revision != payload.expected_revision + 1
+        ):
+            raise ValueError("Invalid activation result")
+        return TelegramActivationResult(
+            connection_id=connection_id, installation_id="telegram-bot",
+            enabled=True, revision=result.revision,
+            provider_identity_verified_at_activation=True,
+            webhook_registration_verified=False, live_connected=False,
+        )
+    except (ValueError, ValidationError, AttributeError, TypeError):
+        logger.error("channel.telegram.activation_result_invalid")
+        raise HTTPException(503, "Telegram activation unavailable") from None
+
+
 class PersonalConsentRecoveryItem(BaseModel):
     connection_id: str
     provider_id: str
