@@ -29,6 +29,15 @@ if TYPE_CHECKING:
 SOFT_EXPLORATION_MODE = "soft_exploration"
 
 
+def get_runtime_soft_reasoning_composer() -> Any:
+    """Resolve the canonical composer lazily, retaining the patchable bridge API."""
+    from ai_karen_engine.core.runtime.soft_reasoning_composition import (
+        get_runtime_soft_reasoning_composer as resolve_composer,
+    )
+
+    return resolve_composer()
+
+
 class ReasoningActivationError(RuntimeError):
     """Raised when an authorized reasoning mode cannot be activated safely."""
 
@@ -312,7 +321,6 @@ class RuntimeReasoningBridge:
     ) -> ComposedSoftReasoning:
         from ai_karen_engine.core.runtime.soft_reasoning_composition import (
             SoftReasoningCompositionUnavailable,
-            get_runtime_soft_reasoning_composer,
         )
 
         try:
