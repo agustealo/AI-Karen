@@ -1626,8 +1626,13 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_a),
             )
+            # Other disposable connections in this tenant may have their
+            # own archived receipt evidence; assert the historical connection
+            # only while retaining the real tenant-scoped RLS principal.
             assert await raw.fetchval(
-                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones "
+                "WHERE connection_id=$1",
+                historical_id,
             ) == 1
             assert await raw.execute(
                 "DELETE FROM public.channel_provider_status_tombstones "
@@ -1639,7 +1644,9 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 str(tenant_b),
             )
             assert await raw.fetchval(
-                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones "
+                "WHERE connection_id=$1",
+                historical_id,
             ) == 0
         await raw.execute(
             "REVOKE SELECT, DELETE ON public.channel_provider_status_tombstones "
