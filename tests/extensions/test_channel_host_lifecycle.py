@@ -1677,6 +1677,8 @@ async def test_telegram_reconciliation_host_reads_evidence_without_releasing_cla
         "claim_state": "uncertain", "claim_revision_matches": True,
         "claim_expired": True,
     })
+    host.repository.inspect_telegram_bot_ownership = AsyncMock(return_value=True)
+    adapter.identify_bot = AsyncMock(return_value=123456)
     adapter.observe_registration = AsyncMock(return_value={
         "provider_url_matches": True, "provider_webhook_registered": True,
         "live_connected": False,
@@ -1690,12 +1692,15 @@ async def test_telegram_reconciliation_host_reads_evidence_without_releasing_cla
         expected_revision=2,
     )
     assert result["claim_state"] == "uncertain"
+    assert result["bot_identity_owner_verified"] is True
     assert result["claim_released"] is False
     assert result["reconciliation_authorized"] is False
     assert result["provider_url_matches"] is True
     host.activation._authorize.assert_awaited_once()
     assert host.activation._authorize.await_args.kwargs["action"] == "channel.inspect"
     assert host.repository.inspect_telegram_webhook_claim.await_count == 2
+    assert host.repository.inspect_telegram_bot_ownership.await_count == 2
+    assert adapter.identify_bot.await_count == 2
     adapter.observe_registration.assert_awaited_once_with(
         connection=conn, public_origin="https://hooks.example.org",
     )
@@ -1728,6 +1733,8 @@ async def test_telegram_reconciliation_rejects_claim_race_during_provider_read(l
         {"claim_state": "in_flight", "claim_revision_matches": True, "claim_expired": False},
         later_claim,
     ])
+    host.repository.inspect_telegram_bot_ownership = AsyncMock(return_value=True)
+    adapter.identify_bot = AsyncMock(return_value=123456)
     adapter.observe_registration = AsyncMock(return_value={
         "provider_url_matches": True, "provider_webhook_registered": True,
         "live_connected": False,
