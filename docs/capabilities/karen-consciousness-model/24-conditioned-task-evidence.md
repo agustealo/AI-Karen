@@ -19,7 +19,7 @@ When every evaluated case belongs to the actual `CanonicalEvaluationCorpus` at t
 - The number of distinct **declared** task groups, not a claim that those groups are statistically independent.
 - The canonical SQLite benchmark receipt's UTC creation time.
 
-The score of each such case is recomputed through the existing `BenchmarkRunner._is_correct` rule before issuing curated-oracle source evidence. Caller-provided `correct=True` on a demonstrably incorrect prediction does not create a verified curated-oracle claim. No prompts or expected labels are written into the new receipt. KCM re-hashes the **current** corpus when reading that receipt; a subsequently edited expected label, input, group or source invalidates it. Legacy and synthetic cases absent from the canonical corpus remain eligible only for existing narrow observed-benchmark reporting, **not** curated-oracle verification.
+The **actual evaluated case** is fingerprinted by the canonical `BenchmarkRunner` at evaluation time. The issuance adapter requires that fingerprint to match the canonical case's full input/features/oracle contract; reusing a canonical ID with altered input never qualifies. The score of each matching case is also recomputed through the existing `BenchmarkRunner._is_correct` rule before issuing curated-oracle source evidence. Caller-provided `correct=True` on a demonstrably incorrect prediction does not create a verified curated-oracle claim. No prompts or expected labels are written into the new receipt. KCM re-hashes the **current** corpus when reading that receipt; a subsequently edited expected label, input, group or source invalidates it. Legacy and synthetic cases absent from the canonical corpus remain eligible only for existing narrow observed-benchmark reporting, **not** curated-oracle verification.
 
 ### Critical distinction
 
@@ -45,7 +45,7 @@ Nothing in these reports can authorize execution, training, checkpoint promotion
 
 ## Tests and proof
 
-The dedicated KCM gate includes isolated registry + SQLite benchmark issuance and read, canonical scoped OutcomeStore, source-corpus drift, altered curated digest, false correctness claims, unreviewed grouping, expired and future timestamps, centrally configured TTL and malformed environment values, along with existing artifact drift, tenant isolation, duplicated/altered case verdicts and no-store-create reads. Existing CI still proves PostgreSQL RLS, memory revocation, cognitive authority and the first-boot release contract.
+The dedicated KCM gate includes isolated registry + SQLite benchmark issuance and read, canonical scoped OutcomeStore, source-corpus drift, custom-corpus input substitution under reused case IDs, altered curated digest, false correctness claims, unreviewed grouping, expired and future timestamps, centrally configured TTL and malformed environment values, along with existing artifact drift, tenant isolation, duplicated/altered case verdicts and no-store-create reads. Existing CI still proves PostgreSQL RLS, memory revocation, cognitive authority and the first-boot release contract.
 
 This is **integrity against normal application mutations**, not cryptographic proof against a privileged machine administrator who can rewrite both data and receipts.
 
