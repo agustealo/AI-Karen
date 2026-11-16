@@ -50,9 +50,14 @@ class FakeSession:
     def __init__(self, *results):
         self.results = list(results)
         self.calls = []
+        self.lock_calls = []
 
     async def execute(self, statement, params):
-        self.calls.append((str(statement), dict(params)))
+        sql = str(statement)
+        if "pg_advisory_xact_lock" in sql:
+            self.lock_calls.append((sql, dict(params)))
+            return RowResult(scalar=None)
+        self.calls.append((sql, dict(params)))
         return self.results.pop(0)
 
 
@@ -674,9 +679,14 @@ async def test_status_retention_prunes_only_tenant_scoped_unmatched_old_evidence
         "revision": 7, "retention_days": 90, "limit": 100,
     }
     if dry_run:
+        assert session.lock_calls == []
         assert "DELETE FROM" not in sql
         assert "FOR UPDATE" not in sql
     else:
+        assert len(session.lock_calls) == 1
+        assert session.lock_calls[0][1]["scope"] == (
+            f"karen:channel-status:{TENANT}:conn"
+        )
         assert "FOR UPDATE OF e, c SKIP LOCKED" in sql
         assert "INSERT INTO public.channel_provider_status_tombstones" in sql
         assert "DELETE FROM public.channel_provider_status_events" in sql
@@ -732,6 +742,7 @@ async def test_archived_active_provider_status_replay_is_acknowledged_without_re
         connection=account, status=event,
     )
     assert len(session.calls) == 3
+    assert len(session.lock_calls) == 1
     assert "NOT EXISTS" in session.calls[0][0]
     assert "channel_provider_status_tombstones" in session.calls[0][0]
     assert "channel_provider_status_tombstones" in session.calls[2][0]
