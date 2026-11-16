@@ -75,7 +75,7 @@ async def test_chat_runtime_records_durable_topology_decision_lineage() -> None:
     )
     assert stored_trajectory is not None
     assert len(stored_trajectory.feature_snapshot_refs) == 1
-    assert len(stored_trajectory.decision_observation_refs) == 1
+    assert len(stored_trajectory.decision_observation_refs) == 2
 
     snapshots = store.list_feature_snapshots(
         trajectory.trajectory_id,
