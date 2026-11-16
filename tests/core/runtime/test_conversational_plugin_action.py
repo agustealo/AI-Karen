@@ -409,3 +409,25 @@ async def test_unavailable_rbac_denies_action_before_invoking_plugin():
     assert response.error == "plugin_action_permission_unavailable"
     assert "unavailable permissions" not in response.text
     service.execute_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_session_denies_plugin_action_even_with_scoped_inspection_plan():
+    service = _service()
+    request = _request()
+    request.context.session_id = None
+    plan = _plan()
+    plan.authorized_session_id = None
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=service,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=request, decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert not result.success
+    assert result.degraded
+    assert result.error == "plugin_action_context_incomplete"
+    assert "No action was run" in result.text
+    service.execute_plugin.assert_not_awaited()
