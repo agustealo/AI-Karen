@@ -1,6 +1,6 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Governed learning-admission, lifecycle fencing and evidence-gated SelfModel projection merged (PRs #915, #924, #930, #931, #938 and #940). Canonical built-in Persona evidence integration is in development. Neural training remains disabled.  
+**Status:** Governed learning-admission, lifecycle fencing and evidence-gated SelfModel projection merged (PRs #915, #924, #930, #931, #938, #940 and #946). Canonical Persona configuration evidence is merged; user-scoped reviewed-decision diagnostics are in development. Neural training remains disabled.  
 **Research cutoff:** 2026-11-16  
 **Repository baseline audited:** `agustealo/AI-Karen` `main` at `e570d950501915a9fce9e089ac91e583a71eb80e`  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
@@ -46,6 +46,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [19 — Memory, consent and erasure lifecycle hooks](19-memory-consent-erasure-hooks.md) | Atomic revocation on canonical source changes; live PostgreSQL acceptance |
 | [20 — Operational self-model projection](20-operational-self-model-projection.md) | Canonical SelfModel, evidence verification, skill/identity separation and health |
 | [21 — Canonical system Persona evidence](21-canonical-persona-evidence.md) | Real built-in Persona configuration, exact claim binding, drift and limits |
+| [22 — Reviewed decision evidence](22-reviewed-decision-evidence.md) | Scoped independent decision review, no skill mastery or training grant |
 
 ### Machine-readable proposed contracts
 
