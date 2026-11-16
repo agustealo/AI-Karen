@@ -14,9 +14,11 @@ from typing import Any, Sequence
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.reasoning.defaults import get_default_strategies
 from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
-from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    ExecutionTopology,
+)
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
-from ai_karen_engine.core.runtime.contracts import ExecutionTopology
 from ai_karen_engine.core.runtime.policy import ResponseStrategyPolicyProbe
 from ai_karen_engine.core.runtime.soft_reasoning_composition import (
     ComposedSoftReasoning,
