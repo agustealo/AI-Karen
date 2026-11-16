@@ -22,6 +22,7 @@ from typing import Protocol
 
 from .contracts import (
     CapabilityBelief,
+    IdentityDomain,
     IdentityFacet,
     ModelPropertyStatus,
     SelfModel,
@@ -148,6 +149,11 @@ def _active_receipt(
     receipt = receipts.get(ref)
     if (
         type(receipt) is not SelfModelEvidenceReceipt
+        or not isinstance(receipt.verified_at, datetime)
+        or (
+            receipt.valid_until is not None
+            and not isinstance(receipt.valid_until, datetime)
+        )
         or receipt.evidence_ref != ref
         or receipt.tenant_id != tenant_id
         or not receipt.receipt_id.strip()
@@ -176,10 +182,15 @@ def _valid_provenance(
         return False
     if provenance.status not in _ALLOWED_STATES:
         return False
+    if not isinstance(provenance.valid_from, datetime):
+        return False
     if _utc(provenance.valid_from) > at:
         return False
-    if provenance.valid_until is not None and _utc(provenance.valid_until) <= at:
-        return False
+    if provenance.valid_until is not None:
+        if not isinstance(provenance.valid_until, datetime):
+            return False
+        if _utc(provenance.valid_until) <= at:
+            return False
     if independent and provenance.status is not ModelPropertyStatus.CONFIRMED:
         return False
 
@@ -321,7 +332,10 @@ class SelfModelProjector:
                 copy.deepcopy(item) for item in items
                 if _valid_provenance(
                     item, resolved, tenant_id=tenant_id,
-                    at=now, independent=False,
+                    at=now,
+                    independent=item.domain in {
+                        IdentityDomain.CAPABILITY, IdentityDomain.SKILL,
+                    },
                 )
             ]
 
