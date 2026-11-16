@@ -77,6 +77,13 @@ def _canonical_curated_oracle_snapshot(
     if observations is not None:
         if len(observations) != len(case_hashes):
             return None
+        # Reuse the canonical benchmark evaluator's real task-specific
+        # scoring rule. A caller-supplied 'correct=True' cannot make an
+        # incorrect prediction part of a trusted curated oracle snapshot.
+        from ai_karen_engine.core.intelligence.ml.evaluation.runner import (
+            BenchmarkRunner,
+        )
+        evaluator = BenchmarkRunner()
         for outcome in observations:
             identity = hashlib.sha256(
                 outcome.case_id.encode("utf-8")
@@ -89,6 +96,16 @@ def _canonical_curated_oracle_snapshot(
                 or case.expected_value != outcome.expected_value
                 or case.task != outcome.task
             ):
+                return None
+            try:
+                if (
+                    outcome.prediction is None
+                    or type(outcome.correct) is not bool
+                    or evaluator._is_correct(case, outcome.prediction)
+                    is not outcome.correct
+                ):
+                    return None
+            except (AttributeError, TypeError, ValueError):
                 return None
 
     try:
