@@ -218,6 +218,19 @@ async def test_real_kcm_rls_revocation_concurrency_and_erasure() -> None:
         assert row["lineage_status"] == "revoked"
         assert row["revoked_at"] is not None
 
+        # A source cannot be resurrected into a new dataset version after
+        # an already committed revocation.
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                "INSERT INTO public.kcm_dataset_source_lineage "
+                "(tenant_id,user_id,dataset_id,dataset_version,assessment_id,"
+                "source_event_id,source_revision,manifest_sha256,split,"
+                "leakage_group_id) "
+                "VALUES($1,$2,$3,2,$4,$5,$6,$7,'train','replay')",
+                tenant_a, user_a, dataset, _uuid(), source_a,
+                source_hash, "b" * 64,
+            )
+
         # Concurrent different-source revocations must serialize on the
         # same scope row and produce two distinct monotonic epochs.
         second = await asyncpg.connect(pg_dsn)
