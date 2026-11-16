@@ -207,7 +207,8 @@ async def receive_signed_channel_event(
         raise HTTPException(
             status_code=503, detail="Channel admission unavailable",
         ) from None
-    return JSONResponse(status_code=202, content={"accepted": True})
+    # Provider success requires HTTP 200, and only follows durable admission.
+    return JSONResponse(status_code=200, content={"accepted": True})
 
 
 __all__ = [
