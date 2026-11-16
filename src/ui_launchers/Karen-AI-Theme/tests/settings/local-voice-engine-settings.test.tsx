@@ -220,6 +220,83 @@ describe("governed local engine voice settings", () => {
     expect(screen.getByText("Save speech engine").closest("button")?.disabled).toBe(true);
   });
 
+  it("exposes the backend-backed Voice Studio without inventing a ready model", async () => {
+    api.getVoiceEngineCatalog.mockResolvedValue({ contract_version: "1.0.0", engines: [] });
+    render(<LocalVoiceEngineSettings />);
+    expect(screen.getByText("Local Voice Studio")).toBeTruthy();
+    await screen.findByText("No Local TTS Plugin Ready");
+    expect(screen.getByTestId("voice-studio-readiness").textContent).toMatch(/No local engines ready/);
+    expect(screen.getByText(/install and license its approved model/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Preview local voice" })).toBeNull();
+    expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit sample text and verified voice selection before preview", async () => {
+    api.getVoiceEngineCatalog.mockResolvedValue({
+      ...catalog,
+      engines: [{
+        ...catalog.engines[0],
+        voices: [
+          { id: "alba", name: "Alba", language: "en" },
+          { id: "sage", name: "Sage", language: "en" },
+        ],
+      }],
+    });
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    const createURL = vi.fn(() => "blob:studio-sample");
+    const revokeURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeURL });
+    const play = vi.fn().mockResolvedValue(undefined);
+    const pause = vi.fn();
+    vi.stubGlobal("Audio", class {
+      src: string;
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      play = play;
+      pause = pause;
+      constructor(url: string) { this.src = url; }
+    });
+    api.synthesizeLocalVoice.mockResolvedValue(
+      new Blob([new Uint8Array(48)], { type: "audio/wav" }),
+    );
+
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    expect(screen.getByTestId("voice-studio-saved-selection").textContent).toContain("Pocket TTS · Alba");
+    expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Sage en/ }));
+    expect(screen.getByRole("button", { name: /Sage en/ }).getAttribute("aria-pressed")).toBe("true");
+    const input = screen.getByRole("textbox", { name: "Try a spoken sample" });
+    fireEvent.change(input, { target: { value: "The studio should speak precisely this sample." } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview local voice" }));
+    await waitFor(() => expect(api.synthesizeLocalVoice).toHaveBeenCalledTimes(1));
+    expect(api.synthesizeLocalVoice.mock.calls[0].slice(0, 3)).toEqual([
+      "pocket-tts", "sage", "The studio should speak precisely this sample.",
+    ]);
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "Stop local preview" }));
+    expect(pause).toHaveBeenCalledOnce();
+    expect(revokeURL).toHaveBeenCalledWith("blob:studio-sample");
+    expect(api.setVoiceSelection).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not synthesize an empty studio sample", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    fireEvent.change(screen.getByRole("textbox", { name: "Try a spoken sample" }), {
+      target: { value: "   " },
+    });
+    expect((screen.getByRole("button", { name: "Preview local voice" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
+  });
+
   it("previews WAV only after explicit user action, without sending a chat message", async () => {
     api.getVoiceSelection.mockResolvedValue({
       voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
