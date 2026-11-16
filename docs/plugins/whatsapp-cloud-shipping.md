@@ -226,3 +226,24 @@ general Graph webhook aggregation up to **1,000** updates. Karen still
 supports only 64 KiB and 100 counted events. Do not raise those ceilings
 until the canonical repository has measured, bounded bulk admission and
 durable retry behavior for the largest supported valid signed batch.
+
+
+## KWA-01C5C1: atomic bounded status-batch persistence
+
+The canonical `SqlChannelRepository` now accepts one verified 1..100-receipt
+status batch inside a **single tenant-RLS transaction and a single scoped
+replay/prune advisory lock**. Both the individual-receipt and batch entrypoints
+reuse the same insert, exact digest/tombstone replay, current-connection
+revision, recipient binding and monotonic reconciliation SQL.
+
+The host's `ChannelIngressService` delegates provider status tuples to that
+canonical repository method after native signature and batch authorization.
+If any receipt fails validation, collides with different evidence, loses its
+connection revision, or encounters a database failure, the entire status batch
+transaction rolls back and the webhook receives no success acknowledgement.
+Exact signed retries converge without duplicate status records or chat turns.
+
+Mixed inbound messages still use their own durable inbox admission path.
+Deactivated WhatsApp receipts retain their restricted historical pathway.
+This is **not** a 3 MB / 1,000-event capacity increase, does not measure
+provider-facing p95/p99 latency, and does not establish live Meta connectivity.

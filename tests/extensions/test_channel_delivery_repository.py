@@ -875,3 +875,69 @@ async def test_telegram_reconciliation_claim_reader_reports_missing_without_rele
         "claim_expired": False,
     }
     assert len(session.calls) == 1
+
+@pytest.mark.asyncio
+async def test_whatsapp_status_batch_uses_one_tenant_transaction_and_retention_lock(monkeypatch):
+    """The batch reuses unchanged status SQL but one scoped lock and SQL transaction."""
+    account = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://whatsapp", revision=1, enabled=True,
+    )
+    statuses = tuple(
+        provider_status(message=f"wamid.bulk-{index}")
+        for index in range(2)
+    )
+    session = FakeSession(
+        RowResult(scalar=statuses[0].provider_receipt_id), RowResult(scalar=None),
+        RowResult(scalar=statuses[1].provider_receipt_id), RowResult(scalar=None),
+    )
+    entered = []
+    @asynccontextmanager
+    async def single_scope(tenant_id):
+        entered.append(tenant_id)
+        yield session
+    monkeypatch.setattr(module, "async_transaction_scope", single_scope)
+    accepted = await SqlChannelRepository().record_provider_status_batch(
+        connection=account, statuses=statuses,
+    )
+    assert accepted == 2
+    assert entered == [TENANT]
+    assert len(session.lock_calls) == 1
+    assert session.lock_calls[0][1]["scope"] == (
+        f"karen:channel-status:{TENANT}:conn"
+    )
+    assert len(session.calls) == 4
+    assert "INSERT INTO public.channel_provider_status_events" in session.calls[0][0]
+    assert "UPDATE public.channel_outbox" in session.calls[1][0]
+    assert "INSERT INTO public.channel_provider_status_events" in session.calls[2][0]
+    assert "UPDATE public.channel_outbox" in session.calls[3][0]
+
+
+@pytest.mark.asyncio
+async def test_invalid_whatsapp_status_batch_rejected_before_sql(monkeypatch):
+    account = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://whatsapp", revision=1, enabled=True,
+    )
+    session = FakeSession()
+    install(monkeypatch, session)
+    store = SqlChannelRepository()
+    for invalid in ((), (provider_status(),) * 101, [provider_status()]):
+        with pytest.raises(module.ChannelAdmissionDenied, match="1..100"):
+            await store.record_provider_status_batch(
+                connection=account, statuses=invalid,
+            )
+    forged = provider_status().model_copy(update={"provider_receipt_id": "0" * 64})
+    with pytest.raises(ValueError, match="does not match"):
+        await store.record_provider_status_batch(
+            connection=account, statuses=(provider_status(), forged),
+        )
+    disabled = account.model_copy(update={"enabled": False})
+    with pytest.raises(module.ChannelAdmissionDenied, match="inactive"):
+        await store.record_provider_status_batch(
+            connection=disabled, statuses=(provider_status(),),
+        )
+    assert session.lock_calls == []
+    assert session.calls == []
