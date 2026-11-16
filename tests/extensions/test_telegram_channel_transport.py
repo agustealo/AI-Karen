@@ -1100,9 +1100,10 @@ async def test_telegram_signed_webhook_executes_and_records_real_adapter_send_co
         assert accepted.status_code == expected_http
         if expected_state is None:
             assert accepted.json()["detail"] == "Native channel event rejected"
-            repo.admit_verified_inbound.assert_not_awaited() if secret != SECRET else (
+            if secret != SECRET:
+                repo.admit_verified_inbound.assert_not_awaited()
+            else:
                 repo.admit_verified_inbound.assert_awaited_once()
-            )
             repo.claim_inbound.assert_not_awaited()
             chat_runtime.execute.assert_not_awaited()
             provider_http.post.assert_not_awaited()
