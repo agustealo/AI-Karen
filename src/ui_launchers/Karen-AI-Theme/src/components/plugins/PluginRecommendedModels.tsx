@@ -40,7 +40,7 @@ type DownloadPolicy = {
   block_new_downloads: boolean;
   require_license_acceptance: boolean;
 };
-type DownloadChannel = { id: string; effective_enabled: boolean; admin_only: boolean };
+type DownloadChannel = { id: string; effective_enabled: boolean };
 type DownloadChannelsResponse = { channels: DownloadChannel[] };
 type DownloadValidation = {
   allowed: boolean;
@@ -204,7 +204,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       job.channel_id === item.channel_id && ACTIVE.has(job.status));
     if (submitting.current || !canManage || state !== "ready" || !policy ||
         !policy.master_enabled || policy.block_new_downloads ||
-        !channel?.effective_enabled || !channel.admin_only ||
+        !channel?.effective_enabled ||
         item.installed || alreadyRunning ||
         item.metadata_verified !== true || item.verification_state !== "verified" ||
         !revision || !IMMUTABLE_REVISION.test(revision) ||
@@ -331,7 +331,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           item.verification_state === "verified" &&
           typeof revision === "string" && IMMUTABLE_REVISION.test(revision);
         const blocked = !policy?.master_enabled || policy.block_new_downloads ||
-          !channel?.effective_enabled || !channel.admin_only;
+          !channel?.effective_enabled;
         const acceptanceKey = `${item.id}:${revision || "unverified"}`;
         const canQueue = !item.installed && !activeJob && !blocked && verified &&
           accepted[acceptanceKey] === true && busyId === null;
@@ -371,7 +371,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                 )}
                 {blocked && (
                   <p role="status" className="text-xs text-muted-foreground">
-                    Download blocked by backend policy or disabled admin-only channel.
+                    Download blocked by backend policy or a disabled channel.
                   </p>
                 )}
                 {verified && !blocked && (
