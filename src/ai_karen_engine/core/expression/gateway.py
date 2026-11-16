@@ -260,9 +260,11 @@ class ExpressionGateway:
             if attempted_model_engines and task.reserve_additional_model_call is not None:
                 try:
                     permitted = await task.reserve_additional_model_call()
-                except Exception as exc:
-                    # Do not expose arbitrary budget/host exception details.
-                    raise EngineUnavailableError("execution_budget_guard_failed") from exc
+                except Exception:
+                    # The host callback may include secrets in its exception.
+                    # Suppress chaining so diagnostic tracebacks expose only
+                    # this bounded, non-sensitive execution failure code.
+                    raise EngineUnavailableError("execution_budget_guard_failed") from None
                 if permitted is not True:
                     _emit_routing_event(
                         RoutingEvents.REJECTED,
