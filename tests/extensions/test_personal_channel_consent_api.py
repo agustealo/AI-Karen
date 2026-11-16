@@ -1482,3 +1482,117 @@ async def test_telegram_provision_ignores_untrusted_actor_fields_and_refuses_for
             request=request, user=actor(roles=["admin"]),
         )
     assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_telegram_activation_uses_existing_runtime_policy_and_local_evidence_only():
+    host, request = host_context()
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=1, enabled=False,
+    ))
+    host.activate_telegram_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    result = await api.activate_telegram_connection(
+        connection_id=api.UUID(CONNECTION),
+        payload=api.TelegramActivationRequest(expected_revision=1),
+        request=request, user=actor(roles=["admin"]),
+    )
+    assert result.enabled is True
+    assert result.revision == 2
+    assert result.provider_identity_verified_at_activation is True
+    assert result.webhook_registration_verified is False
+    assert result.live_connected is False
+    assert "vault://" not in result.model_dump_json()
+    plan = host.activation.issue_action_plan.await_args.kwargs
+    call = host.activate_telegram_connection.await_args.kwargs
+    assert plan["action"] == "channel.activate"
+    assert plan["tenant_id"] == TENANT and plan["user_id"] == USER
+    assert call["session_id"] == plan["session_id"]
+    assert call["authorized_plan"] == "trusted-plan"
+    assert call["expected_revision"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision,enabled,installation", [
+    (2, False, "telegram-bot"),
+    (1, True, "telegram-bot"),
+    (1, False, "whatsapp-cloud"),
+])
+async def test_telegram_activation_rejects_unavailable_connection_before_policy(
+    revision, enabled, installation,
+):
+    host, request = host_context()
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT, installation_id=installation,
+        provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=revision, enabled=enabled,
+    ))
+    host.activate_telegram_connection = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await api.activate_telegram_connection(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.TelegramActivationRequest(expected_revision=1),
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.activate_telegram_connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_activation_policy_denial_cannot_start_adapter():
+    host, request = host_context()
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT, installation_id="telegram-bot",
+        provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=1, enabled=False,
+    ))
+    host.activate_telegram_connection = AsyncMock()
+    host.activation.issue_action_plan.side_effect = PermissionError("not allowed")
+    with pytest.raises(HTTPException) as error:
+        await api.activate_telegram_connection(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.TelegramActivationRequest(expected_revision=1),
+            request=request, user=actor(),
+        )
+    assert error.value.status_code == 403
+    host.activate_telegram_connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_activation_rejects_fake_provider_readiness_result():
+    host, request = host_context()
+    host.repository.get_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT, installation_id="telegram-bot",
+        provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=1, enabled=False,
+    ))
+    host.activate_telegram_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    with pytest.raises(HTTPException) as error:
+        await api.activate_telegram_connection(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.TelegramActivationRequest(expected_revision=1),
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 503
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "1", 1.0])
+def test_telegram_activation_requires_strict_positive_revision(bad):
+    with pytest.raises(ValidationError):
+        api.TelegramActivationRequest(expected_revision=bad)
