@@ -228,6 +228,7 @@ jobs:
         if: ${{ always() }}
         run: |
           pytest \
+            tests/core/runtime/trajectory/test_learning_contracts.py \
             tests/core/intelligence/ml/test_policy_decision_time_provenance.py \
             tests/core/intelligence/ml/test_verification_review_workflow.py \
             tests/core/intelligence/ml/test_ope_frozen_candidate_evidence.py \
