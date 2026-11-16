@@ -592,7 +592,7 @@ async def test_validation_fails_closed_when_access_metadata_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_start_download_pins_reviewed_sha_but_keeps_main_install_slot(
+async def test_start_download_pins_reviewed_sha_and_separates_install_slot(
     tmp_path: Path,
 ) -> None:
     repository = FakeModelDownloadRepository()
@@ -620,11 +620,111 @@ async def test_start_download_pins_reviewed_sha_but_keeps_main_install_slot(
     )
 
     assert job["revision"] == "resolved-sha-123"
-    assert Path(job["install_path"]).name == "main"
+    assert Path(job["install_path"]).name == "resolved-sha-123"
+    assert Path(job["install_path"]).name != "main"
     service._orchestrator.get_model_info.assert_awaited_once()
     call = service._orchestrator.get_model_info.await_args
     assert call.args[1] == "resolved-sha-123"
     assert call.kwargs["refresh_remote"] is True
+
+
+@pytest.mark.asyncio
+async def test_distinct_reviewed_revisions_never_share_publication_destination(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import ModelInfo
+
+    async def verified_revision(_model_id, revision, **_kwargs):
+        return ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner", repository="test-model",
+            storage_key="transformers", license=None,
+            gated=False, revision=revision,
+        )
+
+    service._orchestrator.get_model_info = AsyncMock(side_effect=verified_revision)
+    user = {"user_id": "test-user", "tenant_id": "test-tenant"}
+    requests = [
+        {"model_id": "test-owner/test-model", "validated_revision": revision,
+         "channel_id": "core_runtime_transformers"}
+        for revision in ("approved-sha-a", "approved-sha-b")
+    ]
+    jobs = [await service.start_download(request, user) for request in requests]
+
+    assert [job["revision"] for job in jobs] == [
+        "approved-sha-a", "approved-sha-b",
+    ]
+    assert [Path(job["install_path"]).name for job in jobs] == [
+        "approved-sha-a", "approved-sha-b",
+    ]
+    assert jobs[0]["install_path"] != jobs[1]["install_path"]
+    assert Path(jobs[0]["install_path"]).parent == Path(jobs[1]["install_path"]).parent
+
+
+@pytest.mark.asyncio
+async def test_reviewed_sha_overrides_mutable_main_install_alias(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, FakeModelDownloadRepository())
+    service._orchestrator.get_model_info = AsyncMock(
+        return_value=ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner", repository="test-model",
+            storage_key="transformers", license=None, gated=False,
+            revision="verified-sha",
+        )
+    )
+
+    job = await service.start_download(
+        {
+            "model_id": "test-owner/test-model",
+            "revision": "main",
+            "validated_revision": "verified-sha",
+            "channel_id": "core_runtime_transformers",
+        },
+        {"user_id": "test-user", "tenant_id": "test-tenant"},
+    )
+
+    assert job["revision"] == "verified-sha"
+    assert Path(job["install_path"]).name == "verified-sha"
+
+
+@pytest.mark.asyncio
+async def test_model_publication_paths_reject_traversal_and_cross_model_symlinks(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, FakeModelDownloadRepository())
+    await service.initialize()
+    channel = service._channels["core_runtime_transformers"]
+    for model_id in (
+        "owner/../../foreign", "owner/../foreign", "../repo",
+        "owner/..", "owner/", "owner/repo/more",
+    ):
+        with pytest.raises(ModelOrchestratorError, match="Unsafe model identifier"):
+            service._build_install_path(channel, model_id, "main")
+    for revision in (
+        "../foreign", "../../foreign", "/tmp/foreign", "main/../../other",
+        r"main\\..\\other", "refs//escape", ".", "..",
+    ):
+        with pytest.raises(ModelOrchestratorError, match="Unsafe model revision"):
+            service._build_install_path(channel, "owner/repo", revision)
+
+    # Legitimate multi-part remote refs stay within this exact model's slot.
+    safe = service._build_install_path(channel, "owner/repo", "refs/pr/8")
+    assert safe.is_relative_to(tmp_path / "models")
+    assert safe.parts[-3:] == ("refs", "pr", "8")
+
+    base = tmp_path / "models" / channel.storage_key / "owner--repo"
+    base.mkdir(parents=True)
+    external = tmp_path / "foreign"
+    external.mkdir()
+    (base / "unsafe-link").symlink_to(external, target_is_directory=True)
+    with pytest.raises(ModelOrchestratorError, match="escapes root"):
+        service._build_install_path(
+            channel, "owner/repo", "unsafe-link/model",
+        )
 
 
 @pytest.mark.asyncio

@@ -62,9 +62,13 @@ def _runtime(*, enabled=True, busy=False):
         engine_catalog=AsyncMock(return_value=catalog),
         synthesis_busy=Mock(return_value=busy),
         synthesize_with_plugin=AsyncMock(
+            side_effect=(
+                RuntimeError("local_synthesis_unavailable") if not enabled
+                else None
+            ),
             return_value=SynthesizedSpeech(
                 engine="pocket-tts", voice_id="alba", audio=_wav()
-            )
+            ),
         ),
     )
     return engine
@@ -85,19 +89,23 @@ async def test_catalog_and_synthesis_share_one_authenticated_runtime():
     assert result.headers["x-content-type-options"] == "nosniff"
     assert voice.synthesize_with_plugin.await_args.args[0].text == "Hello"
     assert voice.synthesize_with_plugin.await_args.kwargs["engine_id"] == "pocket-tts"
+    # The route cannot probe again: VoiceRuntime is the only admission
+    # authority and performs exactly one catalog check before inference.
+    assert voice.engine_catalog.await_count == 1  # Explicit GET only.
 
 
 @pytest.mark.asyncio
-async def test_unavailable_plugin_is_rejected_before_text_is_read():
+async def test_unavailable_plugin_is_rejected_by_runtime_not_duplicate_route_catalog():
     voice = _runtime(enabled=False)
     with patch("ai_karen_engine.api_routes.voice.get_voice_runtime", return_value=voice):
         with pytest.raises(HTTPException) as raised:
             await synthesize_with_voice_engine(
-                "pocket-tts", _request(forbidden=True), user={"user_id": "owner"},
+                "pocket-tts", _request(), user={"user_id": "owner"},
             )
     assert raised.value.status_code == 503
     assert raised.value.detail == "local_synthesis_unavailable"
-    voice.synthesize_with_plugin.assert_not_awaited()
+    voice.synthesize_with_plugin.assert_awaited_once()
+    voice.engine_catalog.assert_not_awaited()
 
 
 @pytest.mark.asyncio

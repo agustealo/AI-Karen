@@ -251,6 +251,28 @@ release readiness. See the
 [Pocket acceptance ledger](12-pocket-tts-native-acceptance.md) when available
 on the release branch.
 
+### 2026-11-16: TTS admission and model publication safety audit
+
+Two canonical-owner corrections protect model-backed consumer voice:
+
+- `api_routes/voice.py` does **not** probe the plugin engine catalog before
+  `VoiceRuntime.synthesize_with_plugin`. That runtime operation already
+  performs the actor/tenant/RBAC-eligible catalog verification before governed
+  execution. A duplicate route probe previously loaded/probed Pocket twice per
+  speech chunk and widened a check/use race. The ingress retains bounded JSON,
+  authentication and busy rejection, and leaves admission to VoiceRuntime.
+- `ModelDownloadControlService` installs a reviewed `validated_revision`
+  under that pinned reference, not the mutable `main` directory, even when
+  the incoming optional `revision` is absent or `main`. Model/revision
+  publication paths reject traversal, empty segments and symlink escapes.
+  Existing jobs are not silently migrated; their recorded installed paths
+  remain durable evidence for independently authorized models.
+
+Proof source: `tests/core/voice/test_voice_plugin_http.py` and
+`tests/core/model_runtime/test_model_download_durable_worker.py`.
+Exact-head CI and real licensed Pocket model/browser audio remain separate
+required gates; no new runtime, model registry or installer was introduced.
+
 ## UI behavior
 
 User settings should offer separate *speech output* and *speech input*
