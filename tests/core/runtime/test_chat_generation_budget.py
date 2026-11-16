@@ -220,3 +220,39 @@ async def test_grounded_search_synthesis_receives_authorized_plan(monkeypatch):
     gateway.generate.assert_awaited_once()
     assert gateway.generate.await_args.args[0].max_tokens == 256
     assert gateway.generate.await_args.args[0].reserve_additional_model_call is meter.consume_model_call
+
+    # Invalid or cross-plan result receipts may carry realistic inline source
+    # text, but must never trigger the model or spend another model call.
+    for invalid in (
+        {"success": False},
+        {"success": 1},
+        {"degraded": True},
+        {"source": "manual"},
+        {"source": "tool"},
+        {"source_id": "not-authorized"},
+        {"attempts": []},
+        {"attempts": [{"id": "search.plugin", "type": "plugin", "status": "failed"}]},
+        {"attempts": [{"id": "search.plugin", "type": "tool", "status": "success"}]},
+    ):
+        gateway.generate.reset_mock()
+        meter.consume_model_call.reset_mock()
+        untrusted = SimpleNamespace(**{**vars(retrieved), **invalid})
+        assert await runtime._synthesize_search_evidence(
+            request, decision, plan, meter, untrusted
+        ) is None
+        gateway.generate.assert_not_awaited()
+        meter.consume_model_call.assert_not_awaited()
+
+    # A separately admitted tool result is equally valid source evidence.
+    plan.allowed_tools = ["search.tool"]
+    tool_result = SimpleNamespace(**{
+        **vars(retrieved),
+        "source": "tool",
+        "source_id": "search.tool",
+        "attempts": [{"id": "search.tool", "type": "tool", "status": "success"}],
+    })
+    gateway.generate.reset_mock()
+    await runtime._synthesize_search_evidence(
+        request, decision, plan, meter, tool_result
+    )
+    gateway.generate.assert_awaited_once()
