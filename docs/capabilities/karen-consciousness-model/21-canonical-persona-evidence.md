@@ -65,6 +65,9 @@ These are availability/configuration observations. They do **not** claim:
 The projected facets use \`IdentityDomain.PREFERENCE\` with namespaced
 system Persona keys. \`CapabilityBelief\` remains empty. The result is
 tenant-bound even though built-in Persona definitions are global.
+Evidence-lineage digests include the authenticated tenant identifier, so two
+owners do not share the same projection fingerprint. A fingerprint is a
+diagnostic, never a capability grant.
 
 ## Fail-closed contracts
 
