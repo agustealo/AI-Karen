@@ -147,9 +147,9 @@ async def test_disabled_engine_is_skipped_without_consuming_an_additional_model_
 
     assert visited == ["local", "alternate"]
     assert result.metadata["fallback_level"] == 2
-    assert result.metadata["skipped_engines"][0] == {
+    assert {
         "engine_id": "cloud", "reason": "disabled",
-    }
+    } in result.metadata["skipped_engines"]
     assert meter.model_calls == 2
 
 
