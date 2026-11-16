@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
 from ai_karen_engine.core.intelligence.ml.contracts import Prediction, PredictionTask
@@ -94,12 +94,12 @@ class GovernedConfidenceEvaluation:
     model_id: str
     model_version: str
     feature_version: str
-    status: str
+    status: Literal["insufficient_evidence", "evaluated_shadow"]
     sample_count: int
     minimum_samples: int
     window_limit: int
     evidence_version: str
     brier_score: MetricResult | None = None
     expected_calibration_error: MetricResult | None = None
-    scope: str = "principal_scoped_bounded_window"
-    runtime_authorized: bool = False
+    scope: str = field(default="principal_scoped_bounded_window", init=False)
+    runtime_authorized: bool = field(default=False, init=False)
