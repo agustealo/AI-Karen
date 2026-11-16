@@ -662,6 +662,7 @@ class TelegramReconciliationObservation(BaseModel):
     claim_state: Literal["absent", "in_flight", "uncertain", "verified"]
     claim_revision_matches: StrictBool
     claim_expired: StrictBool
+    bot_identity_owner_verified: Literal[True]
     provider_url_matches: StrictBool
     provider_webhook_registered: StrictBool
     live_connected: Literal[False]
