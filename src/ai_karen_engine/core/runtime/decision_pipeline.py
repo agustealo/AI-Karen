@@ -99,6 +99,7 @@ class RuntimeDecisionPipeline:
         # A CORTEX-originated value cannot supply a trusted policy proof.
         constraints = dict(authorized_decision.policy_constraints)
         constraints.pop("response_strategy_policy_probe", None)
+        constraints.pop("verification_alternative_readiness", None)
         if get_runtime_settings().features.enable_verification_strategy_policy_probe:
             direct_plan = (
                 policy.allowed
@@ -134,6 +135,35 @@ class RuntimeDecisionPipeline:
                     constraints["response_strategy_policy_probe"] = (
                         permission.to_metadata()
                     )
+                    try:
+                        from ai_karen_engine.core.runtime.reasoning_bridge import (
+                            get_runtime_reasoning_bridge,
+                        )
+
+                        readiness = (
+                            get_runtime_reasoning_bridge()
+                            .inspect_optional_verification_readiness(
+                                permission=permission,
+                                decision=authorized_decision,
+                                preferred_provider=request.preferred_provider,
+                                preferred_model=request.preferred_model,
+                            )
+                        )
+                    except Exception as exc:
+                        # Research diagnostics are never an execution grant.
+                        # Failure leaves the chosen, authorized reply intact.
+                        logger.warning(
+                            "verification_alternative_readiness_probe_failed",
+                            extra={
+                                "error_type": type(exc).__name__,
+                                "policy_decision_id": policy.decision_id,
+                                "correlation_id": request.context.correlation_id,
+                            },
+                        )
+                    else:
+                        constraints["verification_alternative_readiness"] = (
+                            readiness.to_metadata()
+                        )
         authorized_decision = replace(
             authorized_decision, policy_constraints=constraints,
         )
