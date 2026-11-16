@@ -12,6 +12,22 @@ Status: **candidate, not a live WhatsApp connection**. Canonical plugin: `src/ai
 - `ChannelIngressService` verifies signed raw POST content, normalizes text-only inbound events, and commits inbox records before returning 202; the shared worker handles ChatRuntime turns and durable outbox dispatch.
 - API routes remain thin. Cloud API receipts confirming **sent** are not the same as delivery/read receipts.
 
+## KWA-01C first slice: Meta phone identity preflight
+
+Before the host's `ChannelActivationService` can commit a WhatsApp connection's
+enabled revision, the existing adapter now makes a **read-only**, host-client
+`GET /{phone_number_id}?fields=id,display_phone_number` against the configured
+Graph version. The bearer token comes only from `ChannelVaultSecretResolver`.
+A non-200 response, malformed metadata, missing display number, wrong returned
+ID, timeout, or unavailable host HTTP GET denies activation without leaking
+provider error details. No generic plugin enable or new credential store exists.
+
+This attests that **the token can read the configured phone-number identity at
+activation time only**. It does not establish that a phone is registered for
+messaging, the WABA is subscribed to the correct webhook, inbound/outbound
+traffic works, tokens remain valid, 24-hour service windows are enforced, or
+a live Meta test-number trial passed. Those are independent release gates.
+
 ## Operator setup (explicit opt-in)
 
 1. Install/validate the preinstalled `whatsapp-cloud` manifest using Karen's governed plugin catalog. Do **not** use generic plugin `/load` to enable messaging.
@@ -28,7 +44,8 @@ These are operator requirements, **not an assertion that the current deployment 
 
 - [ ] Authenticated operator provisioning and activation through a usable admin connection flow, with Vault credential rotation and refusal on missing RBAC, tenant, or consent
 - [ ] End-to-end Meta test-number handshake on a public HTTPS callback, signed inbound delivery, tenant identity linking, durable one-turn response, and provider-observed receipt
-- [ ] Signed **status** updates reconciled to the existing durable delivery owner (`sent`, `delivered`, `read`, `failed`). The current v1.0.0 text-only adapter rejects status/batch webhooks; it is **not** accurate to claim delivery/read tracking
+- [x] **Source-only:** Signed status batches and durable, monotonic PostgreSQL reconciliation are implemented by KWA-01B. This does **not** establish live Meta delivery/read evidence.
+- [ ] **Provider acceptance:** Real Meta status batches, delayed/duplicate provider receipts, deactivation handling, and unmatched-status retention must pass end-to-end.
 - [ ] Provider-backed 24-hour conversation window and explicit template/opt-in policy before outbound initiation. Current adapter is limited to host-staged text replies, not unrestricted templates or campaigns
 - [ ] Network timeouts, retries, rate limiting, unknown-send semantics, exact-account fencing, rotation and revocation, audit/telemetry, provider downtime and incident recovery acceptance
 - [ ] Real signed-in admin browser walkthrough at narrow and wide viewports, plus disconnection, replay, concurrency and privacy behavior
