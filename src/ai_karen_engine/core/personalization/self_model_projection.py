@@ -49,6 +49,13 @@ class SelfModelEvidenceAuthority(str, Enum):
     INDEPENDENT_EVALUATION = "independent_evaluation"
 
 
+class SelfModelEvidenceSubject(str, Enum):
+    """Never mix tenant-wide Karen identity with a person's user model."""
+
+    KAREN_SELF = "karen_self"
+    USER = "user"
+
+
 @dataclass(frozen=True, slots=True)
 class SelfModelEvidenceReceipt:
     """Result returned by an authorized verifier, not caller metadata.
@@ -63,6 +70,7 @@ class SelfModelEvidenceReceipt:
     source_revision: str
     status: SelfModelEvidenceStatus
     authority: SelfModelEvidenceAuthority
+    subject: SelfModelEvidenceSubject
     verified_at: datetime
     valid_until: datetime | None = None
 
@@ -156,6 +164,7 @@ def _active_receipt(
         )
         or receipt.evidence_ref != ref
         or receipt.tenant_id != tenant_id
+        or receipt.subject is not SelfModelEvidenceSubject.KAREN_SELF
         or not isinstance(receipt.receipt_id, str)
         or not receipt.receipt_id.strip()
         or not isinstance(receipt.source_revision, str)
@@ -407,6 +416,7 @@ __all__ = [
     "SelfModelProjectionHealth",
     "SelfModelEvidenceStatus",
     "SelfModelEvidenceAuthority",
+    "SelfModelEvidenceSubject",
     "SelfModelEvidenceReceipt",
     "SelfModelEvidenceReader",
     "OperationalSelfModelRead",
