@@ -9,6 +9,7 @@ discovery authority.
 from __future__ import annotations
 
 import logging
+import math
 import io
 import json
 import os
@@ -1367,6 +1368,147 @@ class PluginService:
             "matches": projections,
             "truncated": len(candidates) > limit,
             "mutation_performed": False,
+        }
+
+
+    @staticmethod
+    def _chat_action_phrase(value: str) -> str:
+        """Normalize exact manifest-declared utterances, never build regexes."""
+        return " ".join(value.casefold().strip().rstrip(" ?!.").split())
+
+    def resolve_conversational_read_action(
+        self, *, plugin_id: str, goal: str, caller_roles: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve one read-only, fixed-input action from a verified manifest.
+
+        Only canonical installed plugins may opt in through the strict
+        manifest-owned conversational_actions contract. Nothing in this method
+        invokes plugin code or grants a permission. The regular execute_plugin
+        method remains the sole application execution owner, including the
+        fresh RuntimePolicy decision, action gate, schema and tenant readiness.
+        """
+        if (
+            not isinstance(plugin_id, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_-]{0,49}", plugin_id)
+            or not isinstance(goal, str)
+            or not 1 <= len(goal.strip()) <= 240
+            or not isinstance(caller_roles, list)
+        ):
+            return None
+        kernel = self._get_kernel()
+        record = kernel.get_record(plugin_id)
+        if (
+            record is None
+            or record.get("is_valid") is not True
+            or record.get("status") not in {"enabled", "active"}
+            or record.get("activation_blocked_reason")
+        ):
+            return None
+        manifest = record.get("manifest")
+        if (
+            manifest is None
+            or getattr(manifest, "name", None) != plugin_id
+            or getattr(getattr(manifest, "capabilities", None), "communication_channel", None)
+            is not None
+            or getattr(getattr(manifest, "capabilities", None), "voice_modality", None)
+            is not None
+        ):
+            return None
+        roles = {
+            str(role).casefold().strip()
+            for role in caller_roles
+            if isinstance(role, str) and role.strip()
+        }
+        manifest_roles = {
+            str(getattr(role, "value", role)).casefold().strip()
+            for role in (
+                getattr(getattr(manifest, "rbac", None), "allowed_roles", ())
+                or ()
+            )
+        }
+        if not roles.intersection(manifest_roles):
+            return None
+        governance = getattr(manifest, "governance", None)
+        if not isinstance(governance, dict):
+            return None
+        contract = governance.get("conversational_actions")
+        if (
+            not isinstance(contract, dict)
+            or set(contract) != {"version", "actions"}
+            or type(contract["version"]) is not int
+            or contract["version"] != 1
+            or not isinstance(contract["actions"], list)
+            or not 1 <= len(contract["actions"]) <= 16
+        ):
+            return None
+
+        # A malformed or ambiguous manifest action registry denies the whole
+        # selection. Arbitrary strings from a model or client never become
+        # plugin parameters, and secrets cannot enter fixed action inputs.
+        actions: list[Dict[str, Any]] = []
+        seen_action_ids: set[str] = set()
+        seen_utterances: set[str] = set()
+        for item in contract["actions"]:
+            if (
+                not isinstance(item, dict)
+                or set(item) != {
+                    "id", "utterances", "parameters",
+                    "side_effect_level", "requires_confirmation",
+                }
+                or not isinstance(item["id"], str)
+                or not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", item["id"])
+                or item["side_effect_level"] != "none"
+                or item["requires_confirmation"] is not False
+                or not isinstance(item["utterances"], list)
+                or not 1 <= len(item["utterances"]) <= 16
+                or not isinstance(item["parameters"], dict)
+                or len(item["parameters"]) > 12
+            ):
+                return None
+            if any(
+                not isinstance(phrase, str)
+                or not 3 <= len(phrase.strip()) <= 160
+                for phrase in item["utterances"]
+            ):
+                return None
+            if any(
+                not isinstance(key, str)
+                or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
+                or re.search(r"(?:token|password|secret|credential|api_key)", key)
+                or type(value) not in {str, int, float, bool}
+                or (isinstance(value, str) and len(value) > 160)
+                or (isinstance(value, float) and not math.isfinite(value))
+                for key, value in item["parameters"].items()
+            ):
+                return None
+            if item["id"] in seen_action_ids:
+                return None
+            seen_action_ids.add(item["id"])
+            for phrase in item["utterances"]:
+                normalized = self._chat_action_phrase(phrase)
+                if not normalized or normalized in seen_utterances:
+                    return None
+                seen_utterances.add(normalized)
+            actions.append(item)
+        normalized_goal = self._chat_action_phrase(goal)
+        matches = [
+            item for item in actions
+            if normalized_goal in {
+                self._chat_action_phrase(phrase)
+                for phrase in item["utterances"]
+            }
+        ]
+        if len(matches) != 1:
+            return None
+        selected = matches[0]
+        # Return a copy only of fixed, inspected manifest input. The requested
+        # utterance itself is not sent to the plugin unless a future reviewed
+        # prompt contract explicitly declares a safe parameter mapping.
+        return {
+            "action_id": selected["id"],
+            "parameters": dict(selected["parameters"]),
+            "authorization_required": "fresh_plugin_execution_policy",
+            "manifest_source": "plugin_kernel",
         }
 
     def get_plugins_by_category(self, category: str) -> List[Dict[str, Any]]:
