@@ -8,11 +8,11 @@ These synthetic labels do not establish real-world reasoning improvement.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
 from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
     ActionRiskClass,
     DecisionType,
@@ -40,35 +40,19 @@ OTHER = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 PERMISSION = "intelligence.ml.verification_review"
 
 
-@dataclass
-class PrincipalFixture:
-    """Test the trusted principal contract without importing the HTTP stack."""
-
-    user_id: str
-    tenant_id: str
-    permissions: list[str] = field(default_factory=list)
-    expires_at: datetime | None = None
-
-    def has_permission(self, permission: str) -> bool:
-        return permission.lower() in {item.lower() for item in self.permissions}
-
-    def is_expired(self) -> bool:
-        return self.expires_at is not None and datetime.utcnow() > self.expires_at
-
-
 ACTIONS = ["respond_direct", "verify_then_respond"]
 BASELINE = SimpleNamespace(policy_id="baseline-v1", policy_version="v1")
 CANDIDATE = SimpleNamespace(policy_id="shadow-v1", policy_version="v1")
 
 
 def subject(tenant: str = TENANT, user_id: str = SUBJECT):
-    return PrincipalFixture(user_id=user_id, tenant_id=tenant)
+    return AuthenticatedPrincipal(user_id=user_id, tenant_id=tenant)
 
 
 def reviewer(
     *, tenant: str = TENANT, user_id: str = REVIEWER, allowed: bool = True,
 ):
-    return PrincipalFixture(
+    return AuthenticatedPrincipal(
         user_id=user_id, tenant_id=tenant,
         permissions=[PERMISSION] if allowed else [],
     )
@@ -164,7 +148,7 @@ async def test_receipts_are_atomic_durable_scoped_and_redacted():
         lambda: reviewer(user_id=SUBJECT),
         lambda: subject(),
         lambda: "forged-actor",
-        lambda: PrincipalFixture(
+        lambda: AuthenticatedPrincipal(
             user_id=REVIEWER, tenant_id=TENANT, permissions=[PERMISSION],
             expires_at=datetime(2020, 1, 1),
         ),
@@ -177,6 +161,46 @@ async def test_unprivileged_self_cross_tenant_and_expired_issuers_denied(invalid
             observation(3), reviewer=invalid_reviewer(),
         )
     assert store.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+@pytest.mark.asyncio
+async def test_structurally_forged_principal_is_not_a_trusted_auth_identity():
+    class FakePrincipal:
+        user_id = REVIEWER
+        tenant_id = TENANT
+
+        def has_permission(self, permission):
+            return True
+
+        def is_expired(self):
+            return False
+
+    store = InMemoryOutcomeStore()
+    with pytest.raises(PermissionError, match="trusted authenticated reviewer"):
+        await service(store).record_review(
+            observation(16), reviewer=FakePrincipal(),
+        )
+    assert store.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+def test_compatibility_principal_import_is_canonical_identity():
+    # Auth package has HTTP-facing optional imports; verify the shared
+    # identity after injecting just the isolated legacy module, not by
+    # adding FastAPI as a requirement to the core intelligence worker.
+    import ast
+    from pathlib import Path
+
+    module = ast.parse(
+        Path("src/ai_karen_engine/auth/principal.py").read_text()
+    )
+    imported = [
+        alias.name
+        for node in ast.walk(module)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "ai_karen_engine.platform.security.principal"
+        for alias in node.names
+    ]
+    assert imported == ["AuthenticatedPrincipal"]
 
 
 @pytest.mark.asyncio
@@ -242,7 +266,7 @@ async def test_subject_scoping_blocks_other_user_tenant_and_expired_read():
     await service(store).record_review(entry, reviewer=reviewer())
     for wrong in (
         subject(OTHER_TENANT), subject(TENANT, OTHER),
-        PrincipalFixture(
+        AuthenticatedPrincipal(
             user_id=SUBJECT, tenant_id=TENANT,
             expires_at=datetime(2020, 1, 1),
         ),
