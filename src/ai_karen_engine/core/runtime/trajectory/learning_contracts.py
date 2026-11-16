@@ -337,6 +337,7 @@ def validate_probability_distribution(
             return invalid
         if chosen_probability is not None and (
             chosen_action not in action_probabilities
+            or chosen_probability <= 0.0
             or not math.isclose(
                 action_probabilities[chosen_action], chosen_probability,
                 rel_tol=0.0, abs_tol=1e-6,
