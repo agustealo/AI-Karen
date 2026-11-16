@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: kcm-governance-${ github.workflow }}-${ github.ref }}
+  group: kcm-governance-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,9 +34,9 @@ jobs:
 
       - name: Start canonical isolated PostgreSQL service
         env:
-          KAREN_CI_DOCKERHUB_USERNAME: ${ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
-          KAREN_CI_DOCKERHUB_TOKEN: ${ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
-          KAREN_CI_POSTGRES_IMAGE: ${ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
         run: bash scripts/ci/start-postgres-container.sh
 
       - uses: actions/setup-python@v5
