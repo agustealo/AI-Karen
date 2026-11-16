@@ -144,6 +144,12 @@ jobs:
       - name: Verify canonical chat ingress and grounded response parity
         run: pytest tests/architecture/test_chat_stream_route_contract.py -q
 
+      - name: Prove fallback keeps RuntimePolicy scope and shared execution budget
+        run: |
+          pytest -q \
+            tests/core/runtime/test_runtime_fallback_authority.py \
+            tests/core/runtime/test_runtime_fallback_memory.py
+
       - name: Burn empty and prematurely terminated chat SSE failures
         run: |
           # These targeted stream regressions have isolated runtime doubles.
