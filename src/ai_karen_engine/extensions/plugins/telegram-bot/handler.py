@@ -31,7 +31,6 @@ from ai_karen_engine.extensions.platform.core.host.base import (
 _SECRET_TOKEN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 _BOT_TOKEN = re.compile(r"^[0-9]{6,20}:[A-Za-z0-9_-]{20,128}$")
 _TELEGRAM_API_BASE = "https://api.telegram.org"
-_MAX_NATIVE_BYTES = 65_536
 _MAX_TEXT_LENGTH = 4_096
 
 
@@ -46,6 +45,10 @@ class MainExtension(ExtensionBase):
 
     def __init__(self, manifest: Any, context: Any) -> None:
         super().__init__(manifest, context)
+        channel = getattr(manifest.capabilities, "communication_channel", None)
+        if channel is None or type(channel.max_native_body_bytes) is not int:
+            raise ValueError("Canonical channel manifest body budget required")
+        self._native_body_limit = channel.max_native_body_bytes
         self._secret_resolver: HostSecretResolver | None = None
         self._http_client: httpx.AsyncClient | None = None
         self._started: set[tuple[str, str, int]] = set()
@@ -303,7 +306,7 @@ class MainExtension(ExtensionBase):
         headers: Mapping[str, str], body: bytes,
     ) -> bool:
         self._require_active(connection)
-        if len(body) > _MAX_NATIVE_BYTES or not body:
+        if len(body) > self._native_body_limit or not body:
             return False
         header_values = [
             value for key, value in headers.items()
@@ -324,7 +327,7 @@ class MainExtension(ExtensionBase):
         headers: Mapping[str, str], body: bytes,
     ) -> InboundChannelEvent:
         self._require_active(connection)
-        if len(body) > _MAX_NATIVE_BYTES:
+        if len(body) > self._native_body_limit:
             raise ValueError("Telegram update exceeds the channel body ceiling")
         try:
             payload = json.loads(body)

@@ -15,7 +15,9 @@ from ai_karen_engine.persistence.repositories.channel_repository import (
     ChannelAdmissionDenied,
     InboundAdmission,
 )
-from ai_karen_engine.services.channels.ingress import ChannelIngressService
+from ai_karen_engine.services.channels.ingress import (
+    ChannelIngressService, ChannelNativeBodyTooLarge,
+)
 
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
@@ -499,3 +501,26 @@ async def test_status_batch_partial_failure_requires_retry_of_all_signed_receipt
     assert repo.record_provider_status.await_args_list[3].kwargs["status"] == second
     repo.admit_verified_inbound.assert_not_awaited()
     service._on_admitted.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disabled_whatsapp_status_respects_declared_transport_bytes():
+    service, adapter, repo, _ = disabled_whatsapp_ingress()
+    service._max_native_body_bytes = 131_072
+    original_catalog = service._kernel.get_channel_activation_manifest
+    def scoped_catalog(installation_id):
+        manifest = original_catalog(installation_id)
+        if manifest is None:
+            return None
+        manifest.capabilities.communication_channel.max_native_body_bytes = 65_536
+        return manifest
+    service._kernel.get_channel_activation_manifest = scoped_catalog
+    with pytest.raises(ChannelNativeBodyTooLarge):
+        await service.verify_and_route_installed(
+            tenant_id=TENANT, connection_id="connection-a",
+            headers={"X-Hub-Signature-256": "signed"},
+            body=b"x" * 65_537,
+        )
+    adapter.normalize_deactivated_statuses.assert_not_awaited()
+    repo.record_deactivated_provider_status.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()

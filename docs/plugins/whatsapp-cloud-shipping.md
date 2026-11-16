@@ -206,3 +206,23 @@ Proof in existing plugin gates:
 tests/extensions/test_channel_ingress_service.py
 tests/extensions/test_channel_delivery_repository.py
 tests/integration/test_channel_claim_concurrency_postgres.py\`.
+
+
+
+## KWA-01C5B: manifest-governed native payload budget
+
+`capabilities.communication_channel.max_native_body_bytes` is a strict, versioned
+per-transport declaration. The currently installed WhatsApp and Telegram
+manifests both declare **65,536 bytes**. The shared channel host retains its
+operator-configured upper bound, but may not override a lower approved
+transport budget. Active and disabled-status-only webhook paths check this
+declaration before adapter signature normalization. Over-budget requests
+return HTTP **413** rather than being mislabeled as forged signatures; no
+inbox, status event, ChatRuntime execution or provider dispatch occurs.
+
+This is a **source-contract correctness change, not a capacity increase**.
+Meta documents WhatsApp payload envelopes up to approximately **3 MB** and
+general Graph webhook aggregation up to **1,000** updates. Karen still
+supports only 64 KiB and 100 counted events. Do not raise those ceilings
+until the canonical repository has measured, bounded bulk admission and
+durable retry behavior for the largest supported valid signed batch.

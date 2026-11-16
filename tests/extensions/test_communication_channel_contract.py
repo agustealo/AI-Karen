@@ -184,3 +184,19 @@ def test_schema_parity_covers_runtime_and_channel_catalog():
     invalid["capabilities"]["communication_channel"]["authentication"] = "none"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(invalid, schema)
+
+
+@pytest.mark.parametrize("invalid_budget", [0, -1, 10_485_761, True, "65536"])
+def test_channel_manifest_rejects_invalid_native_body_budget(invalid_budget):
+    values = _channel_catalog()
+    values["capabilities"]["communication_channel"]["max_native_body_bytes"] = invalid_budget
+    with pytest.raises(ValidationError):
+        ExtensionManifest.from_dict(values)
+
+
+def test_channel_manifest_defaults_to_strict_64k_native_budget():
+    values = _channel_catalog()
+    channel = ExtensionManifest.from_dict(
+        values,
+    ).capabilities.communication_channel
+    assert channel.max_native_body_bytes == 65_536

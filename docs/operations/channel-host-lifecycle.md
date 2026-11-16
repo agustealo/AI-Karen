@@ -102,3 +102,16 @@ pytest tests/architecture/ -q
 ```
 
 Main Quality, Production First-Boot, authentication, plugin-backend, and database contract workflows remain binding release gates.
+
+
+## Transport-specific native body budget
+
+The operator `KAREN_CHANNEL_MAX_BODY_BYTES` setting is the host-wide upper
+bound. Each installed communication-channel manifest separately declares a
+strict `max_native_body_bytes` ceiling (65,536 bytes by default). The effective
+admission maximum is the **minimum** of these bounds for the persisted
+tenant/connection's canonical adapter. The host checks this before provider
+signature normalization and responds HTTP 413 on over-budget callbacks;
+it does not grant permission, activate a transport, or select a provider from
+an unauthenticated request. No native payload, secret or sender identity is
+logged as part of capacity rejection.

@@ -380,3 +380,23 @@ def test_subscription_challenge_echoes_only_after_host_verification():
         tenant_id=TENANT, connection_id=CONNECTION,
         verify_token="meta-verify-token-123",
     )
+
+
+def test_native_webhook_enforces_manifest_body_limit_before_signature():
+    """A generous host maximum must not override a smaller transport cap."""
+    ingress, repo, adapter = gateway()
+    ingress._max_native_body_bytes = 131_072
+    ingress._kernel.get_channel_activation_manifest = lambda _: SimpleNamespace(
+        capabilities=SimpleNamespace(
+            communication_channel=SimpleNamespace(
+                inbound={"text"}, max_native_body_bytes=65_536,
+            ),
+        ),
+    )
+    with TestClient(isolated_app(ingress)) as client:
+        response = client.post(NATIVE, content=b"x" * 65_537)
+    assert response.status_code == 413
+    assert response.json() == {"detail": "Native event too large"}
+    adapter.verify_event.assert_not_awaited()
+    adapter.normalize_event.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()

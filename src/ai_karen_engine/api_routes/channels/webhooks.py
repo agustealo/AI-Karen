@@ -18,7 +18,10 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from ai_karen_engine.persistence.repositories.channel_repository import (
     ChannelAdmissionDenied,
 )
-from ai_karen_engine.services.channels.ingress import ChannelIngressService
+from ai_karen_engine.services.channels.ingress import (
+    ChannelIngressService,
+    ChannelNativeBodyTooLarge,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +189,8 @@ async def receive_signed_channel_event(
             headers=request.headers,
             body=body,
         )
+    except ChannelNativeBodyTooLarge:
+        raise HTTPException(status_code=413, detail="Native event too large") from None
     except ChannelAdmissionDenied:
         # No user IDs, link secrets or provider credentials in HTTP responses.
         raise HTTPException(

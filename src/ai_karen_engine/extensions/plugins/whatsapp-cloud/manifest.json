@@ -36,7 +36,8 @@
       "supports_edits": false,
       "supports_streaming": false,
       "supports_media": false,
-      "supports_delivery_receipts": false
+      "supports_delivery_receipts": false,
+      "max_native_body_bytes": 65536
     }
   },
   "permissions": {
