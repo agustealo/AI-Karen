@@ -316,7 +316,7 @@ class RuntimePolicyEnforcer:
         )
         topology = request.execution_topology
         if (
-            or selected_policy.requires_human_gate
+            selected_policy.requires_human_gate
             or selected_policy.risk_level not in {"low", "medium"}
             or not selected_policy.decision_id
             or not selected_policy.policy_version
