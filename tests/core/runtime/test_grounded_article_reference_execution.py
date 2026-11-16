@@ -41,7 +41,8 @@ def request():
 
 def retrieved(*, source="plugin", article_id="article-1"):
     return SimpleNamespace(
-        success=True, source=source, source_id="intelligent-search",
+        success=True, degraded=False, source=source, source_id="intelligent-search",
+        attempts=[{"type": source, "id": "intelligent-search", "status": "success"}],
         sources=[{
             "url": "https://example.org/article",
             "evidence_level": "fetched_page",
