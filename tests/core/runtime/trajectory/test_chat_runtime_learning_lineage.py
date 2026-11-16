@@ -342,3 +342,95 @@ async def test_unproven_strategy_alternatives_are_not_manufactured(decision):
     assert len(rows) == 1
     assert rows[0].decision_type == DecisionType.EXECUTION_TOPOLOGY.value
     assert rows[0].ope_eligible is False
+
+
+@pytest.mark.asyncio
+async def test_read_only_policy_probe_survives_trajectory_without_ope_promotion() -> None:
+    store = InMemoryTrajectoryStore()
+    runtime = _runtime(store)
+    trajectory = _trajectory()
+    probe = {
+        "schema_version": "response_strategy_policy_probe_v1",
+        "source_decision_id": "policy-scoped",
+        "source_policy_version": "v2",
+        "selected_action": "respond_direct",
+        "policy_permitted_actions": ["respond_direct", "verify_then_respond"],
+        "status": "alternative_reasoning_mode_policy_permitted",
+        "alternative_policy_decision_id": "policy-shadow",
+        "alternative_policy_version": "v2",
+        "execution_eligibility_established": False,
+        "randomized_selection": False,
+        "ope_eligible": False,
+    }
+    decision = ExecutionDecision(
+        topology=ExecutionTopology.DIRECT,
+        policy_decision_id="policy-scoped",
+        policy_version="v2",
+        policy_constraints={"response_strategy_policy_probe": probe},
+    )
+    await runtime._record_learning_decision(trajectory, decision)
+
+    snapshots = store.list_feature_snapshots(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    observations = store.list_decision_observations(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    strategy = next(
+        row for row in observations
+        if row.decision_type == DecisionType.RESPOND_STRATEGY.value
+    )
+    assert snapshots[0].metadata["response_strategy_policy_probe"] == probe
+    assert strategy.metadata["response_strategy_policy_probe"] == probe
+    assert strategy.eligible_actions == ("respond_direct",)
+    assert strategy.chosen_probability is None
+    assert strategy.action_probabilities == {}
+    assert strategy.ope_eligible is False
+    assert strategy.ope_ineligible_reason == OpeEligibilityReason.MISSING_PROPENSITY.value
+    assert strategy.metadata["alternative_authorization"] == "not_established"
+    assert "verification_policy_snapshot" not in strategy.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corruption", [
+    {"source_decision_id": "another-decision"},
+    {"source_policy_version": "another-version"},
+    {"execution_eligibility_established": True},
+    {"randomized_selection": True},
+    {"ope_eligible": True},
+])
+async def test_untrusted_or_inconsistent_policy_probe_is_not_recorded(corruption):
+    store = InMemoryTrajectoryStore()
+    runtime = _runtime(store)
+    trajectory = _trajectory()
+    probe = {
+        "schema_version": "response_strategy_policy_probe_v1",
+        "source_decision_id": "policy-scoped",
+        "source_policy_version": "v2",
+        "selected_action": "respond_direct",
+        "policy_permitted_actions": ["respond_direct"],
+        "execution_eligibility_established": False,
+        "randomized_selection": False,
+        "ope_eligible": False,
+        **corruption,
+    }
+    await runtime._record_learning_decision(
+        trajectory,
+        ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id="policy-scoped",
+            policy_version="v2",
+            policy_constraints={"response_strategy_policy_probe": probe},
+        ),
+    )
+    snapshots = store.list_feature_snapshots(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    rows = store.list_decision_observations(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    assert "response_strategy_policy_probe" not in snapshots[0].metadata
+    assert all(
+        "response_strategy_policy_probe" not in row.metadata for row in rows
+    )
+    assert all(not row.ope_eligible for row in rows)
