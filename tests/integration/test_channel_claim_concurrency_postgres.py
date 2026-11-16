@@ -784,7 +784,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             credential_handle="vault://whatsapp-one", revision=1, enabled=True,
         )
         provider_id = "wamid.delayed-send-42"
-        recipient_id = "room"
+        recipient_id = "15551234567"
 
         def signed_status(
             state: ChannelDeliveryState, *, recipient=recipient_id,
@@ -810,7 +810,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             """INSERT INTO public.channel_outbox
                (delivery_id,tenant_id,connection_id,inbox_id,destination_id,
                 idempotency_key,message_kind,message_text)
-               VALUES ($1,$2,$3,$4,'room','status-receipt-test','text','answer')""",
+               VALUES ($1,$2,$3,$4,'15551234567','status-receipt-test','text','answer')""",
             next_delivery, tenant_a, connection_id, inbox,
         )
         delivered_early = signed_status(ChannelDeliveryState.DELIVERED)
@@ -921,7 +921,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                    (delivery_id,tenant_id,connection_id,inbox_id,destination_id,
                     idempotency_key,message_kind,message_text,
                     status,provider_message_id,attempt_count)
-                   VALUES ($1,$2,$3,$4,'room','duplicate-provider-id','text',
+                   VALUES ($1,$2,$3,$4,'15551234567','duplicate-provider-id','text',
                            'answer','sent',$5,1)""",
                 extra_delivery, tenant_a, connection_id, extra_inbox, provider_id,
             )
