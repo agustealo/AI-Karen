@@ -454,3 +454,44 @@ governed recovery design; a claim expiry alone never authorizes a retry.
 No cross-tenant bot ownership transfer is provided. An external operator
 could change Telegram's webhook after any observation, so real inbound
 and outbound acceptance remains mandatory before declaring the channel live.
+
+## Operator-recovered inbound backlog
+
+Telegram's signed native webhook ingress acknowledges a message only after
+durable admission. If the process-local worker is unavailable or at capacity,
+SQL retains the receipt; the HTTP response does **not** mean a model answer
+was executed or delivered.
+
+Karen already has a canonical tenant-RLS pending/expired inbox reader,
+atomic `claim_inbound` lease, authorized ChatRuntime execution service,
+and outbound delivery worker. Operators may now invoke this existing recovery
+path through the authenticated Channels API:
+
+`POST /api/channels/personal/operator/telegram/connections/{connection_id}/inbox/recover`
+
+The body contains only `{"expected_revision": 2, "limit": 100}`.
+`limit` must be between 1 and 100 inclusive. The endpoint derives tenant
+and operator identity from the authenticated session, verifies a currently
+enabled Telegram connection and exact revision, and obtains a fresh
+`channel.recover` RuntimePolicy authorization. ChannelHost independently
+rechecks authorization and revision before reading the SQL inbox. A second
+connection read after discovery rejects lifecycle changes before scheduling.
+
+Only the bounded, previously committed and eligible receipts enter Karen's
+existing `ChannelInboxWorker`. The worker must still acquire its own atomic
+SQL claim, revalidate linked sender/principal, invoke the canonical
+ChatRuntime, commit the delivery outbox under the active lease, obtain a fresh
+outbound authorization, and receive a provider result.
+
+The response contains `scheduled_count` plus
+`execution_verified=false`, `provider_delivery_verified=false`,
+and `live_connected=false`. Scheduling is not a model or transport success.
+No incoming body, sender, provider URL, token, alternate plugin, or model
+routing choice can be supplied to this endpoint.
+
+This is **not automatic startup replay**. It cannot rescue a disabled
+connection, revoked principal or identity binding, uncommitted message, or
+ambiguous outbound delivery. Idempotent SQL claims continue to prevent
+concurrent recovery workers from executing the same inbox receipt twice.
+An observed signed inbound-to-provider-confirmed outbound round trip remains
+a separate live acceptance gate.
