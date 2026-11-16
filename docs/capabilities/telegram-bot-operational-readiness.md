@@ -153,3 +153,36 @@ placed in plugin health reports or ordinary logs. A failed or malformed
 inspection denies with a generic error. The canonical Channels host will need
 a separately authorized, read-only projection before these results can appear
 in consumer UI. This slice intentionally adds no public endpoint.
+
+## Governed operator provisioning API
+
+An authenticated and verified administrative actor may request a **disabled**
+Telegram connection through the existing Channels ingress:
+
+`POST /api/channels/personal/operator/telegram/connections`
+
+The body contains only `provider_account_id` (the operator's nonsecret
+account label) and `credential_handle` in canonical
+`vault://<lowercase-UUID>` form. Do **not** put the Telegram Bot API token,
+webhook signing secret, tenant, actor, permissions, or activation flags into
+the request body. The referenced credential must already be stored in the
+canonical Identity Vault with the Telegram installation's required secret
+types and tenant access controls.
+
+The route derives tenant and user from the authenticated Karen session, issues
+a fresh `channel.provision` plan via the canonical activation service, and
+delegates all credential authorization and SQL creation to that service.
+Successful HTTP 201 contains only `connection_id`,
+`installation_id=telegram-bot`, `enabled=false`, `revision=1`,
+and `operational=false`. It does not attach an owner, activate a bot,
+register the Telegram webhook, or imply any provider delivery acceptance.
+
+A 403 means provisioning was not authorized. Provider, database, Vault, or
+unexpected response failures do not leak the credential handle or raw
+provider error. A request can create no operational Telegram transport
+without separate activation, live provider identity verification, webhook
+registration, identity-linking, and full round-trip acceptance.
+
+The path reuses the already registered Channels router and does not create
+a parallel administrative service. Later operator UI should use this same
+endpoint and display the returned disabled status without inferring health.
