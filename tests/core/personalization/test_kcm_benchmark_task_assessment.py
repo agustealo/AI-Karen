@@ -592,13 +592,19 @@ async def test_future_dated_benchmark_is_not_credible(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_unconfigured_ttl_never_asserts_freshness(tmp_path):
+async def test_canonical_default_evidence_age_is_enforced(tmp_path):
+    from ai_karen_engine.config.learning import get_learning_settings
+
     manifest, receipt, store, _ = await fixture(tmp_path)
     result = await inspect(tmp_path, manifest, receipt, store)
     assert result.health is KcmBenchmarkAssessmentHealth.MEASURED
-    assert result.freshness_verified is False
-    assert result.expires_at is None
-    assert "freshness_window_unenforced" in result.reason_codes
+    assert result.freshness_verified is True
+    assert result.evaluated_at is not None
+    assert result.expires_at is not None
+    assert (
+        result.expires_at - result.evaluated_at
+    ).total_seconds() == get_learning_settings().kcm_benchmark_max_evidence_age_seconds
+    assert "freshness_window_verified" in result.reason_codes
     assert result.curated_oracle_source_verified is False
 
 
@@ -630,6 +636,25 @@ def test_invalid_configured_age_budget_rejected(tmp_path):
                 minimum_cases=1, maximum_cases=10,
                 max_evidence_age_seconds=value,
             )
+
+
+def test_central_learning_config_rejects_invalid_evidence_ttl(monkeypatch):
+    from ai_karen_engine.config.learning import LearningSettings
+
+    assert LearningSettings().kcm_benchmark_max_evidence_age_seconds == 2_592_000
+    for bad in (0, -1, 31_536_001, True, 1.5):
+        with pytest.raises(ValueError, match="evidence age"):
+            LearningSettings(kcm_benchmark_max_evidence_age_seconds=bad)
+    monkeypatch.setenv("KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS", "180")
+    settings = LearningSettings()
+    settings.apply_env_overrides()
+    assert settings.kcm_benchmark_max_evidence_age_seconds == 180
+    monkeypatch.setenv("KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS", "wrong")
+    with pytest.raises(ValueError, match="numeric"):
+        LearningSettings().apply_env_overrides()
+    monkeypatch.setenv("KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS", "0")
+    with pytest.raises(ValueError, match="evidence age"):
+        LearningSettings().apply_env_overrides()
 
 
 def test_benchmark_bounds_are_explicit_and_validated(tmp_path):
