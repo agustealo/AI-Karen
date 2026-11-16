@@ -424,10 +424,14 @@ class TelegramProvisionRequest(BaseModel):
             not self.provider_account_id.strip()
             or self.provider_account_id != self.provider_account_id.strip()
             or not self.credential_handle.startswith("vault://")
-            or any(character.isspace() for character in self.credential_handle)
-            or ":" in self.credential_handle[len("vault://"):]
         ):
             raise ValueError("Valid provider identity and Vault reference required")
+        try:
+            handle_id = UUID(self.credential_handle[len("vault://"):])
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("Canonical Vault credential reference required") from None
+        if self.credential_handle != "vault://" + str(handle_id):
+            raise ValueError("Canonical Vault credential reference required")
         return self
 
 
