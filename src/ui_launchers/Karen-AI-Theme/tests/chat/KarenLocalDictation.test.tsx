@@ -179,6 +179,61 @@ describe("local dictation composer acceptance with controlled browser devices", 
     }
   });
 
+  it("holds the exact recorder until delayed onstop so a rapid restart cannot lose dictation", async () => {
+    vi.mocked(apiClient.transcribeLocalAudio).mockResolvedValue({
+      text: "delayed stop", engine: "faster-whisper-local", language: "en",
+    });
+    render(<KarenLocalDictationCapture port={port} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    const old = Recorder.instances[0];
+    // Real browsers do not guarantee onstop runs synchronously with stop().
+    old.stop = () => {
+      old.state = "inactive";
+      old.ondataavailable?.({ data: new Blob(["captured"]) });
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Stop local dictation" }));
+    await screen.findByText("Finalizing local recording…");
+    const start = screen.getByRole("button", { name: "Start local dictation" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(true);
+    fireEvent.click(start);
+    expect(Recorder.instances).toHaveLength(1);
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+
+    old.onstop?.();
+    await waitFor(() => expect(apiClient.transcribeLocalAudio).toHaveBeenCalledOnce());
+    await waitFor(() => expect(composer.setText).toHaveBeenCalledWith("Existing delayed stop"));
+    expect(stopTrack).toHaveBeenCalled();
+    expect(screen.queryByText("Finalizing local recording…")).toBeNull();
+    await screen.findByRole("button", { name: "Start local dictation" });
+  });
+
+  it("discarding a deferred stop releases the mic and fences its late transcript", async () => {
+    render(<KarenLocalDictationCapture port={port} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start local dictation" }));
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    const old = Recorder.instances[0];
+    old.stop = () => {
+      old.state = "inactive";
+      old.ondataavailable?.({ data: new Blob(["discarded"]) });
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Stop local dictation" }));
+    await screen.findByRole("button", { name: "Discard finalizing local recording" });
+    fireEvent.click(screen.getByRole("button", { name: "Discard finalizing local recording" }));
+    await waitFor(() => expect(stopTrack).toHaveBeenCalled());
+    const start = screen.getByRole("button", { name: "Start local dictation" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(false);
+    fireEvent.click(start);
+    await screen.findByRole("button", { name: "Stop local dictation" });
+    expect(Recorder.instances).toHaveLength(2);
+    old.onstop?.();
+    expect(screen.getByRole("button", { name: "Stop local dictation" })).toBeTruthy();
+    expect(apiClient.transcribeLocalAudio).not.toHaveBeenCalled();
+    expect(composer.setText).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Discard local recording" }));
+  });
+
   it("ignores duplicate recorder stop events without a second transcript upload", async () => {
     vi.mocked(apiClient.transcribeLocalAudio).mockResolvedValue({
       text: "once", engine: "local", language: "en",
