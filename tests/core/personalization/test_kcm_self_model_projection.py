@@ -180,6 +180,29 @@ async def test_verified_principle_reuses_canonical_self_model() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fresh_receipt_timestamped_during_verification_is_valid() -> None:
+    class LiveReader(EvidenceReader):
+        async def verify_many(
+            self, *, tenant_id: str, evidence_refs: tuple[str, ...],
+        ):
+            assert tenant_id == TENANT
+            return {
+                "config-1": replace(
+                    receipt("config-1"),
+                    verified_at=datetime.now(timezone.utc),
+                ),
+            }
+
+    # An implicit inspection instant is captured after the awaited source
+    # returns. A receipt created inside the reader is not a future receipt.
+    result = await projector(LiveReader()).project(
+        model=model(principles=[facet()]), tenant_id=TENANT
+    )
+    assert result.health is SelfModelProjectionHealth.READY
+    assert result.verified_claims == 1
+
+
+@pytest.mark.asyncio
 async def test_capability_requires_independent_review_and_confirmation() -> None:
     original = model(
         principles=[facet()],
