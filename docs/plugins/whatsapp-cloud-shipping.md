@@ -41,3 +41,47 @@ These are operator requirements, **not an assertion that the current deployment 
 When an adapter passes the ship gate, copy the **exact reviewed source files** and manifest into `free_plugins/essential/<id>`, record a provenance/CI evidence receipt, verify source/free tree content parity and package installation through the governed UI, and publish only after checks pass. Subsequent source changes invalidate the mirrored release until the parity/release check is repeated.
 
 For existing shipped essentials, any divergence between a preinstalled source and a free copy is **release drift** to audit and reconcile, not a reason to choose the free directory as runtime authority.
+
+## KWA-01B source implementation: signed batches and durable status evidence
+
+The canonical WhatsApp adapter now normalizes multiple signed \`entry[].changes[]\`,
+\`messages[]\`, and \`statuses[]\` into one bounded typed transport batch. The
+existing \`ChannelIngressService\` verifies one raw native signature and checks
+installation, tenant, connection revision and capabilities before processing.
+Only text events reach the durable inbox. Unsupported media/event types are
+counted and ignored, never converted to prompts; malformed or cross-phone
+payloads are denied. A \`/link\` proof cannot share a batch with another event.
+
+Migration \`54_channel_provider_status_ledger\` adds a tenant-FORCE-RLS status
+evidence ledger, keyed by an adapter-derived idempotency digest of Meta's
+signed message ID, recipient, state and timestamp. Meta does **not** supply a
+globally unique status event ID; the hash is an internal deduplication key,
+not a native ID or an alternative signature. Signed statuses contain no Karen
+user identity and do not execute ChatRuntime, user plugins, or sends.
+
+The canonical SQL repository stages status-before-send observations, then
+checks matching tenant + connection + current revision + original inbox
+revision + provider message ID + recipient before advancing a finalized
+outbox. It never changes \`accepted\` into success. Once a verified provider
+send is finalized, pending signed receipts may advance \`sent\` to \`delivered\`
+or \`read\`. Out-of-order \`sent\` and contradictory lower-confidence
+\`failed\` observations cannot reduce \`read\`. A terminal \`failed\` row is
+not reopened. The unique scoped provider-message index fails a migration
+rather than allowing ambiguous attribution. A POST webhook returns 202 only
+after every supported event is committed; partial failures are retried safely
+through unique inbox IDs and status receipt digests. An HTTP 202 is only
+**durable admission**, never proof of ChatRuntime success or provider delivery.
+
+**Still blocked:** production data migration rollout and review of existing
+duplicate provider message IDs; a governed retention/cleanup policy for
+unmatched status receipts; status events received after connection
+deactivation; real Meta test-number signature interop, delayed read/failure
+events, and live signed-in end-to-end acceptance. All remain required before
+shipping the canonical source to the \`free_plugins\` release mirror. Do
+not infer real provider status from source tests alone.
+
+Proof in existing plugin gates:
+\`pytest -q tests/extensions/test_whatsapp_cloud_transport.py
+tests/extensions/test_channel_ingress_service.py
+tests/extensions/test_channel_delivery_repository.py
+tests/integration/test_channel_claim_concurrency_postgres.py\`.
