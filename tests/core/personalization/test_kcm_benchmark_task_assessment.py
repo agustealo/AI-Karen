@@ -58,13 +58,16 @@ def model_id(tenant: str = TENANT) -> str:
     )
 
 
-def outcome(case: int, model: MLModelManifest, *, correct: bool) -> PredictionOutcome:
+def outcome(
+    case: int, model: MLModelManifest, *, correct: bool,
+    prediction_feature: str | None = None,
+) -> PredictionOutcome:
     prediction = Prediction(
         task=TASK,
         label="verified-expected" if correct else "different",
         model_id=model.model_id,
         model_version=model.model_version,
-        feature_version=model.feature_version,
+        feature_version=prediction_feature or model.feature_version,
         probability=0.8,
         confidence=0.8,
         fallback_used=False,
@@ -86,6 +89,7 @@ async def fixture(
     root: Path,
     *,
     verdicts: tuple[bool, ...] = (True, True, False),
+    prediction_feature: str | None = None,
 ):
     artifact = root / "actual-model.bin"
     artifact.write_bytes(b"trusted-model-artifact-for-scoped-tests")
@@ -115,7 +119,10 @@ async def fixture(
         fallback_count=0,
         abstention_count=0,
         outcomes=[
-            outcome(index, manifest, correct=correct)
+            outcome(
+                index, manifest, correct=correct,
+                prediction_feature=prediction_feature,
+            )
             for index, correct in enumerate(verdicts)
         ],
     )
@@ -205,6 +212,22 @@ async def test_same_receipt_is_deterministic(tmp_path):
     first = await inspect(tmp_path, manifest, receipt, store)
     second = await inspect(tmp_path, manifest, receipt, store)
     assert first == second
+
+
+@pytest.mark.asyncio
+async def test_legacy_feature_receipt_survives_but_is_not_kcm_evidence(tmp_path):
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, prediction_feature="legacy-predictor-default-v1",
+    )
+    with sqlite3.connect(tmp_path / "benchmark_evidence.sqlite3") as db:
+        data = db.execute(
+            "SELECT evidence_json FROM benchmark_receipts WHERE receipt_id=?",
+            (receipt,),
+        ).fetchone()[0]
+    assert "kcm_case_receipt_version" not in data
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert result.general_skill_certified is False
 
 
 @pytest.mark.asyncio
