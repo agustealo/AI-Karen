@@ -95,6 +95,17 @@ async def test_real_kcm_rls_revocation_concurrency_and_erasure() -> None:
         assert await provision(tenant_b, user_b) == 0
         assert await provision(tenant_a, user_c) == 0
 
+        # Even a privileged caller with matching transaction parameters
+        # cannot manufacture a cross-tenant user membership.
+        with pytest.raises(asyncpg.CheckViolationError):
+            await provision(tenant_a, user_b)
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute(
+                "INSERT INTO public.kcm_training_scope_state "
+                "(tenant_id,user_id) VALUES($1,$2)",
+                tenant_b, user_a,
+            )
+
         blocked = await conn.fetchval(
             "SELECT training_authorized FROM public.kcm_training_scope_state "
             "WHERE tenant_id=$1 AND user_id=$2",
