@@ -1960,6 +1960,115 @@ class SqlChannelRepository:
             )
             return result.scalar_one_or_none() is not None
 
+    async def prune_unmatched_provider_statuses(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int, retention_days: int,
+        limit: int, dry_run: bool,
+    ) -> int:
+        """Explicitly prune only old unmatched Meta evidence under tenant RLS.
+
+        Matched deliveries and any potential in-flight claim are excluded.
+        Digest-only tombstones prevent ordinary webhook retries from reviving
+        purged phone/provider metadata. The host, not this DB adapter, owns
+        operator RBAC, RuntimePolicy, configuration and audit admission.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Connection scope required for status retention")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Valid connection revision required for retention")
+        if type(retention_days) is not int or not 30 <= retention_days <= 3650:
+            raise ValueError("Status retention must be 30..3650 days")
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("Status retention batch must be 1..1000")
+        if type(dry_run) is not bool:
+            raise ValueError("Status retention dry-run must be a boolean")
+
+        # Never interpolate caller SQL. The two modes share one eligibility
+        # predicate; only the destructive mode takes row locks.
+        candidate_sql = """
+            WITH candidates AS MATERIALIZED (
+                SELECT e.tenant_id, e.connection_id, e.receipt_id,
+                       e.event_digest, e.created_at
+                FROM public.channel_provider_status_events e
+                JOIN public.channel_connections c
+                  ON c.tenant_id = e.tenant_id
+                 AND c.connection_id = e.connection_id
+                WHERE e.tenant_id = CAST(:tenant AS uuid)
+                  AND e.connection_id = :connection
+                  AND c.installation_id = 'whatsapp-cloud'
+                  AND c.revision = :revision
+                  AND e.created_at <
+                      clock_timestamp() - make_interval(days => :retention_days)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.channel_outbox o
+                      WHERE o.tenant_id = e.tenant_id
+                        AND o.connection_id = e.connection_id
+                        AND o.provider_message_id = e.provider_message_id
+                        AND o.destination_id = e.recipient_id
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.channel_outbox active
+                      WHERE active.tenant_id = e.tenant_id
+                        AND active.connection_id = e.connection_id
+                        AND active.destination_id = e.recipient_id
+                        AND active.claim_token IS NOT NULL
+                        AND active.claim_expires_at > clock_timestamp()
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.channel_provider_status_tombstones t
+                      WHERE t.tenant_id = e.tenant_id
+                        AND t.connection_id = e.connection_id
+                        AND t.receipt_id = e.receipt_id
+                  )
+                ORDER BY e.created_at, e.receipt_id
+                LIMIT :limit
+        """
+        # The lock applies only to the original status rows. Concurrent
+        # cleanup workers skip rather than competing for the same receipt.
+        candidate_sql += (
+            " FOR UPDATE OF e SKIP LOCKED\n"
+            if not dry_run else "\n"
+        )
+        candidate_sql += ")\n"
+        if dry_run:
+            sql = candidate_sql + "SELECT COUNT(*) FROM candidates"
+        else:
+            sql = candidate_sql + """
+                , archived AS (
+                    INSERT INTO public.channel_provider_status_tombstones (
+                        tenant_id, connection_id, receipt_id, event_digest,
+                        source_created_at
+                    )
+                    SELECT tenant_id, connection_id, receipt_id, event_digest,
+                           created_at
+                    FROM candidates
+                    ON CONFLICT (tenant_id, connection_id, receipt_id)
+                    DO NOTHING
+                    RETURNING tenant_id, connection_id, receipt_id
+                ), deleted AS (
+                    DELETE FROM public.channel_provider_status_events e
+                    USING archived t
+                    WHERE e.tenant_id = t.tenant_id
+                      AND e.connection_id = t.connection_id
+                      AND e.receipt_id = t.receipt_id
+                    RETURNING e.receipt_id
+                )
+                SELECT COUNT(*) FROM deleted
+            """
+        async with async_transaction_scope(tenant_id) as session:
+            count = (await session.execute(
+                text(sql),
+                {
+                    "tenant": tenant_id,
+                    "connection": connection_id,
+                    "revision": expected_revision,
+                    "retention_days": retention_days,
+                    "limit": limit,
+                },
+            )).scalar_one()
+        return int(count)
+
     @staticmethod
     def _status_event_digest(status: ChannelProviderStatusEvent) -> str:
         """Canonical exact-replay digest of already signed Meta status fields."""
