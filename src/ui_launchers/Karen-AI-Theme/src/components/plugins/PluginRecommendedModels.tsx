@@ -59,6 +59,7 @@ type DownloadJob = {
   requested_by?: string | null;
 };
 type DownloadReceipt = { job_id: string; status: string };
+type OwnedJobsResponse = { jobs: DownloadJob[]; scope: "authenticated_user" };
 
 const IMMUTABLE_REVISION = /^[a-f0-9]{40,64}$/i;
 const ACTIVE = new Set(["queued", "running", "promoting", "paused", "pause_requested"]);
@@ -113,14 +114,15 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         apiClient.get<RecommendationResponse>("/api/models/download/recommendations"),
         apiClient.get<DownloadPolicy>("/api/models/download/policy"),
         apiClient.get<DownloadChannelsResponse>("/api/models/download/channels"),
-        apiClient.get<DownloadJob[]>("/api/models/download/jobs?limit=200"),
+        apiClient.get<OwnedJobsResponse>("/api/runtime/model-library/my-downloads?limit=200"),
       ]);
       if (generation !== epoch.current) return;
       if (!Array.isArray(recommended.recommendations) ||
           !recommended.recommendations.every(isModelRecommendation) ||
           !nextPolicy || typeof nextPolicy.master_enabled !== "boolean" ||
           typeof nextPolicy.block_new_downloads !== "boolean" ||
-          !Array.isArray(channelResponse.channels) || !Array.isArray(nextJobs)) {
+          !Array.isArray(channelResponse.channels) ||
+          nextJobs?.scope !== "authenticated_user" || !Array.isArray(nextJobs.jobs)) {
         throw new Error("model_setup_contract_invalid");
       }
       setItems(recommended.recommendations.filter((item) =>
@@ -128,7 +130,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       ));
       setPolicy(nextPolicy);
       setChannels(channelResponse.channels);
-      setJobs(nextJobs);
+      setJobs(nextJobs.jobs);
       // License acceptance must be fresh for the backend-verified revision.
       setAccepted({});
       setState("ready");
@@ -154,7 +156,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
     let cancelled = false;
     const handle = window.setTimeout(() => {
       void apiClient.get<DownloadJob>(
-        `/api/models/download/jobs/${encodeURIComponent(trackedJob.job_id)}`,
+        `/api/runtime/model-library/my-downloads/${encodeURIComponent(trackedJob.job_id)}`,
       ).then((updated) => {
         if (cancelled) return;
         if (updated.job_id !== trackedJob.job_id ||
