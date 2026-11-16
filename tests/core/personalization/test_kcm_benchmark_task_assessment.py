@@ -262,6 +262,16 @@ async def test_artifact_mutation_invalidates_benchmark_evidence(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_retired_model_is_not_a_current_task_capability(tmp_path):
+    manifest, receipt, store, _ = await fixture(tmp_path)
+    registry = MLModelRegistry(registry_dir=str(tmp_path))
+    registry.register(replace(manifest, status=ModelStatus.RETIRED.value))
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert result.general_skill_certified is False
+
+
+@pytest.mark.asyncio
 async def test_old_receipt_without_case_membership_remains_noncertifying(tmp_path):
     manifest, receipt, store, _ = await fixture(tmp_path)
     import json
