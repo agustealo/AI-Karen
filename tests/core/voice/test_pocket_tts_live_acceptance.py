@@ -6,7 +6,7 @@ two operator-supplied environment variables below.
 
 Run against an authorized, already-running local host:
   KAREN_POCKET_ACCEPTANCE_URL=http://127.0.0.1:8000
-  KAREN_POCKET_ACCEPTANCE_TOKEN=...  # set securely, never commit
+  # Supply KAREN_POCKET_ACCEPTANCE_TOKEN in the operator's private environment.
   PYTHONPATH=src pytest -q tests/core/voice/test_pocket_tts_live_acceptance.py
 
 An actual audible Voice Studio/browser session, human listening, approved
