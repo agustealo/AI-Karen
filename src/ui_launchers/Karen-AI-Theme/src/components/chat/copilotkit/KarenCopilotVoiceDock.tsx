@@ -12,6 +12,9 @@ import { AudioLines, RefreshCw, Settings2, ShieldCheck } from "lucide-react";
 
 import { KarenBrowserDictationCapture } from "../KarenBrowserDictationCapture";
 import { KarenLocalDictationCapture } from "../KarenLocalDictationCapture";
+import {
+  stopAssistantPlayback, useAssistantPlaybackPhase,
+} from "../KarenBrowserSpeechPlayback";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
 import type {
@@ -42,6 +45,7 @@ export function KarenCopilotVoiceDock({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const playbackPhase = useAssistantPlaybackPhase();
   const [discovery, setDiscovery] = useState<Discovery>("idle");
   const [listening, setListening] = useState<Listening>("checking");
   const [listenCycle, setListenCycle] = useState(0);
@@ -216,6 +220,20 @@ export function KarenCopilotVoiceDock({
               port={port} onAvailabilityChange={onListeningAvailability} />
           )}
           {!disabled && <KarenBrowserDictationCapture port={port} />}
+          {playbackPhase !== "idle" && (
+            <div data-testid="karen-copilot-active-speech"
+              className="flex min-h-11 items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-2">
+              <span role="status" aria-live="polite" className="text-xs text-foreground">
+                {playbackPhase === "preparing" ? "Preparing speech…" : "Karen is speaking"}
+              </span>
+              <button type="button"
+                onClick={stopAssistantPlayback}
+                aria-label="Stop Karen speech playback"
+                className="min-h-9 rounded-lg bg-background px-3 text-xs font-semibold text-foreground ring-1 ring-border hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">
+                Stop audio
+              </button>
+            </div>
+          )}
           <button type="button"
             aria-expanded={open}
             aria-controls="karen-copilot-voice-options"
