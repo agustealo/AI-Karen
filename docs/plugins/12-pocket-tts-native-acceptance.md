@@ -161,10 +161,12 @@ network-dependent tests if **both** opt-in variables are unset. A skip is
 **not** successful native acceptance. Providing only one variable is an
 error, never an invitation to fall back to mock speech.
 
-The live tests require an anonymous user to be denied, an authenticated
-catalog to report Pocket ready at the exact reviewed model revision, an
-approved real voice, a real `POST /api/voice/engines/pocket-tts/synthesis`
-with the selected voice and fixed harmless phrase, real non-silent PCM frames,
+The live tests require both anonymous catalog and anonymous synthesis to
+be denied, an authenticated catalog to report Pocket ready at the exact
+reviewed model revision, an invented voice to be rejected without substitute,
+an approved real voice, a real
+`POST /api/voice/engines/pocket-tts/synthesis` with the selected voice and
+fixed harmless phrase, real non-silent PCM frames,
 correct mono PCM16 WAV properties, and a private no-store transport response.
 They report only model/voice IDs and duration/latency/real-time factor metadata;
 they do not save audio, text, paths or the bearer token. The target CPU/RAM
