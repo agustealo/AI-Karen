@@ -7,6 +7,8 @@ These tests cannot substitute for real token/session-revocation integration.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -126,3 +128,30 @@ def test_route_is_mounted_in_existing_admin_training_owner():
     assert "require_permission(Permission.VERIFICATION_REVIEW)" in Path(
         "src/ai_karen_engine/api_routes/admin/verification_reviews.py"
     ).read_text()
+
+
+def test_admin_training_import_does_not_eagerly_import_scipy() -> None:
+    script = """
+import sys
+class BlockSciPy:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "scipy" or fullname.startswith("scipy."):
+            raise ImportError("SciPy must not be loaded for reviewer ingress")
+sys.meta_path.insert(0, BlockSciPy())
+from ai_karen_engine.api_routes.admin.training import router
+from ai_karen_engine.core.intelligence.ml.policy_evaluation import PolicyObservation
+assert PolicyObservation is not None
+assert any(
+    route.path == "/admin/training/verification/reviews/"
+    for route in router.routes
+)
+assert "scipy" not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
