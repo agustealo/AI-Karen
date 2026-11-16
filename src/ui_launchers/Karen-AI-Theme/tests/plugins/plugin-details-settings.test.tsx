@@ -46,6 +46,40 @@ describe('Plugin details settings affordance', () => {
     expect(screen.queryByText('Governed settings for settings-test')).toBeNull();
   });
 
+  it('opens the host Voice Studio for a confirmed TTS plugin even without a plugin settings schema', () => {
+    const openVoiceStudio = vi.fn();
+    render(
+      <PluginDetailsModal
+        open
+        onOpenChange={vi.fn()}
+        onOpenVoiceStudio={openVoiceStudio}
+        details={{
+          installed: true,
+          plugin: { ...plugin, id: 'pocket-tts', display_name: 'Pocket TTS', settings_available: false },
+        }}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Configure' })).toBeNull();
+    const openButton = screen.getByRole('button', { name: 'Open Voice Studio for Pocket TTS' });
+    fireEvent.click(openButton);
+    expect(openVoiceStudio).toHaveBeenCalledOnce();
+  });
+
+  it('does not claim a Voice Studio action for a plugin without backend TTS evidence', () => {
+    render(
+      <PluginDetailsModal
+        open
+        onOpenChange={vi.fn()}
+        details={{
+          installed: true,
+          plugin: { ...plugin, id: 'not-tts', settings_available: false },
+        }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /Open Voice Studio/ })).toBeNull();
+  });
+
   it('does not invent a settings form when backend reports no schema', () => {
     render(
       <PluginDetailsModal
