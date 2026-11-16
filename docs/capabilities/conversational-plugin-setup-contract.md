@@ -116,6 +116,59 @@ input or operator approval, and what it could actually do. Never assert
 evidence. If safe UI input is unavailable, provide a supported setup action
 without requesting raw credentials in chat.
 
+
+## System-wide interaction invariant (KPLUG-CONV-01A)
+
+This is a core Karen behavior, independent of Telegram and independent of
+whether a plugin has a dedicated screen. User intent is interpreted once in
+CORTEX and handed to ChatRuntime. Every plugin target, role, capability and
+installation state comes from the registered PluginKernel manifest, not a
+per-plugin natural-language alias table or a UI-only route.
+
+The generic request family includes:
+
+- Discover: "Show my plugins" / "Which installed plugins can I use to write articles?"
+- Setup/resume: "Set up my X" / "Continue configuring X"
+- Inspect: "Is my X ready?" / "What can my X plugin do?"
+- Manage: "Enable X plugin" / "Disable X" / "Uninstall X"
+- Use: "Use my X plugin to perform Y"
+
+At the **read-only** KPLUG-CONV-01A stage, all these user requests resolve to
+a single plugin.inspect preflight. That capability authorizes only inspection,
+never a lifecycle mutation or execution. The requested operation/action is
+returned separately and explicitly marked **not executed**. The presence of a
+manifest or successful preflight is not proof that a requested plugin task
+happened. Missing and ambiguous matches must be reported as such.
+
+The next runtime stage must dispatch using existing owners, not Telegram
+branches in ChatRuntime:
+
+| Declared manifest family | Operational authority |
+| --- | --- |
+| General plugin actions and schemas | PluginService -> PluginKernel -> ExtensionExecutionService |
+| Communication transports | ChannelHost / ChannelActivationService, with durable SQL ownership |
+| Voice/STT/TTS plugin engines | VoiceRuntime engine catalog and governed synthesizer/transcriber |
+| Future specialized plugin families | Their registered canonical host adapter, not an additional chat router |
+
+Every path shares authenticated tenant/user/session, RuntimePolicy, manifest
+RBAC, fresh action-scoped approval, schema validation, Vault-safe credential
+handoff, persisted receipts and audit. Feature declarations are useful for
+discovery but do not establish engine health, account ownership, active consent,
+remote provider success, or live functionality.
+
+A plugin may be installed and enabled while its operator role is unavailable
+to the current user. A manifest-specified role match is only preliminary
+eligibility; the plugin still cannot execute until the canonical action gate
+grants an independently authorized plan. Unknown or unsupported capabilities
+must never become model-generated claims of completion.
+
+**Proof:** tests must be deliberately provider-neutral, covering arbitrary
+newly registered general plugins, declared voice features, channel-host-only
+features, role-denied requests, generic management/use intents, unknown or
+ambiguous manifests, and zero side effects during preflight. These tests must
+be invoked by exact-head CI, not merely checked into the repository.
+
+
 ## General plugin interaction contract
 
 Conversational setup is only one use case. A user can also ask Karen to
