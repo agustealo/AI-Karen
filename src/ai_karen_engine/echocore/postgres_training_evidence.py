@@ -17,11 +17,15 @@ from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.platform.memory.postgres.consent_filter import recallable_memory_event
-from ai_karen_engine.platform.memory.postgres.ledger_models import ConsentScope, MemoryEvent
+from ai_karen_engine.platform.memory.postgres.ledger_models import (
+    ConsentScope,
+    MemoryAssertion,
+    MemoryEvent,
+)
 
 from .training_admission import VerifiedTrainingEvidence
 
@@ -136,12 +140,24 @@ class PostgresTrainingEvidenceResolver:
                 stored_digest, digest
             ):
                 return None
+            # NeuroVault stores a parent memory/assertion ID, not normally
+            # the ledger event UUID. Preserve owner-scoped legacy event-ID
+            # references while resolving the canonical assertion identity.
             superseding_event = (
                 await session.execute(
                     select(MemoryEvent.event_id).where(
                         MemoryEvent.tenant_id == tenant,
                         MemoryEvent.user_id == user,
-                        MemoryEvent.supersedes == source,
+                        or_(
+                            MemoryEvent.supersedes == source,
+                            MemoryEvent.supersedes.in_(
+                                select(MemoryAssertion.assertion_id).where(
+                                    MemoryAssertion.event_id == source,
+                                    MemoryAssertion.tenant_id == tenant,
+                                    MemoryAssertion.user_id == user,
+                                )
+                            ),
+                        ),
                     ).limit(1)
                 )
             ).scalar_one_or_none()
