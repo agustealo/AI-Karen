@@ -164,7 +164,7 @@ CREATE FUNCTION kcm_internal.kcm_revoke_training_source(
 ) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public AS $kcm_revoke$
 DECLARE v_epoch bigint;
-DECLARE v_existing bigint;
+        v_existing bigint;
 BEGIN
     IF p_tenant_id IS DISTINCT FROM
         NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
