@@ -10,7 +10,8 @@ from typing import Any, Mapping, Protocol
 import httpx
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection, ChannelDeliveryReceipt, ChannelDeliveryRequest,
-    ChannelDeliveryState, InboundChannelEvent,
+    ChannelDeliveryState, ChannelProviderStatusEvent, ChannelWebhookBatch,
+    InboundChannelEvent,
 )
 from ai_karen_engine.extensions.platform.core.host.base import (
     ExtensionBase, HookContext, HookPoint,
@@ -153,56 +154,156 @@ class MainExtension(ExtensionBase):
         ).hexdigest()
         return hmac.compare_digest(values[0], f"sha256={digest}")
 
+    @staticmethod
+    def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        record: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in record:
+                raise ValueError("Duplicate WhatsApp webhook JSON key")
+            record[key] = value
+        return record
+
+    async def normalize_events(
+        self, *, connection: ChannelConnection,
+        headers: Mapping[str, str], body: bytes,
+    ) -> ChannelWebhookBatch:
+        """Parse a bounded signed Meta delivery with no authority over identity.
+
+        The host verifies the original byte signature *before* calling this
+        normalizer. Unsupported media/events become ignored observations, never
+        prompts; invalid phone/account scope rejects the entire callback.
+        """
+        self._require_active(connection)
+        if not body or len(body) > _MAX_BODY:
+            raise ValueError("Invalid WhatsApp webhook size")
+        try:
+            payload = json.loads(body, object_pairs_hook=self._unique_json_object)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Malformed WhatsApp webhook JSON") from exc
+        if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
+            raise ValueError("Not a WhatsApp Business webhook")
+        entries = payload.get("entry")
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 16:
+            raise ValueError("Invalid WhatsApp webhook entry count")
+        credentials = await self._credentials(connection)
+        messages: list[InboundChannelEvent] = []
+        statuses: list[ChannelProviderStatusEvent] = []
+        ignored = 0
+        changes_seen = 0
+        for entry in entries:
+            changes = entry.get("changes") if isinstance(entry, dict) else None
+            if not isinstance(changes, list) or not 1 <= len(changes) <= 16:
+                raise ValueError("Invalid WhatsApp webhook changes")
+            changes_seen += len(changes)
+            if changes_seen > 32:
+                raise ValueError("Too many WhatsApp webhook changes")
+            for change in changes:
+                if not isinstance(change, dict):
+                    raise ValueError("Malformed WhatsApp webhook change")
+                if change.get("field") != "messages":
+                    ignored += 1
+                    continue
+                data = change.get("value")
+                if not isinstance(data, dict):
+                    raise ValueError("Malformed WhatsApp message container")
+                metadata = data.get("metadata")
+                if (
+                    data.get("messaging_product") != "whatsapp"
+                    or not isinstance(metadata, dict)
+                    or metadata.get("phone_number_id") != credentials["phone_number_id"]
+                ):
+                    raise ValueError("WhatsApp phone account mismatch")
+                native_messages = data.get("messages", [])
+                native_statuses = data.get("statuses", [])
+                if not isinstance(native_messages, list) or not isinstance(native_statuses, list):
+                    raise ValueError("Invalid WhatsApp message or status array")
+                if len(native_messages) + len(native_statuses) > 100:
+                    raise ValueError("WhatsApp webhook event count exceeds limit")
+                if not native_messages and not native_statuses:
+                    ignored += 1
+                for item in native_messages:
+                    if not isinstance(item, dict):
+                        raise ValueError("Malformed WhatsApp message")
+                    if item.get("type") != "text":
+                        ignored += 1
+                        continue
+                    sender, message_id, content = item.get("from"), item.get("id"), item.get("text")
+                    if (
+                        not isinstance(sender, str) or not _PHONE_ID.fullmatch(sender)
+                        or not isinstance(message_id, str)
+                        or not message_id.startswith("wamid.") or len(message_id) > 256
+                        or not isinstance(content, dict)
+                        or not isinstance(content.get("body"), str)
+                        or not (0 < len(content["body"]) <= _MAX_TEXT)
+                    ):
+                        raise ValueError("Malformed WhatsApp text message")
+                    messages.append(InboundChannelEvent(
+                        connection_id=connection.connection_id,
+                        external_event_id=message_id,
+                        external_sender_id=sender,
+                        external_conversation_id=sender,
+                        message_kind="text",
+                        text=content["body"],
+                    ))
+                for item in native_statuses:
+                    if not isinstance(item, dict):
+                        raise ValueError("Malformed WhatsApp status")
+                    state = item.get("status")
+                    if state not in {"sent", "delivered", "read", "failed"}:
+                        ignored += 1
+                        continue
+                    message_id = item.get("id")
+                    recipient = item.get("recipient_id")
+                    timestamp = item.get("timestamp")
+                    if (
+                        not isinstance(message_id, str)
+                        or not message_id.startswith("wamid.") or len(message_id) > 256
+                        or not isinstance(recipient, str) or not _PHONE_ID.fullmatch(recipient)
+                        or not isinstance(timestamp, str)
+                        or not 1 <= len(timestamp) <= 12 or not timestamp.isascii()
+                        or not timestamp.isdigit()
+                    ):
+                        raise ValueError("Malformed WhatsApp provider receipt")
+                    timestamp_number = int(timestamp)
+                    if not 1 <= timestamp_number <= 4102444800:
+                        raise ValueError("Invalid WhatsApp provider timestamp")
+                    # Meta status webhooks have no guaranteed unique event ID.
+                    # Derive a repeatable digest from validated signed fields.
+                    identity = {
+                        "message_id": message_id,
+                        "recipient": recipient,
+                        "state": state,
+                        "timestamp": timestamp_number,
+                    }
+                    receipt_id = hashlib.sha256(
+                        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("ascii")
+                    ).hexdigest()
+                    statuses.append(ChannelProviderStatusEvent(
+                        connection_id=connection.connection_id,
+                        provider_message_id=message_id,
+                        recipient_id=recipient,
+                        state=ChannelDeliveryState(state),
+                        provider_timestamp=timestamp_number,
+                        provider_receipt_id=receipt_id,
+                        error_code="whatsapp_provider_failed" if state == "failed" else None,
+                    ))
+                if len(messages) + len(statuses) + ignored > 100:
+                    raise ValueError("WhatsApp webhook event count exceeds limit")
+        return ChannelWebhookBatch(
+            messages=tuple(messages), statuses=tuple(statuses), ignored_count=ignored,
+        )
+
     async def normalize_event(
         self, *, connection: ChannelConnection,
         headers: Mapping[str, str], body: bytes,
     ) -> InboundChannelEvent:
-        self._require_active(connection)
-        if not body or len(body) > _MAX_BODY:
-            raise ValueError("Invalid WhatsApp event size")
-        try:
-            payload = json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("Malformed WhatsApp event JSON") from exc
-        if not isinstance(payload, dict) or payload.get("object") != "whatsapp_business_account":
-            raise ValueError("Not a WhatsApp Business webhook")
-        entries = payload.get("entry")
-        if not isinstance(entries, list) or len(entries) != 1:
-            raise ValueError("Require exactly one WhatsApp webhook entry")
-        changes = entries[0].get("changes") if isinstance(entries[0], dict) else None
-        if not isinstance(changes, list) or len(changes) != 1 or not isinstance(changes[0], dict):
-            raise ValueError("Require exactly one WhatsApp message change")
-        item = changes[0]
-        data = item.get("value")
-        if item.get("field") != "messages" or not isinstance(data, dict):
-            raise ValueError("Unsupported WhatsApp webhook event")
-        credentials = await self._credentials(connection)
-        metadata = data.get("metadata")
-        if (
-            not isinstance(metadata, dict)
-            or metadata.get("phone_number_id") != credentials["phone_number_id"]
-            or data.get("messaging_product") != "whatsapp"
-        ):
-            raise ValueError("WhatsApp phone account mismatch")
-        messages = data.get("messages")
-        if not isinstance(messages, list) or len(messages) != 1 or not isinstance(messages[0], dict):
-            raise ValueError("WhatsApp status or batch updates are not user messages")
-        message = messages[0]
-        sender, message_id, content = message.get("from"), message.get("id"), message.get("text")
-        if (
-            message.get("type") != "text"
-            or not isinstance(sender, str) or not _PHONE_ID.fullmatch(sender)
-            or not isinstance(message_id, str) or not message_id.startswith("wamid.")
-            or len(message_id) > 256
-            or not isinstance(content, dict) or not isinstance(content.get("body"), str)
-            or not (0 < len(content["body"]) <= _MAX_TEXT)
-        ):
-            raise ValueError("Only direct WhatsApp text messages are supported")
-        return InboundChannelEvent(
-            connection_id=connection.connection_id,
-            external_event_id=message_id, external_sender_id=sender,
-            external_conversation_id=sender, message_kind="text", text=content["body"],
+        """Legacy single-event contract for explicit link/admit methods."""
+        result = await self.normalize_events(
+            connection=connection, headers=headers, body=body,
         )
+        if len(result.messages) != 1 or result.statuses or result.ignored_count:
+            raise ValueError("Single-event admission requires one WhatsApp text")
+        return result.messages[0]
 
     async def send(
         self, *, connection: ChannelConnection, delivery: ChannelDeliveryRequest,
