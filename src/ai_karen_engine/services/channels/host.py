@@ -271,7 +271,12 @@ class ChannelHostServices:
         )
         if current != connection:
             raise PermissionError("Telegram webhook connection changed")
-        result = await register(connection=connection, public_origin=origin)
+        try:
+            result = await register(connection=connection, public_origin=origin)
+        except PermissionError:
+            # Provider/network uncertainty is an unavailable diagnosis, not
+            # an operator authorization failure (HTTP 403).
+            raise RuntimeError("Telegram webhook registration unverified") from None
         fresh = await self.repository.get_enabled_connection(
             tenant_id=tenant_id, connection_id=connection_id,
         )
