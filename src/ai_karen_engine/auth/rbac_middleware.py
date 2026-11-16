@@ -140,6 +140,7 @@ class Permission(str, Enum):
     CHANNEL_RECOVER = "channel.recover"
     CHANNEL_SEND = "channel.send"
     CHANNEL_INSPECT = "channel.inspect"
+    CHANNEL_STATUS_PRUNE = "channel.status_prune"
 
 
 class Role(str, Enum):

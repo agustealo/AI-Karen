@@ -47,6 +47,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             DROP TABLE IF EXISTS public.channel_personal_pairing_state CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_pairing_consents CASCADE;
             DROP TABLE IF EXISTS public.channel_connection_owners CASCADE;
+            DROP TABLE IF EXISTS public.channel_provider_status_tombstones CASCADE;
             DROP TABLE IF EXISTS public.channel_outbox CASCADE;
             DROP TABLE IF EXISTS public.channel_inbox CASCADE;
             DROP TABLE IF EXISTS public.channel_link_challenges CASCADE;
@@ -105,6 +106,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261116030000_56_whatsapp_customer_window_evidence.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(customer_window_migration)
+        status_retention_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261116040000_57_channel_provider_status_retention_tombstones.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(status_retention_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -1231,6 +1237,161 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert not await history_repo.record_deactivated_provider_status(
             connection=history, status=historical_status,
         )
+        # KWA-01C4: tombstone only *unmatched* old Meta status evidence.
+        # Both known historical sends and their delivery/read proofs survive.
+        retention_account = history.model_copy(update={
+            "enabled": True, "revision": 3,
+        })
+        orphan_message = "wamid.unmatched-retention"
+        orphan = ChannelProviderStatusEvent(
+            connection_id=historical_id,
+            provider_message_id=orphan_message,
+            recipient_id=historical_recipient,
+            state=ChannelDeliveryState.DELIVERED,
+            provider_timestamp=1770000020,
+            provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                provider_message_id=orphan_message,
+                recipient_id=historical_recipient,
+                state=ChannelDeliveryState.DELIVERED,
+                provider_timestamp=1770000020,
+            ),
+        )
+        assert await history_repo.record_provider_status(
+            connection=retention_account, status=orphan,
+        )
+        await raw.execute(
+            """UPDATE public.channel_provider_status_events
+               SET created_at = clock_timestamp() - interval '100 days'
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        )
+        candidates = await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            expected_revision=3, retention_days=90, limit=10,
+            dry_run=True,
+        )
+        assert candidates == 1
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        ) == 3
+        assert await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_b), connection_id=historical_id,
+            expected_revision=3, retention_days=90, limit=10,
+            dry_run=False,
+        ) == 0
+        assert await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            expected_revision=4, retention_days=90, limit=10,
+            dry_run=False,
+        ) == 0
+        # Compete a signed replay against pruning while a separate
+        # transaction holds the same scoped advisory lock. Regardless of who
+        # runs first, replay cannot resurrect the scrubbed phone/message.
+        async with raw.transaction():
+            await raw.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"karen:channel-status:{tenant_a}:{historical_id}",
+            )
+            purge_task = asyncio.create_task(
+                history_repo.prune_unmatched_provider_statuses(
+                    tenant_id=str(tenant_a), connection_id=historical_id,
+                    expected_revision=3, retention_days=90, limit=10,
+                    dry_run=False,
+                )
+            )
+            replay_task = asyncio.create_task(
+                history_repo.record_provider_status(
+                    connection=retention_account, status=orphan,
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not purge_task.done()
+            assert not replay_task.done()
+        removed, replayed = await asyncio.gather(purge_task, replay_task)
+        assert removed == 1
+        assert replayed is True
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        ) == 2
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_provider_status_tombstones
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND receipt_id=$3""",
+            tenant_a, historical_id, orphan.provider_receipt_id,
+        ) == 1
+        assert await raw.fetchval(
+            """SELECT event_digest FROM public.channel_provider_status_tombstones
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND receipt_id=$3""",
+            tenant_a, historical_id, orphan.provider_receipt_id,
+        ) == history_repo._status_event_digest(orphan)
+        # A replay of the same signed orphan is acknowledged but cannot
+        # restore either the provider ID or recipient phone number to storage.
+        assert await history_repo.record_provider_status(
+            connection=retention_account, status=orphan,
+        )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        ) == 2
+        with pytest.raises(asyncpg.PostgresError):
+            await raw.execute(
+                """UPDATE public.channel_provider_status_tombstones
+                   SET event_digest=$1 WHERE tenant_id=$2
+                     AND connection_id=$3 AND receipt_id=$4""",
+                "0" * 64, tenant_a, historical_id, orphan.provider_receipt_id,
+            )
+        # A non-superuser gets tenant-visible tombstones only. Even a
+        # deliberately granted DELETE privilege cannot remove audit evidence
+        # because migration 57 deliberately omits a DELETE RLS policy.
+        await raw.execute("CREATE ROLE karen_status_retention_probe NOLOGIN")
+        await raw.execute(
+            "GRANT USAGE ON SCHEMA public TO karen_status_retention_probe"
+        )
+        await raw.execute(
+            "GRANT SELECT, DELETE ON public.channel_provider_status_tombstones "
+            "TO karen_status_retention_probe"
+        )
+        async with raw.transaction():
+            await raw.execute("SET LOCAL ROLE karen_status_retention_probe")
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_a),
+            )
+            assert await raw.fetchval(
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+            ) == 1
+            assert await raw.execute(
+                "DELETE FROM public.channel_provider_status_tombstones "
+                "WHERE tenant_id=$1 AND connection_id=$2",
+                tenant_a, historical_id,
+            ) == "DELETE 0"
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_b),
+            )
+            assert await raw.fetchval(
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+            ) == 0
+        await raw.execute(
+            "REVOKE SELECT, DELETE ON public.channel_provider_status_tombstones "
+            "FROM karen_status_retention_probe"
+        )
+        await raw.execute(
+            "REVOKE USAGE ON SCHEMA public FROM karen_status_retention_probe"
+        )
+        await raw.execute("DROP ROLE karen_status_retention_probe")
+        assert await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            expected_revision=3, retention_days=90, limit=10,
+            dry_run=False,
+        ) == 0
+
         # Remove isolated historical fixture so the test's pre-existing RLS
         # census remains exact, rather than weakening its assertions.
         await raw.execute(
