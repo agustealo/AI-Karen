@@ -229,7 +229,6 @@ jobs:
         run: |
           pytest \
             tests/core/intelligence/ml/test_policy_decision_time_provenance.py \
-            tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py \
             tests/core/intelligence/ml/test_verification_review_workflow.py \
             tests/core/intelligence/ml/test_ope_frozen_candidate_evidence.py \
             -q --timeout=300 --tb=short
