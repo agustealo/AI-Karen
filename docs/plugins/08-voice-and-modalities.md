@@ -299,8 +299,14 @@ another speech service:
   long unspaced text/URLs, without truncation or breaking UTF-16 surrogate
   pairs. Both the browser speaker and the local plugin path use this one
   chunk generator.
+- Optional browser-vendor dictation merges a final transcript against the
+  **live current draft** rather than a snapshot taken when recording started.
+  Each recording can commit at most once, and old recognition callbacks are
+  fenced from later sessions. The vendor still requires explicit user consent
+  and the feature remains disabled by default.
 
-Proof: `tests/settings/local-voice-engine-settings.test.tsx` and
-`tests/chat/browser-speech-playback.test.tsx`. These test UI behavior and
+Proof: `tests/settings/local-voice-engine-settings.test.tsx`,
+`tests/chat/browser-speech-playback.test.tsx`, and
+`tests/chat/browser-dictation-capture.test.tsx`. These test UI behavior and
 synthetic audio callbacks, **not** real Pocket model quality, browser vendor
 processing, or device-level audio acceptance.
