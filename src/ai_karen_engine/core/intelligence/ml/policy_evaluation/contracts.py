@@ -32,6 +32,13 @@ class DecisionType(str, Enum):
     PROACTIVE_CONTINUITY = "proactive_continuity"
 
 
+class VerificationAction(str, Enum):
+    """Canonical response-strategy alternatives for verified effort studies."""
+
+    RESPOND_DIRECT = "respond_direct"
+    VERIFY_THEN_RESPOND = "verify_then_respond"
+
+
 class PolicyStatus(str, Enum):
     CANDIDATE = "candidate"
     SHADOW = "shadow"
