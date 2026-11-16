@@ -72,8 +72,19 @@ def factory_for(values: list[Any]) -> tuple[Any, Session, list[dict[str, str]]]:
     return transaction, session, scopes
 
 
-def event(*, sensitivity: str = "normal", digest: str = REVISION) -> Any:
-    return SimpleNamespace(payload_hash=digest, sensitivity_class=sensitivity)
+def event(
+    *, sensitivity: str = "normal", digest: str = REVISION,
+    tags: tuple[str, ...] = (), custom: dict[str, Any] | None = None,
+    event_type: str = "memory_persisted",
+) -> Any:
+    return SimpleNamespace(
+        payload_hash=digest,
+        sensitivity_class=sensitivity,
+        event_type=event_type,
+        payload={
+            "metadata": {"tags": list(tags), "custom": custom or {}}
+        },
+    )
 
 
 def consent(granted: bool = True, revoked: bool = False) -> Any:
@@ -168,3 +179,27 @@ async def test_current_memory_and_consent_still_cannot_approve_training() -> Non
     result = await evaluator.evaluate(MemoryArtifact(), objective="procedural_skill")
     assert result.status is TrainingAdmissionStatus.POLICY_BLOCKED
     assert result.reason_codes == ("training_rights_missing",)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe_event",
+    [
+        event(tags=("no_training",)),
+        event(custom={"privacy_tags": ["restricted"]}),
+        event(custom={"training_eligibility": "ineligible"}),
+        event(custom={"propagation_allowed": False}),
+        event(event_type="memory_tombstone"),
+    ],
+)
+async def test_canonical_ledger_veto_cannot_be_omitted_by_bridge(
+    unsafe_event: Any,
+) -> None:
+    transaction, session, _ = factory_for([unsafe_event])
+    proof = await PostgresTrainingEvidenceResolver(
+        transaction_factory=transaction
+    ).resolve(
+        tenant_id=TENANT, user_id=USER, source_ref=SOURCE,
+        source_revision=REVISION, objective="procedural_skill",
+    )
+    assert proof is None
+    assert session.calls == 1

@@ -30,6 +30,48 @@ _ALLOWED_SENSITIVITY = frozenset({"normal", "public", "internal"})
 _TRAINING_OBJECTIVES = frozenset({
     "persona_expression", "procedural_skill", "verified_correction",
 })
+_BLOCKED_TAGS = frozenset({
+    "no_training", "no_export", "sensitive", "restricted", "prohibited",
+})
+
+
+def _source_prohibits_training(event: MemoryEvent) -> bool:
+    """Consult canonical ledger content; detached artifact tags are not authority."""
+    if event.event_type != "memory_persisted":
+        return True
+    payload = event.payload
+    if not isinstance(payload, dict):
+        return True
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return True
+    custom = metadata.get("custom") or {}
+    if not isinstance(custom, dict):
+        return True
+    for values in (
+        payload.get("privacy_tags"),
+        metadata.get("tags"),
+        custom.get("privacy_tags"),
+    ):
+        if values is None:
+            continue
+        if not isinstance(values, (list, tuple, set)):
+            return True
+        if _BLOCKED_TAGS.intersection(
+            str(getattr(value, "value", value)).strip().lower()
+            for value in values
+        ):
+            return True
+    if any(
+        str(getattr(value, "value", value) or "").strip().lower() == "ineligible"
+        for value in (
+            payload.get("training_eligibility"),
+            metadata.get("training_eligibility"),
+            custom.get("training_eligibility"),
+        )
+    ):
+        return True
+    return custom.get("no_training") is True or custom.get("propagation_allowed") is False
 
 
 class PostgresTrainingEvidenceResolver:
@@ -80,13 +122,14 @@ class PostgresTrainingEvidenceResolver:
                 await session.execute(
                     select(MemoryEvent).where(
                         MemoryEvent.event_id == source,
+                        MemoryEvent.event_type == "memory_persisted",
                         recallable_memory_event(
                             tenant_id=tenant, user_id=user, now=now,
                         ),
                     )
                 )
             ).scalar_one_or_none()
-            if event is None:
+            if event is None or _source_prohibits_training(event):
                 return None
             stored_digest = str(event.payload_hash or "").strip().lower()
             if not _DIGEST.fullmatch(stored_digest) or not hmac.compare_digest(
