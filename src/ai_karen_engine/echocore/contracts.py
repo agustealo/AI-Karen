@@ -47,6 +47,9 @@ class RuntimeMemoryArtifact:
     retention_score: float = 0.0
     privacy_tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Carries the upstream source veto across the memory/EchoCore boundary.
+    # This is advisory for rejection only; "eligible" never authorizes training.
+    training_eligibility: str = "review"
 
 
 @dataclass(slots=True)

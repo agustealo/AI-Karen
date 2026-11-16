@@ -60,6 +60,16 @@ class DefaultRuntimeToEchoBridge:
         source_tier: MemoryTier,
     ) -> RuntimeMemoryArtifact:
         artifact_type = self._resolve_artifact_type(item, source_tier)
+        metadata = dict(item.get("metadata", {}) or {})
+        # Never allow bridging to drop an explicit training prohibition.
+        # Only an independent EchoCore admission assessment can approve.
+        upstream = getattr(item.get("training_eligibility"), "value", item.get("training_eligibility"))
+        nested = getattr(metadata.get("training_eligibility"), "value", metadata.get("training_eligibility"))
+        eligibility = (
+            "ineligible"
+            if any(str(value or "").strip().lower() == "ineligible" for value in (upstream, nested))
+            else "review"
+        )
         return RuntimeMemoryArtifact(
             artifact_id=str(item.get("id") or item.get("artifact_id") or item.get("record_id")),
             artifact_type=artifact_type,
@@ -72,7 +82,8 @@ class DefaultRuntimeToEchoBridge:
             importance_score=float(item.get("importance_score", 0.0) or 0.0),
             retention_score=float(item.get("retention_score", 0.0) or 0.0),
             privacy_tags=list(item.get("privacy_tags", []) or []),
-            metadata=dict(item.get("metadata", {}) or {}),
+            metadata=metadata,
+            training_eligibility=eligibility,
         )
 
     def _items_from_result(self, write_result: Dict[str, Any], *keys: str) -> List[Dict[str, Any]]:

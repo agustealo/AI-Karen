@@ -176,3 +176,38 @@ async def test_upstream_ineligible_never_promoted() -> None:
     )
     assert result.status is TrainingAdmissionStatus.POLICY_BLOCKED
     assert result.reason_codes == ("artifact_ineligible",)
+
+@pytest.mark.asyncio
+async def test_bridge_preserves_explicit_upstream_training_veto() -> None:
+    """Integration regression: real bridge and actual EchoCore artifact type."""
+    from ai_karen_engine.echocore.bridge import DefaultRuntimeToEchoBridge
+    from ai_karen_engine.core.memory.types.base import ArtifactTrainingEligibility
+
+    base = {
+        "id": "memory-1",
+        "tenant_id": "tenant-a",
+        "user_id": "user-a",
+        "importance_score": 1.0,
+        "retention_score": 1.0,
+        "metadata": {"source_ref": "memory-1", "source_revision": "rev-1"},
+    }
+    for source in (
+        {**base, "training_eligibility": "ineligible"},
+        {**base, "training_eligibility": ArtifactTrainingEligibility.INELIGIBLE},
+        {**base, "training_eligibility": "eligible", "metadata": {
+            **base["metadata"], "training_eligibility": "ineligible",
+        }},
+    ):
+        artifacts = DefaultRuntimeToEchoBridge().export_artifacts(
+            {"promoted_ltm_records": [source]}
+        )
+        assert len(artifacts) == 1
+        artifact = artifacts[0]
+        assert artifact.training_eligibility == "ineligible"
+        proof = EvidencePort(verified_evidence())
+        result = await evaluator(proof).evaluate(
+            artifact, objective="procedural_skill"
+        )
+        assert result.status is TrainingAdmissionStatus.POLICY_BLOCKED
+        assert result.reason_codes == ("artifact_ineligible",)
+        assert proof.calls == 0
