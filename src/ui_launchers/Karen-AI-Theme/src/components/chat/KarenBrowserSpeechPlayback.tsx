@@ -189,26 +189,31 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
       for (const chunk of chunks) {
         if (stopped) break;
         await new Promise<void>((resolve, reject) => {
-          pendingResolve = resolve;
+          // Cancellation and media callbacks must settle only their own
+          // chunk. A delayed event from a completed chunk must not clear the
+          // resolver for a subsequent chunk.
+          let settled = false;
+          const settle = (failure?: SafeSpeechError) => {
+            if (settled) return;
+            settled = true;
+            if (pendingResolve === cancelChunk) pendingResolve = null;
+            if (failure) reject(failure);
+            else resolve();
+          };
+          const cancelChunk = () => settle();
+          pendingResolve = cancelChunk;
           const utterance = new SpeechSynthesisUtterance(chunk);
           utterance.voice = selected;
           utterance.lang = selected.lang;
-          utterance.onend = () => {
-            pendingResolve = null;
-            resolve();
-          };
-          utterance.onerror = () => {
-            pendingResolve = null;
-            reject(new SafeSpeechError("Browser speech playback failed."));
-          };
+          utterance.onend = cancelChunk;
+          utterance.onerror = () => settle(new SafeSpeechError("Browser speech playback failed."));
           try {
             synth.speak(utterance);
             if (!stopped && activePlayback === stopSession) {
               publishPlaybackPhase("speaking");
             }
           } catch {
-            pendingResolve = null;
-            reject(new SafeSpeechError("The browser could not start speech playback."));
+            settle(new SafeSpeechError("The browser could not start speech playback."));
           }
         });
       }
@@ -223,20 +228,25 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
         audio = new Audio(objectUrl);
         const playing = audio;
         await new Promise<void>((resolve, reject) => {
-          pendingResolve = resolve;
-          playing.onended = () => {
-            pendingResolve = null;
-            resolve();
+          // Retired Audio events and delayed play() failures cannot erase
+          // the pending cancellation handle of a newer WAV chunk.
+          let settled = false;
+          const settle = (failure?: SafeSpeechError) => {
+            if (settled) return;
+            settled = true;
+            if (pendingResolve === cancelChunk) pendingResolve = null;
+            if (failure) reject(failure);
+            else resolve();
           };
-          playing.onerror = () => {
-            pendingResolve = null;
-            reject(new SafeSpeechError("Karen's local speech could not be played."));
-          };
+          const cancelChunk = () => settle();
+          pendingResolve = cancelChunk;
+          playing.onended = cancelChunk;
+          playing.onerror = () => settle(new SafeSpeechError("Karen's local speech could not be played."));
           void playing.play().then(() => {
             if (!stopped && activePlayback === stopSession) {
               publishPlaybackPhase("speaking");
             }
-          }).catch(() => reject(new SafeSpeechError(
+          }).catch(() => settle(new SafeSpeechError(
             "Karen's local speech could not be played."
           )));
         });
