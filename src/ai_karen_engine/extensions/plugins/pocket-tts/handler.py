@@ -220,7 +220,16 @@ class MainExtension(ExtensionBase):
         )
 
         service = get_model_download_control_service()
-        jobs = await service.list_jobs(status="completed", limit=500)
+        # The canonical PostgreSQL owner filters tenant/model/revision,
+        # completed status, license and safe-code policy before pagination.
+        # A global last-500 scan can hide a valid older install; accepting
+        # NULL/unowned legacy jobs would cross the explicit tenant boundary.
+        jobs = await service.list_completed_model_installations(
+            tenant_id=tenant_id,
+            model_id=self._spec["model_id"],
+            revision=self._spec["revision"],
+            channel_id=self._spec["channel_id"],
+        )
         root = Path(service.models_root)
         if root.is_symlink() or not root.is_dir():
             return None
@@ -233,7 +242,7 @@ class MainExtension(ExtensionBase):
                 or job.get("revision") != self._spec["revision"]
                 or job.get("license_accepted") is not True
                 or job.get("trust_remote_code") is True
-                or str(job.get("tenant_id") or "") not in ("", tenant_id)
+                or str(job.get("tenant_id") or "") != tenant_id
             ):
                 continue
             path = str(job.get("install_path") or "")
