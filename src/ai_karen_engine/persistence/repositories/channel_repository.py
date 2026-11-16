@@ -2062,7 +2062,44 @@ class SqlChannelRepository:
                  "provider_receipt": receipt.provider_receipt_id,
                  "error_code": receipt.error_code},
             )
-            return result.scalar_one_or_none() is not None
+            finalized = result.scalar_one_or_none() is not None
+            if finalized and receipt.state is ChannelDeliveryState.SENT:
+                # Status callbacks can arrive before the send HTTP response.
+                # Find the original inbox revision while the finalized outbox
+                # row is still locked by this transaction, then apply any
+                # already-durable signed receipts without retrying the send.
+                current = (await session.execute(
+                    text("""
+                        SELECT o.connection_id, o.destination_id,
+                               i.connection_revision
+                        FROM public.channel_outbox o
+                        JOIN public.channel_inbox i
+                          ON i.tenant_id = o.tenant_id
+                         AND i.connection_id = o.connection_id
+                         AND i.inbox_id = o.inbox_id
+                        WHERE o.tenant_id = CAST(:tenant AS uuid)
+                          AND o.delivery_id = CAST(:delivery AS uuid)
+                          AND o.provider_message_id = :provider_message
+                          AND o.status = 'sent'
+                    """),
+                    {
+                        "tenant": tenant_id,
+                        "delivery": str(uuid.UUID(receipt.delivery_id)),
+                        "provider_message": receipt.provider_message_id,
+                    },
+                )).mappings().one_or_none()
+                if current is None:
+                    raise ChannelAdmissionDenied(
+                        "Finalized send lost tenant-scoped inbox attribution"
+                    )
+                await self._reconcile_provider_status(
+                    session, tenant_id=tenant_id,
+                    connection_id=str(current["connection_id"]),
+                    revision=int(current["connection_revision"]),
+                    provider_message_id=receipt.provider_message_id,
+                    recipient_id=str(current["destination_id"]),
+                )
+            return finalized
 
     async def quarantine_expired_outbound_claims(
         self, *, tenant_id: str, limit: int = 100,
