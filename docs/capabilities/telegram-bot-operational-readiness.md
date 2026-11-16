@@ -218,3 +218,21 @@ obtained from canonical deployment configuration before implementing any
 provider mutation. There is no automatic Telegram retry or webhook
 registration in this slice. Failure and revision conflicts never return a
 token, provider response body, native URL or Vault reference.
+
+## Canonical public webhook origin (provider mutation prerequisite)
+
+`KAREN_TELEGRAM_WEBHOOK_PUBLIC_ORIGIN` is an optional, operator-controlled,
+HTTPS origin in the canonical channel host settings. When the host is enabled,
+a configured value must be a lowercase, canonical public DNS hostname with
+no userinfo, port, path, query or fragment, for example
+`https://hooks.example.org`. Loopback/local names, IP literals,
+credential-containing or ambiguous URLs fail startup validation. No value
+is inferred from incoming Host or Forwarded headers.
+
+Omitting this variable is valid and leaves provider webhook registration
+unavailable. Defining it does not activate any connection, create a webhook,
+or prove Telegram can deliver to that origin. It is only a prerequisite for
+a later explicit, RuntimePolicy-authorized `setWebhook` workflow that
+constructs the exact tenant connection path, validates the effective HTTPS
+deployment configuration, and independently reconciles Telegram's response.
+Do not expose the configured origin as proof of a live connection.
