@@ -100,13 +100,13 @@ def test_malformed_or_unverified_sync_completion_fails_closed(replacement, error
 
 
 def test_sync_unselected_model_still_requires_an_actual_model_receipt():
-    result = _execute(_valid(), model=None)
+    result = _execute(_valid(), model="auto")
     assert result.model == "qwen3:4b"
 
     missing_model = _valid()
     missing_model.pop("model")
     with pytest.raises(ProviderExecutionError, match="provider_response_unverified_model"):
-        _execute(missing_model, model=None)
+        _execute(missing_model, model="auto")
 
 
 def test_sync_metadata_does_not_treat_boolean_usage_as_tokens():
