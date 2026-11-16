@@ -63,3 +63,15 @@ Approval is not proof of training. Only an independently authorized and lineage-
 - No user-facing API, database migration, model training, or provider/runtime changes. Admission remains default-disabled.
 
 **Follow-up:** independently verified rights and target receipts, dataset manifest lineage, retraining/revocation fencing, and live PostgreSQL RLS tests before any promotion.
+
+
+## KCM-01C: Immutable dataset integrity inspection (stacked draft)
+
+- New pure helper: `learning/kcm_dataset_integrity.py`, owned by the canonical learning dataset domain.
+- The inspector verifies frozen-manifest structure, actual dataset bytes against SHA-256, canonical source-revision digests, unique assessment/source identities, leakage-group split isolation, deterministic membership ordering, timezone-aware timestamps, and current governance deletion epoch.
+- The manifest schema and examples now require owner_user_id and lineage receipt references. Source revisions are SHA-256 identifiers, matching the current PostgreSQL memory ledger.
+- Passing integrity returns `training_authorized=False` by construction. Consent receipts, data rights, source ownership, and target correctness still require host-owned, live verification before training and again before model promotion.
+- Local isolated verification: 13 pure-Python pytest cases passed. This is not live PostgreSQL, rights, or training readiness evidence.
+- No migration, plugin, model trainer, provider router, or memory store is created. Training remains disabled.
+
+**Next:** implement source-to-dataset membership persistence with tenant RLS and independently verified rights/outcome receipts, then source revocation fences for any training or derived checkpoint.
