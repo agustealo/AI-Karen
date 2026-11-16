@@ -29,7 +29,7 @@ def _wav() -> bytes:
         writer.setnchannels(1)
         writer.setsampwidth(2)
         writer.setframerate(24_000)
-        writer.writeframes(b"\\x00\\x00\\x01\\x00")
+        writer.writeframes(bytes((0, 0, 1, 0)))
     return output.getvalue()
 
 
