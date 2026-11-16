@@ -38,6 +38,9 @@ functions support idempotent scope provisioning and serialized revocation.
 They enforce the exact current transaction-scoped principal, lock the owner's
 epoch row, update that epoch monotonically, append the source revocation and
 mark matching dataset lineage revoked in **one database transaction**.
+A database trigger also takes the same owner-row lock before lineage insertion
+and rejects replay of an already-revoked source revision. This prevents
+concurrent registration from outrunning a revocation commit.
 No public or authenticated execution grants are provided. A trusted host
 execution role requires separate reviewed provisioning.
 
