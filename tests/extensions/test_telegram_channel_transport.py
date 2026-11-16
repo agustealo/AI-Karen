@@ -875,3 +875,280 @@ async def test_telegram_recovery_provider_error_masks_vault_bot_token():
             connection=connection(), public_origin="https://hooks.example.org",
         )
     assert TOKEN not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_status", "sender", "secret", "expected_http", "expected_state"),
+    [
+        (200, 901, SECRET, 200, ChannelDeliveryState.SENT),
+        (429, 901, SECRET, 200, ChannelDeliveryState.UNKNOWN),
+        (200, 901, "invalid-webhook-secret", 403, None),
+        (200, 902, SECRET, 403, None),
+    ],
+)
+async def test_telegram_signed_webhook_executes_and_records_real_adapter_send_contract(
+    monkeypatch, provider_status, sender, secret, expected_http, expected_state,
+):
+    """Offline whole-chain contract, not an assertion of a live Telegram account.
+
+    Exercise the actual HTTP route, installed protocol adapter, tenant-bound
+    admission, leased worker, canonical ChatRuntime bridge, policy-gated
+    dispatcher and the installed adapter's provider response parser together.
+    The repository and Telegram HTTP peer are deliberately simulated: the
+    separate PostgreSQL tests own RLS/transactional claims, and only an observed
+    real-provider round trip can establish live operational readiness.
+    """
+    import asyncio
+    import uuid
+
+    from fastapi import FastAPI
+
+    from ai_karen_engine.api_routes.channels.webhooks import router
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatExecutionStatus,
+    )
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.persistence.repositories.channel_repository import (
+        ChannelAdmissionDenied,
+        ChannelDeliveryPreflight,
+        ClaimedChannelDelivery,
+        ClaimedChannelMessage,
+        InboundAdmission,
+    )
+    from ai_karen_engine.services.auth.auth_service import UserStatus
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    from ai_karen_engine.services.channels.execution import ChannelExecutionService
+    from ai_karen_engine.services.channels.ingress import ChannelIngressService
+    from ai_karen_engine.services.channels.worker import ChannelInboxWorker
+
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    inbox_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    binding_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    claim_token = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    conn = connection().model_copy(update={"connection_id": str(uuid.uuid4())})
+    response = (
+        httpx.Response(200, json={
+            "ok": True,
+            "result": {"message_id": 432, "chat": {"id": 901}},
+        })
+        if provider_status == 200 else httpx.Response(provider_status)
+    )
+    kernel, adapter, resolver, provider_http = load_transport(response=response)
+    manifest = kernel.loader.load_manifest("telegram-bot")
+    monkeypatch.setattr(
+        kernel, "get_channel_activation_manifest",
+        lambda installation_id: (
+            manifest if installation_id == "telegram-bot" else None
+        ),
+    )
+    monkeypatch.setattr(
+        kernel, "is_canonical_channel_adapter",
+        lambda installation_id, candidate: (
+            installation_id == "telegram-bot" and candidate is adapter
+        ),
+    )
+    await adapter.start(connection=conn)
+
+    state = {}
+    repo = SimpleNamespace(
+        get_enabled_connection=AsyncMock(return_value=conn),
+        get_connection=AsyncMock(return_value=conn),
+        renew_inbound_claim=AsyncMock(return_value=True),
+        fail_inbound_claim=AsyncMock(return_value=True),
+        renew_outbound_claim=AsyncMock(return_value=True),
+        finalize_outbound_claim=AsyncMock(return_value=True),
+    )
+
+    async def admit_verified(*, connection, event):
+        # Emulate the SQL binding gate, never promote Telegram's forged
+        # tenant/user JSON into a Karen principal.
+        if (
+            connection != conn
+            or event.external_sender_id != "901"
+            or event.external_conversation_id != "901"
+        ):
+            raise ChannelAdmissionDenied("No active bound sender")
+        state["event"] = event
+        receipt = InboundAdmission(
+            inbox_id=inbox_id,
+            correlation_id="ffffffff-ffff-ffff-ffff-ffffffffffff",
+            tenant_id=TENANT, user_id=user, binding_id=binding_id,
+            inserted=True,
+        )
+        state["admission"] = receipt
+        return receipt
+
+    async def claim_inbound(*, tenant_id, inbox_id, lease_seconds):
+        assert tenant_id == TENANT and inbox_id == state["admission"].inbox_id
+        assert lease_seconds >= 3
+        return claim_token, state["admission"]
+
+    async def load_claimed(*, tenant_id, inbox_id, claim_token):
+        assert tenant_id == TENANT and inbox_id == state["admission"].inbox_id
+        assert claim_token == "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+        event = state["event"]
+        return ClaimedChannelMessage(
+            inbox_id=inbox_id, correlation_id=state["admission"].correlation_id,
+            tenant_id=TENANT, user_id=user, binding_id=binding_id,
+            connection_id=conn.connection_id,
+            external_conversation_id=event.external_conversation_id,
+            external_sender_id=event.external_sender_id,
+            message_kind=event.message_kind, text=event.text,
+        )
+
+    async def stage_delivery(*, tenant_id, inbox_id, claim_token, delivery):
+        assert tenant_id == TENANT and inbox_id == state["admission"].inbox_id
+        assert claim_token == "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+        state["delivery"] = delivery
+        return True
+
+    async def get_preflight(*, tenant_id, delivery_id):
+        if tenant_id != TENANT or state.get("delivery") is None:
+            return None
+        if state["delivery"].delivery_id != delivery_id:
+            return None
+        return ChannelDeliveryPreflight(
+            connection_id=conn.connection_id,
+            user_id=user, external_conversation_id="901",
+        )
+
+    async def claim_outbound(*, tenant_id, delivery_id, lease_seconds):
+        assert tenant_id == TENANT and lease_seconds >= 3
+        assert delivery_id == state["delivery"].delivery_id
+        return ClaimedChannelDelivery(
+            connection=conn, delivery=state["delivery"],
+            user_id=user, external_conversation_id="901",
+            claim_token="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+
+    repo.admit_verified_inbound = AsyncMock(side_effect=admit_verified)
+    repo.claim_inbound = AsyncMock(side_effect=claim_inbound)
+    repo.load_claimed_message = AsyncMock(side_effect=load_claimed)
+    repo.complete_and_stage_delivery = AsyncMock(side_effect=stage_delivery)
+    repo.get_delivery_preflight = AsyncMock(side_effect=get_preflight)
+    repo.claim_outbound = AsyncMock(side_effect=claim_outbound)
+
+    chat_runtime = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(
+        answer="Hello from ChatRuntime",
+        status=ChatExecutionStatus.OK,
+        metadata=SimpleNamespace(to_dict=lambda: {
+            "response_source": "model", "degraded_mode": False,
+        }),
+    )))
+    principal_lookup = AsyncMock(return_value=SimpleNamespace(
+        id=user, tenant_id=TENANT, status=UserStatus.ACTIVE, roles=["user"],
+    ))
+    execution = ChannelExecutionService(
+        repository=repo, chat_runtime=chat_runtime,
+        principal_lookup=principal_lookup,
+    )
+    delivery_service = ChannelDeliveryService(kernel=kernel, repository=repo)
+    policy_issues = []
+
+    async def dispatch_authorized(*, tenant_id, delivery_id, user_id, session_id):
+        policy_issues.append((tenant_id, delivery_id, user_id, session_id))
+        plan = AuthorizedExecutionPlan(
+            execution_id="telegram-roundtrip-contract",
+            policy_decision_id="runtime-policy-accepted",
+            authorized_tenant_id=tenant_id,
+            authorized_user_id=user_id,
+            authorized_session_id=session_id,
+            allowed_plugins=["telegram-bot"],
+            allowed_capabilities=["channel.send"],
+        )
+        return await delivery_service.dispatch(
+            tenant_id=tenant_id, delivery_id=delivery_id,
+            adapter=adapter, authorized_plan=plan,
+        )
+
+    async def with_heartbeat(operation, *, renew, **kwargs):
+        assert await renew() is True
+        return await operation
+
+    monkeypatch.setattr(
+        "ai_karen_engine.services.channels.execution.run_with_claim_heartbeat",
+        with_heartbeat,
+    )
+    monkeypatch.setattr(
+        "ai_karen_engine.services.channels.delivery.run_with_claim_heartbeat",
+        with_heartbeat,
+    )
+    worker = ChannelInboxWorker(
+        repository=repo, execution=execution, max_inflight=1,
+        dispatch_outbox=dispatch_authorized,
+    )
+    worker.start()
+    ingress = ChannelIngressService(
+        kernel=kernel, repository=repo, max_native_body_bytes=65_536,
+        on_admitted=worker.submit,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.state.channel_ingress_service = ingress
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://telegram-contract.test",
+        ) as client:
+            accepted = await client.post(
+                f"/api/channels/webhooks/{TENANT}/{conn.connection_id}",
+                content=native_message(sender=sender, chat=sender),
+                headers={"X-Telegram-Bot-Api-Secret-Token": secret},
+            )
+        assert accepted.status_code == expected_http
+        if expected_state is None:
+            assert accepted.json()["detail"] == "Native channel event rejected"
+            repo.admit_verified_inbound.assert_not_awaited() if secret != SECRET else (
+                repo.admit_verified_inbound.assert_awaited_once()
+            )
+            repo.claim_inbound.assert_not_awaited()
+            chat_runtime.execute.assert_not_awaited()
+            provider_http.post.assert_not_awaited()
+            repo.finalize_outbound_claim.assert_not_awaited()
+            return
+
+        assert accepted.json() == {"accepted": True}
+        await asyncio.gather(*tuple(worker._tasks))
+        repo.admit_verified_inbound.assert_awaited_once()
+        repo.claim_inbound.assert_awaited_once()
+        principal_lookup.assert_awaited_once_with(tenant_id=TENANT, user_id=user)
+        chat_runtime.execute.assert_awaited_once()
+        runtime_request = chat_runtime.execute.await_args.args[0]
+        assert runtime_request.context.user_id == user
+        assert runtime_request.context.tenant_id == TENANT
+        assert runtime_request.context.request_id == inbox_id
+        assert runtime_request.messages == [
+            {"role": "user", "content": "Hello Karen"},
+        ]
+        staged = state["delivery"]
+        assert staged.text == "Hello from ChatRuntime"
+        assert staged.destination_id == "901"
+        assert staged.idempotency_key == inbox_id
+        assert policy_issues == [(
+            TENANT, staged.delivery_id, user,
+            ChannelDeliveryService._session_id(
+                tenant_id=TENANT, user_id=user,
+                connection_id=conn.connection_id,
+                external_conversation_id="901",
+            ),
+        )]
+        provider_http.post.assert_awaited_once()
+        assert provider_http.post.await_args.kwargs["json"] == {
+            "chat_id": 901, "text": "Hello from ChatRuntime",
+        }
+        repo.finalize_outbound_claim.assert_awaited_once()
+        recorded = repo.finalize_outbound_claim.await_args.kwargs["receipt"]
+        assert recorded.state is expected_state
+        assert recorded.delivery_id == staged.delivery_id
+        if expected_state is ChannelDeliveryState.SENT:
+            assert recorded.provider_message_id == "432"
+            assert recorded.provider_receipt_id is None
+        else:
+            assert recorded.provider_message_id is None
+            assert recorded.error_code == "telegram_response_uncertain"
+        assert resolver.await_count > 0
+    finally:
+        await worker.shutdown()
+        await adapter.stop(connection=conn)
