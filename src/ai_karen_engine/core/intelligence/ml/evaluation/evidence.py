@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from uuid import uuid4
 
 from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus, PredictionTask
-from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkResult, PredictionOutcome
+from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkResult, EvaluationCase, PredictionOutcome
 from ai_karen_engine.core.intelligence.ml.promotion import (
     PromotionDecision,
     evaluate_promotion,
@@ -64,7 +64,7 @@ def _canonical_curated_oracle_snapshot(
         return None
     if not case_hashes or len(set(case_hashes)) != len(case_hashes):
         return None
-    lookup: dict[str, object] = {}
+    lookup: dict[str, EvaluationCase] = {}
     for case in CanonicalEvaluationCorpus.get_cases(task=task):
         if case.dataset_version != dataset_version:
             continue
