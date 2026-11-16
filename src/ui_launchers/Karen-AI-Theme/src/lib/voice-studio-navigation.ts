@@ -10,5 +10,8 @@ export const VOICE_STUDIO_DASHBOARD_HREF =
 /** Accept only the documented Voice Studio landing target. */
 export function isVoiceStudioDashboardRoute(search: string): boolean {
   const query = new URLSearchParams(search);
-  return query.get('view') === 'settings' && query.get('section') === 'voice';
+  return query.getAll('view').length === 1 &&
+    query.getAll('section').length === 1 &&
+    query.get('view') === 'settings' &&
+    query.get('section') === 'voice';
 }
