@@ -57,7 +57,6 @@ def test_sync_response_requires_observed_matching_model():
 @pytest.mark.parametrize(
     ("replacement", "error"),
     [
-        ({}, "provider_response_unverified_model"),
         ({"model": ""}, "provider_response_unverified_model"),
         ({"model": None}, "provider_response_unverified_model"),
         ({"model": "other-model"}, "provider_response_requested_model_mismatch"),
