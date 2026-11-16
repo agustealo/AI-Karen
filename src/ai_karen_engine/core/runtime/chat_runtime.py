@@ -5600,6 +5600,134 @@ class ChatRuntime:
             response_source=provider_meta.get("response_source"),
         )
 
+    @staticmethod
+    def _inspect_selected_strategy_execution(
+        decision: ExecutionDecision,
+        provider_meta: Dict[str, Any],
+        *,
+        response_completed: bool,
+        success: bool,
+        transcript_status: str,
+        observed_model_calls: int,
+        correlation_id: str | None,
+    ) -> Optional[Dict[str, Any]]:
+        """Classify the *chosen* path using actual Runtime/Gateway evidence.
+
+        This post-execution observation is not a second action authorization,
+        randomized selection receipt, independent verification judgment, or
+        OPE sample. No candidate-policy probability is ever inferred.
+        """
+        modes = set(decision.reasoning_modes)
+        if (
+            not decision.policy_decision_id
+            or getattr(decision.risk_level, "value", decision.risk_level)
+            not in {"low", "medium"}
+            or decision.requires_human_gate
+            or decision.tool_requirements
+            or decision.plugin_candidates
+            or decision.requires_agent_delegation
+            or decision.requires_parallel_execution
+            or decision.requires_resumability
+            or decision.workflow_id
+        ):
+            return None
+
+        if decision.topology == ExecutionTopology.DIRECT and not modes:
+            selected = "respond_direct"
+        elif (
+            decision.topology == ExecutionTopology.REASONING
+            and "verification" in modes
+            and modes.issubset({"verification", "metacognition"})
+        ):
+            selected = "verify_then_respond"
+        else:
+            return None
+
+        provenance = provider_meta.get("provenance")
+        provider = provider_meta.get("actual_provider")
+        model = provider_meta.get("actual_model")
+        receipt_matches = (
+            isinstance(provenance, ResponseProvenance)
+            and provenance.response_source == ResponseSource.MODEL
+            and isinstance(provider, str) and bool(provider.strip())
+            and isinstance(model, str) and bool(model.strip())
+            and provenance.provider == provider
+            and provenance.model == model
+            and provenance.decision_id == decision.policy_decision_id
+            and isinstance(correlation_id, str) and bool(correlation_id.strip())
+            and provenance.correlation_id == correlation_id
+            and provider_meta.get("response_source") == "model"
+            and isinstance(observed_model_calls, int)
+            and not isinstance(observed_model_calls, bool)
+            and observed_model_calls > 0
+            and provider_meta.get("fallback_level") == 0
+            and provider_meta.get("degraded_mode") is False
+        )
+
+        reason_codes: list[str] = []
+        if not receipt_matches:
+            reason_codes.append("model_generation_receipt_unverified")
+
+        reasoning_id: str | None = None
+        reasoning_status = "not_applicable"
+        if selected == "verify_then_respond":
+            reasoning_id = provider_meta.get("reasoning_id")
+            reasoning_status = provider_meta.get("reasoning_status")
+            if not (
+                isinstance(reasoning_id, str)
+                and bool(reasoning_id.strip())
+                and reasoning_status in {"success", "completed", "partial", "abstained"}
+                and provider_meta.get("reasoning_activation") == "core_defaults"
+                and provider_meta.get("reasoning_generation_mode")
+                == "model_after_authorized_reasoning"
+                and provider_meta.get("reasoning_model_calls") == 0
+                and provider_meta.get("reasoning_model_attribution_status")
+                == "not_executed"
+                and isinstance(provider_meta.get("reasoning_steps"), int)
+                and not isinstance(provider_meta["reasoning_steps"], bool)
+                and provider_meta["reasoning_steps"] > 0
+                and modes.issubset(set(provider_meta.get("reasoning_modes") or []))
+            ):
+                reason_codes.append("reasoning_execution_receipt_unverified")
+
+        if not (success and response_completed):
+            reason_codes.append("response_execution_incomplete")
+        if transcript_status not in {"persisted", "already_persisted"}:
+            reason_codes.append("transcript_persistence_unverified")
+
+        observed = not reason_codes
+        return {
+            "schema_version": "selected_strategy_execution_v1",
+            "policy_decision_id": decision.policy_decision_id,
+            "policy_version": decision.policy_version,
+            "selected_action": selected,
+            "status": (
+                "selected_runtime_path_observed" if observed else "unverified"
+            ),
+            "reason_codes": reason_codes,
+            "reasoning_id": (
+                reasoning_id if isinstance(reasoning_id, str) else None
+            ),
+            "reasoning_status": (
+                reasoning_status if reasoning_status in {
+                    "success", "completed", "partial", "abstained",
+                    "not_applicable",
+                } else "unverified"
+            ),
+            "provider_receipt_observed": bool(receipt_matches),
+            "actual_provider": provider if receipt_matches else None,
+            "actual_model": model if receipt_matches else None,
+            "response_completed": bool(success and response_completed),
+            "transcript_durable": transcript_status in {
+                "persisted", "already_persisted",
+            },
+            "execution_observation_only": True,
+            "independent_verification_proven": False,
+            "dual_action_eligibility_established": False,
+            "randomized_selection": False,
+            "ope_eligible": False,
+        }
+
     async def _record_execution_outcome(
         self,
         trajectory_id: Optional[str],
@@ -5647,6 +5775,19 @@ class ChatRuntime:
             and 0 < medusa_calls <= decision.max_model_calls
             else meter.model_calls
         )
+        from ai_karen_engine.platform.observability.context import (
+            get_correlation_context,
+        )
+
+        observed_strategy = self._inspect_selected_strategy_execution(
+            decision,
+            provider_meta or {},
+            response_completed=bool(text),
+            success=success,
+            transcript_status=transcript_status,
+            observed_model_calls=observed_model_calls,
+            correlation_id=get_correlation_context().correlation_id,
+        )
         await self._outcome_recorder.record_execution_outcome_async(
             trajectory_id=trajectory_id,
             decision_observation_id=decision_observation_id,
@@ -5659,6 +5800,10 @@ class ChatRuntime:
             persistence_success=persistence_success,
             metadata={
                 "topology": decision.topology.value,
+                **(
+                    {"selected_strategy_execution": observed_strategy}
+                    if observed_strategy is not None else {}
+                ),
                 # Operational learning derives from this append-only outcome
                 # evidence, not transient process-local counters. Attribution
                 # is withheld for fallback/mixed/unknown model executions.
