@@ -23,6 +23,7 @@ from ai_karen_engine.core.intelligence.ml.durable_outcomes import (
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
     BenchmarkResult, EvaluationCase, PredictionOutcome,
+    evaluation_case_sha256,
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.corpus import (
     CanonicalEvaluationCorpus,
@@ -89,6 +90,9 @@ def outcome(
         calibrated_probability=0.8,
         latency_ms=10,
         fallback_used=False,
+        evaluated_case_sha256=(
+            evaluation_case_sha256(oracle_case) or ""
+        ) if oracle_case else "",
     )
 
 
@@ -515,6 +519,73 @@ async def test_declared_correctness_not_scored_by_canonical_evaluator_is_not_ora
     assert result.health is KcmBenchmarkAssessmentHealth.MEASURED
     assert result.curated_oracle_source_verified is False
     assert result.general_skill_certified is False
+
+
+@pytest.mark.asyncio
+async def test_custom_corpus_reusing_ids_with_changed_input_is_not_canonical(
+    tmp_path,
+):
+    from ai_karen_engine.core.intelligence.ml.evaluation.runner import (
+        BenchmarkRunner,
+    )
+    from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
+        BenchmarkConfig,
+    )
+    import json
+
+    manifest, _, _, _ = await fixture(tmp_path)
+    original = CanonicalEvaluationCorpus.get_cases(task=TASK)[0]
+    altered = replace(
+        original,
+        input_text=(
+            original.input_text + " Answer: " + original.expected_label
+        ),
+        features=dict(original.features),
+    )
+
+    class AlteredCorpus:
+        @staticmethod
+        def get_cases(**kwargs):
+            return [altered]
+
+    class RealPredictor:
+        def predict(self, features):
+            return Prediction(
+                task=TASK,
+                label=original.expected_label,
+                model_id=manifest.model_id,
+                model_version=manifest.model_version,
+                feature_version=manifest.feature_version,
+                probability=0.9,
+                confidence=0.9,
+            )
+
+    outcome_result = await BenchmarkRunner(
+        corpus=AlteredCorpus(),
+    ).run(
+        RealPredictor(),
+        BenchmarkConfig(
+            model_id=manifest.model_id,
+            model_version=manifest.model_version,
+            task=TASK,
+            dataset_version=CanonicalEvaluationCorpus.DATASET_VERSION,
+        ),
+    )
+    assert outcome_result.sample_count == 1
+    assert outcome_result.outcomes[0].correct is True
+    assert outcome_result.outcomes[0].evaluated_case_sha256 == evaluation_case_sha256(altered)
+    assert evaluation_case_sha256(altered) != evaluation_case_sha256(original)
+
+    receipt = EvaluationEvidenceStore(tmp_path)._record(
+        manifest, outcome_result,
+    )
+    with sqlite3.connect(tmp_path / "benchmark_evidence.sqlite3") as db:
+        payload = json.loads(db.execute(
+            "SELECT evidence_json FROM benchmark_receipts WHERE receipt_id=?",
+            (receipt,),
+        ).fetchone()[0])
+    assert "kcm_curated_oracle_version" not in payload
+    assert "curated_oracle_sha256" not in payload
 
 
 @pytest.mark.asyncio
