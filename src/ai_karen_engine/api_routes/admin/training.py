@@ -23,7 +23,12 @@ from ai_karen_engine.services.admin.admin_training_control_service import (
     AdminTrainingControlService,
 )
 
+from ai_karen_engine.api_routes.admin.verification_reviews import (
+    router as verification_reviews_router,
+)
+
 router = APIRouter(prefix="/admin/training", tags=["admin-training"])
+router.include_router(verification_reviews_router)
 
 _WORKER_REQUIREMENTS = {
     "transformers": ("torch", "transformers", "peft", "accelerate", "safetensors"),
