@@ -359,3 +359,48 @@ Proof: `tests/settings/local-voice-engine-settings.test.tsx`,
 `tests/chat/browser-dictation-capture.test.tsx`. These test UI behavior and
 synthetic audio callbacks, **not** real Pocket model quality, browser vendor
 processing, or device-level audio acceptance.
+
+
+## First-class Voice Studio navigation (2026-11-16)
+
+The plugin overview's **Frontend: not required (backend-only)** status is
+correct for Pocket TTS. The extension provides model-backed synthesis through
+the canonical backend, not a distributable React UI component. Installing a
+second plugin frontend merely to hide that status would duplicate ownership.
+
+The first-class consumer path is now:
+
+1. **Plugins & Tools → Pocket TTS → Open Voice Studio** for TTS plugins with a
+   backend-declared `capabilities.voice_modality` v1 contract. The canonical
+   `ExtensionCoreManager` preserves the validated modality declaration in
+   `/api/extensions/list`; it does not project model or runtime health.
+2. **Assistant → Voice → Local Voice Studio** presents only engines returned
+   by the authenticated `GET /api/voice/engines` VoiceRuntime catalog and
+   the user's saved `GET /api/settings/voice` selection.
+3. Voice selection presents real installed voice IDs, languages and verified
+   model/revision information. A bounded, editable sample invokes the existing
+   local WAV endpoint **only after the user clicks Preview**. Stop, source
+   change, unmount, and abort retire the exact preview session.
+4. Save still requires both the authenticated write receipt and a matching
+   backend readback. The UI never claims a persisted voice solely from
+   plugin enablement or an HTTP write acknowledgement.
+5. Copilot retains its existing opt-in per-message Read aloud, voice dock,
+   global Stop, and explicit microphone controls. No autoplay or inferred
+   voice-cloning/streaming capability is introduced.
+
+**Readiness is independent of installation status.** An enabled Pocket plugin
+can have zero authorized selectable voices when the pinned model, accepted
+license, first-party voice assets, dependency or tenant-scoped installation
+evidence is missing. The Voice Studio must show **No Local TTS Plugin Ready**
+with the existing administrator installation path in **Models & Runtime →
+Model Downloads**, not synthesize test audio through an unverified engine.
+
+Tests: `tests/extensions/test_extension_manifest_metadata_contract.py`,
+`src/ui_launchers/Karen-AI-Theme/tests/plugin-host/plugin-registry.test.tsx`,
+`src/ui_launchers/Karen-AI-Theme/tests/plugins/plugin-overview-page.test.tsx`
+and `src/ui_launchers/Karen-AI-Theme/tests/settings/local-voice-engine-settings.test.tsx`.
+
+Source CI validates contracts and UI behavior with controlled browser audio
+stubs. Actual signed-in browser playback, native Pocket CPU inference, licensed
+model installation, latency and accessibility on target devices remain separate
+release gates, never implied by a frontend success badge.
