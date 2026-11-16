@@ -319,6 +319,7 @@ class PluginInspectionRequest:
 
     operation: str
     target: Optional[str] = None
+    requested_action: Optional[str] = None
 
 
 _PLUGIN_LOOKUP_PATTERNS = (
@@ -367,6 +368,35 @@ _PLUGIN_LOOKUP_PATTERNS = (
     ),
 )
 
+
+# This recognition contract is shared by every installed plugin. It classifies
+# the user's requested lifecycle/action purpose but grants only catalog reads.
+# Actual mutations and invocation must obtain fresh, action-specific authority.
+_PLUGIN_ACTION_PATTERNS = (
+    re.compile(
+        r"^(?:please\s+)?(?P<action>enable|disable|activate|deactivate|"
+        r"install|uninstall|remove|update|upgrade)\s+"
+        r"(?:(?:my|the|installed)\s+)?(?:plugin\s+)?"
+        r"(?P<target>[a-z][a-z0-9 _-]{1,64}?)"
+        r"(?:\s+(?:plugin|integration))?[?!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:please\s+)?(?P<action>use|invoke|run)\s+"
+        r"(?:(?:my|the|installed)\s+)?(?:plugin\s+)?"
+        r"(?P<target>[a-z][a-z0-9 _-]{1,64}?)"
+        r"(?:\s+plugin)?\s+(?:to|for)\s+(?P<goal>.+)$",
+        re.IGNORECASE,
+    ),
+)
+
+_PLUGIN_DISCOVERY = re.compile(
+    r"^(?:which|what)\s+(?:of\s+the\s+)?(?:installed\s+|available\s+)?"
+    r"plugins?\s+(?:can|could|should)\s+(?:i|you|karen)\s+"
+    r"(?:use\s+)?(?:to|for)\s+.+[?!.]*$",
+    re.IGNORECASE,
+)
+
 _PLUGIN_INVENTORY = re.compile(
     r"^(?:(?:please\s+)?(?:show|list)(?:\s+me)?\s+(?:my|the|available|installed)\s+plugins"
     r"|(?:which|what)\s+plugins\s+(?:are\s+(?:installed|available)|can\s+you\s+use|do\s+i\s+have)"
@@ -386,6 +416,32 @@ def parse_plugin_inspection_request(query: str) -> Optional[PluginInspectionRequ
         return None
     if _PLUGIN_INVENTORY.fullmatch(raw):
         return PluginInspectionRequest(operation="list")
+    if _PLUGIN_DISCOVERY.fullmatch(raw):
+        return PluginInspectionRequest(operation="discover")
+    for action_pattern in _PLUGIN_ACTION_PATTERNS:
+        match = action_pattern.fullmatch(raw)
+        if match is None:
+            continue
+        action = match.group("action").casefold()
+        target = match.group("target").strip(" .?!")
+        # A bounded, explicitly named plugin is mandatory. Compound provider
+        # actions are not silently reduced to catalog inspection.
+        if (
+            not target
+            or re.search(r"\b(?:and|then|with\s+(?:token|secret|password))\b", target, re.I)
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{1,64}", target)
+        ):
+            return None
+        if action in {"use", "invoke", "run"}:
+            goal = match.group("goal") or ""
+            if not 1 <= len(goal.strip()) <= 240:
+                return None
+            return PluginInspectionRequest(
+                operation="use", target=target, requested_action="execute",
+            )
+        return PluginInspectionRequest(
+            operation="manage", target=target, requested_action=action,
+        )
     if re.fullmatch(
         r"(?:please\s+)?(?:continue|resume)\s+setting\s+it\s+up[?!.]*",
         raw,
