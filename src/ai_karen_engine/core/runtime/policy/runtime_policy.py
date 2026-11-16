@@ -299,7 +299,18 @@ class RuntimePolicyEnforcer:
         Neither result proves that the alternative is executable; callers must
         not use this probe for sampling, eligibility, or an OPE receipt.
         """
-        if not direct_plan_authorized or not selected_policy.allowed:
+        # The selected policy must belong to the exact authenticated context.
+        # Matching only the shadow decision would allow cross-principal source
+        # lineage to be relabelled as a valid optional-verification probe.
+        selected_scope = selected_policy.runtime_constraints
+        if (
+            not direct_plan_authorized
+            or not selected_policy.allowed
+            or selected_scope.get("authorized_user_id") != request.user_id
+            or selected_scope.get("authorized_tenant_id") != request.tenant_id
+            or selected_scope.get("authorized_session_id") != request.session_id
+            or selected_scope.get("correlation_id") != request.correlation_id
+        ):
             return ResponseStrategyPolicyProbe(
                 source_decision_id=selected_policy.decision_id,
                 source_policy_version=selected_policy.policy_version,
