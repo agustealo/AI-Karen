@@ -20,6 +20,7 @@ from ai_karen_engine.core.personalization.self_model_projection import (
     SelfModelEvidenceAuthority,
     SelfModelEvidenceReceipt,
     SelfModelEvidenceStatus,
+    SelfModelEvidenceSubject,
     SelfModelProjectionHealth,
     SelfModelProjector,
 )
@@ -108,6 +109,7 @@ def receipt(
     authority: SelfModelEvidenceAuthority = (
         SelfModelEvidenceAuthority.CONFIGURATION
     ),
+    subject: SelfModelEvidenceSubject = SelfModelEvidenceSubject.KAREN_SELF,
     expires: datetime | None = None,
 ) -> SelfModelEvidenceReceipt:
     return SelfModelEvidenceReceipt(
@@ -117,6 +119,7 @@ def receipt(
         source_revision="a" * 64,
         status=status,
         authority=authority,
+        subject=subject,
         verified_at=NOW - timedelta(hours=1),
         valid_until=expires,
     )
@@ -332,6 +335,21 @@ async def test_malformed_external_evidence_fails_closed_without_exception() -> N
         model=model(principles=[facet()]), tenant_id=TENANT, at=NOW
     )
     assert result.health is SelfModelProjectionHealth.UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_user_subject_receipts_cannot_certify_karen_identity() -> None:
+    port = EvidenceReader({
+        "config-1": receipt(
+            "config-1", subject=SelfModelEvidenceSubject.USER,
+        ),
+    })
+    result = await projector(port).project(
+        model=model(principles=[facet()]), tenant_id=TENANT, at=NOW,
+    )
+    assert result.health is SelfModelProjectionHealth.UNAVAILABLE
+    assert result.verified_claims == 0
+    assert not result.model.principles
 
 
 @pytest.mark.asyncio
