@@ -15,6 +15,7 @@ CORTEX never performs retrieval. Runtime evidence resolution delegates memory
 selection exclusively to MemoryRuntimeManager -> NeuroRecall.
 """
 
+import logging
 from dataclasses import replace
 from typing import Optional
 
@@ -48,6 +49,9 @@ from ai_karen_engine.core.runtime.policy import (
     RuntimeLevel,
     RuntimePolicyEnforcer,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeDecisionPipeline:
@@ -109,14 +113,27 @@ class RuntimeDecisionPipeline:
                 and not scoped_conflict_evidence_ids(cognitive_context)
             )
             if direct_plan:
-                permission = await self._policy.probe_optional_verification(
-                    self._build_execution_policy_request(request, cognitive),
-                    policy,
-                    direct_plan_authorized=True,
-                )
-                constraints["response_strategy_policy_probe"] = (
-                    permission.to_metadata()
-                )
+                try:
+                    permission = await self._policy.probe_optional_verification(
+                        self._build_execution_policy_request(request, cognitive),
+                        policy,
+                        direct_plan_authorized=True,
+                    )
+                except Exception as exc:
+                    # Optional research evidence must not interrupt an
+                    # already authorized chat execution or create fake proof.
+                    logger.warning(
+                        "response_strategy_policy_probe_failed",
+                        extra={
+                            "error_type": type(exc).__name__,
+                            "policy_decision_id": policy.decision_id,
+                            "correlation_id": request.context.correlation_id,
+                        },
+                    )
+                else:
+                    constraints["response_strategy_policy_probe"] = (
+                        permission.to_metadata()
+                    )
         authorized_decision = replace(
             authorized_decision, policy_constraints=constraints,
         )
