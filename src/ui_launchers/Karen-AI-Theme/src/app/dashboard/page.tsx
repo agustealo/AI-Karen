@@ -72,6 +72,7 @@ import { Separator } from "@/components/ui/separator";
 
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
+import { isVoiceStudioDashboardRoute } from "@/lib/voice-studio-navigation";
 
 /**
  * Browser recovery keys are owned by the same authenticated identity as chat.
@@ -226,6 +227,15 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
   const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model' | 'voice'>('behavior');
+  // A fixed, host-owned deep link from the Plugin Store opens the same
+  // settings panel as Plugins & Tools. No execution or provider decisions
+  // are inferred from URL parameters. Only this explicit route is accepted.
+  useEffect(() => {
+    if (isVoiceStudioDashboardRoute(window.location.search)) {
+      setSettingsInitialSection('voice');
+      setActiveMainView('settings');
+    }
+  }, []);
   const [karenPanelOpen, setKarenPanelOpen] = useState(false);
   const karenLauncherRef = useRef<HTMLButtonElement | null>(null);
   const karenPanelRef = useRef<HTMLDivElement | null>(null);

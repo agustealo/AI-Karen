@@ -404,3 +404,32 @@ Source CI validates contracts and UI behavior with controlled browser audio
 stubs. Actual signed-in browser playback, native Pocket CPU inference, licensed
 model installation, latency and accessibility on target devices remain separate
 release gates, never implied by a frontend success badge.
+
+
+### Plugin Store path to Voice Studio (2026-11-16)
+
+The **Plugin Store → installed TTS plugin → Manage** flow now exposes
+**Open Voice Studio** even when the plugin has no generic settings schema.
+The button is conditionally passed from the Plugin Store only when its
+authenticated extension registry confirms the selected installed plugin
+declares the versioned TTS capability. Neither the plugin's name, tags,
+marketplace description nor a successful install can assert runtime readiness.
+
+The Store navigates through the single host deep link,
+`/dashboard?view=settings&section=voice`, and Dashboard resolves it into
+the existing **Assistant → Voice** panel. It does not mount a separate
+voice settings implementation, infer provider selections from the URL, or
+call the extension executor directly. Unavailable/failed extension catalog
+reads fail closed and hide the shortcut, without preventing ordinary
+plugin details or lifecycle controls.
+
+Source proof:
+- `tests/plugins/plugin-details-settings.test.tsx` confirms the host
+  action coexists with generic plugin settings only when supplied.
+- `tests/plugins/plugin-store-voice-studio.test.tsx` verifies installed
+  TTS identity, catalog outages, uninstalled and non-TTS cases, and actual
+  navigation to the authenticated existing settings route.
+- `tests/plugins/voice-studio-navigation.test.ts` verifies the canonical
+  route and rejects ambiguous or unrelated navigation parameters.
+
+Browser/device acceptance remains separate from source-level checks.
