@@ -174,6 +174,50 @@ class ChannelHostServices:
         )
         return verified is True
 
+    async def activate_telegram_connection(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ):
+        """Run canonical Telegram activation without browser-selected adapters.
+
+        This confirms local activation and provider identity, not remote
+        webhook registration or an end-to-end message round-trip.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel activation host is unavailable")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Expected connection revision required")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "telegram-bot"
+            or connection.enabled or connection.revision != expected_revision
+        ):
+            raise PermissionError("Telegram connection is unavailable for activation")
+        adapter = self._installed.get(connection.installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(
+                connection.installation_id
+            ) is None
+            or not self.kernel.is_canonical_channel_adapter(
+                connection.installation_id, adapter
+            )
+        ):
+            raise PermissionError("Canonical Telegram transport unavailable")
+        # ChannelActivationService rechecks principal/RBAC/RuntimePolicy,
+        # config, immutable revision and persisted CAS before returning.
+        return await self.activation.activate(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan, adapter=adapter,
+            settings={"private_chats_only": True},
+        )
+
     async def inspect_channel_webhook(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,
