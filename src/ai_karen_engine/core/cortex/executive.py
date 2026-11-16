@@ -391,6 +391,23 @@ class CortexExecutionDecider:
                 if tool not in topology.get("tool_requirements", []):
                     topology.setdefault("tool_requirements", []).append(tool)
 
+            if capability_decision.intent == "plugin.inspect":
+                # Plugin management/use language is an intent hint, never a
+                # general tool or plugin execution grant. Keep CORTEX's risk
+                # observations and RuntimePolicy as final authority, but
+                # restrict this read-only preflight to its one capability.
+                # In particular, ML hints and incidental "debug/code" words
+                # cannot add filesystem, shell, search, or provider actions.
+                topology["tool_requirements"] = []
+                topology["plugin_candidates"] = []
+                topology["agent_delegation"] = False
+                topology["requires_parallel_execution"] = False
+                topology["requires_resumability"] = False
+                capabilities["required"] = ["plugin.inspect"]
+                workflow = {"required": False, "workflow_id": None}
+                memory_policy["write_requested"] = False
+                memory_policy["recall_required"] = False
+
             return {
                 "intent": (
                     capability_decision.intent
