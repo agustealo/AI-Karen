@@ -1515,6 +1515,7 @@ async def test_telegram_webhook_registration_host_fences_revision_and_canonical_
     assert host.activation._authorize.await_args.kwargs["action"] == "channel.webhook.register"
     adapter.register_webhook.assert_awaited_once_with(
         connection=connection, public_origin="https://hooks.example.org",
+        expected_bot_id=123456,
     )
     host.repository.claim_telegram_webhook_registration.assert_awaited_once_with(
         tenant_id=connection.tenant_id, connection_id=connection.connection_id,
