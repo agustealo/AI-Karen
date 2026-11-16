@@ -294,7 +294,7 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             correlation_id="pg-review-correlation-1",
             feature_version="pg-verification-features-v1",
             created_at=datetime.now(timezone.utc),
-            metadata={"secret_prompt": "NEVER_PERSIST_REVIEW_PROMPT"},
+            metadata={"snapshot_origin": "ci_decision_time"},
         )
         await lineage.save_feature_snapshot_async(feature)
         decision = DecisionObservation(
