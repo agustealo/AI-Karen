@@ -1292,9 +1292,16 @@ class PluginService:
                 # A manifest declaration alone is not a ready local engine.
                 host_eligible = False
                 execution_route = "voice_runtime"
-                readiness = "requires_authorized_voice_catalog"
-                next_action = "voice.inspect_engine_catalog"
                 features = declared_generic_features[:20]
+                if not validated or blocked:
+                    readiness = "invalid_or_blocked"
+                    next_action = "plugin.installation_review"
+                elif registration_state not in {"enabled", "active"}:
+                    readiness = "disabled"
+                    next_action = "plugin.enable_with_approval"
+                else:
+                    readiness = "requires_authorized_voice_catalog"
+                    next_action = "voice.inspect_engine_catalog"
             else:
                 host_eligible = False
                 execution_route = "plugin_executor"
