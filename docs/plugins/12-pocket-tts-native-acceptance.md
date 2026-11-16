@@ -19,6 +19,9 @@
 | First-class Copilot voice dock and global Stop audio | [PR #872](https://github.com/agustealo/AI-Karen/pull/872) · [PR #880](https://github.com/agustealo/AI-Karen/pull/880) | **Merged**; browser UI source contracts, not real device acceptance |
 | Preview isolation, voice-settings readback, long speech and browser-dictation draft safety | [PR #888](https://github.com/agustealo/AI-Karen/pull/888) | **Merged**; 7/7 exact-head checks including frontend production build |
 | Governed built-in model download in Pocket plugin UX | [PR #911](https://github.com/agustealo/AI-Karen/pull/911) | **Merged**; licensed native load and audio still unverified |
+| Complete PCM16 WAV payload validation for local/plugin synthesis | [PR #922](https://github.com/agustealo/AI-Karen/pull/922) | **Merged**; transport-integrity tests, not actual model acceptance |
+| Enabled `plugin_audio` channel downloads from plugin management | [PR #925](https://github.com/agustealo/AI-Karen/pull/925) | **Merged**; frontend policy/contract wiring, not real licensed download |
+| Authenticated real Pocket server audio acceptance runner | `tests/core/voice/test_pocket_tts_live_acceptance.py` | **Operator opt-in only**; no target run or captured device artifact |
 | Target hardware runtime + licensed model install | No attested target artifact | **Not proven** |
 | Native Pocket audio and WAV integrity | No non-mocked target WAV | **Not proven** |
 | Browser preview/read-aloud on real target | No device/browser capture | **Not proven** |
@@ -126,6 +129,49 @@ non-mocked speech or consumer acceptance. Preserve test exit codes and the
 exact repository commit in the evidence report.
 
 ## Real API and UI acceptance
+
+### Operator-only authenticated server smoke test
+
+Karen now includes an opt-in **non-mocked** HTTP smoke test at
+`tests/core/voice/test_pocket_tts_live_acceptance.py`. It uses the running
+Karen server's real authentication, PluginService, VoiceRuntime and native
+Pocket engine. It does **not** inject a fake user principal, bypass admission,
+download a model, install dependencies, or infer readiness from job completion.
+
+The operator must provide both environment variables via a private, secured
+terminal or secret mechanism:
+
+- `KAREN_POCKET_ACCEPTANCE_URL`: the existing *loopback-only* Karen API origin,
+  such as `http://127.0.0.1:8000`. No remote hosts, URL userinfo, query,
+  redirects or proxy environment are permitted by the test.
+- `KAREN_POCKET_ACCEPTANCE_TOKEN`: an actual bearer access token issued by
+  the running, authorized Karen server for the intended tenant. Never commit,
+  paste into issues, or include in logs or CI artifacts.
+
+Once the operator has licensed, downloaded and enabled the model through the
+existing governed host UI, run from the repo root:
+
+```bash
+PYTHONPATH=src pytest -q -ra \
+  tests/core/voice/test_pocket_tts_live_acceptance.py
+```
+
+Normal source CI runs the loopback-origin safety tests and skips the two
+network-dependent tests if **both** opt-in variables are unset. A skip is
+**not** successful native acceptance. Providing only one variable is an
+error, never an invitation to fall back to mock speech.
+
+The live tests require both anonymous catalog and anonymous synthesis to
+be denied, an authenticated catalog to report Pocket ready at the exact
+reviewed model revision, an invented voice to be rejected without substitute,
+an approved real voice, a real
+`POST /api/voice/engines/pocket-tts/synthesis` with the selected voice and
+fixed harmless phrase, real non-silent PCM frames,
+correct mono PCM16 WAV properties, and a private no-store transport response.
+They report only model/voice IDs and duration/latency/real-time factor metadata;
+they do not save audio, text, paths or the bearer token. The target CPU/RAM
+profile, real human listening, browser playback and actual model/voice licensing
+still require independent evidence and sign-off.
 
 Use an authenticated test identity with explicit tenant membership. Retrieve
 `GET /api/voice/engines` and record the real returned `engine_id`,
