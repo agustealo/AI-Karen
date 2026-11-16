@@ -131,6 +131,7 @@ jobs:
             tests/core/model_runtime/test_model_orchestrator_registry_durability.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
             tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
+            tests/core/model_runtime/test_plugin_model_recommendation_tenant_truth.py \
             tests/integration/test_model_download_requested_state_leases.py \
             tests/integration/test_model_download_target_exclusivity.py \
             tests/integration/test_model_download_publication_recovery.py \
@@ -152,6 +153,7 @@ jobs:
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
             tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
+            tests/core/model_runtime/test_plugin_model_recommendation_tenant_truth.py \
             tests/integration/test_model_download_requested_state_leases.py \
             tests/integration/test_model_download_target_exclusivity.py \
             tests/integration/test_model_download_publication_recovery.py \
@@ -173,6 +175,7 @@ jobs:
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
             tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
+            tests/core/model_runtime/test_plugin_model_recommendation_tenant_truth.py \
             -q
 
       - name: Apply model download authority migrations

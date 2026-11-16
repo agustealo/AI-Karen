@@ -42,6 +42,7 @@ import {
   AlertTitle,
 } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { PluginRecommendedModels } from './PluginRecommendedModels';
 import {
   Card,
   CardContent,
@@ -547,6 +548,7 @@ function PluginHealthCard({
   const [operationInProgress, setOperationInProgress] =
     useState<PluginOperation | null>(null);
   const [operationError, setOperationError] = useState('');
+  const [showModelSetup, setShowModelSetup] = useState(false);
   const [operationOverride, setOperationOverride] =
     useState<OperationOverrideState>({});
 
@@ -898,12 +900,26 @@ function PluginHealthCard({
       )}
 
       <div className="mt-3 flex flex-wrap gap-2">
+        {supportsVoiceOutput && (
+          <Button type="button" size="sm" variant="outline"
+            aria-expanded={showModelSetup}
+            aria-label={`Download recommended model for ${displayName}`}
+            onClick={() => setShowModelSetup((visible) => !visible)}>
+            <Settings2 className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            {showModelSetup ? 'Hide model setup' : 'Download recommended model'}
+          </Button>
+        )}
         {supportsVoiceOutput && onOpenVoiceStudio && (
           <Button type="button" size="sm" variant="default"
             onClick={onOpenVoiceStudio} aria-label={`Open Voice Studio for ${displayName}`}>
             <Settings2 className="mr-1.5 h-4 w-4" aria-hidden={true} />
             Open Voice Studio
           </Button>
+        )}
+        {supportsVoiceOutput && showModelSetup && (
+          <div className="w-full">
+            <PluginRecommendedModels key={pluginId} pluginId={pluginId} />
+          </div>
         )}
         {hasUiCapabilities && uiInstallStatus === 'installed' && isBackendActiveState && (
           <div className="flex items-center gap-2 text-xs text-green-600">
