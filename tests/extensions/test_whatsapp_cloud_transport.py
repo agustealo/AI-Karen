@@ -63,6 +63,7 @@ def signed_message():
             "messaging_product": "whatsapp",
             "metadata": {"phone_number_id": PHONE},
             "messages": [{"id": "wamid.event-42", "from": "15551234567",
+                          "timestamp": "1770000000",
                           "type": "text", "text": {"body": "Hi Karen"}}],
         }}]}],
     }).encode()
@@ -165,6 +166,7 @@ async def test_signed_whatsapp_text_is_host_untrusted_identity_only():
         "15551234567", "15551234567",
     )
     assert event.text == "Hi Karen"
+    assert event.provider_timestamp == 1770000000
     assert not hasattr(event, "user_id")
     assert not hasattr(event, "tenant_id")
     assert not await adapter.verify_event(
@@ -325,7 +327,13 @@ def webhook_value(*, messages=None, statuses=None, phone=PHONE):
         "metadata": {"phone_number_id": phone},
     }
     if messages is not None:
-        value["messages"] = messages
+        # Every valid Meta text notification supplies its signed sent timestamp.
+        # Explicitly provided None remains invalid for negative tests.
+        value["messages"] = [
+            {**m, "timestamp": m.get("timestamp", "1770000000")}
+            if isinstance(m, dict) and m.get("type") == "text" else m
+            for m in messages
+        ]
     if statuses is not None:
         value["statuses"] = statuses
     return value
@@ -380,6 +388,30 @@ async def test_signed_whatsapp_batch_normalizes_separate_messages_and_receipts()
     assert not hasattr(evidence, "tenant_id")
     client.post.assert_not_awaited()
     resolver.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timestamp", [
+    None, "", "not-a-time", "-1", "4102444801", 1770000000,
+])
+async def test_whatsapp_signed_text_without_valid_provider_time_is_rejected(timestamp):
+    _, adapter, account, _, _ = adapter_components()
+    await adapter.start(connection=account)
+    body, headers = signed_batch({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": webhook_value(
+            messages=[{
+                "id": "wamid.invalid-time",
+                "from": "15551234567",
+                "type": "text",
+                "timestamp": timestamp,
+                "text": {"body": "Hello"},
+            }],
+        )}]}],
+    })
+    assert await adapter.verify_event(connection=account, headers=headers, body=body)
+    with pytest.raises(ValueError, match="timestamp|Malformed"):
+        await adapter.normalize_events(connection=account, headers=headers, body=body)
 
 
 @pytest.mark.asyncio

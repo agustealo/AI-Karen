@@ -30,9 +30,10 @@ CLAIM = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 
 def create_components(*, state=ChannelDeliveryState.SENT, provider_id="provider-1",
-                      adapter_error=None, supports_receipts=False):
+                      adapter_error=None, supports_receipts=False,
+                      installation_id="channel-plugin"):
     connection = ChannelConnection(
-        connection_id="conn", installation_id="channel-plugin",
+        connection_id="conn", installation_id=installation_id,
         tenant_id=TENANT, provider_account_id="account",
         credential_handle="vault://token", revision=3, enabled=True,
     )
@@ -56,6 +57,7 @@ def create_components(*, state=ChannelDeliveryState.SENT, provider_id="provider-
         ),
         get_enabled_connection=AsyncMock(return_value=connection),
         claim_outbound=AsyncMock(return_value=claim),
+        whatsapp_customer_window_open=AsyncMock(return_value=True),
         renew_outbound_claim=AsyncMock(return_value=True),
         finalize_outbound_claim=AsyncMock(return_value=True),
     )
@@ -102,13 +104,13 @@ def create_components(*, state=ChannelDeliveryState.SENT, provider_id="provider-
 
 
 def authorization(*, user_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
-                  tenant_id=TENANT, allowed=True):
+                  tenant_id=TENANT, allowed=True, installation_id="channel-plugin"):
     return AuthorizedExecutionPlan(
         execution_id="channel-send-1",
         policy_decision_id="policy-decision-1",
         authorized_user_id=user_id,
         authorized_tenant_id=tenant_id,
-        allowed_plugins=["channel-plugin"] if allowed else [],
+        allowed_plugins=[installation_id] if allowed else [],
         allowed_capabilities=["channel.send"],
     )
 
@@ -134,6 +136,44 @@ async def test_sent_requires_provider_message_identifier(immediate_heartbeat):
     assert receipt.state is ChannelDeliveryState.SENT
     assert receipt.provider_message_id == "provider-1"
     assert repo.claim_outbound.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("window_open", [True, False])
+async def test_whatsapp_dispatch_requires_current_host_customer_window(
+    immediate_heartbeat, window_open,
+):
+    service, repo, adapter, _ = create_components(installation_id="whatsapp-cloud")
+    repo.whatsapp_customer_window_open.return_value = window_open
+    result = await service.dispatch(
+        tenant_id=TENANT, delivery_id=DELIVERY, adapter=adapter,
+        authorized_plan=authorization(installation_id="whatsapp-cloud"),
+    )
+    assert result is window_open
+    claim = repo.claim_outbound.await_args.kwargs
+    repo.whatsapp_customer_window_open.assert_awaited_once_with(
+        tenant_id=TENANT, claimed=repo.claim_outbound.return_value,
+        send_budget_seconds=65,
+    )
+    assert claim["delivery_id"] == DELIVERY
+    receipt = repo.finalize_outbound_claim.await_args.kwargs["receipt"]
+    if window_open:
+        adapter.send.assert_awaited_once()
+        assert receipt.state is ChannelDeliveryState.SENT
+    else:
+        adapter.send.assert_not_awaited()
+        assert receipt.state is ChannelDeliveryState.FAILED
+        assert receipt.error_code == "whatsapp_customer_window_closed"
+
+
+@pytest.mark.asyncio
+async def test_other_channel_never_requires_whatsapp_policy(immediate_heartbeat):
+    service, repo, adapter, _ = create_components()
+    assert await service.dispatch(
+        tenant_id=TENANT, delivery_id=DELIVERY, adapter=adapter,
+        authorized_plan=authorization(),
+    )
+    repo.whatsapp_customer_window_open.assert_not_awaited()
 
 
 @pytest.mark.asyncio

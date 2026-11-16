@@ -100,6 +100,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261116010000_54_channel_provider_status_ledger.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(status_migration)
+        customer_window_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261116030000_56_whatsapp_customer_window_evidence.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(customer_window_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -156,6 +161,166 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                     yield session
 
         monkeypatch.setattr(module, "async_transaction_scope", real_scope)
+
+        # KWA-01C2: real SQL proves a signed Meta customer timestamp,
+        # a closed 24h window, a later customer reset, immutable evidence,
+        # and denial of tenant/recipient substitution after a one-shot claim.
+        from ai_karen_engine.extensions.channels.contracts import InboundChannelEvent
+        from ai_karen_engine.persistence.repositories.channel_repository import (
+            ChannelAdmissionDenied,
+        )
+
+        wa_store = SqlChannelRepository()
+        wa_connection = f"wa-window-{uuid.uuid4().hex}"
+        wa_recipient = "15551234567"
+        wa_binding = uuid.uuid4()
+        wa_delivery = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id, provider_account_id,
+                credential_handle, enabled, revision)
+               VALUES ($1, $2, 'whatsapp-cloud', '10987654321', 'vault://meta',
+                       true, 1)""",
+            wa_connection, tenant_a,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_identity_bindings
+               (binding_id, tenant_id, connection_id, external_sender_id,
+                user_id, verified_at)
+               VALUES ($1, $2, $3, $4, $5, now())""",
+            wa_binding, tenant_a, wa_connection, wa_recipient, user,
+        )
+        wa_account = await wa_store.get_enabled_connection(
+            tenant_id=str(tenant_a), connection_id=wa_connection,
+        )
+        assert wa_account is not None
+        old_customer_time = int(
+            (datetime.now(timezone.utc) - timedelta(hours=25)).timestamp()
+        )
+        stale_admission = await wa_store.admit_verified_inbound(
+            connection=wa_account,
+            event=InboundChannelEvent(
+                connection_id=wa_connection, external_event_id="wamid.customer-old",
+                external_sender_id=wa_recipient,
+                external_conversation_id=wa_recipient,
+                message_kind="text", text="Old question",
+                provider_timestamp=old_customer_time,
+            ),
+        )
+        recorded_time = await raw.fetchval(
+            "SELECT extract(epoch FROM provider_event_at)::bigint "
+            "FROM public.channel_inbox WHERE inbox_id=$1",
+            uuid.UUID(stale_admission.inbox_id),
+        )
+        assert recorded_time == old_customer_time
+        await raw.execute(
+            """UPDATE public.channel_inbox SET status='completed'
+               WHERE inbox_id=$1""",
+            uuid.UUID(stale_admission.inbox_id),
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_outbox
+               (delivery_id, tenant_id, connection_id, inbox_id,
+                destination_id, idempotency_key, message_kind, message_text)
+               VALUES ($1, $2, $3, $4, $5, 'reply-old', 'text', 'Reply')""",
+            wa_delivery, tenant_a, wa_connection,
+            uuid.UUID(stale_admission.inbox_id), wa_recipient,
+        )
+        wa_claim = await wa_store.claim_outbound(
+            tenant_id=str(tenant_a), delivery_id=str(wa_delivery), lease_seconds=90,
+        )
+        assert wa_claim is not None
+        assert not await wa_store.whatsapp_customer_window_open(
+            tenant_id=str(tenant_a), claimed=wa_claim,
+        )
+        with pytest.raises(asyncpg.PostgresError):
+            await raw.execute(
+                "UPDATE public.channel_inbox SET provider_event_at=now() "
+                "WHERE inbox_id=$1",
+                uuid.UUID(stale_admission.inbox_id),
+            )
+        # Another authenticated message from the exact same contact/binding
+        # refreshes the policy window; an outgoing message never does.
+        fresh_admission = await wa_store.admit_verified_inbound(
+            connection=wa_account,
+            event=InboundChannelEvent(
+                connection_id=wa_connection, external_event_id="wamid.customer-new",
+                external_sender_id=wa_recipient,
+                external_conversation_id=wa_recipient,
+                message_kind="text", text="New question",
+                provider_timestamp=int(
+                    (datetime.now(timezone.utc) - timedelta(minutes=2)).timestamp()
+                ),
+            ),
+        )
+        assert fresh_admission.inserted
+        assert await wa_store.whatsapp_customer_window_open(
+            tenant_id=str(tenant_a), claimed=wa_claim,
+        )
+        assert not await wa_store.whatsapp_customer_window_open(
+            tenant_id=str(tenant_b), claimed=wa_claim,
+        )
+        wrong_destination = wa_claim.delivery.model_copy(
+            update={"destination_id": "15550009999"},
+        )
+        assert not await wa_store.whatsapp_customer_window_open(
+            tenant_id=str(tenant_a),
+            claimed=wa_claim.__class__(
+                connection=wa_claim.connection, delivery=wrong_destination,
+                user_id=wa_claim.user_id,
+                external_conversation_id=wa_claim.external_conversation_id,
+                claim_token=wa_claim.claim_token,
+            ),
+        )
+        with pytest.raises(ChannelAdmissionDenied):
+            await wa_store.admit_verified_inbound(
+                connection=wa_account,
+                event=InboundChannelEvent(
+                    connection_id=wa_connection, external_event_id="wamid.future",
+                    external_sender_id=wa_recipient,
+                    external_conversation_id=wa_recipient,
+                    message_kind="text", text="Bad clock",
+                    provider_timestamp=int(
+                        (datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp()
+                    ),
+                ),
+            )
+
+        # A pre-migration webhook replay reuses the original receipt and
+        # must never backfill an unaudited customer-window timestamp.
+        legacy_event = InboundChannelEvent(
+            connection_id=wa_connection,
+            external_event_id="wamid.before-migration",
+            external_sender_id=wa_recipient,
+            external_conversation_id=wa_recipient,
+            message_kind="text", text="Previously admitted",
+            provider_timestamp=int(
+                (datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
+            ),
+        )
+        legacy_id = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id, tenant_id, connection_id, connection_revision,
+                external_event_id, external_sender_id, external_conversation_id,
+                message_kind, message_text, event_digest, binding_id, user_id)
+               VALUES ($1, $2, $3, 1, $4, $5, $5, 'text', $6, $7, $8, $9)""",
+            legacy_id, tenant_a, wa_connection, legacy_event.external_event_id,
+            wa_recipient, legacy_event.text,
+            module._event_digest(legacy_event.model_copy(
+                update={"provider_timestamp": None},
+            )),
+            wa_binding, user,
+        )
+        replay = await wa_store.admit_verified_inbound(
+            connection=wa_account, event=legacy_event,
+        )
+        assert replay.inserted is False
+        assert replay.inbox_id == str(legacy_id)
+        assert await raw.fetchval(
+            "SELECT provider_event_at FROM public.channel_inbox WHERE inbox_id=$1",
+            legacy_id,
+        ) is None
 
         # Governed repository only assigns the first active verified owner.
         owner_repo = SqlChannelRepository()
@@ -588,12 +753,14 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_a),
             )
+            # Original claim fixture plus KWA-01C2's three customer
+            # receipts and one WhatsApp outbox all belong to this tenant.
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_inbox"
-            ) == 1
+            ) == 4
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_outbox"
-            ) == 1
+            ) == 2
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_personal_pairing_consents"
             ) == 3

@@ -28,6 +28,32 @@ messaging, the WABA is subscribed to the correct webhook, inbound/outbound
 traffic works, tokens remain valid, 24-hour service windows are enforced, or
 a live Meta test-number trial passed. Those are independent release gates.
 
+## KWA-01C2: host-enforced 24-hour customer service window (source only)
+
+WhatsApp free-form reply dispatch now requires a **signed native customer-message
+timestamp** stored in the existing tenant-FORCE-RLS `channel_inbox`. Migration
+`56_whatsapp_customer_window_evidence` adds immutable `provider_event_at`.
+Meta inbound text with a missing/malformed timestamp is rejected; legacy inbox
+rows with no evidence do not authorize an outgoing send. Event identity digests
+now include available native provider time, without changing legacy digests for
+other channels.
+
+After a one-shot outbox claim, `ChannelDeliveryService` checks the **PostgreSQL
+clock** and verifies that a customer message in the past 24 hours belongs to the
+exact tenant, connection revision, bound Karen principal, sender, destination,
+and conversation. A second customer message can refresh the window, while
+outgoing sends never do. The host reserves 65 seconds for the bounded network
+call and refuses dispatch near expiry or when evidence is missing. Denials are
+durably marked `whatsapp_customer_window_closed` without contacting Meta.
+This guard never grants template messaging or initiates conversations.
+
+**Acceptance limits:** This is source-level policy enforcement, not proof that
+Meta will accept the message. Live provider clock skew, network latency,
+policy changes, restart/recovery, and Meta test-number behavior need
+independent acceptance. Existing queued replies tied to pre-migration inbox
+records intentionally fail closed. Do not bypass this guard by calling an
+adapter directly or enabling generic plugin execution.
+
 ## Operator setup (explicit opt-in)
 
 1. Install/validate the preinstalled `whatsapp-cloud` manifest using Karen's governed plugin catalog. Do **not** use generic plugin `/load` to enable messaging.
@@ -46,7 +72,8 @@ These are operator requirements, **not an assertion that the current deployment 
 - [ ] End-to-end Meta test-number handshake on a public HTTPS callback, signed inbound delivery, tenant identity linking, durable one-turn response, and provider-observed receipt
 - [x] **Source-only:** Signed status batches and durable, monotonic PostgreSQL reconciliation are implemented by KWA-01B. This does **not** establish live Meta delivery/read evidence.
 - [ ] **Provider acceptance:** Real Meta status batches, delayed/duplicate provider receipts, deactivation handling, and unmatched-status retention must pass end-to-end.
-- [ ] Provider-backed 24-hour conversation window and explicit template/opt-in policy before outbound initiation. Current adapter is limited to host-staged text replies, not unrestricted templates or campaigns
+- [x] **Source-only:** Host-gated 24-hour free-form reply window using immutable signed inbound time and a claim-bound PostgreSQL clock check (KWA-01C2).
+- [ ] **Provider acceptance:** Independently verify the 24-hour behavior against live Meta and establish explicit template/opt-in policy before any outbound initiation; no unrestricted templates or campaigns
 - [ ] Network timeouts, retries, rate limiting, unknown-send semantics, exact-account fencing, rotation and revocation, audit/telemetry, provider downtime and incident recovery acceptance
 - [ ] Real signed-in admin browser walkthrough at narrow and wide viewports, plus disconnection, replay, concurrency and privacy behavior
 - [ ] Exact-head CI (Plugin Backend, Frontend, Security, Main Quality, First-Boot), postmerge main, and an independently attested live Meta sandbox trial
