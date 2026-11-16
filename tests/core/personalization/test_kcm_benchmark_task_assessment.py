@@ -543,9 +543,9 @@ async def test_custom_corpus_reusing_ids_with_changed_input_is_not_canonical(
         features=dict(original.features),
     )
 
-    class AlteredCorpus:
-        @staticmethod
-        def get_cases(**kwargs):
+    class AlteredCorpus(CanonicalEvaluationCorpus):
+        @classmethod
+        def get_cases(cls, **kwargs):
             return [altered]
 
     class RealPredictor:
