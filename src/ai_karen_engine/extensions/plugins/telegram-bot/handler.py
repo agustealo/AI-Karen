@@ -260,6 +260,36 @@ class MainExtension(ExtensionBase):
         except Exception:
             raise PermissionError("Telegram registration observation unavailable") from None
 
+    async def identify_bot(
+        self, *, connection: ChannelConnection,
+    ) -> int:
+        """Resolve the numeric provider identity under the trusted host Vault.
+
+        The numeric ID is safe for database ownership; the secret token and
+        provider response must never enter a log or HTTP response.
+        """
+        self._require_active(connection)
+        _, token = await self._secrets(connection)
+        try:
+            response = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getMe"
+            )
+            if response.status_code != 200:
+                raise ValueError("Telegram bot identity unavailable")
+            body = response.json()
+            result = body.get("result") if isinstance(body, dict) else None
+            if (
+                body.get("ok") is not True
+                or not isinstance(result, dict)
+                or result.get("is_bot") is not True
+                or type(result.get("id")) is not int
+                or not 0 < result["id"] < 2**63
+            ):
+                raise ValueError("Telegram bot identity invalid")
+            return result["id"]
+        except Exception:
+            raise PermissionError("Telegram bot identity verification unavailable") from None
+
     async def register_webhook(
         self, *, connection: ChannelConnection, public_origin: str,
     ) -> Mapping[str, bool]:
