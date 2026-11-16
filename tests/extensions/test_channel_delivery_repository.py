@@ -772,14 +772,14 @@ async def test_archived_provider_status_digest_conflict_is_denied(monkeypatch):
 @pytest.mark.asyncio
 async def test_telegram_registration_claim_is_single_insert_under_connection_row_lock(monkeypatch):
     claim_token = "22222222-2222-2222-2222-222222222222"
-    session = FakeSession(RowResult(scalar=claim_token))
+    session = FakeSession(RowResult(scalar=claim_token), RowResult(scalar=123456))
     install(monkeypatch, session)
     token = await SqlChannelRepository().claim_telegram_webhook_registration(
-        tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2,
+        tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2, provider_bot_id=123456,
         lease_seconds=120,
     )
     assert token
-    assert len(session.calls) == 1
+    assert len(session.calls) == 2
     sql, params = session.calls[0]
     assert "channel_telegram_webhook_claims" in sql
     assert "FOR UPDATE OF c" in sql
@@ -788,6 +788,8 @@ async def test_telegram_registration_claim_is_single_insert_under_connection_row
     assert "c.installation_id = 'telegram-bot'" in sql
     assert params["tenant"] == TENANT
     assert params["revision"] == 2
+    assert "channel_telegram_bot_owners" in session.calls[1][0]
+    assert session.calls[1][1]["bot_id"] == 123456
 
 
 @pytest.mark.asyncio
@@ -796,6 +798,7 @@ async def test_telegram_registration_duplicate_or_uncertain_claim_refuses_reentr
     install(monkeypatch, session)
     result = await SqlChannelRepository().claim_telegram_webhook_registration(
         tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2,
+        provider_bot_id=123456,
     )
     assert result is None
     assert "DO NOTHING" in session.calls[0][0]
@@ -835,7 +838,7 @@ async def test_telegram_registration_rejects_invalid_claim_scope(monkeypatch, re
     with pytest.raises(ValueError):
         await SqlChannelRepository().claim_telegram_webhook_registration(
             tenant_id=TENANT, connection_id="telegram-connect",
-            expected_revision=revision, lease_seconds=lease,
+            expected_revision=revision, provider_bot_id=123456, lease_seconds=lease,
         )
     assert not session.calls
 
@@ -941,3 +944,36 @@ async def test_invalid_whatsapp_status_batch_rejected_before_sql(monkeypatch):
         )
     assert session.lock_calls == []
     assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_telegram_global_bot_ownership_conflict_rolls_back_claim(monkeypatch):
+    session = FakeSession(
+        RowResult(scalar="22222222-2222-2222-2222-222222222222"),
+        RowResult(scalar=None),
+        RowResult(scalar=None),
+    )
+    install(monkeypatch, session)
+    with pytest.raises(PermissionError, match="ownership verification denied"):
+        await SqlChannelRepository().claim_telegram_webhook_registration(
+            tenant_id=TENANT, connection_id="telegram-connect",
+            expected_revision=2, provider_bot_id=123456,
+        )
+    assert len(session.calls) == 3
+    assert "channel_telegram_bot_owners" in session.calls[1][0]
+    assert "provider_bot_id" in session.calls[2][0]
+    assert "tenant_id = CAST(:tenant AS uuid)" in session.calls[2][0]
+
+
+@pytest.mark.asyncio
+async def test_telegram_global_bot_ownership_same_connection_is_idempotent(monkeypatch):
+    session = FakeSession(
+        RowResult(scalar="22222222-2222-2222-2222-222222222222"),
+        RowResult(scalar=None),
+        RowResult(scalar=123456),
+    )
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().claim_telegram_webhook_registration(
+        tenant_id=TENANT, connection_id="telegram-connect",
+        expected_revision=2, provider_bot_id=123456,
+    )

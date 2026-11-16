@@ -1494,6 +1494,7 @@ async def test_telegram_webhook_registration_host_fences_revision_and_canonical_
     host.repository.complete_telegram_webhook_registration = AsyncMock(
         return_value=True,
     )
+    adapter.identify_bot = AsyncMock(return_value=123456)
     adapter.register_webhook = AsyncMock(return_value={
         "provider_registration_verified": True,
         "live_connected": False,
@@ -1514,10 +1515,11 @@ async def test_telegram_webhook_registration_host_fences_revision_and_canonical_
     assert host.activation._authorize.await_args.kwargs["action"] == "channel.webhook.register"
     adapter.register_webhook.assert_awaited_once_with(
         connection=connection, public_origin="https://hooks.example.org",
+        expected_bot_id=123456,
     )
     host.repository.claim_telegram_webhook_registration.assert_awaited_once_with(
         tenant_id=connection.tenant_id, connection_id=connection.connection_id,
-        expected_revision=2,
+        expected_revision=2, provider_bot_id=123456,
     )
     host.repository.complete_telegram_webhook_registration.assert_awaited_once_with(
         tenant_id=connection.tenant_id, connection_id=connection.connection_id,
@@ -1554,6 +1556,7 @@ async def test_webhook_registration_disabled_without_configured_public_origin():
         revision=2, enabled=True,
     )
     host.repository.get_enabled_connection = AsyncMock(return_value=conn)
+    adapter.identify_bot = AsyncMock(return_value=123456)
     adapter.register_webhook = AsyncMock()
     await host.initialize()
     host.activation._authorize = AsyncMock()
@@ -1588,6 +1591,7 @@ async def test_telegram_provider_registration_claim_denial_never_calls_provider(
     host.repository.get_enabled_connection = AsyncMock(return_value=connection)
     host.repository.claim_telegram_webhook_registration = AsyncMock(return_value=None)
     host.repository.complete_telegram_webhook_registration = AsyncMock()
+    adapter.identify_bot = AsyncMock(return_value=123456)
     adapter.register_webhook = AsyncMock()
     await host.initialize()
     host.activation._authorize = AsyncMock()
@@ -1628,6 +1632,7 @@ async def test_telegram_provider_registration_unknown_persists_nonreclaimable_cl
     host.repository.complete_telegram_webhook_registration = AsyncMock(
         return_value=False,
     )
+    adapter.identify_bot = AsyncMock(return_value=123456)
     adapter.register_webhook = AsyncMock(
         side_effect=PermissionError("Bot token must not escape"),
     )

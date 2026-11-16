@@ -358,3 +358,43 @@ These two read-only checks do **not** create an atomic transaction with the
 Telegram Bot API, prove unique ownership of the Telegram bot across tenants,
 or authorize recovery. Claim release remains unavailable until independently
 fenced provider ownership and durable recovery are implemented.
+
+## Provider-verified global Telegram bot ownership
+
+Telegram supports one configured webhook per bot token. A Karen connection
+label or tenant-specific uniqueness constraint cannot prevent two different
+tenants from configuring the same bot. The canonical registration workflow
+therefore now performs a fresh, read-only Telegram `getMe` probe using the
+trusted Vault credential and requires its positive numeric bot ID before
+acquiring a webhook mutation claim.
+
+A new globally unique `public.channel_telegram_bot_owners` registry stores
+that numeric provider bot ID, owning tenant, connection, and connection revision.
+No bot token, signing secret, provider URL, or user text is stored. Global
+uniqueness is enforced by PostgreSQL even across tenant-scoped RLS contexts;
+no conflicting owner's tenant identity is returned. Claim acquisition and
+bot-identity reservation occur in the same database transaction. A duplicate
+ID held by another connection aborts the transaction before `setWebhook`,
+without leaving a partially acquired webhook claim.
+
+The adapter re-resolves its Vault credential immediately before `setWebhook`
+and verifies the provider's `getMe` identity again using the **same bot
+token** it will use for the mutation. If a credential changed between the
+original ownership reservation and the actual outbound call, the provider
+mutation is refused and the durable claim remains unresolved. This rules out
+silently registering a different bot after a credential rotation.
+
+A repeat reservation for the *same* tenant, connection, revision, and numeric
+bot ID is accepted only as an idempotent ownership check, not as permission to
+reuse an existing webhook claim. Changing the credential to a different bot,
+switching tenants, or using an older revision fails closed. Owner rows are not
+automatically released when a claim expires, when a provider call is uncertain,
+or when the process restarts. Foreign keys also restrict deleting a tenant or
+connection while a bot ownership record exists, preventing implicit cascade
+release without provider unlink evidence.
+
+**Recovery is still separate:** bot ownership release or reassignment needs
+durable evidence of provider unlink, credential revocation and a separately
+authorized lifecycle transition. No admin UI action or external webhook
+inspection may silently clear these rows. The unique owner guard does not
+by itself prove a live signed inbound message or a successful AI reply.
