@@ -433,3 +433,58 @@ Source proof:
   route and rejects ambiguous or unrelated navigation parameters.
 
 Browser/device acceptance remains separate from source-level checks.
+
+
+### Governed model download inside plugin management (2026-11-16)
+
+Pocket TTS and other backend-declared TTS plugins now provide an optional
+**Download recommended model** panel from both **Plugins & Tools** and
+**Plugin Store → Manage**. There is no plugin-provided frontend package or
+plugin-specific downloader: the host renders
+`PluginRecommendedModels.tsx`, lazily on operator request.
+
+The model requirement is discovered by matching the selected plugin ID to
+the curated `app_consumers` list returned from Karen's existing
+`GET /api/models/download/recommendations`. In particular,
+`pocket-tts` resolves to the pinned `kyutai/pocket-tts` model from
+`config_assets/model_download_recommendations.json`. A test compares that
+curated record with the plugin's reviewed `model_spec.json` so the
+revision, channel, license and minimum required assets cannot silently drift.
+
+The model setup panel:
+
+1. Requires an administrator or super administrator in the presentation
+   layer; the existing admin-scoped model-management router remains the
+   actual permission enforcement.
+2. Reads canonical recommendation, policy, channel and durable job state.
+   Failed or malformed reads disable the install control instead of
+   inventing a missing model or a healthy download worker.
+3. Explains the pinned model ID, revision, missing/registered state and
+   current download jobs. A registered model is **not** proof of an eligible
+   tenant installation, optional `pocket-tts` Python dependency, successful
+   inference load or available voice.
+4. Demands an explicit per-revision acceptance of the verified source's
+   license and gated-access terms, with a model-source link. It rejects
+   mutable/unverified revisions, unavailable access terms, disallowed
+   channels, blocked policy and duplicate active jobs.
+5. Calls existing `POST /api/models/download/validate` and checks the
+   returned model ID, channel, authorization and exact immutable resolved
+   revision **before** using `POST /api/models/download`. Requests retain
+   the curated include-patterns, `validated_revision`, `pin: true`,
+   `trust_remote_code: false`, and explicit license acknowledgement.
+6. Displays the canonical job receipt/progress, without assuming queued
+   means installed or completed means usable. Readiness and voice previews
+   remain exclusively verified through VoiceRuntime / Voice Studio.
+
+Plugin authors **must not** implement download helpers inside the plugin
+process, accept raw model file paths, or call Hugging Face directly to
+bypass credential, license, tenant, resource, policy or lifecycle controls.
+The optional native dependency is still installed by an operator and
+remains distinct from approved model weight installation.
+
+Acceptance evidence includes
+`tests/plugins/plugin-recommended-models.test.tsx`,
+`tests/plugins/plugin-details-settings.test.tsx`, and
+`tests/extensions/test_pocket_tts_recommendation_contract.py`.
+Real licensed-account, model download, tenant-specific readiness and CPU
+synthesis remain hardware/operator acceptance requirements, not UI claims.
