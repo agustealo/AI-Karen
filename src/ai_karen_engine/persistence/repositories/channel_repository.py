@@ -1420,6 +1420,52 @@ class SqlChannelRepository:
             })).scalar_one_or_none()
         return state == "verified"
 
+    async def verify_uncertain_telegram_webhook_claim(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int, provider_bot_id: int,
+    ) -> bool:
+        """Recover only expired uncertain evidence into verified SQL state.
+
+        Requires a host-authorized, same-token provider read-back. The SQL
+        transaction independently fences the exact claim, enabled revision,
+        and globally owned provider bot. Neither claim nor owner is deleted.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if (
+            not isinstance(connection_id, str) or not connection_id
+            or type(expected_revision) is not int or expected_revision < 1
+            or type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63
+        ):
+            raise ValueError("Invalid Telegram webhook recovery scope")
+        async with async_transaction_scope(tenant_id) as session:
+            recovered = (await session.execute(text("""
+                UPDATE public.channel_telegram_webhook_claims w
+                SET state = 'verified', updated_at = clock_timestamp()
+                WHERE w.tenant_id = CAST(:tenant AS uuid)
+                  AND w.connection_id = :connection
+                  AND w.connection_revision = :revision
+                  AND w.state = 'uncertain'
+                  AND w.claim_expires_at <= clock_timestamp()
+                  AND EXISTS (
+                    SELECT 1 FROM public.channel_telegram_bot_owners o
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = o.tenant_id
+                     AND c.connection_id = o.connection_id
+                    WHERE o.provider_bot_id = :bot_id
+                      AND o.tenant_id = w.tenant_id
+                      AND o.connection_id = w.connection_id
+                      AND o.connection_revision = w.connection_revision
+                      AND c.revision = o.connection_revision
+                      AND c.enabled = true
+                      AND c.installation_id = 'telegram-bot'
+                  )
+                RETURNING w.connection_id
+            """), {
+                "tenant": tenant_id, "connection": connection_id,
+                "revision": expected_revision, "bot_id": provider_bot_id,
+            })).scalar_one_or_none()
+        return recovered is not None
+
     async def set_connection_enabled(
         self, *, tenant_id: str, connection_id: str,
         expected_revision: int, enabled: bool,
