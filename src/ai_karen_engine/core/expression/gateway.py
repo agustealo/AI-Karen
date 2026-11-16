@@ -222,6 +222,10 @@ class ExpressionGateway:
         # the first delta has reached the consumer. After that, the response
         # belongs to one model and must end as an explicit incomplete stream.
         task.stream_started = False
+        # ChatRuntime has already reserved the initial model call on this task.
+        # Charge each additional *executed* engine against the same meter.
+        # Disabled and circuit-open entries are not actual engine attempts.
+        attempted_model_engines = 0
 
         for level, engine_id in enumerate(sequence):
             cfg = self.settings.engines.get(engine_id)
@@ -252,6 +256,34 @@ class ExpressionGateway:
                     reason="circuit_open",
                 )
                 continue
+
+            if attempted_model_engines and task.reserve_additional_model_call is not None:
+                try:
+                    permitted = await task.reserve_additional_model_call()
+                except Exception as exc:
+                    # Do not expose arbitrary budget/host exception details.
+                    raise EngineUnavailableError("execution_budget_guard_failed") from exc
+                if permitted is not True:
+                    _emit_routing_event(
+                        RoutingEvents.REJECTED,
+                        correlation_id=task.correlation_id,
+                        request_id=task.request_id,
+                        engine_id=engine_id,
+                        reason="execution_budget_exhausted_max_model_calls",
+                    )
+                    emit_expression_event(
+                        "expression.engine.budget_rejected",
+                        self._event_payload(
+                            task,
+                            engine_id=engine_id,
+                            fallback_level=level,
+                            degradation_reason="execution_budget_exhausted_max_model_calls",
+                        ),
+                    )
+                    raise EngineUnavailableError(
+                        "execution_budget_exhausted_max_model_calls"
+                    )
+            attempted_model_engines += 1
 
             _emit_routing_event(
                 RoutingEvents.SELECTED,
