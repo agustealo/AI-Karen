@@ -195,7 +195,7 @@ def test_route_requires_explicit_dry_run_and_confirmation_before_deletion():
 async def test_operator_endpoint_mints_fresh_action_from_authenticated_identity():
     host, plan = components(dry_count=2)
     host.prune_unmatched_whatsapp_statuses = AsyncMock(return_value={
-        "dry_run": False, "eligible_count": 0, "deleted_count": 2,
+        "dry_run": False, "eligible_count": 2, "deleted_count": 2,
         "connection_revision": 5, "retention_days": 90,
         "batch_limit": 100,
     })
