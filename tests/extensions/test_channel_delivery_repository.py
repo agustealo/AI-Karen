@@ -492,7 +492,10 @@ async def test_status_replay_with_missing_connection_denied(monkeypatch):
         installation_id="whatsapp-cloud", provider_account_id="10987654321",
         credential_handle="vault://secret", revision=1, enabled=True,
     )
-    session = FakeSession(RowResult(scalar=None), RowResult(scalar=None))
+    session = FakeSession(
+        RowResult(scalar=None), RowResult(scalar=None),
+        RowResult(scalar=None),
+    )
     install(monkeypatch, session)
     with pytest.raises(module.ChannelAdmissionDenied):
         await SqlChannelRepository().record_provider_status(
@@ -636,3 +639,121 @@ async def test_deactivated_status_does_not_widen_active_or_non_whatsapp_scope(mo
             ),
         )
     assert session.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dry_run", [True, False])
+async def test_status_retention_prunes_only_tenant_scoped_unmatched_old_evidence(
+    monkeypatch, dry_run,
+):
+    session = FakeSession(RowResult(scalar=2))
+    install(monkeypatch, session)
+    count = await SqlChannelRepository().prune_unmatched_provider_statuses(
+        tenant_id=TENANT, connection_id="conn", expected_revision=7,
+        retention_days=90, limit=100, dry_run=dry_run,
+    )
+    assert count == 2
+    assert len(session.calls) == 1
+    sql, args = session.calls[0]
+    for required in (
+        "e.tenant_id = CAST(:tenant AS uuid)",
+        "e.connection_id = :connection",
+        "c.installation_id = 'whatsapp-cloud'",
+        "c.revision = :revision",
+        "clock_timestamp() - make_interval(days => :retention_days)",
+        "NOT EXISTS",
+        "o.provider_message_id = e.provider_message_id",
+        "o.destination_id = e.recipient_id",
+        "active.claim_expires_at > clock_timestamp()",
+        "channel_provider_status_tombstones",
+        "LIMIT :limit",
+    ):
+        assert required in sql
+    assert args == {
+        "tenant": TENANT, "connection": "conn",
+        "revision": 7, "retention_days": 90, "limit": 100,
+    }
+    if dry_run:
+        assert "DELETE FROM" not in sql
+        assert "FOR UPDATE" not in sql
+    else:
+        assert "FOR UPDATE OF e, c SKIP LOCKED" in sql
+        assert "INSERT INTO public.channel_provider_status_tombstones" in sql
+        assert "DELETE FROM public.channel_provider_status_events" in sql
+        assert "USING archived" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value,reason", [
+    ({"retention_days": 0}, "30..3650"),
+    ({"retention_days": 29}, "30..3650"),
+    ({"retention_days": 3651}, "30..3650"),
+    ({"retention_days": True}, "30..3650"),
+    ({"limit": 0}, "1..1000"),
+    ({"limit": 1001}, "1..1000"),
+    ({"expected_revision": 0}, "revision"),
+    ({"expected_revision": True}, "revision"),
+    ({"dry_run": "false"}, "boolean"),
+])
+async def test_status_retention_invalid_bounds_fail_before_database(
+    monkeypatch, value, reason,
+):
+    session = FakeSession()
+    install(monkeypatch, session)
+    args = {
+        "tenant_id": TENANT, "connection_id": "conn",
+        "expected_revision": 3, "retention_days": 90,
+        "limit": 100, "dry_run": False,
+        **value,
+    }
+    with pytest.raises(ValueError, match=reason):
+        await SqlChannelRepository().prune_unmatched_provider_statuses(**args)
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_archived_active_provider_status_replay_is_acknowledged_without_reinsertion(
+    monkeypatch,
+):
+    event = provider_status()
+    digest = SqlChannelRepository._status_event_digest(event)
+    session = FakeSession(
+        RowResult(scalar=None), RowResult(scalar=None),
+        RowResult(scalar=digest),
+    )
+    install(monkeypatch, session)
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    account = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://whatsapp", revision=1, enabled=True,
+    )
+    assert await SqlChannelRepository().record_provider_status(
+        connection=account, status=event,
+    )
+    assert len(session.calls) == 3
+    assert "NOT EXISTS" in session.calls[0][0]
+    assert "channel_provider_status_tombstones" in session.calls[0][0]
+    assert "channel_provider_status_tombstones" in session.calls[2][0]
+    assert "UPDATE public.channel_outbox" not in "\n".join(sql for sql, _ in session.calls)
+
+
+@pytest.mark.asyncio
+async def test_archived_provider_status_digest_conflict_is_denied(monkeypatch):
+    event = provider_status()
+    session = FakeSession(
+        RowResult(scalar=None), RowResult(scalar=None),
+        RowResult(scalar="0" * 64),
+    )
+    install(monkeypatch, session)
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    account = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://whatsapp", revision=1, enabled=True,
+    )
+    with pytest.raises(module.ChannelAdmissionConflict, match="Archived"):
+        await SqlChannelRepository().record_provider_status(
+            connection=account, status=event,
+        )
+    assert len(session.calls) == 3
