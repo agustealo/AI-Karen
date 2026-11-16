@@ -434,3 +434,130 @@ async def test_untrusted_or_inconsistent_policy_probe_is_not_recorded(corruption
         "response_strategy_policy_probe" not in row.metadata for row in rows
     )
     assert all(not row.ope_eligible for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_nonauthorizing_readiness_is_preserved_with_frozen_choice() -> None:
+    store = InMemoryTrajectoryStore()
+    runtime = _runtime(store)
+    trajectory = _trajectory()
+    probe = {
+        "schema_version": "response_strategy_policy_probe_v1",
+        "source_decision_id": "policy-scoped",
+        "source_policy_version": "v2",
+        "selected_action": "respond_direct",
+        "policy_permitted_actions": ["respond_direct", "verify_then_respond"],
+        "status": "alternative_reasoning_mode_policy_permitted",
+        "alternative_policy_decision_id": "policy-alternative",
+        "alternative_policy_version": "v2",
+        "execution_eligibility_established": False,
+        "randomized_selection": False,
+        "ope_eligible": False,
+    }
+    readiness = {
+        "schema_version": "verification_alternative_readiness_v1",
+        "source_decision_id": "policy-scoped",
+        "source_policy_version": "v2",
+        "alternative_policy_decision_id": "policy-alternative",
+        "status": "unverified",
+        "reason_codes": ["model_selection_not_runtime_resolved"],
+        "verifier_strategy_id": "verify",
+        "verifier_strategy_version": "v1",
+        "provider_health": "unknown",
+        "model_in_registered_inventory": None,
+        "execution_eligibility_established": False,
+        "randomized_selection": False,
+        "ope_eligible": False,
+    }
+    await runtime._record_learning_decision(
+        trajectory,
+        ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id="policy-scoped",
+            policy_version="v2",
+            policy_constraints={
+                "response_strategy_policy_probe": probe,
+                "verification_alternative_readiness": readiness,
+            },
+        ),
+    )
+    snapshots = store.list_feature_snapshots(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    rows = store.list_decision_observations(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    strategy = next(
+        row for row in rows
+        if row.decision_type == DecisionType.RESPOND_STRATEGY.value
+    )
+    assert snapshots[0].metadata["verification_alternative_readiness"] == readiness
+    assert strategy.metadata["verification_alternative_readiness"] == readiness
+    assert strategy.eligible_actions == ("respond_direct",)
+    assert strategy.chosen_probability is None
+    assert strategy.action_probabilities == {}
+    assert strategy.ope_eligible is False
+    assert "verification_policy_snapshot" not in strategy.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corruption", [
+    {"status": "ready"},
+    {"source_decision_id": "another"},
+    {"source_policy_version": "another"},
+    {"alternative_policy_decision_id": "another"},
+    {"ope_eligible": True},
+    {"randomized_selection": True},
+    {"execution_eligibility_established": True},
+    {"reason_codes": ["injected:secret"]},
+])
+async def test_invalid_readiness_never_reaches_durable_lineage(corruption) -> None:
+    store = InMemoryTrajectoryStore()
+    runtime = _runtime(store)
+    trajectory = _trajectory()
+    probe = {
+        "schema_version": "response_strategy_policy_probe_v1",
+        "source_decision_id": "policy-scoped",
+        "source_policy_version": "v2",
+        "selected_action": "respond_direct",
+        "alternative_policy_decision_id": "policy-alternative",
+        "alternative_policy_version": "v2",
+        "execution_eligibility_established": False,
+        "randomized_selection": False,
+        "ope_eligible": False,
+    }
+    readiness = {
+        "schema_version": "verification_alternative_readiness_v1",
+        "source_decision_id": "policy-scoped",
+        "source_policy_version": "v2",
+        "alternative_policy_decision_id": "policy-alternative",
+        "status": "unverified",
+        "reason_codes": ["complete_alternative_execution_not_observed"],
+        "execution_eligibility_established": False,
+        "randomized_selection": False,
+        "ope_eligible": False,
+        **corruption,
+    }
+    await runtime._record_learning_decision(
+        trajectory,
+        ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id="policy-scoped",
+            policy_version="v2",
+            policy_constraints={
+                "response_strategy_policy_probe": probe,
+                "verification_alternative_readiness": readiness,
+            },
+        ),
+    )
+    snapshots = store.list_feature_snapshots(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    rows = store.list_decision_observations(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    assert "verification_alternative_readiness" not in snapshots[0].metadata
+    assert all(
+        "verification_alternative_readiness" not in row.metadata for row in rows
+    )
+    assert all(not row.ope_eligible for row in rows)

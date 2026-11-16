@@ -9,7 +9,15 @@
   "license": "MIT",
   "entrypoint": "handler:MainExtension",
   "category": "productivity",
-  "tags": ["time", "date", "clock", "stopwatch", "alarm", "timezone", "prompt-first"],
+  "tags": [
+    "time",
+    "date",
+    "clock",
+    "stopwatch",
+    "alarm",
+    "timezone",
+    "prompt-first"
+  ],
   "capabilities": {
     "provides_ui": true,
     "provides_api": true,
@@ -26,7 +34,32 @@
     ]
   },
   "rbac": {
-    "allowed_roles": ["user", "admin", "developer"],
+    "allowed_roles": [
+      "user",
+      "admin",
+      "developer"
+    ],
     "default_enabled": true
+  },
+  "governance": {
+    "conversational_actions": {
+      "version": 1,
+      "actions": [
+        {
+          "id": "clock.current_datetime",
+          "utterances": [
+            "tell me the time",
+            "show current time",
+            "show the current time",
+            "what time is it"
+          ],
+          "parameters": {
+            "mode": "datetime"
+          },
+          "side_effect_level": "none",
+          "requires_confirmation": false
+        }
+      ]
+    }
   }
 }
