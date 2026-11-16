@@ -16,6 +16,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
@@ -66,6 +67,14 @@ class KcmBenchmarkTaskAssessment:
     general_skill_certified: bool = False
     execution_authorized: bool = False
     training_authorized: bool = False
+    # Conditions are issuer/corpus observations, never general skill grants.
+    evaluated_at: datetime | None = None
+    expires_at: datetime | None = None
+    freshness_verified: bool = False
+    artifact_architecture: str = ""
+    curated_oracle_sha256: str = ""
+    curated_oracle_source_verified: bool = False
+    declared_group_count: int = 0
 
 
 def _wilson_interval(successes: int, count: int) -> tuple[float, float]:
@@ -105,6 +114,7 @@ class KcmBenchmarkTaskProjector:
         minimum_cases: int,
         maximum_cases: int,
         store: OutcomeStore | None = None,
+        max_evidence_age_seconds: int | None = None,
     ) -> None:
         if (
             type(minimum_cases) is not int
@@ -114,6 +124,15 @@ class KcmBenchmarkTaskProjector:
             raise ValueError("KCM benchmark case bounds must satisfy 1 <= min <= max <= 1000")
         if not isinstance(registry_dir, Path):
             raise TypeError("Canonical ML registry path required")
+        if (
+            max_evidence_age_seconds is not None
+            and (
+                type(max_evidence_age_seconds) is not int
+                or not 1 <= max_evidence_age_seconds <= 31_536_000
+            )
+        ):
+            raise ValueError("KCM benchmark evidence age must be 1-31536000 seconds")
+        self._max_evidence_age_seconds = max_evidence_age_seconds
         self._directory = registry_dir
         self._minimum = minimum_cases
         self._maximum = maximum_cases
@@ -215,9 +234,22 @@ class KcmBenchmarkTaskProjector:
             )
             if second != receipt:
                 return reject("benchmark_source_changed_during_read")
+            now = datetime.now(timezone.utc)
+            if receipt.evaluated_at is None:
+                return reject("benchmark_issuer_timestamp_unavailable")
+            if receipt.evaluated_at > now:
+                return reject("benchmark_issuer_timestamp_in_future")
+            expires_at: datetime | None = None
+            if self._max_evidence_age_seconds is not None:
+                expires_at = receipt.evaluated_at + timedelta(
+                    seconds=self._max_evidence_age_seconds,
+                )
+                if now >= expires_at:
+                    return reject("benchmark_evidence_expired")
             return self._measure(
                 receipt=receipt, observations=observations,
                 tenant_id=tenant_id, user_id=user_id,
+                expires_at=expires_at,
                 reject=reject,
             )
         except PermissionError:
@@ -240,6 +272,7 @@ class KcmBenchmarkTaskProjector:
         observations: list,
         tenant_id: str,
         user_id: str,
+        expires_at: datetime | None,
         reject,
     ) -> KcmBenchmarkTaskAssessment:
         prefix = f"benchmark:{receipt.receipt_id}:"
@@ -283,6 +316,11 @@ class KcmBenchmarkTaskProjector:
             "dataset_version": receipt.dataset_version,
             "receipt": receipt.receipt_id,
             "cases": sorted(by_hash.items()),
+            "evaluated_at": receipt.evaluated_at.isoformat()
+                if receipt.evaluated_at is not None else None,
+            "artifact_architecture": receipt.artifact_architecture,
+            "curated_oracle_sha256": receipt.curated_oracle_sha256,
+            "declared_group_count": receipt.declared_group_count,
         }
         digest = hashlib.sha256(
             json.dumps(lineage, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -305,8 +343,22 @@ class KcmBenchmarkTaskProjector:
             descriptive_wilson_upper=upper,
             evidence_sha256=digest,
             benchmark_provenance_verified=True,
+            evaluated_at=receipt.evaluated_at,
+            expires_at=expires_at,
+            freshness_verified=expires_at is not None,
+            artifact_architecture=receipt.artifact_architecture,
+            curated_oracle_sha256=receipt.curated_oracle_sha256,
+            curated_oracle_source_verified=bool(receipt.curated_oracle_sha256),
+            declared_group_count=receipt.declared_group_count,
             reason_codes=(
                 "task_and_model_specific_benchmark_only",
+                "curated_oracle_source_verified"
+                if receipt.curated_oracle_sha256
+                else "oracle_source_not_verified",
+                "freshness_window_verified"
+                if expires_at is not None
+                else "freshness_window_unenforced",
+                "declared_groups_not_independent",
                 "case_independence_unverified",
                 "production_conditions_unverified",
                 "not_general_skill_certification",
