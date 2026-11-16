@@ -1158,6 +1158,7 @@ class PluginService:
 
     async def inspect_for_conversation(
         self, *, tenant_id: str, target: Optional[str] = None, limit: int = 25,
+        caller_roles: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Read-only, redacted plugin catalog for authenticated ChatRuntime.
 
@@ -1178,6 +1179,13 @@ class PluginService:
         ):
             raise ValueError("Invalid plugin inspection target")
 
+        # Caller roles come solely from ChatExecutionContext's verified
+        # principal, never from user prose, tool output or plugin metadata.
+        role_set = {
+            str(role).casefold().strip()
+            for role in (caller_roles or [])
+            if isinstance(role, str) and role.strip()
+        }
         records = await self.list_plugins()
         kernel = self._get_kernel()
         requested_key = self._inspection_key(target) if target is not None else None
@@ -1231,6 +1239,32 @@ class PluginService:
             validated = record.get("is_valid") is True
             registration_state = str(record.get("status") or "unknown")
             blocked = bool(record.get("activation_blocked_reason"))
+            manifest_roles = {
+                str(getattr(role, "value", role)).casefold().strip()
+                for role in (
+                    getattr(getattr(manifest, "rbac", None), "allowed_roles", ())
+                    or ()
+                )
+            }
+            role_eligible = bool(manifest_roles.intersection(role_set))
+            capabilities = getattr(manifest, "capabilities", None)
+            declared_generic_features = [
+                label
+                for flag, label in (
+                    ("provides_api", "plugin.api"),
+                    ("provides_ui", "plugin.ui"),
+                    ("provides_background_tasks", "plugin.background_tasks"),
+                    ("provides_webhooks", "plugin.webhooks"),
+                )
+                if bool(getattr(capabilities, flag, False))
+            ]
+            voice = getattr(capabilities, "voice_modality", None)
+            if voice is not None:
+                declared_generic_features.extend(
+                    f"voice.{modality}"
+                    for modality in list(getattr(voice, "modalities", ()) or ())[:10]
+                    if isinstance(modality, str)
+                )
             if channel is not None:
                 host_eligible = bool(
                     validated and not blocked
@@ -1255,7 +1289,7 @@ class PluginService:
             else:
                 host_eligible = False
                 execution_route = "plugin_executor"
-                features = []
+                features = declared_generic_features[:20]
                 if not validated or blocked:
                     readiness = "invalid_or_blocked"
                     next_action = "plugin.installation_review"
@@ -1280,10 +1314,15 @@ class PluginService:
                 ),
                 "category": str(getattr(manifest, "category", "") or "")[:40],
                 "registered": validated,
+                "role_eligible": role_eligible,
+                "role_check_source": "manifest_rbac",
                 "generic_execution_enabled": (
                     channel is None and registration_state in {"enabled", "active"}
                     and validated and not blocked
                 ),
+                # Installation status and manifest role eligibility are
+                # independent from a fresh action-specific RuntimePolicy grant.
+                "authorized_to_execute": False,
                 "execution_route": execution_route,
                 "channel_host_eligible": host_eligible,
                 "connection_status": (
