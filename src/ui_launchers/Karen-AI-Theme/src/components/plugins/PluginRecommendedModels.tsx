@@ -64,6 +64,12 @@ const IMMUTABLE_REVISION = /^[a-f0-9]{40,64}$/i;
 const ACTIVE = new Set(["queued", "running", "promoting", "paused", "pause_requested"]);
 const JOB_ID = /^mdl-[a-f0-9-]{36}$/i;
 
+function normalizedProgress(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(100, Math.max(0, numeric > 1 ? numeric : numeric * 100));
+}
+
 function isModelRecommendation(value: unknown): value is ModelRecommendation {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<ModelRecommendation>;
@@ -335,7 +341,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
               </p>
             ) : activeJob ? (
               <div role="status" className="text-xs">
-                Download job: {activeJob.status}. {Math.round(Math.max(0, Math.min(100, activeJob.progress)))}% reported.
+                Download job: {activeJob.status}. {normalizedProgress(activeJob.progress).toFixed(1)}% reported.
                 Completion alone does not establish TTS runtime readiness.
               </div>
             ) : (
