@@ -101,6 +101,7 @@ jobs:
           pytest tests/core/intelligence/ml/test_verification_review_receipts.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_verification_review_workflow.py -q --timeout=300 --tb=short
           pytest tests/api_routes/test_verification_review_api.py -q --timeout=300 --tb=short
+          pytest tests/core/runtime/trajectory/test_learning_contracts.py -q --timeout=300 --tb=short
           pytest tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_policy_decision_time_provenance.py -q --timeout=300 --tb=short
 
