@@ -54,6 +54,9 @@ class InboundChannelEvent(_ChannelRecord):
     external_conversation_id: str = Field(min_length=1)
     message_kind: str = Field(min_length=1)
     text: str | None = None
+    # Signed provider-origin event time; optional for transports that do not
+    # provide it. Only the host repository may persist policy timing evidence.
+    provider_timestamp: int | None = Field(default=None, ge=1, le=4102444800)
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
