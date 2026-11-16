@@ -70,6 +70,17 @@ class OutcomeStore(ABC):
         """List tool-runtime receipts only for the exact principal and run."""
         raise OutcomeStoreError("Governed tool receipts are unavailable")
 
+    def list_scoped_outcomes_by_ids(
+        self,
+        tenant_id: str,
+        *,
+        user_id: str,
+        outcome_ids: list[str],
+        source: str,
+    ) -> list[dict[str, Any]]:
+        """Read exact receipts for one principal. No unscoped fallback."""
+        raise OutcomeStoreError("Scoped receipt lookup is not available")
+
     @abstractmethod
     def get_for_trajectory(
         self,
@@ -209,6 +220,29 @@ class InMemoryOutcomeStore(OutcomeStore):
             ), reverse=True,
         )[:max(1, min(int(limit), 100))]
 
+    def list_scoped_outcomes_by_ids(
+        self, tenant_id: str, *, user_id: str,
+        outcome_ids: list[str], source: str,
+    ) -> list[dict[str, Any]]:
+        if (
+            not tenant_id or tenant_id == "default" or not user_id
+            or source not in {"runtime.execution", "user.feedback", "intelligence.ml"}
+            or not 1 <= len(outcome_ids) <= 1000
+            or any(not isinstance(value, str) or not value for value in outcome_ids)
+            or len(set(outcome_ids)) != len(outcome_ids)
+        ):
+            raise OutcomeStoreError("Exact scoped outcome receipt query required")
+        from copy import deepcopy
+
+        wanted = set(outcome_ids)
+        return [
+            deepcopy(row) for row in self._records
+            if row.get("tenant_id") == tenant_id
+            and row.get("user_id") == user_id
+            and row.get("source") == source
+            and row.get("outcome_id") in wanted
+        ]
+
     def list_for_tenant(
         self,
         tenant_id: str,
@@ -332,6 +366,69 @@ class PostgresOutcomeStore(OutcomeStore):
         }
 
     @staticmethod
+    def _validate_verification_review(
+        payload: dict[str, Any], metadata: dict[str, Any],
+    ) -> None:
+        """Strict redacted review receipt inside the existing ML ledger.
+
+        The trusted reviewer adapter enforces authenticated RBAC before writes.
+        This check fences schema and identity even at the storage boundary.
+        """
+        required = {
+            "schema_version", "evidence_kind", "evidence_source",
+            "evidence_ref", "decision_observation_id",
+            "observation_sha256", "reviewer_user_id",
+            "utility_policy_version", "value",
+        }
+        identifier = payload.get("outcome_id")
+        ref = metadata.get("evidence_ref")
+        digest = metadata.get("observation_sha256")
+        reviewer = metadata.get("reviewer_user_id")
+        kind = metadata.get("evidence_kind")
+        value = metadata.get("value")
+        if (
+            set(metadata) != required
+            or kind not in {"reward", "verification_need"}
+            or metadata.get("evidence_source") not in {
+                "human_review", "independent_test",
+            }
+            or not isinstance(ref, str)
+            or not 1 <= len(ref) <= 256
+            or not ref.isascii()
+            or not all(ch.isalnum() or ch in "-._:/" for ch in ref)
+            or identifier != ref
+            or not isinstance(metadata.get("decision_observation_id"), str)
+            or not metadata["decision_observation_id"]
+            or payload.get("decision_observation_id")
+            != metadata["decision_observation_id"]
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or not all(ch in "0123456789abcdef" for ch in digest)
+            or not isinstance(reviewer, str)
+            or not reviewer.strip()
+            or reviewer == payload.get("user_id")
+            or not payload.get("user_id")
+            or not isinstance(metadata.get("utility_policy_version"), str)
+            or not metadata["utility_policy_version"]
+            or (
+                kind == "verification_need"
+                and not isinstance(value, bool)
+            )
+            or (
+                kind == "reward"
+                and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or not 0.0 <= value <= 1.0
+                )
+            )
+        ):
+            raise OutcomeStoreError(
+                "Verification review requires exact independently issued scoped evidence"
+            )
+
+    @staticmethod
     def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
         tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
@@ -341,6 +438,12 @@ class PostgresOutcomeStore(OutcomeStore):
             raise OutcomeStoreError(f"Unsupported outcome source: {source or 'missing'}")
         if source == "intelligence.ml":
             metadata = payload.get("metadata")
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("schema_version") == "ml_verification_review_v1"
+            ):
+                PostgresOutcomeStore._validate_verification_review(payload, metadata)
+                return tenant_id, source
             if (
                 not payload.get("user_id")
                 or not payload.get("outcome_id")
@@ -645,6 +748,49 @@ class PostgresOutcomeStore(OutcomeStore):
                 extra={"tenant_id": tenant, "trajectory_id": trajectory_id},
             )
             raise OutcomeStoreError("Outcome trajectory retrieval failed") from exc
+
+    def list_scoped_outcomes_by_ids(
+        self, tenant_id: str, *, user_id: str,
+        outcome_ids: list[str], source: str,
+    ) -> list[dict[str, Any]]:
+        tenant = self._require_tenant(tenant_id)
+        if (
+            not isinstance(user_id, str) or not user_id.strip()
+            or source not in {"runtime.execution", "user.feedback", "intelligence.ml"}
+            or not isinstance(outcome_ids, list)
+            or not 1 <= len(outcome_ids) <= 1000
+            or any(not isinstance(value, str) or not value for value in outcome_ids)
+            or len(set(outcome_ids)) != len(outcome_ids)
+        ):
+            raise OutcomeStoreError("Exact scoped outcome receipt query required")
+        try:
+            with transaction_scope(tenant) as session:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND source = :source
+                          AND outcome_id = ANY(CAST(:outcome_ids AS text[]))
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant, "user_id": user_id,
+                        "source": source, "outcome_ids": outcome_ids,
+                    },
+                ).mappings().all()
+            return [self._payload_from_row(row["payload"]) for row in rows]
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.scoped_receipt_read_failed",
+                extra={"tenant_id": tenant, "source": source,
+                       "receipt_count": len(outcome_ids),
+                       "error_type": type(exc).__name__},
+            )
+            raise OutcomeStoreError("Scoped outcome receipts unavailable") from exc
 
     def list_for_tenant(
         self,
