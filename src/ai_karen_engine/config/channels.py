@@ -7,15 +7,18 @@ activation remains an explicit per-tenant RuntimePolicy decision.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from typing import Mapping
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _SECRET_TYPE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,49}$")
+_PUBLIC_HOST = re.compile(r"^(?=.{4,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$")
 
 
 @dataclass(frozen=True)
@@ -26,12 +29,43 @@ class ChannelHostSettings:
     service_principal_id: str = ""
     max_native_body_bytes: int = 65_536
     http_timeout_seconds: float = 10.0
+    telegram_webhook_public_origin: str | None = None
 
     def validate(self) -> "ChannelHostSettings":
         if not 1 <= self.max_native_body_bytes <= 10_485_760:
             raise ValueError("Channel native request budget must be 1..10485760")
         if not 0.5 <= self.http_timeout_seconds <= 60:
             raise ValueError("Channel network timeout must be 0.5..60 seconds")
+        if self.telegram_webhook_public_origin is not None:
+            origin = self.telegram_webhook_public_origin
+            if not isinstance(origin, str) or len(origin) > 300:
+                raise ValueError("Invalid public channel webhook origin")
+            try:
+                parsed = urlsplit(origin)
+                hostname = parsed.hostname
+                if (
+                    parsed.scheme != "https"
+                    or not hostname
+                    or _PUBLIC_HOST.fullmatch(hostname) is None
+                    or parsed.netloc != hostname
+                    or parsed.port is not None
+                    or parsed.path not in ("", "/")
+                    or parsed.query or parsed.fragment
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or origin != "https://" + hostname
+                    or hostname.lower() != hostname
+                    or hostname.endswith(".local")
+                ):
+                    raise ValueError("Invalid public channel webhook origin")
+                try:
+                    ipaddress.ip_address(hostname)
+                except ValueError:
+                    pass
+                else:
+                    raise ValueError("IP-address webhook origins are not allowed")
+            except (ValueError, TypeError, AttributeError):
+                raise ValueError("Invalid public channel webhook origin") from None
         if not self.enabled:
             # Never parse or activate configured installations on a disabled host.
             return self
@@ -125,6 +159,9 @@ def load_channel_host_settings() -> ChannelHostSettings:
         service_principal_id=os.getenv("KAREN_CHANNEL_SERVICE_PRINCIPAL_ID", ""),
         max_native_body_bytes=body_budget,
         http_timeout_seconds=timeout,
+        telegram_webhook_public_origin=(
+            os.getenv("KAREN_TELEGRAM_WEBHOOK_PUBLIC_ORIGIN") or None
+        ),
     ).validate()
 
 
