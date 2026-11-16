@@ -664,3 +664,57 @@ async def test_telegram_registration_network_uncertainty_masks_bot_token():
             connection=connection(), public_origin="https://hooks.example.org",
         )
     assert TOKEN not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_telegram_read_only_reconciliation_observes_exact_provider_url():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    target = (
+        f"https://hooks.example.org/api/channels/webhooks/"
+        f"{TENANT}/telegram-conn-1"
+    )
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True, "result": {"url": target},
+    })
+    client.post.reset_mock()
+    evidence = await adapter.observe_registration(
+        connection=connection(), public_origin="https://hooks.example.org",
+    )
+    assert evidence == {
+        "provider_url_matches": True,
+        "provider_webhook_registered": True,
+        "live_connected": False,
+    }
+    client.post.assert_not_awaited()
+    assert TOKEN not in str(evidence)
+
+
+@pytest.mark.asyncio
+async def test_telegram_read_only_reconciliation_does_not_accept_foreign_url():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True, "result": {
+            "url": f"https://foreign.example/api/channels/webhooks/{TENANT}/telegram-conn-1",
+        },
+    })
+    evidence = await adapter.observe_registration(
+        connection=connection(), public_origin="https://hooks.example.org",
+    )
+    assert evidence["provider_webhook_registered"] is True
+    assert evidence["provider_url_matches"] is False
+    assert evidence["live_connected"] is False
+
+
+@pytest.mark.asyncio
+async def test_telegram_read_only_reconciliation_masks_failed_provider_response():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.return_value = httpx.Response(500, json={
+        "error": "contains bot token",
+    })
+    with pytest.raises(PermissionError, match="observation unavailable"):
+        await adapter.observe_registration(
+            connection=connection(), public_origin="https://hooks.example.org",
+        )
