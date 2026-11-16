@@ -1020,3 +1020,47 @@ async def test_telegram_owner_preflight_rejects_invalid_bot_identity(monkeypatch
             expected_revision=2, provider_bot_id=bot_id,
         )
     assert session.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", [True, False])
+async def test_telegram_uncertain_claim_verified_only_with_atomic_tenant_owner_guard(
+    monkeypatch, accepted,
+):
+    session = FakeSession(RowResult(scalar="telegram-connect" if accepted else None))
+    install(monkeypatch, session)
+    result = await SqlChannelRepository().verify_uncertain_telegram_webhook_claim(
+        tenant_id=TENANT, connection_id="telegram-connect",
+        expected_revision=2, provider_bot_id=123456,
+    )
+    assert result is accepted
+    assert len(session.calls) == 1
+    sql, args = session.calls[0]
+    assert "UPDATE public.channel_telegram_webhook_claims" in sql
+    assert "SET state = 'verified'" in sql
+    assert "w.state = 'uncertain'" in sql
+    assert "w.claim_expires_at <= clock_timestamp()" in sql
+    assert "channel_telegram_bot_owners" in sql
+    assert "o.provider_bot_id = :bot_id" in sql
+    assert "o.tenant_id = w.tenant_id" in sql
+    assert "o.connection_revision = w.connection_revision" in sql
+    assert "c.enabled = true" in sql
+    assert "c.revision = o.connection_revision" in sql
+    assert "DELETE" not in sql and "INSERT" not in sql
+    assert args["bot_id"] == 123456
+    assert args["tenant"] == TENANT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bot_id", [None, True, 0, -1, "123456", 2**63])
+async def test_telegram_uncertain_claim_recovery_rejects_invalid_provider_id(
+    monkeypatch, bot_id,
+):
+    session = FakeSession()
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().verify_uncertain_telegram_webhook_claim(
+            tenant_id=TENANT, connection_id="telegram-connect",
+            expected_revision=2, provider_bot_id=bot_id,
+        )
+    assert not session.calls

@@ -419,3 +419,38 @@ invalidates the response. Successful evidence includes
 This is only a prerequisite for future governed recovery. It does not grant
 a claim reset, authorization to revoke ownership, remote `deleteWebhook`,
 or a proof of signed inbound message processing.
+
+## Explicit, verified-only recovery of expired uncertain registration
+
+The canonical operator endpoint
+
+`POST /api/channels/personal/operator/telegram/connections/{connection_id}/reconciliation/verify`
+
+accepts only `{"expected_revision": 2}`. It requires an authenticated,
+active verified operator and a fresh `channel.recover` RBAC, RuntimePolicy
+and action-gate decision. The trusted host checks the enabled tenant-scoped
+Telegram connection, exact revision, and durable claim. Only an **expired
+`uncertain`** claim is eligible. A pending, unexpired, absent, or previously
+verified claim is not promoted.
+
+The canonical adapter resolves one bot token from the host-governed Vault,
+performs read-only `getMe` and `getWebhookInfo` using that **same token**,
+and requires Telegram to report the exact configured HTTPS origin,
+tenant ID and connection ID. The host verifies the connection and claim
+still match, then reads the globally unique bot-owner ledger for the
+provider-verified numeric identity. SQL independently checks the tenant,
+enabled connection and revision, bot-owner record, expired lease, and
+`uncertain` state as one conditional update to `verified`.
+
+On success, the response is strictly
+`{"claim_verified":true,"claim_released":false,"bot_ownership_released":false,"live_connected":false}`.
+This is **provider-registration reconciliation**, not proof of signed
+inbound messages, successful model execution or delivery of an outbound
+reply. It never issues `setWebhook`, `deleteWebhook`, retries an unknown
+POST, deletes a claim, changes the owner, or erases credentials.
+
+An interrupted `in_flight` claim remains blocked and requires a separate
+governed recovery design; a claim expiry alone never authorizes a retry.
+No cross-tenant bot ownership transfer is provided. An external operator
+could change Telegram's webhook after any observation, so real inbound
+and outbound acceptance remains mandatory before declaring the channel live.

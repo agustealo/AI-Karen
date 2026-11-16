@@ -810,3 +810,68 @@ async def test_telegram_registration_rejects_untrusted_expected_bot_id(bot_id):
         )
     client.get.assert_not_awaited()
     client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_recovery_verifies_bot_and_exact_webhook_with_same_token():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    expected = (
+        f"https://hooks.example.org/api/channels/webhooks/"
+        f"{TENANT}/telegram-conn-1"
+    )
+    client.get.side_effect = [
+        httpx.Response(200, json={
+            "ok": True, "result": {"id": 123456, "is_bot": True},
+        }),
+        httpx.Response(200, json={
+            "ok": True, "result": {"url": expected},
+        }),
+    ]
+    client.post.reset_mock()
+    assert await adapter.verify_registration_for_recovery(
+        connection=connection(), public_origin="https://hooks.example.org",
+    ) == 123456
+    assert client.get.await_count >= 2
+    assert all(
+        f"/bot{TOKEN}/" in args.args[0]
+        for args in client.get.await_args_list[-2:]
+    )
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [
+    "", "https://outside.example",
+    "https://hooks.example.org/api/channels/webhooks/foreign/connection",
+    "https://hooks.example.org/api/channels/webhooks/"
+])
+async def test_telegram_recovery_rejects_mismatched_webhook_without_mutation(url):
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.side_effect = [
+        httpx.Response(200, json={
+            "ok": True, "result": {"id": 123456, "is_bot": True},
+        }),
+        httpx.Response(200, json={
+            "ok": True, "result": {"url": url},
+        }),
+    ]
+    client.post.reset_mock()
+    with pytest.raises(PermissionError, match="recovery verification unavailable"):
+        await adapter.verify_registration_for_recovery(
+            connection=connection(), public_origin="https://hooks.example.org",
+        )
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_recovery_provider_error_masks_vault_bot_token():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.side_effect = httpx.TimeoutException(f"private {TOKEN}")
+    with pytest.raises(PermissionError) as error:
+        await adapter.verify_registration_for_recovery(
+            connection=connection(), public_origin="https://hooks.example.org",
+        )
+    assert TOKEN not in str(error.value)
