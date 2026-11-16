@@ -2,7 +2,7 @@
 
 /** Governed local speech engines. Never infer readiness from plugin metadata. */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, Loader2, Play, RefreshCw, Square } from "lucide-react";
+import { AlertCircle, Check, CircleCheck, Headphones, Loader2, Play, RefreshCw, Square, Volume2 } from "lucide-react";
 import { apiClient, ApiError } from "@/lib/api";
 import type { VoiceCatalog, VoiceEngine, VoiceSelectionResponse } from "@/lib/voice-capabilities";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 
 const BROWSER = "_browser_speech_";
 const PREVIEW_TEXT = "Hello, I am Karen. This is a local voice preview.";
+const MAX_PREVIEW_TEXT_CHARS = 480;
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
@@ -33,6 +34,7 @@ export default function LocalVoiceEngineSettings() {
   const [voiceId, setVoiceId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [previewText, setPreviewText] = useState(PREVIEW_TEXT);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const mountedRef = useRef(false);
@@ -112,6 +114,7 @@ export default function LocalVoiceEngineSettings() {
   );
 
   const changeEngine = (value: string) => {
+    if (savingRef.current) return;
     stop();
     setError(null);
     setEngineId(value);
@@ -124,7 +127,8 @@ export default function LocalVoiceEngineSettings() {
       stop();
       return;
     }
-    if (!selectedEngine || !selectedVoice) return;
+    if (!selectedEngine || !selectedVoice || savingRef.current ||
+        !previewText.trim() || previewText.length > MAX_PREVIEW_TEXT_CHARS) return;
     stop();
     setError(null);
     const controller = new AbortController();
@@ -132,7 +136,7 @@ export default function LocalVoiceEngineSettings() {
     setPreviewing(true);
     try {
       const blob = await apiClient.synthesizeLocalVoice(
-        selectedEngine.engine_id, selectedVoice.id, PREVIEW_TEXT, controller.signal,
+        selectedEngine.engine_id, selectedVoice.id, previewText.trim(), controller.signal,
       );
       if (controller.signal.aborted) return;
       const url = URL.createObjectURL(blob);
@@ -152,7 +156,7 @@ export default function LocalVoiceEngineSettings() {
       await audio.play();
     } catch (cause) {
       if (!controller.signal.aborted) {
-        setError(errorMessage(cause));
+        setError("Karen could not complete the local voice preview. Verify the engine and try again.");
         stop();
       }
     }
@@ -215,23 +219,80 @@ export default function LocalVoiceEngineSettings() {
     }
   };
 
+  const savedEngine = catalog?.engines.find(
+    (entry) => entry.engine_id === saved?.voice.engine_id,
+  );
+  const savedVoice = savedEngine?.voices.find((voice) => voice.id === saved?.voice.voice_id);
+  const savedLocal = saved?.voice.engine_id !== null && saved?.voice.engine_id !== undefined;
+  const savedLabel = savedLocal
+    ? storedMissing
+      ? "Saved local voice unavailable"
+      : savedEngine && savedVoice
+        ? `${savedEngine.display_name} · ${savedVoice.name}`
+        : "Local voice not verified"
+    : "Browser speech";
+  const hasUnsavedSelection = saved !== null &&
+    (engineId !== (saved.voice.engine_id ?? BROWSER) ||
+     voiceId !== (saved.voice.voice_id ?? ""));
+  const previewReady = status === "ready" && !saving &&
+    Boolean(selectedEngine && selectedVoice && previewText.trim()) &&
+    previewText.length <= MAX_PREVIEW_TEXT_CHARS;
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Local Speech Engines</CardTitle>
-        <CardDescription>
-          Choose a verified, authorized speech plugin. Model-backed voices are
-          independent of browser-installed voices, and require local model assets.
-        </CardDescription>
+    <Card data-testid="karen-local-voice-studio">
+      <CardHeader className="space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Headphones className="h-6 w-6" aria-hidden="true" />
+            </div>
+            <div>
+              <CardTitle className="text-xl">Local Voice Studio</CardTitle>
+              <CardDescription className="mt-1 max-w-xl">
+                Choose your authorized speech engine, hear an actual model-backed sample, and
+                save the voice Karen uses when you choose Read aloud.
+              </CardDescription>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs text-muted-foreground"
+            role="status" data-testid="voice-studio-readiness">
+            {status === "loading"
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              : status === "ready" && Boolean(catalog?.engines.length)
+                ? <CircleCheck className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
+                : <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />}
+            {status === "loading" ? "Verifying engines" :
+              status === "failed" ? "Catalog unavailable" :
+                catalog?.engines.length ? `${catalog.engines.length} local engine${catalog.engines.length === 1 ? "" : "s"} ready` : "No local engines ready"}
+          </span>
+        </div>
+        {status === "ready" && saved && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+            <span className="text-muted-foreground">Account selection:</span>
+            <span className="font-medium" data-testid="voice-studio-saved-selection">{savedLabel}</span>
+            {!storedMissing && savedLocal && saved?.available && (
+              <span className="inline-flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+                <Check className="h-3 w-3" aria-hidden="true" /> Verified
+              </span>
+            )}
+            {hasUnsavedSelection && <span className="text-xs text-muted-foreground">Unsaved changes</span>}
+          </div>
+        )}
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-5">
         {status === "loading" && (
           <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
             Verifying installed local speech engines…
           </p>
         )}
-        {error && <Alert><AlertCircle className="h-4 w-4" /><AlertTitle>Local voice unavailable</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Voice Studio needs attention</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
         {status === "ready" && (
           <>
             {!catalog?.engines.length && (
@@ -239,21 +300,26 @@ export default function LocalVoiceEngineSettings() {
                 <AlertCircle className="h-4 w-4" />
                 <AlertTitle>No Local TTS Plugin Ready</AlertTitle>
                 <AlertDescription>
-                  An administrator must enable a trusted speech plugin and install its approved
-                  model and voice assets. Browser voices can still be configured below.
+                  An enabled plugin is not necessarily ready for speech. An administrator must
+                  install and license its approved model through Models &amp; Runtime → Model Downloads,
+                  enable the trusted plugin, then refresh here. No browser fallback is selected automatically.
                 </AlertDescription>
               </Alert>
             )}
-            {storedMissing && <p role="alert" className="text-sm text-destructive">
-              Your saved local speech engine or voice is no longer available.
-              Select another verified engine or return to browser speech.
-            </p>}
+            {storedMissing && (
+              <p role="alert" className="text-sm text-destructive">
+                Your saved local speech engine or voice is no longer available.
+                Select another verified engine or explicitly return to browser speech.
+              </p>
+            )}
             <div className="space-y-2">
               <Label htmlFor="karen-local-engine">Speech output source</Label>
-              <Select value={engineId === BROWSER || selectedEngine ? engineId : "_missing_saved_"} onValueChange={changeEngine}>
+              <Select value={engineId === BROWSER || selectedEngine ? engineId : "_missing_saved_"}
+                disabled={saving} onValueChange={changeEngine}>
                 <SelectTrigger id="karen-local-engine"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {engineId !== BROWSER && !selectedEngine && <SelectItem value="_missing_saved_" disabled>Saved engine unavailable</SelectItem>}
+                  {engineId !== BROWSER && !selectedEngine &&
+                    <SelectItem value="_missing_saved_" disabled>Saved engine unavailable</SelectItem>}
                   <SelectItem value={BROWSER}>Browser speech (device-dependent)</SelectItem>
                   {catalog?.engines.map((engine) => (
                     <SelectItem key={engine.engine_id} value={engine.engine_id}>
@@ -262,39 +328,102 @@ export default function LocalVoiceEngineSettings() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                Local speech is generated through Karen&apos;s authenticated runtime.
+                Browser speech depends on your device and may use vendor services.
+              </p>
             </div>
-            {selectedEngine && (
-              <>
+            {selectedEngine ? (
+              <section aria-label="Local voice preview and selection" className="space-y-4 rounded-xl border p-4">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h3 className="text-base font-semibold">{selectedEngine.display_name}</h3>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Model: {selectedEngine.model_id} · Version: {selectedEngine.plugin_version}
+                    </p>
+                    <p className="mt-0.5 break-all font-mono text-[11px] text-muted-foreground">
+                      Verified model revision: {selectedEngine.model_revision}
+                    </p>
+                  </div>
+                  <span className="rounded-full border px-2 py-1 text-xs text-muted-foreground">
+                    {selectedEngine.features.streaming ? "Streaming supported" : "Complete WAV"}
+                  </span>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="karen-local-voice">Installed voice</Label>
-                  <Select value={selectedVoice?.id ?? ""} onValueChange={(id) => { stop(); setVoiceId(id); }}>
-                    <SelectTrigger id="karen-local-voice"><SelectValue placeholder="Select a voice" /></SelectTrigger>
+                  <Select value={selectedVoice?.id ?? ""} disabled={saving}
+                    onValueChange={(id) => { stop(); setVoiceId(id); }}>
+                    <SelectTrigger id="karen-local-voice">
+                      <SelectValue placeholder="Select a verified voice" />
+                    </SelectTrigger>
                     <SelectContent>
                       {selectedEngine.voices.map((voice) => (
                         <SelectItem key={voice.id} value={voice.id}>{voice.name} ({voice.language})</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" role="group" aria-label="Available local voices">
+                    {selectedEngine.voices.map((voice) => (
+                      <button type="button" key={voice.id} disabled={saving}
+                        aria-pressed={selectedVoice?.id === voice.id}
+                        onClick={() => { stop(); setVoiceId(voice.id); }}
+                        className={`flex min-h-14 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50 ${
+                          selectedVoice?.id === voice.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+                        }`}>
+                        <span className="min-w-0">
+                          <span className="block truncate font-medium">{voice.name}</span>
+                          <span className="block text-xs text-muted-foreground">{voice.language}</span>
+                        </span>
+                        {selectedVoice?.id === voice.id && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="karen-local-voice-sample">Try a spoken sample</Label>
+                  <textarea id="karen-local-voice-sample" value={previewText} maxLength={MAX_PREVIEW_TEXT_CHARS}
+                    disabled={saving || previewing}
+                    onChange={(event) => setPreviewText(event.target.value)}
+                    rows={3} className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-ring"
+                    aria-describedby="karen-local-voice-sample-help" />
+                  <div id="karen-local-voice-sample-help" className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>Only sent to your selected local engine when you press Preview. Not added to chat.</span>
+                    <span>{previewText.length}/{MAX_PREVIEW_TEXT_CHARS}</span>
+                  </div>
+                  <Button type="button" variant="outline" disabled={!previewing && !previewReady}
+                    onClick={() => void preview()}>
+                    {previewing ? <Square className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
+                    {previewing ? "Stop local preview" : "Preview local voice"}
+                  </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Model: {selectedEngine.model_id} · Version: {selectedEngine.plugin_version}
-                  {selectedEngine.features.streaming ? " · Streaming" : " · Full WAV"}
-                  {selectedEngine.features.voice_cloning ? " · Voice cloning approved" : ""}
+                  {selectedEngine.features.voice_cloning
+                    ? "Voice cloning is declared available by this authorized engine."
+                    : "Voice cloning is not available for this engine."}
+                  {" "}Model availability can change if an administrator disables the plugin or revokes its installation.
                 </p>
-                <Button type="button" variant="outline" onClick={() => void preview()}>
-                  {previewing ? <Square className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
-                  {previewing ? "Stop local preview" : "Preview local voice"}
-                </Button>
-              </>
+              </section>
+            ) : (
+              <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">
+                Browser speech is a separate device feature. Use the Browser voice panel below to
+                choose and preview an installed browser voice.
+              </div>
             )}
           </>
         )}
-        <Button type="button" variant="outline" onClick={() => { stop(); void refresh(++revisionRef.current); }}>
-          <RefreshCw className="mr-2 h-4 w-4" />Refresh local engines
+        <Button type="button" variant="outline" disabled={saving}
+          onClick={() => { stop(); void refresh(++revisionRef.current); }}>
+          <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
+          Refresh local engines
         </Button>
       </CardContent>
-      <CardFooter className="flex justify-end">
-        <Button type="button" onClick={() => void save()} disabled={status !== "ready" || saving || (engineId !== BROWSER && !selectedVoice)}>
+      <CardFooter className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+        <span className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Volume2 className="h-4 w-4" aria-hidden="true" />
+          Read aloud remains opt-in on every assistant reply.
+        </span>
+        <Button type="button" onClick={() => void save()}
+          disabled={status !== "ready" || saving || (engineId !== BROWSER && !selectedVoice)}>
           {saving ? "Saving…" : "Save speech engine"}
         </Button>
       </CardFooter>
