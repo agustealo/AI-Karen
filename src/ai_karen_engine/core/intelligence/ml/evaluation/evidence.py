@@ -40,8 +40,15 @@ class BenchmarkCaseReceipt:
 
 
 class EvaluationEvidenceStore:
-    def __init__(self, registry_dir: Path) -> None:
+    def __init__(
+        self, registry_dir: Path, *, create_if_missing: bool = True,
+    ) -> None:
         self.database = Path(registry_dir) / "benchmark_evidence.sqlite3"
+        # Existing benchmark writer/approval consumers retain their original
+        # initialization behavior. KCM's observational reader opens an
+        # already-existing registry strictly read-only.
+        if not create_if_missing:
+            return
         self.database.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
             db.execute("""
@@ -216,7 +223,13 @@ class EvaluationEvidenceStore:
             or not registry.validate_artifact(registered)
         ):
             return None
-        with self._connect() as db:
+        if not self.database.is_file():
+            return None
+        # SQLite URI mode=ro avoids silently creating or mutating evidence
+        # storage during a KCM read, even if a receipt is absent.
+        with sqlite3.connect(
+            self.database.resolve().as_uri() + "?mode=ro", uri=True,
+        ) as db:
             db.row_factory = sqlite3.Row
             row = db.execute(
                 """SELECT receipt_id, model_id, model_version, purpose,
