@@ -946,12 +946,63 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             historical_delivery, tenant_a, historical_id,
             historical_inbox, historical_recipient, historical_msg,
         )
+        # Provider status may arrive before the HTTP send receipt, then
+        # operator deactivation may occur before that receipt is finalized.
+        pending_id = uuid.uuid4()
+        pending_provider_id = "wamid.sent-before-disable"
+        await raw.execute(
+            """INSERT INTO public.channel_outbox
+               (delivery_id,tenant_id,connection_id,inbox_id,destination_id,
+                idempotency_key,message_kind,message_text)
+               VALUES ($1,$2,$3,$4,$5,'pending-before-disable','text','Reply')""",
+            pending_id, tenant_a, historical_id,
+            historical_inbox, historical_recipient,
+        )
+        history_repo = SqlChannelRepository()
+        pending_status = ChannelProviderStatusEvent(
+            connection_id=historical_id,
+            provider_message_id=pending_provider_id,
+            recipient_id=historical_recipient,
+            state=ChannelDeliveryState.DELIVERED,
+            provider_timestamp=1770000009,
+            provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                provider_message_id=pending_provider_id,
+                recipient_id=historical_recipient,
+                state=ChannelDeliveryState.DELIVERED,
+                provider_timestamp=1770000009,
+            ),
+        )
+        assert await history_repo.record_provider_status(
+            connection=ChannelConnection(
+                tenant_id=str(tenant_a), connection_id=historical_id,
+                installation_id="whatsapp-cloud",
+                provider_account_id="10987654321",
+                credential_handle="vault://meta", revision=1, enabled=True,
+            ),
+            status=pending_status,
+        )
+        pending_claim = await history_repo.claim_outbound(
+            tenant_id=str(tenant_a), delivery_id=str(pending_id),
+            lease_seconds=90,
+        )
+        assert pending_claim is not None
         await raw.execute(
             """UPDATE public.channel_connections
                SET enabled=false,revision=2
                WHERE tenant_id=$1 AND connection_id=$2""",
             tenant_a, historical_id,
         )
+        assert await history_repo.finalize_outbound_claim(
+            tenant_id=str(tenant_a), claim_token=pending_claim.claim_token,
+            receipt=ChannelDeliveryReceipt(
+                delivery_id=str(pending_id), state=ChannelDeliveryState.SENT,
+                provider_message_id=pending_provider_id,
+            ),
+        )
+        assert await raw.fetchval(
+            "SELECT status FROM public.channel_outbox WHERE delivery_id=$1",
+            pending_id,
+        ) == "delivered"
         history = ChannelConnection(
             tenant_id=str(tenant_a), connection_id=historical_id,
             installation_id="whatsapp-cloud", provider_account_id="10987654321",
@@ -967,7 +1018,6 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 provider_timestamp=1770000010,
             ),
         )
-        history_repo = SqlChannelRepository()
         assert await history_repo.record_deactivated_provider_status(
             connection=history, status=historical_status,
         )
@@ -982,7 +1032,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             """SELECT count(*) FROM public.channel_provider_status_events
                WHERE tenant_id=$1 AND connection_id=$2""",
             tenant_a, historical_id,
-        ) == 1
+        ) == 2
         assert await history_repo.get_enabled_connection(
             tenant_id=str(tenant_a), connection_id=historical_id,
         ) is None
