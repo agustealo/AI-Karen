@@ -457,7 +457,8 @@ class SelfModelProjector:
         digest = (
             hashlib.sha256(
                 json.dumps(
-                    lineage, sort_keys=True, separators=(",", ":"),
+                    {"tenant_id": tenant_id, "evidence": lineage},
+                    sort_keys=True, separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()
             if lineage else ""
