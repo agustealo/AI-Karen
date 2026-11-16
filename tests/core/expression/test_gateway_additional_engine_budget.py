@@ -7,6 +7,7 @@ reserve another call. The original Runtime meter owns every reservation.
 
 from __future__ import annotations
 
+import traceback
 from unittest.mock import patch
 
 import pytest
@@ -213,8 +214,13 @@ async def test_guard_exception_fails_closed_before_any_second_provider_call() ->
         "ai_karen_engine.core.expression.gateway.get_engine",
         side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
     ):
-        with pytest.raises(EngineUnavailableError, match="execution_budget_guard_failed"):
+        with pytest.raises(
+            EngineUnavailableError, match="execution_budget_guard_failed"
+        ) as captured:
             await ExpressionGateway(_settings()).generate(task)
+    assert "host detail must not leak" not in "".join(
+        traceback.format_exception(captured.value)
+    )
     assert visited == ["local"]
     assert meter.model_calls == 1
 
