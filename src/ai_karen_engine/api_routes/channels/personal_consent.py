@@ -654,6 +654,72 @@ async def register_telegram_webhook(
         raise HTTPException(503, "Telegram webhook registration unverified") from None
 
 
+class TelegramRecoveryVerificationRequest(BaseModel):
+    """The caller may supply only a strict connection revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: StrictInt = Field(gt=0)
+
+
+class TelegramRecoveryVerificationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim_verified: Literal[True]
+    claim_released: Literal[False]
+    bot_ownership_released: Literal[False]
+    live_connected: Literal[False]
+
+
+@router.post(
+    "/operator/telegram/connections/{connection_id}/reconciliation/verify",
+    response_model=TelegramRecoveryVerificationResult,
+)
+async def verify_uncertain_telegram_registration(
+    connection_id: UUID,
+    payload: TelegramRecoveryVerificationRequest,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> TelegramRecoveryVerificationResult:
+    """Freshly authorized evidence-only provider read, guarded SQL promotion."""
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        connection = await host.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != str(connection_id)
+            or connection.installation_id != "telegram-bot"
+            or connection.revision != payload.expected_revision
+        ):
+            raise PermissionError("Telegram recovery unavailable")
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="telegram-bot", action="channel.recover",
+        )
+        result = await host.reconcile_uncertain_telegram_webhook(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            user_id=user_id, session_id=session_id,
+            authorized_plan=plan, expected_revision=payload.expected_revision,
+        )
+    except PermissionError:
+        raise HTTPException(403, "Telegram recovery denied") from None
+    except Exception as exc:
+        logger.error(
+            "channel.telegram.recovery.unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "Telegram recovery unverified") from None
+    try:
+        return TelegramRecoveryVerificationResult.model_validate(result)
+    except ValidationError:
+        logger.error("channel.telegram.recovery.invalid_result")
+        raise HTTPException(503, "Telegram recovery unverified") from None
+
+
 class TelegramReconciliationObservation(BaseModel):
     """Read-only evidence; cannot unlock a provider mutation."""
 
