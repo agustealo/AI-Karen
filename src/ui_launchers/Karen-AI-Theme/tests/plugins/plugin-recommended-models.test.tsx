@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { PluginRecommendedModels } from '@/components/plugins/PluginRecommendedModels';
 
 const mocks = vi.hoisted(() => ({
@@ -194,6 +194,49 @@ describe('Governed plugin model setup', () => {
     expect(screen.queryByRole('button', { name: 'Download recommended model' })).toBeNull();
     expect(mocks.post).not.toHaveBeenCalled();
   });
+
+  it.each(['failed', 'cancelled'] as const)(
+    'restores the download action after an owned queued job becomes %s',
+    async (terminalStatus) => {
+      const jobId = 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335';
+      const initialGet = mocks.get.getMockImplementation();
+      mocks.get.mockImplementation(async (url: string) => {
+        if (url === `/api/runtime/model-library/my-downloads/${jobId}`) {
+          return {
+            job_id: jobId,
+            model_id: recommendation.model_id,
+            revision: PINNED,
+            channel_id: recommendation.channel_id,
+            status: terminalStatus,
+            progress: 0.25,
+          };
+        }
+        return initialGet?.(url);
+      });
+      render(<PluginRecommendedModels pluginId="pocket-tts" />);
+      await screen.findByText('Pocket TTS English 18.2M (REFL)');
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+      await screen.findByText(/download job is queued/);
+      expect(screen.getByText(/Download job: queued/)).toBeTruthy();
+
+      vi.useFakeTimers();
+      try {
+        await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(mocks.get).toHaveBeenCalledWith(
+        `/api/runtime/model-library/my-downloads/${jobId}`,
+      );
+      const retry = screen.getByRole('button', { name: 'Download recommended model' });
+      expect(retry.hasAttribute('disabled')).toBe(false);
+      expect(screen.getByText(/Model download did not complete/)).toBeTruthy();
+
+      fireEvent.click(retry);
+      await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(4));
+    },
+  );
 
   it('fails closed without admin role or when the canonical download API is unavailable', async () => {
     mocks.admin = false;
