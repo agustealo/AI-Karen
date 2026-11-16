@@ -126,7 +126,7 @@ through unique inbox IDs and status receipt digests. An HTTP 202 is only
 
 **Still blocked:** production data migration rollout and review of existing
 duplicate provider message IDs; a governed retention/cleanup policy for
-unmatched status receipts; status events received after connection
+unmatched status receipts; live Meta acceptance for status events received after connection
 deactivation; real Meta test-number signature interop, delayed read/failure
 events, and live signed-in end-to-end acceptance. All remain required before
 shipping the canonical source to the \`free_plugins\` release mirror. Do
