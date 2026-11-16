@@ -186,9 +186,14 @@ class CortexExecutionDecider:
         if (
             reasoning_depth == "deep" or analysis.get("reasoning_required")
         ) and not reasoning_modes:
+            # Depth/effort alone never establishes a causal-identification
+            # request. Preserve explicit Intelligence/CORTEX modes above;
+            # otherwise use a conservative, noncausal reasoning preflight.
+            # RuntimePolicy still decides whether either mode may execute.
             reasoning_modes = normalize_reasoning_modes(
-                ["causal", "verification", "refinement", "metacognition"]
+                ["verification", "metacognition"]
             )
+            reason_codes.append("generic_reasoning_modes_noncausal")
 
         inferred_model_calls = int(analysis.get("max_model_calls", max_steps))
         if "soft_exploration" in reasoning_modes:
