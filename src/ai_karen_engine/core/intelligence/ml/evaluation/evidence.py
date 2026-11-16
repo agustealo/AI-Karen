@@ -35,6 +35,7 @@ class BenchmarkCaseReceipt:
     sample_count: int
     correct_count: int
     case_hashes: tuple[str, ...]
+    case_verdicts: tuple[tuple[str, bool], ...]
     decision: str
 
 
@@ -129,6 +130,18 @@ class EvaluationEvidenceStore:
                 hashlib.sha256(item.case_id.encode("utf-8")).hexdigest()[:24]
                 for item in result.outcomes
             ),
+            "case_verdicts": sorted(
+                [
+                    {
+                        "case_hash": hashlib.sha256(
+                            item.case_id.encode("utf-8")
+                        ).hexdigest()[:24],
+                        "correct": item.correct,
+                    }
+                    for item in result.outcomes
+                ],
+                key=lambda item: item["case_hash"],
+            ),
             "metrics": {
                 name: {"value": metric.value, "sample_count": metric.sample_count}
                 for name, metric in result.metrics.items()
@@ -205,6 +218,7 @@ class EvaluationEvidenceStore:
         try:
             evidence = json.loads(row["evidence_json"])
             hashes = evidence["case_hashes"]
+            verdicts = evidence["case_verdicts"]
             n = evidence["sample_count"]
             correct = evidence["correct_count"]
             task = PredictionTask(row["purpose"])
@@ -217,6 +231,16 @@ class EvaluationEvidenceStore:
                 or evidence.get("error_count") != 0
                 or not isinstance(hashes, list) or len(hashes) != n
                 or len(set(hashes)) != n
+                or not isinstance(verdicts, list)
+                or len(verdicts) != n
+                or any(
+                    not isinstance(item, dict)
+                    or set(item) != {"case_hash", "correct"}
+                    or type(item["correct"]) is not bool
+                    or item["case_hash"] != hashes[index]
+                    for index, item in enumerate(verdicts)
+                )
+                or sum(item["correct"] for item in verdicts) != correct
                 or any(
                     not isinstance(value, str)
                     or len(value) != 24
@@ -240,6 +264,9 @@ class EvaluationEvidenceStore:
             sample_count=n,
             correct_count=correct,
             case_hashes=tuple(hashes),
+            case_verdicts=tuple(
+                (item["case_hash"], item["correct"]) for item in verdicts
+            ),
             decision=row["decision"],
         )
 
