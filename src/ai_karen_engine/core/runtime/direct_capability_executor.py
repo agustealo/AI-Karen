@@ -580,6 +580,16 @@ class DirectCapabilityExecutor:
         ):
             return None
         plugin_id = str(plugin.get("installation_id") or "")
+        if not (
+            request.context.session_id
+            and request.context.conversation_id
+            and request.context.correlation_id
+        ):
+            return DirectCapabilityResult(
+                handled=True, degraded=True,
+                text="Plugin execution requires a verified session and conversation. No action was run.",
+                error="plugin_action_context_incomplete",
+            )
         try:
             contract = service.resolve_conversational_read_action(
                 plugin_id=plugin_id, goal=goal,
