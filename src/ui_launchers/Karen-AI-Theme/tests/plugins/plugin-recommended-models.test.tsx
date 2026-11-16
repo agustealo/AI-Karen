@@ -64,7 +64,9 @@ const getImpl = (source = catalog(), nextPolicy = policy, jobs: unknown[] = []) 
     if (url === '/api/models/download/recommendations') return source;
     if (url === '/api/models/download/policy') return nextPolicy;
     if (url === '/api/models/download/channels') return channels;
-    if (url === '/api/models/download/jobs?limit=200') return jobs;
+    if (url === '/api/runtime/model-library/my-downloads?limit=200') {
+      return { jobs, total: jobs.length, scope: 'authenticated_user' };
+    }
     throw new Error('Unexpected model control URL: ' + url);
   });
 
@@ -159,6 +161,21 @@ describe('Governed plugin model setup', () => {
     await screen.findByText('Pocket TTS English 18.2M (REFL)');
     expect(screen.getByRole('button', { name: 'Download recommended model' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('alert').textContent).toContain('could not be verified');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects a download-history response without authenticated owner scope', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/api/models/download/recommendations') return catalog();
+      if (url === '/api/models/download/policy') return policy;
+      if (url === '/api/models/download/channels') return channels;
+      if (url === '/api/runtime/model-library/my-downloads?limit=200') {
+        return { jobs: [], scope: 'admin_global' };
+      }
+      throw new Error('Unexpected URL');
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    expect(await screen.findByText(/could not verify recommended models/)).toBeTruthy();
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
