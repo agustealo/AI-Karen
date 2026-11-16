@@ -12,16 +12,17 @@ vi.mock('@/lib/useAuth', () => ({
   useAuth: () => ({ user: { id: 'test-user', roles: ['user', 'admin'] } })
 }));
 
-// Mock apiClient to avoid actual network calls
+// Both the legacy default import and the canonical named import must use
+// the same controlled HTTP mock. Production registry uses the named export.
+const mockGet = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
   ApiError: class ApiError extends Error {
     constructor(public status: number, message: string) {
       super(message);
     }
   },
-  default: {
-    get: vi.fn()
-  }
+  default: { get: mockGet },
+  apiClient: { get: mockGet },
 }));
 import apiClient from '@/lib/api';
 
