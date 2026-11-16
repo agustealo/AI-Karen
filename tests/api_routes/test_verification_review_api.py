@@ -113,7 +113,7 @@ def test_review_endpoint_does_not_accept_client_supplied_policy_facts(monkeypatc
     })
     assert response.status_code == 422
     response = client.post("/api/admin/training/verification/reviews/", json={
-        **request_payload(), "reward": float("nan"),
+        **request_payload(), "reward": "NaN",
     })
     assert response.status_code == 422
 
