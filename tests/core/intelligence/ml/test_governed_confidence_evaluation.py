@@ -35,6 +35,7 @@ def record(
     feature_version: str = _FEATURE,
     fallback: bool = False,
     label_source: str = "heldout_evaluation",
+    label_evidence_ref: str | None = None,
     outcome_id: str | None = None,
 ) -> dict:
     return {
@@ -46,7 +47,7 @@ def record(
         "metadata": {
             "schema_version": "ml_predictor_evidence_v1",
             "label_source": label_source,
-            "label_evidence_ref": f"benchmark:receipt:{number}",
+            "label_evidence_ref": label_evidence_ref or f"benchmark:receipt:{number}",
             "task": _TASK.value,
             "model_id": model,
             "model_version": model_version,
@@ -170,6 +171,43 @@ async def test_principal_scope_version_and_label_provenance_filtering() -> None:
     assert report.sample_count == 18
     assert report.brier_score is None
     assert report.expected_calibration_error is None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_label_receipts_cannot_inflate_sample_count() -> None:
+    valid = [
+        record(i, correct=True, confidence=1.0) for i in range(18)
+    ]
+    replayed_labels = [
+        record(
+            200 + i,
+            correct=False,
+            confidence=0.0,
+            label_evidence_ref="benchmark:receipt:0",
+        )
+        for i in range(7)
+    ]
+    report = await evaluate(evaluator(valid + replayed_labels))
+    assert report.status == "insufficient_evidence"
+    assert report.sample_count == 18
+    assert report.brier_score is None
+    assert report.expected_calibration_error is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_persisted_label_reference_is_never_evaluated() -> None:
+    valid = [
+        record(i, correct=True, confidence=1.0) for i in range(19)
+    ]
+    forged = record(
+        201,
+        correct=True,
+        confidence=1.0,
+        label_evidence_ref="private label injection !",
+    )
+    report = await evaluate(evaluator(valid + [forged]))
+    assert report.status == "insufficient_evidence"
+    assert report.sample_count == 19
 
 
 @pytest.mark.asyncio
