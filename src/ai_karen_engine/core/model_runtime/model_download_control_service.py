@@ -759,10 +759,17 @@ class ModelDownloadControlService:
                 },
             )
         install_channel = self._channels[validation.channel_id]
+        # A reviewed revision is an explicit immutable selection, even when
+        # the optional caller "revision" was omitted. Do not queue a pinned
+        # model into the shared "main" publication slot: it can otherwise
+        # overwrite a different reviewed revision without changing the job's
+        # recorded revision. Preserve legacy main-slot behavior only for
+        # unreviewed requests that never supplied a revision.
+        installation_revision = revision or reviewed_revision
         install_path = self._build_install_path(
             install_channel,
             model_id,
-            revision,
+            installation_revision,
         )
         job = ModelDownloadJob(
             job_id=f"mdl-{uuid.uuid4()}",
