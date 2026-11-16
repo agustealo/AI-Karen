@@ -40,12 +40,13 @@ def adapter_components(*, status=200, reply=None):
             },
         )),
         post=AsyncMock(return_value=httpx.Response(
-        status, json=reply if reply is not None else {
-            "messaging_product": "whatsapp",
-            "messages": [{"id": "wamid.provider-receipt-42"}],
-            "contacts": [{"wa_id": "15551234567"}],
-        },
-    )))
+            status, json=reply if reply is not None else {
+                "messaging_product": "whatsapp",
+                "messages": [{"id": "wamid.provider-receipt-42"}],
+                "contacts": [{"wa_id": "15551234567"}],
+            },
+        )),
+    )
     adapter.bind_host_services(secret_resolver=resolver, http_client=client)
     account = ChannelConnection(
         connection_id="wa-1", installation_id="whatsapp-cloud",
