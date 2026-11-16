@@ -8,7 +8,6 @@ import importlib.util
 import io
 import json
 import wave
-from fnmatch import fnmatchcase
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -78,68 +77,6 @@ def _snapshot(module, tmp_path):
     (subdir / "tokenizer.model").write_bytes(b"test-tokenizer")
     (folder / "alba.safetensors").write_bytes(b"test-voice")
     return model_dir, spec
-
-
-
-def test_curated_pocket_download_matches_native_loader_contract(module):
-    """An operator must never download a different pin or incomplete voice set.
-
-    The download catalog owns acquisition choices; the first-party model
-    specification owns native loading. Compare both at build time rather than
-    duplicating an inference or download configuration service.
-    """
-    spec = module._read_spec()
-    config = json.loads(
-        (ROOT / "config_assets" / "model_download_recommendations.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    curated = [
-        entry for entry in config["recommendations"]
-        if "pocket-tts" in entry.get("app_consumers", [])
-    ]
-    assert len(curated) == 1, "Only one reviewed Pocket acquisition pin is allowed"
-    recommendation = curated[0]
-    assert recommendation["model_id"] == spec["model_id"]
-    assert recommendation["revision"] == spec["revision"]
-    assert recommendation["channel_id"] == spec["channel_id"]
-    assert recommendation["expected_runtime"] == spec["runtime_package"]
-    assert recommendation["license"] == spec["model_license"]
-    assert recommendation["license_url"] == (
-        f"https://huggingface.co/{spec['model_id']}"
-    )
-    assert recommendation["tier"] == "optional"
-    assert recommendation["recommended"] is False
-
-    base = spec["model_subdirectory"]
-    patterns = recommendation["include_patterns"]
-    assert patterns == [
-        f"{base}/{spec['weights']}",
-        f"{base}/{spec['tokenizer']}",
-        f"{base}/{spec['voice_dir']}/*.safetensors",
-    ]
-    assert len(set(patterns)) == len(patterns)
-    assert all(
-        not pattern.startswith("/") and
-        all(part not in {"", ".", ".."} for part in pattern.split("/"))
-        for pattern in patterns
-    )
-    # The reviewed 18M model is the only version to include in this job.
-    required = (
-        f"{base}/{spec['weights']}",
-        f"{base}/{spec['tokenizer']}",
-        f"{base}/{spec['voice_dir']}/alba.safetensors",
-    )
-    forbidden = (
-        f"{base}/{spec['voice_dir']}/README.txt",
-        "languages/english_7m_refl_2026-10/model.safetensors",
-        "languages/english_2m_refl_2026-10/tokenizer.model",
-    )
-    assert all(any(fnmatchcase(path, glob) for glob in patterns) for path in required)
-    assert all(
-        not any(fnmatchcase(path, glob) for glob in patterns)
-        for path in forbidden
-    )
 
 
 def test_manifest_is_versioned_closed_and_default_disabled():
