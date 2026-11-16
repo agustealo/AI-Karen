@@ -142,7 +142,7 @@ describe("governed local engine voice settings", () => {
     await waitFor(() => expect(api.getVoiceSelection).toHaveBeenCalledTimes(2));
     // The first refresh finishes before the pending backend write.
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Speech output source" }).textContent).toMatch(/Browser speech/));
-    expect((screen.getByRole("button", { name: "Save speech engine" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Saving…" }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => completeSave({
       status: "success", voice: local.voice, available: true,
