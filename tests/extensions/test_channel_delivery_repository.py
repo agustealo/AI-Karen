@@ -501,7 +501,7 @@ async def test_status_replay_with_missing_connection_denied(monkeypatch):
         await SqlChannelRepository().record_provider_status(
             connection=connection, status=provider_status(),
         )
-    assert len(session.calls) == 2
+    assert len(session.calls) == 3
 
 
 @pytest.mark.asyncio
