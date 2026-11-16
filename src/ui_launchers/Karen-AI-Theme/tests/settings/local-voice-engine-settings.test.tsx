@@ -267,8 +267,8 @@ describe("governed local engine voice settings", () => {
     await screen.findByText(/Model: kyutai\/pocket-tts/);
     expect(screen.getByTestId("voice-studio-saved-selection").textContent).toContain("Pocket TTS · Alba");
     expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /Sage en/ }));
-    expect(screen.getByRole("button", { name: /Sage en/ }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Choose Sage local voice" }));
+    expect(screen.getByRole("button", { name: "Choose Sage local voice" }).getAttribute("aria-pressed")).toBe("true");
     const input = screen.getByRole("textbox", { name: "Try a spoken sample" });
     fireEvent.change(input, { target: { value: "The studio should speak precisely this sample." } });
     fireEvent.click(screen.getByRole("button", { name: "Preview local voice" }));
