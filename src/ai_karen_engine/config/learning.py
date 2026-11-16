@@ -36,6 +36,9 @@ class LearningSettings:
     kcm_training_min_quality: float = 0.82
     kcm_training_min_correctness: float = 0.90
     kcm_training_min_provenance: float = 0.80
+    # Default task-benchmark evidence lifetime for read-only KCM inspection.
+    # Expired evidence is unavailable; it cannot certify current capability.
+    kcm_benchmark_max_evidence_age_seconds: int = 2_592_000
     model_routing_min_samples: int = 12
     model_routing_history_limit: int = 500
     model_routing_history_days: int = 90
@@ -52,6 +55,13 @@ class LearningSettings:
             value = getattr(self, setting)
             if not isinstance(value, (int, float)) or not 0.0 < value <= 1.0:
                 raise ValueError(f"{setting} must be in (0, 1]")
+        if (
+            type(self.kcm_benchmark_max_evidence_age_seconds) is not int
+            or not 1 <= self.kcm_benchmark_max_evidence_age_seconds <= 31_536_000
+        ):
+            raise ValueError(
+                "KCM benchmark evidence age must be 1-31536000 seconds"
+            )
         if not 5 <= self.model_routing_min_samples <= 1000:
             raise ValueError("Learning minimum model sample count must be 5-1000")
         if not 10 <= self.model_routing_history_limit <= 1000:
@@ -145,6 +155,8 @@ class LearningSettings:
             ("KCM_TRAINING_MIN_QUALITY", "kcm_training_min_quality", float),
             ("KCM_TRAINING_MIN_CORRECTNESS", "kcm_training_min_correctness", float),
             ("KCM_TRAINING_MIN_PROVENANCE", "kcm_training_min_provenance", float),
+            ("KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS",
+             "kcm_benchmark_max_evidence_age_seconds", int),
             ("LEARNING_MODEL_ROUTING_MIN_SAMPLES", "model_routing_min_samples", int),
             ("LEARNING_MODEL_ROUTING_HISTORY_LIMIT", "model_routing_history_limit", int),
             ("LEARNING_MODEL_ROUTING_HISTORY_DAYS", "model_routing_history_days", int),
