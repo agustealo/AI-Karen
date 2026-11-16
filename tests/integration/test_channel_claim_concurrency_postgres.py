@@ -1165,15 +1165,38 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             ChannelDeliveryState.READ,
             message_id="wamid.bulk-rollback-proof",
         )
-        # receipt ID is stable across error_code changes, while the evidence
-        # digest is not. Conflict on the second event must roll back the first.
-        conflicting_old = delivered_early.model_copy(update={
-            "error_code": "conflicting-signed-evidence",
-        })
+        # A valid incoming receipt cannot change a digest derived from its
+        # signed fields. The disposable DB owner seeds one deliberately corrupt
+        # digest to prove the SQL collision and *transactional rollback*, not
+        # merely Pydantic rejection before starting the transaction.
+        conflicting_old = signed_status(
+            ChannelDeliveryState.DELIVERED,
+            message_id="wamid.bulk-existing-corrupt-digest",
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_provider_status_events (
+                   tenant_id, connection_id, connection_revision,
+                   provider_message_id, recipient_id, state,
+                   provider_timestamp, receipt_id, event_digest, error_code
+               ) VALUES ($1,$2,1,$3,$4,'delivered',$5,$6,$7,NULL)""",
+            tenant_a, connection_id, conflicting_old.provider_message_id,
+            conflicting_old.recipient_id, conflicting_old.provider_timestamp,
+            conflicting_old.provider_receipt_id, "0" * 64,
+        )
         with pytest.raises(module.ChannelAdmissionConflict, match="changed evidence"):
             await batch_repo.record_provider_status_batch(
                 connection=account, statuses=(new_event, conflicting_old),
             )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 101
+        await raw.execute(
+            """DELETE FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2 AND receipt_id=$3""",
+            tenant_a, connection_id, conflicting_old.provider_receipt_id,
+        )
         assert await raw.fetchval(
             """SELECT COUNT(*) FROM public.channel_provider_status_events
                WHERE tenant_id=$1 AND connection_id=$2""",
