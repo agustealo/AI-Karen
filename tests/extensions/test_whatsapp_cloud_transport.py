@@ -236,3 +236,168 @@ async def test_meta_subscription_does_not_accept_missing_host_secret_or_stale_re
             connection=wrong_phone, verify_token="meta-verify-token-123",
         )
     client.post.assert_not_awaited()
+
+
+
+def signed_batch(payload):
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "X-Hub-Signature-256": "sha256=" + hmac.new(
+            APP_SECRET.encode(), body, hashlib.sha256,
+        ).hexdigest(),
+    }
+    return body, headers
+
+
+def webhook_value(*, messages=None, statuses=None, phone=PHONE):
+    value = {
+        "messaging_product": "whatsapp",
+        "metadata": {"phone_number_id": phone},
+    }
+    if messages is not None:
+        value["messages"] = messages
+    if statuses is not None:
+        value["statuses"] = statuses
+    return value
+
+
+@pytest.mark.asyncio
+async def test_signed_whatsapp_batch_normalizes_separate_messages_and_receipts():
+    _, adapter, account, resolver, client = adapter_components()
+    await adapter.start(connection=account)
+    status = {
+        "id": "wamid.provider-receipt-42",
+        "recipient_id": "15551234567",
+        "status": "delivered",
+        "timestamp": "1770000000",
+    }
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "changes": [{
+                "field": "messages",
+                "value": webhook_value(
+                    messages=[
+                        {"id": "wamid.first-1", "from": "15551234567",
+                         "type": "text", "text": {"body": "First"}},
+                        {"id": "wamid.media-1", "from": "15551234567",
+                         "type": "image", "image": {"id": "not-for-chat"}},
+                    ],
+                    statuses=[status],
+                ),
+            }, {
+                "field": "messages",
+                "value": webhook_value(messages=[
+                    {"id": "wamid.second-2", "from": "15551234567",
+                     "type": "text", "text": {"body": "Second"}},
+                ]),
+            }],
+        }],
+    }
+    body, headers = signed_batch(payload)
+    assert await adapter.verify_event(connection=account, headers=headers, body=body)
+    batch = await adapter.normalize_events(connection=account, headers=headers, body=body)
+    assert tuple(event.text for event in batch.messages) == ("First", "Second")
+    assert len(batch.statuses) == 1
+    assert batch.ignored_count == 1
+    evidence = batch.statuses[0]
+    assert evidence.state is ChannelDeliveryState.DELIVERED
+    assert evidence.provider_message_id == "wamid.provider-receipt-42"
+    assert evidence.recipient_id == "15551234567"
+    assert evidence.provider_timestamp == 1770000000
+    assert len(evidence.provider_receipt_id) == 64
+    assert not hasattr(evidence, "user_id")
+    assert not hasattr(evidence, "tenant_id")
+    client.post.assert_not_awaited()
+    resolver.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_status_only_callback_is_not_a_chat_message():
+    _, adapter, account, _, _ = adapter_components()
+    await adapter.start(connection=account)
+    body, headers = signed_batch({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": webhook_value(
+            statuses=[{
+                "id": "wamid.provider", "recipient_id": "15551234567",
+                "status": "read", "timestamp": "1770000001",
+            }],
+        )}]}],
+    })
+    assert await adapter.verify_event(connection=account, headers=headers, body=body)
+    batch = await adapter.normalize_events(connection=account, headers=headers, body=body)
+    assert batch.messages == ()
+    assert len(batch.statuses) == 1
+    assert batch.statuses[0].state is ChannelDeliveryState.READ
+    with pytest.raises(ValueError, match="Single-event"):
+        await adapter.normalize_event(connection=account, headers=headers, body=body)
+
+
+@pytest.mark.asyncio
+async def test_signed_batch_wrong_phone_and_malformed_receipts_fail_closed():
+    _, adapter, account, _, client = adapter_components()
+    await adapter.start(connection=account)
+    examples = [
+        webhook_value(
+            statuses=[{
+                "id": "wamid.provider", "recipient_id": "15551234567",
+                "status": "delivered", "timestamp": "1770000000",
+            }], phone="99999999999",
+        ),
+        webhook_value(
+            statuses=[{
+                "id": "wamid.provider", "recipient_id": "nope",
+                "status": "delivered", "timestamp": "1770000000",
+            }],
+        ),
+        webhook_value(
+            statuses=[{
+                "id": "wamid.provider", "recipient_id": "15551234567",
+                "status": "delivered", "timestamp": "bad-time",
+            }],
+        ),
+        webhook_value(messages=[
+            {"id": "wamid.provider", "from": "15551234567",
+             "type": "text", "text": {"body": ""}},
+        ]),
+    ]
+    for value in examples:
+        body, headers = signed_batch({
+            "object": "whatsapp_business_account",
+            "entry": [{"changes": [{"field": "messages", "value": value}]}],
+        })
+        assert await adapter.verify_event(connection=account, headers=headers, body=body)
+        with pytest.raises(ValueError):
+            await adapter.normalize_events(connection=account, headers=headers, body=body)
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_signed_batch_bound_and_duplicate_json_keys_rejected():
+    _, adapter, account, _, _ = adapter_components()
+    await adapter.start(connection=account)
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{
+            "field": "messages",
+            "value": webhook_value(messages=[
+                {"id": f"wamid.{i}", "from": "15551234567",
+                 "type": "text", "text": {"body": "hello"}}
+                for i in range(101)
+            ]),
+        }]}],
+    }
+    body, headers = signed_batch(payload)
+    with pytest.raises(ValueError, match="count exceeds limit"):
+        await adapter.normalize_events(connection=account, headers=headers, body=body)
+    duplicate = (
+        b'{"object":"whatsapp_business_account",'
+        b'"object":"whatsapp_business_account","entry":[]}'
+    )
+    with pytest.raises(ValueError, match="Duplicate"):
+        await adapter.normalize_events(connection=account, headers={}, body=duplicate)
+    assert not await adapter.verify_event(
+        connection=account, headers={"X-Hub-Signature-256": "sha256=" + "0" * 64},
+        body=body,
+    )
