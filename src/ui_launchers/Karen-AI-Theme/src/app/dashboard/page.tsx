@@ -226,6 +226,16 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
   const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model' | 'voice'>('behavior');
+  // A fixed, host-owned deep link from the Plugin Store opens the same
+  // settings panel as Plugins & Tools. No execution or provider decisions
+  // are inferred from URL parameters. Only this explicit route is accepted.
+  useEffect(() => {
+    const search = new URLSearchParams(window.location.search);
+    if (search.get('view') === 'settings' && search.get('section') === 'voice') {
+      setSettingsInitialSection('voice');
+      setActiveMainView('settings');
+    }
+  }, []);
   const [karenPanelOpen, setKarenPanelOpen] = useState(false);
   const karenLauncherRef = useRef<HTMLButtonElement | null>(null);
   const karenPanelRef = useRef<HTMLDivElement | null>(null);
