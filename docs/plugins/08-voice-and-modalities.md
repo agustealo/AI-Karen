@@ -456,9 +456,11 @@ The model setup panel:
 1. Requires an administrator or super administrator in the presentation
    layer; the existing admin-scoped model-management router remains the
    actual permission enforcement.
-2. Reads canonical recommendation, policy, channel and durable job state.
+2. Reads canonical recommendation, policy, channel and **owner-scoped**
+   durable job state using `/api/runtime/model-library/my-downloads`.
    Failed or malformed reads disable the install control instead of
-   inventing a missing model or a healthy download worker.
+   inventing a missing model or a healthy download worker. The panel never
+   displays arbitrary admin-global job history or other tenants' jobs.
 3. Explains the pinned model ID, revision, missing/registered state and
    current download jobs. Pinned plugin recommendations qualify their
    **installed** label against the authenticated tenant's completed, licensed,
