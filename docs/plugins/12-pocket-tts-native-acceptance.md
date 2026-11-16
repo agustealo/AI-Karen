@@ -18,6 +18,7 @@
 | Reviewed revision publication paths, single engine authorization, traversal fences | [PR #885](https://github.com/agustealo/AI-Karen/pull/885) | **Merged**; 11/11 exact-head checks incl. durable worker and first boot |
 | First-class Copilot voice dock and global Stop audio | [PR #872](https://github.com/agustealo/AI-Karen/pull/872) · [PR #880](https://github.com/agustealo/AI-Karen/pull/880) | **Merged**; browser UI source contracts, not real device acceptance |
 | Preview isolation, voice-settings readback, long speech and browser-dictation draft safety | [PR #888](https://github.com/agustealo/AI-Karen/pull/888) | **Merged**; 7/7 exact-head checks including frontend production build |
+| Governed built-in model download in Pocket plugin UX | [PR #911](https://github.com/agustealo/AI-Karen/pull/911) | **Merged**; licensed native load and audio still unverified |
 | Target hardware runtime + licensed model install | No attested target artifact | **Not proven** |
 | Native Pocket audio and WAV integrity | No non-mocked target WAV | **Not proven** |
 | Browser preview/read-aloud on real target | No device/browser capture | **Not proven** |
@@ -60,6 +61,7 @@ consumer-device pass:
 | V-AUD-05 | Settings could claim voice save without readback | `LocalVoiceEngineSettings` via authenticated settings owner | #888, 7/7, merged |
 | V-AUD-06 | Long unspaced replies could bypass synthesis chunk bound | `KarenBrowserSpeechPlayback` | #888, 7/7, merged |
 | V-AUD-07 | Browser dictation could overwrite newer typing, duplicate transcripts or accept stale-session events | `KarenBrowserDictationCapture` canonical draft port | #888, 7/7, merged |
+| V-AUD-08 | WAV response validation accepted declared audio frames without checking the actual frame bytes, allowing a header-only or truncated synthesized WAV to appear successful | `services/voice_runtime.py`, shared native/plugin output boundary | Source regression added in `test_voice_wav_integrity.py`; requires exact-head CI |
 
 **Open acceptance (not bypassable):** prove the licensed Pocket model is
 actually installed and healthy on the target machine; generate non-mocked
@@ -69,13 +71,14 @@ speech Stop, account switch, cancellation, draft restoration and responsive
 390/768/1024/1440px Copilot experience in a real signed-in browser.
 Keep denial and revocation scenarios in the evidence matrix.
 
-**Known scale watchpoints:** Pocket currently searches a bounded list of
-completed model-download jobs (up to 500) for an eligible tenant-scoped
-installation. On a host with more historical jobs, availability may need
-a governed tenant/model indexed query rather than list-and-filter. This is
-**not proven fixed** by #885 or #888. Also validate that local/native TTS
-model preparation does not exceed the user-facing request budget and that
-the worker correctly fences model revocation during ongoing requests.
+**Known scale watchpoints:** The tenant/model/revision/channel completed-
+installation query now runs in the canonical PostgreSQL model-download owner
+before pagination; an older eligible job must not be hidden by other tenants'
+newer downloads. PR #911 separately prevents the plugin setup UI from
+treating another tenant's artifact registry entry as a licensed installation.
+Actual PostgreSQL scale, local/native TTS cold-model preparation budgets,
+revocation during inference, and the model's real output quality still require
+deployment evidence.
 
 The opt-in non-mocked STT tests in
 `tests/core/voice/test_voice_real_model_acceptance.py` require actual WAV
@@ -190,6 +193,19 @@ measured performance is within the documented hardware support budget.
 test, unexplained offline network access, silent browser/cloud fallback,
 tenant/RBAC bypass, private-audio persistence, corrupted playback, or an
 unreproducible performance result.
+
+### Synthesized WAV integrity and native truth
+
+VoiceRuntime is the canonical output admission point for both its local
+native synthesis interface and authenticated plugin synthesis. In addition
+to a syntactically valid WAV header, successful responses must now contain
+the declared complete PCM16 frames and stay within the existing audio
+duration/size budget. A 44-byte header can claim two frames while containing
+zero PCM bytes; such output must be rejected as a server-side synthesis
+failure, not delivered as a playable audio response. Regression tests use
+intentionally malformed synthetic WAVs and do **not** demonstrate that Pocket
+TTS generated or played real speech. Full native and browser acceptance
+remains open until signed-off target-hardware evidence is attached.
 
 When acceptance is complete, replace each **Not proven** cell with an
 evidence link and exact verified result. Update the voice modality chapter
