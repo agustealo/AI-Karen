@@ -128,6 +128,7 @@ class ChannelActivationService:
             "channel.send", "channel.recover", "channel.provision",
             "channel.activate", "channel.deactivate", "channel.consent",
             "channel.inspect", "channel.webhook.register",
+            "channel.status_prune",
         }:
             raise ChannelActivationDenied("Unknown channel action")
         if not tenant_id or not user_id or not session_id:

@@ -779,6 +779,73 @@ class ChannelHostServices:
             user_id=user_id, provider_id=provider_id,
         )
 
+    async def prune_unmatched_whatsapp_statuses(
+        self, *, tenant_id: str, connection_id: str,
+        user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+        dry_run: bool,
+    ) -> dict[str, int | bool]:
+        """Operator-authorized, opt-in and bounded tenant retention action.
+
+        This is not a webhook callback, periodic worker scan, or plugin tool.
+        SQL owns atomic candidate selection, receipt tombstones, and deletion;
+        fresh RuntimePolicy owns the authorization. No phone IDs, Meta message
+        identifiers, original payloads or credentials appear in audit logs.
+        """
+        if (
+            not self._initialized or self._closed or self.activation is None
+            or self.settings.status_retention_enabled is not True
+        ):
+            raise PermissionError("Channel status retention unavailable")
+        if type(dry_run) is not bool:
+            raise ValueError("Status retention dry-run must be boolean")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "whatsapp-cloud"
+            or connection.installation_id not in self._installed
+            or self.kernel.get_channel_activation_manifest(
+                connection.installation_id
+            ) is None
+        ):
+            raise PermissionError("WhatsApp retention connection unavailable")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.status_prune", plan=authorized_plan,
+        )
+        count = await self.repository.prune_unmatched_provider_statuses(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=connection.revision,
+            retention_days=self.settings.status_retention_days,
+            limit=self.settings.status_retention_batch_limit,
+            dry_run=dry_run,
+        )
+        logger.info(
+            "channel.status_retention.completed",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "user_id": user_id,
+                "connection_revision": connection.revision,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+                "dry_run": dry_run,
+                "eligible_or_deleted_count": count,
+                "retention_days": self.settings.status_retention_days,
+            },
+        )
+        return {
+            "dry_run": dry_run,
+            "eligible_count": count,
+            "deleted_count": 0 if dry_run else count,
+            "connection_revision": connection.revision,
+            "retention_days": self.settings.status_retention_days,
+            "batch_limit": self.settings.status_retention_batch_limit,
+        }
+
     async def recover_inbox(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,
