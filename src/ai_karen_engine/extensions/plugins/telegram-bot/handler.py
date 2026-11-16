@@ -292,6 +292,7 @@ class MainExtension(ExtensionBase):
 
     async def register_webhook(
         self, *, connection: ChannelConnection, public_origin: str,
+        expected_bot_id: int,
     ) -> Mapping[str, bool]:
         """Explicit host-authorized setWebhook, followed by live read-back.
 
@@ -300,6 +301,8 @@ class MainExtension(ExtensionBase):
         Neither success nor an error proves inbound ChatRuntime delivery.
         """
         self._require_active(connection)
+        if type(expected_bot_id) is not int or not 0 < expected_bot_id < 2**63:
+            raise PermissionError("Telegram bot ownership verification unavailable")
         if (
             not isinstance(public_origin, str)
             or not public_origin.startswith("https://")
@@ -329,6 +332,28 @@ class MainExtension(ExtensionBase):
             f"{connection.tenant_id}/{connection.connection_id}"
         )
         try:
+            # Credential rotation between host identity reservation and this
+            # Vault resolution must not redirect a webhook to another bot.
+            # The SAME resolved token is used for the identity recheck and
+            # the mutation. No provider write occurs if IDs differ.
+            proof = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getMe"
+            )
+            if proof.status_code != 200:
+                raise ValueError("Telegram bot ownership changed")
+            identity_payload = proof.json()
+            identity = (
+                identity_payload.get("result")
+                if isinstance(identity_payload, dict) else None
+            )
+            if (
+                identity_payload.get("ok") is not True
+                or not isinstance(identity, dict)
+                or identity.get("is_bot") is not True
+                or type(identity.get("id")) is not int
+                or identity["id"] != expected_bot_id
+            ):
+                raise ValueError("Telegram bot ownership changed")
             response = await self._http_client.post(
                 f"{_TELEGRAM_API_BASE}/bot{token}/setWebhook",
                 json={
