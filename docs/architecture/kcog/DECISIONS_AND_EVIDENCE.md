@@ -42,4 +42,6 @@
 
 **Non-closure:** these safety slices do not implement causal identification, independently verified calibration or cross-domain transfer. A future real-model runtime trial is still required.
 
+| 2026-11-15 | KCON-211 model selection and reasoning parity | Candidate branch `fix/kcon211-authorization-first-reasoning-parity-20261115` | Removed selected-provider/model veto in both chat branches; use one fail-closed policy-aware topology selector. Adds unit and source contract tests. | SOURCE_CANDIDATE, exact-head CI and real-model/browser acceptance NOT_RUN |
+
 Do not overwrite evidence when an earlier claim is corrected. Add a dated reconciliation entry with links and reason.

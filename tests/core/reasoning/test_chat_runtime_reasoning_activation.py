@@ -88,3 +88,56 @@ def test_reasoning_strategy_cannot_override_observed_model_receipt() -> None:
         if isinstance(value, ast.Constant)
     }
     assert {"actual_provider", "actual_model", "response_source"}.issubset(excluded)
+
+
+
+def test_preferred_model_does_not_change_authorized_reasoning_topology() -> None:
+    """KCON-211: both runtime transports use the same policy-gated selector."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+
+    run = ChatRuntime._should_execute_authorized_reasoning
+    cognitive = SimpleNamespace(
+        topology=ExecutionTopology.REASONING,
+        reasoning_modes=["verification"],
+    )
+    approved = SimpleNamespace(
+        topology=ExecutionTopology.REASONING,
+        reasoning_modes=["verification"],
+    )
+    assert run(cognitive, approved) is True
+
+    source = _chat_runtime_source()
+    assert source.count("self._should_execute_authorized_reasoning(decision, plan)") == 2
+    assert 'not (request.preferred_provider and request.preferred_model)' not in source
+
+    denied = SimpleNamespace(
+        topology=ExecutionTopology.DIRECT,
+        reasoning_modes=[],
+    )
+    assert run(denied, denied) is False
+
+    with pytest.raises(PermissionError, match="reasoning_modes_not_authorized"):
+        run(cognitive, SimpleNamespace(
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=[],
+        ))
+
+    with pytest.raises(PermissionError, match="reasoning_topology_authorization_mismatch"):
+        run(cognitive, denied)
+
+
+def test_direct_and_workflow_topologies_remain_unchanged() -> None:
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+
+    for topology in (ExecutionTopology.DIRECT, ExecutionTopology.WORKFLOW):
+        decision = SimpleNamespace(topology=topology, reasoning_modes=[])
+        plan = SimpleNamespace(topology=topology, reasoning_modes=[])
+        assert not ChatRuntime._should_execute_authorized_reasoning(decision, plan)

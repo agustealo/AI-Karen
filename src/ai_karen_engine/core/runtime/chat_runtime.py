@@ -519,7 +519,7 @@ class ChatRuntime:
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
-            elif grounded is None and not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning" and not (request.preferred_provider and request.preferred_model):
+            elif grounded is None and not self._is_explicit_save_turn(request) and self._should_execute_authorized_reasoning(decision, plan):
                 text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
             elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required and decision.topology.value != "reasoning":
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
@@ -1036,7 +1036,7 @@ class ChatRuntime:
                         meter,
                         _meta=provider_meta,
                     )
-                    if decision.topology.value == "reasoning" and not (request.preferred_provider and request.preferred_model)
+                    if self._should_execute_authorized_reasoning(decision, plan)
                     else (
                         self._run_graph_stream(
                             request,
@@ -4004,6 +4004,29 @@ class ChatRuntime:
             if _meta is not None:
                 self._accumulate_chunk_metadata(chunk, _meta)
             yield chunk
+
+    @staticmethod
+    def _should_execute_authorized_reasoning(
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Honor policy-approved reasoning independently of model preference.
+
+        CORTEX decides the topology and RuntimePolicy authorizes the modes.
+        A selected provider/model is only an inference preference. It cannot
+        turn authorized reasoning into direct generation, and a mismatched
+        execution plan may not silently fall back to a different path.
+        """
+        if decision.topology != plan.topology:
+            raise PermissionError("reasoning_topology_authorization_mismatch")
+        if decision.topology != ExecutionTopology.REASONING:
+            return False
+
+        requested = set(decision.reasoning_modes)
+        allowed = set(plan.reasoning_modes)
+        if not requested or not requested.issubset(allowed):
+            raise PermissionError("reasoning_modes_not_authorized")
+        return True
 
     async def _run_reasoning(
         self,
