@@ -8,10 +8,13 @@ on:
       - "src/ai_karen_engine/learning/kcm_governance.py"
       - "src/ai_karen_engine/echocore/postgres_training_evidence.py"
       - "src/ai_karen_engine/core/personalization/self_model_projection.py"
+      - "src/ai_karen_engine/core/personalization/system_persona_evidence.py"
+      - "src/ai_karen_engine/core/persona/contracts.py"
       - "src/ai_karen_engine/learning/kcm_dataset_preflight.py"
       - "tests/core/learning/test_kcm_governance.py"
       - "tests/core/learning/test_kcm_postgres_training_evidence.py"
       - "tests/core/personalization/test_kcm_self_model_projection.py"
+      - "tests/core/personalization/test_kcm_system_persona_evidence.py"
       - "tests/integration/test_kcm_governance_postgres.py"
       - "tests/integration/test_kcm_lifecycle_revocation_postgres.py"
       - "requirements/ci/**"
@@ -88,6 +91,8 @@ jobs:
           pytest tests/core/learning/test_kcm_postgres_training_evidence.py -q --tb=short
           python -m compileall -q src/ai_karen_engine/core/personalization/self_model_projection.py tests/core/personalization/test_kcm_self_model_projection.py
           pytest tests/core/personalization/test_kcm_self_model_projection.py -q --tb=short
+          python -m compileall -q src/ai_karen_engine/core/personalization/system_persona_evidence.py tests/core/personalization/test_kcm_system_persona_evidence.py
+          pytest tests/core/personalization/test_kcm_system_persona_evidence.py -q --tb=short
           pytest tests/integration/test_kcm_governance_postgres.py -q --tb=short
           python -m compileall -q tests/integration/test_kcm_lifecycle_revocation_postgres.py
           pytest tests/integration/test_kcm_lifecycle_revocation_postgres.py -q --tb=short
