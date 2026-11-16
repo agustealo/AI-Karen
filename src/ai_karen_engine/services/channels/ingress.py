@@ -396,9 +396,13 @@ class ChannelIngressService:
             # SQL owns a single transaction and replay/prune lock for the whole
             # signed status batch. Mixed inbound events retain their inbox owner.
             if event.statuses:
-                await self._repository.record_provider_status_batch(
+                persisted = await self._repository.record_provider_status_batch(
                     connection=connection, statuses=event.statuses,
                 )
+                # True/None or a partial count cannot authorize HTTP 200.
+                # The canonical repository counts exact replays as accepted.
+                if type(persisted) is not int or persisted != len(event.statuses):
+                    raise RuntimeError("Native status batch persistence incomplete")
             logger.info(
                 "channel.ingress.batch_processed",
                 extra={
