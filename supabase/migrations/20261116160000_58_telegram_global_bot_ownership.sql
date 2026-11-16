@@ -5,7 +5,7 @@ BEGIN;
 
 CREATE TABLE public.channel_telegram_bot_owners (
     provider_bot_id bigint PRIMARY KEY CHECK (provider_bot_id > 0),
-    tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+    tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE RESTRICT,
     connection_id text NOT NULL,
     connection_revision bigint NOT NULL CHECK (connection_revision > 0),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -13,7 +13,7 @@ CREATE TABLE public.channel_telegram_bot_owners (
     CONSTRAINT channel_telegram_bot_owner_connection_fk
         FOREIGN KEY (tenant_id, connection_id)
         REFERENCES public.channel_connections (tenant_id, connection_id)
-        ON DELETE CASCADE
+        ON DELETE RESTRICT
 );
 
 REVOKE ALL ON public.channel_telegram_bot_owners FROM PUBLIC;
