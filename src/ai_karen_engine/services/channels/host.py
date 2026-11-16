@@ -757,7 +757,7 @@ class ChannelHostServices:
         )
         return {
             "dry_run": dry_run,
-            "eligible_count": count if dry_run else 0,
+            "eligible_count": count,
             "deleted_count": 0 if dry_run else count,
             "connection_revision": connection.revision,
             "retention_days": self.settings.status_retention_days,
