@@ -12,8 +12,8 @@ from collections.abc import Sequence
 from typing import Any
 
 from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
+from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
 from ai_karen_engine.core.intelligence.ml.verification_review_evidence import (
-    AuthenticatedEvidencePrincipal,
     GovernedVerificationReviewEvidence,
 )
 
@@ -175,7 +175,7 @@ def evaluate_verification_effort_candidate(
 async def evaluate_verification_effort_with_durable_reviews(
     observations: Sequence[PolicyObservation],
     *,
-    subject: AuthenticatedEvidencePrincipal,
+    subject: AuthenticatedPrincipal,
     baseline_policy: Any,
     candidate_policy: Any,
     min_samples: int = _MIN_VERIFIED_SAMPLES,
@@ -187,7 +187,7 @@ async def evaluate_verification_effort_with_durable_reviews(
     boundary. A separate reviewer needs an independent permission to issue
     the receipts. No proxy identity, cache fallback or runtime activation.
     """
-    if not isinstance(subject, AuthenticatedEvidencePrincipal) or subject.is_expired():
+    if not isinstance(subject, AuthenticatedPrincipal) or subject.is_expired():
         raise PermissionError("Trusted, current subject principal is required")
     reviewed = GovernedVerificationReviewEvidence(
         tenant_id=subject.tenant_id,
