@@ -98,4 +98,7 @@ def test_offline_policy_evaluator():
     ]
     result = evaluator.evaluate(outcomes)
     assert result["sample_count"] == 3
-    assert result["baseline_success_rate"] == pytest.approx(2 / 3, rel=1e-3)
+    assert result["observed_success_rate"] == pytest.approx(2 / 3, rel=1e-3)
+    assert result["baseline_success_rate"] is None
+    assert result["candidate_success_rate"] is None
+    assert result["rate_source"] == "unattributed_legacy_execution_status"

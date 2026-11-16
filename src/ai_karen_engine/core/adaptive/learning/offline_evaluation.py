@@ -79,6 +79,12 @@ class OfflinePolicyEvaluator:
                 "baseline_policy_version": baseline_version,
                 "utility_policy_version": self._utility_policy.utility_policy_version,
                 "sample_count": 0,
+                "observed_success_rate": None,
+                "baseline_success_rate": None,
+                "candidate_success_rate": None,
+                "baseline_observed_count": 0,
+                "candidate_observed_count": 0,
+                "rate_source": "no_observations",
                 "estimates": {},
                 "overlap_diagnostics": None,
                 "segment_metrics": {},
@@ -91,8 +97,11 @@ class OfflinePolicyEvaluator:
             return result
 
         if isinstance(observations[0], dict):
-            baseline_success = sum(1 for o in observations if o.get("execution_status") == "success")
-            baseline_success_rate = baseline_success / len(observations)
+            observed_success = sum(
+                1 for o in observations
+                if isinstance(o, dict) and o.get("execution_status") == "success"
+            )
+            observed_success_rate = observed_success / len(observations)
             result = {
                 "evaluation_id": evaluation_id,
                 "policy_id": candidate_id,
@@ -101,8 +110,14 @@ class OfflinePolicyEvaluator:
                 "baseline_policy_version": baseline_version,
                 "utility_policy_version": self._utility_policy.utility_policy_version,
                 "sample_count": len(observations),
-                "baseline_success_rate": baseline_success_rate,
-                "candidate_success_rate": baseline_success_rate,
+                "observed_success_rate": observed_success_rate,
+                # Legacy completions have no behavior-policy provenance;
+                # neither baseline nor candidate success is observed.
+                "baseline_success_rate": None,
+                "candidate_success_rate": None,
+                "baseline_observed_count": 0,
+                "candidate_observed_count": 0,
+                "rate_source": "unattributed_legacy_execution_status",
                 "estimates": {},
                 "overlap_diagnostics": None,
                 "segment_metrics": {},
@@ -164,13 +179,29 @@ class OfflinePolicyEvaluator:
         config = PromotionConfig(min_samples=self._ope_min_samples)
         promotion = evaluate_promotion(evidence, config)
 
-        baseline_success = sum(
-            1 for o in observations if o.behavior_policy_id == baseline_id and o.reward >= 0.5
-        )
-        baseline_success_rate = baseline_success / len(observations)
+        # Descriptive observed reward thresholds are not counterfactual
+        # estimates. A candidate-policy rate is absent unless that exact
+        # policy/version was the *logged behavior* for a distinct cohort.
+        # Never assign the overall behavior rate to an unevaluated candidate.
+        baseline_observed = [
+            o for o in observations
+            if o.behavior_policy_id == baseline_id
+            and o.behavior_policy_version == baseline_version
+        ]
+        candidate_observed = [
+            o for o in observations
+            if o.behavior_policy_id == candidate_id
+            and o.behavior_policy_version == candidate_version
+        ]
 
-        candidate_success = sum(1 for o in observations if o.reward >= 0.5)
-        candidate_success_rate = candidate_success / len(observations)
+        def observed_reward_rate(cohort: list[PolicyObservation]) -> float | None:
+            if not cohort:
+                return None
+            return sum(o.reward >= 0.5 for o in cohort) / len(cohort)
+
+        observed_success_rate = observed_reward_rate(observations)
+        baseline_success_rate = observed_reward_rate(baseline_observed)
+        candidate_success_rate = observed_reward_rate(candidate_observed)
 
         result = {
             "evaluation_id": evaluation_id,
@@ -180,8 +211,12 @@ class OfflinePolicyEvaluator:
             "baseline_policy_version": baseline_version,
             "utility_policy_version": self._utility_policy.utility_policy_version,
             "sample_count": len(observations),
+            "observed_success_rate": observed_success_rate,
             "baseline_success_rate": baseline_success_rate,
             "candidate_success_rate": candidate_success_rate,
+            "baseline_observed_count": len(baseline_observed),
+            "candidate_observed_count": len(candidate_observed),
+            "rate_source": "logged_behavior_policy_reward_threshold",
             "estimates": {
                 name: {
                     "estimator_name": est.estimator_name,

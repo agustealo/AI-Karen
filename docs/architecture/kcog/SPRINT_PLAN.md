@@ -30,7 +30,7 @@
 - **Proof:** existing model-routing OPE tests plus new verification-policy adversarial cases under Cognitive Proof CI; Main Quality and first-boot must pass for merge.
 - **Remaining evidence:** deployment-independent, prospectively sampled baseline/candidate cases, logged real action propensities, held-out independent correctness and safety reviews, latency/cost and segment-level regression analysis; no verified intelligence improvement is claimed yet.
 
-## KCOG-01B2: Canonical OPE estimator integrity (implementation pending CI)
+## KCOG-01B2: Canonical OPE estimator integrity (merged #895)
 
 - **Owner:** `core/intelligence/ml/policy_evaluation/estimators.py`. Do not add a duplicate estimator to KCOG or model/provider routing.
 - **Audit finding:** the previous effective sample size computed mean squared divided by variance, not Kish effective sample size; the overlap diagnostic counted eligible actions as though they had actually been observed; the default `DoublyRobustEstimator` used the observed outcome as a missing reward-model substitute. These defects can exaggerate causal support and evidence for promotion.
@@ -38,6 +38,15 @@
 - **Promotion safety:** `OfflinePolicyEvaluator` has no validated nuisance reward model wired by default. It will therefore omit DR evidence, and the existing promotion gate's `require_dr` protection blocks eligibility. Production policy changes still require separate authorization and a verified held-out study.
 - **Proof:** synthetic exact arithmetic and negative support tests, missing/invalid reward model, returned estimator evidence, and no false automatic promotion. Gate under Cognitive Proof CI and verify the exact head before merge.
 - **Remaining acceptance:** separately validated and registered action-conditioned nuisance model, held-out label provenance, effective overlap and non-inferiority on correctness/safety, latency and cost. No automatically activated verification change.
+
+## KCOG-01B3: Observational-policy report provenance (draft, not accepted)
+
+- **Base:** KCOG-01B2 #895 merged as `219889ed5c032652230eeb1bf24fb1cc6a93e3a6`. Subsequent unrelated voice changes may land on live main before PR creation.
+- **Owner:** existing `OfflinePolicyEvaluator` in `core/adaptive/learning/offline_evaluation.py`; keep the Intelligence/ML canonical estimators and policy contracts unchanged.
+- **Audit finding:** the evaluator labelled the overall behavior-policy success fraction as `candidate_success_rate` even when no candidate decisions had been executed. It also divided baseline successes by the entire mixed-policy corpus rather than by the actual baseline behavior cohort. Completion-only legacy dict rows were presented as baseline evidence.
+- **Fix:** report an explicit overall observed reward-threshold rate, and split baseline/candidate observed rates by **exact logged behavior policy ID and version**. A never-executed candidate or missing baseline has a `None` rate and zero observed count, not fabricated success. The legacy status path reports only an unattributed observed completion fraction; empty corpora expose nullable fields. Include a `rate_source` qualifier to prevent treating the threshold as verified answer correctness or a counterfactual estimate.
+- **Proof:** synthetic exact-cohort tests, no-candidate execution, wrong version, no-baseline, mixed-policy corpus, legacy completion, empty outcome, and existing adaptive learning regression. Added to Cognitive Proof CI.
+- **Limits:** descriptive logged reward thresholds do not measure causal benefit or independently judged correctness, and cannot authorize a policy change. An independently reviewed held-out prospective dataset remains necessary.
 
 ## Scope, product acceptance and exit
 
