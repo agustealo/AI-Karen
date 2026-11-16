@@ -321,6 +321,13 @@ class SelfModelProjector:
                 reason_codes=tuple(sorted(codes)),
             )
 
+        # Authoritative verification can mint receipts during the awaited
+        # lookup. With an implicit clock, compare them to the time *after*
+        # the reader returns, never to a stale pre-await timestamp.
+        # An explicit historical instant remains an exact inspection bound.
+        if at is None:
+            now = datetime.now(timezone.utc)
+
         # A revoked receipt poisons the entire projection, not merely the
         # corresponding capability: no stale cached claim may stay visible.
         if any(
