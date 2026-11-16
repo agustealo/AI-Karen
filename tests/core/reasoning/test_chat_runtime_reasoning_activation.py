@@ -88,3 +88,37 @@ def test_reasoning_strategy_cannot_override_observed_model_receipt() -> None:
         if isinstance(value, ast.Constant)
     }
     assert {"actual_provider", "actual_model", "response_source"}.issubset(excluded)
+
+
+
+
+def test_both_chat_transports_use_canonical_reasoning_authorization() -> None:
+    """Inspect the actual selectors without importing the heavier chat runtime."""
+    import ast
+
+    tree = ast.parse(_chat_runtime_source())
+    runtime = next(
+        cls for cls in tree.body
+        if isinstance(cls, ast.ClassDef) and cls.name == "ChatRuntime"
+    )
+    methods = {
+        method.name: method
+        for method in runtime.body
+        if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    for method in (methods["execute"], methods["execute_stream"]):
+        authorized_calls = [
+            node for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_should_execute_authorized_reasoning"
+        ]
+        assert len(authorized_calls) == 1
+
+    selector = methods["_should_execute_authorized_reasoning"]
+    selector_source = ast.get_source_segment(_chat_runtime_source(), selector) or ""
+    assert "plan.reasoning_modes" in selector_source
+    assert "plan.topology" in selector_source
+    assert "preferred_provider" not in selector_source
+    assert "preferred_model" not in selector_source

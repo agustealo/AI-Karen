@@ -519,8 +519,10 @@ class ChatRuntime:
                 pending = self._pending_clarification_from_result(request, direct_result)
                 if pending:
                     provider_meta["pending_clarification"] = pending
-            elif grounded is None and not self._is_explicit_save_turn(request) and decision.topology.value == "reasoning" and not (request.preferred_provider and request.preferred_model):
-                text, provider_meta = await self._run_reasoning(request, decision, plan, meter)
+            elif grounded is None and not self._is_explicit_save_turn(request) and self._should_execute_authorized_reasoning(decision, plan):
+                text, provider_meta = await self._run_reasoning_with_model_synthesis(
+                    request, decision, plan, meter
+                )
             elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required and decision.topology.value != "reasoning":
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
             elif grounded is None and not self._is_explicit_save_turn(request):
@@ -1036,7 +1038,7 @@ class ChatRuntime:
                         meter,
                         _meta=provider_meta,
                     )
-                    if decision.topology.value == "reasoning" and not (request.preferred_provider and request.preferred_model)
+                    if self._should_execute_authorized_reasoning(decision, plan)
                     else (
                         self._run_graph_stream(
                             request,
@@ -3751,6 +3753,7 @@ class ChatRuntime:
         memory_recall_meta: Optional[Dict[str, Any]] = None,
         *,
         token_sink: Optional[Callable[[str], Awaitable[None]]] = None,
+        reasoning_preflight: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Simple conversational path: CORTEX -> ExpressionGateway."""
         if not await meter.consume_model_call():
@@ -3762,6 +3765,7 @@ class ChatRuntime:
             request,
             decision,
             memory_recall_meta,
+            reasoning_preflight=reasoning_preflight,
         )
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
@@ -3779,7 +3783,9 @@ class ChatRuntime:
             request_id=ctx.request_id,
             metadata={
                 "transport": request.metadata.get("transport", "runtime"),
-                "execution_mode": "direct",
+                "execution_mode": (
+                    "reasoning_synthesis" if reasoning_preflight else "direct"
+                ),
                 "reasoning_depth": decision.reasoning_depth,
                 "memory_context": (
                     memory_recall_meta.get("memory_context", {})
@@ -3877,6 +3883,7 @@ class ChatRuntime:
         meter: ExecutionBudgetMeter,
         memory_recall_meta: Optional[Dict[str, Any]] = None,
         _meta: Optional[Dict[str, Any]] = None,
+        reasoning_preflight: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         """Emit real provider deltas without a second routing or prompt owner.
 
@@ -3899,6 +3906,7 @@ class ChatRuntime:
                 result = await self._run_simple(
                     request, decision, plan, meter, memory_recall_meta,
                     token_sink=send_token,
+                    reasoning_preflight=reasoning_preflight,
                 )
                 await events.put(("complete", result))
             except Exception as exc:
@@ -3921,7 +3929,9 @@ class ChatRuntime:
                         content=payload,
                         correlation_id=request.context.correlation_id,
                         metadata={
-                            "execution_mode": "direct",
+                            "execution_mode": (
+                                "reasoning_synthesis" if reasoning_preflight else "direct"
+                            ),
                             "topology": plan.topology.value,
                             "response_source": "provider_stream_pending_receipt",
                             "actual_provider": None,
@@ -3959,7 +3969,9 @@ class ChatRuntime:
                         content=text,
                         correlation_id=request.context.correlation_id,
                         metadata={
-                            "execution_mode": "direct",
+                            "execution_mode": (
+                                "reasoning_synthesis" if reasoning_preflight else "direct"
+                            ),
                             "actual_provider": normalized.get("actual_provider"),
                             "actual_model": normalized.get("actual_model"),
                             "response_source": normalized.get("response_source"),
@@ -4004,6 +4016,143 @@ class ChatRuntime:
             if _meta is not None:
                 self._accumulate_chunk_metadata(chunk, _meta)
             yield chunk
+
+    @staticmethod
+    def _should_execute_authorized_reasoning(
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Honor policy-approved reasoning independently of model preference.
+
+        CORTEX decides the topology and RuntimePolicy authorizes the modes.
+        A selected provider/model is only an inference preference. It cannot
+        turn authorized reasoning into direct generation, and a mismatched
+        execution plan may not silently fall back to a different path.
+        """
+        if decision.topology != plan.topology:
+            raise PermissionError("reasoning_topology_authorization_mismatch")
+        if decision.topology != ExecutionTopology.REASONING:
+            return False
+
+        requested = set(decision.reasoning_modes)
+        allowed = set(plan.reasoning_modes)
+        if not requested or not requested.issubset(allowed):
+            raise PermissionError("reasoning_modes_not_authorized")
+        return True
+
+    @staticmethod
+    def _should_synthesize_after_reasoning(
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        reasoning_meta: Dict[str, Any],
+    ) -> bool:
+        """Permit a second, provider-owned answer only for safe reasoned turns.
+
+        Selected model intent must not skip the authorized reasoning run.
+        Conversely, a prior strategy's unverified *model-call count* is not
+        a model execution receipt and cannot justify pretending the selected
+        provider generated anything. Fail closed on failed/budget-exhausted
+        reasoning and on unidentified causal/counterfactual estimates.
+        """
+        if not (request.preferred_provider and request.preferred_model):
+            return False
+        if not ChatRuntime._should_execute_authorized_reasoning(decision, plan):
+            return False
+        # Only canonical non-generative strategies may require a separate
+        # provider reply. A runtime-composed strategy can have executed an
+        # inference whose unverified diagnostics reported zero calls.
+        if reasoning_meta.get("reasoning_activation") != "core_defaults":
+            return False
+        if reasoning_meta.get("reasoning_model_calls") != 0:
+            return False
+        if reasoning_meta.get("reasoning_status") in {"failed", "budget_exhausted"}:
+            return False
+        reasoning_modes = set(reasoning_meta.get("reasoning_modes") or [])
+        if reasoning_modes & {"causal", "counterfactual"}:
+            return False
+        risk = getattr(decision.risk_level, "value", decision.risk_level)
+        if risk in {"high", "critical"} and reasoning_meta.get("reasoning_status") != "success":
+            return False
+        return True
+
+    @staticmethod
+    def _trusted_reasoning_prompt_context(
+        plan: AuthorizedExecutionPlan,
+        reasoning_meta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Only enumerated runtime statuses enter the trusted prompt section."""
+        raw_status = reasoning_meta.get("reasoning_status")
+        status = (
+            raw_status
+            if raw_status in {"success", "completed", "partial", "abstained"}
+            else "unverified"
+        )
+        allowed = set(plan.reasoning_modes)
+        modes = [
+            mode for mode in (reasoning_meta.get("reasoning_modes") or [])
+            if isinstance(mode, str) and mode in allowed
+        ][:8]
+        return {
+            "reasoning_status": status,
+            "authorized_modes": modes,
+            "evidence_independently_verified": False,
+            "causal_effect_identified": False,
+            "verification_incomplete": status != "success",
+        }
+
+    @staticmethod
+    def _combine_reasoning_and_generation_receipts(
+        reasoning_meta: Dict[str, Any],
+        generation_meta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Retain analysis lineage; the provider receipt owns actual model truth."""
+        result = {**reasoning_meta, **generation_meta}
+        for key in (
+            "reasoning_id",
+            "reasoning_status",
+            "reasoning_modes",
+            "reasoning_model_calls",
+            "reasoning_steps",
+            "reasoning_model_attribution_status",
+        ):
+            if key in reasoning_meta:
+                result[key] = reasoning_meta[key]
+        result["execution_spans"] = [
+            *(reasoning_meta.get("execution_spans") or []),
+            *(generation_meta.get("execution_spans") or []),
+        ]
+        result["reasoning_generation_mode"] = "model_after_authorized_reasoning"
+        return result
+
+    async def _run_reasoning_with_model_synthesis(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Execute cognitive reasoning before any selected-model answer."""
+        summary, reasoning_meta = await self._run_reasoning(
+            request, decision, plan, meter
+        )
+        if not self._should_synthesize_after_reasoning(
+            request, decision, plan, reasoning_meta
+        ):
+            return summary, reasoning_meta
+
+        text, generation_meta = await self._run_simple(
+            request,
+            decision,
+            plan,
+            meter,
+            reasoning_preflight=self._trusted_reasoning_prompt_context(
+                plan, reasoning_meta
+            ),
+        )
+        return text, self._combine_reasoning_and_generation_receipts(
+            reasoning_meta, generation_meta
+        )
 
     async def _run_reasoning(
         self,
@@ -4210,24 +4359,43 @@ class ChatRuntime:
         meter: ExecutionBudgetMeter,
         _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
-        text, normalized = await self._run_reasoning(
-            request,
-            decision,
-            plan,
-            meter,
+        text, reasoning_meta = await self._run_reasoning(
+            request, decision, plan, meter,
         )
+
+        if self._should_synthesize_after_reasoning(
+            request, decision, plan, reasoning_meta
+        ):
+            generation_meta: Dict[str, Any] = {}
+            async for chunk in self._run_simple_stream(
+                request,
+                decision,
+                plan,
+                meter,
+                _meta=generation_meta,
+                reasoning_preflight=self._trusted_reasoning_prompt_context(
+                    plan, reasoning_meta
+                ),
+            ):
+                yield chunk
+            if _meta is not None:
+                _meta.update(self._combine_reasoning_and_generation_receipts(
+                    reasoning_meta, generation_meta
+                ))
+            return
+
         if _meta is not None:
-            _meta.update(normalized)
+            _meta.update(reasoning_meta)
         yield ChatStreamChunk(
             type="content",
             content=text,
             correlation_id=request.context.correlation_id,
             metadata={
                 "execution_mode": "reasoning",
-                "actual_provider": normalized.get("actual_provider"),
-                "actual_model": normalized.get("actual_model"),
-                "response_source": normalized.get("response_source"),
-                "reasoning_modes": normalized.get("reasoning_modes", []),
+                "actual_provider": reasoning_meta.get("actual_provider"),
+                "actual_model": reasoning_meta.get("actual_model"),
+                "response_source": reasoning_meta.get("response_source"),
+                "reasoning_modes": reasoning_meta.get("reasoning_modes", []),
                 "topology": plan.topology.value,
             },
         )
@@ -4255,6 +4423,8 @@ class ChatRuntime:
         request: ChatExecutionRequest,
         decision: ExecutionDecision,
         memory_context: Optional[Dict[str, Any]] = None,
+        *,
+        reasoning_preflight: Optional[Dict[str, Any]] = None,
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Assemble prompt and preserve PromptRuntime-owned consumer telemetry."""
         from ai_karen_engine.core.runtime.prompt import (
@@ -4305,6 +4475,8 @@ class ChatRuntime:
                 "workflow_version": decision.workflow_version,
                 "requires_human_gate": decision.requires_human_gate,
                 "requires_resumability": decision.requires_resumability,
+                **({"reasoning_preflight": dict(reasoning_preflight)}
+                   if reasoning_preflight else {}),
                 **({"verified_workspace_run": {
                     "resource_type": "medusa_run",
                     "run_id": request.metadata["verified_workspace_run"]["run_id"],

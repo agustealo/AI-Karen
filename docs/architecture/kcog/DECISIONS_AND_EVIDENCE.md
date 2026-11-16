@@ -42,4 +42,8 @@
 
 **Non-closure:** these safety slices do not implement causal identification, independently verified calibration or cross-domain transfer. A future real-model runtime trial is still required.
 
+| 2026-11-15 | KCON-211 model selection and reasoning parity | PR [#881](https://github.com/agustealo/AI-Karen/pull/881) candidate | Removed selected-provider/model veto in both chat branches; use one fail-closed policy-aware topology selector. Adds unit and source contract tests. | SOURCE_CANDIDATE, exact-head CI and real-model/browser acceptance NOT_RUN |
+
+| 2026-11-15 | KCON-211 selected-model reasoning runtime integration | PR [#881](https://github.com/agustealo/AI-Karen/pull/881), earlier head `cc4ccf263ed485892266f8da15df9f5236331132` | Production Ollama Settings E2E failed because deterministic reasoning produced a degraded, non-model response instead of using the approved saved model. New head `8ff15faa3bd31882776673bc6b9f45aae685c1f2` adds governed preflight + canonical model generation with real streaming and provenance, plus 11 negative/positive regression cases. | IMPLEMENTING / CI PENDING, real model proof not yet passed |
+
 Do not overwrite evidence when an earlier claim is corrected. Add a dated reconciliation entry with links and reason.

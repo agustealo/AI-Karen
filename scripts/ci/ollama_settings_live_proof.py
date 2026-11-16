@@ -206,6 +206,45 @@ def assert_default_runtime_response(payload: dict[str, Any], model: str) -> dict
             "persona_history_scope_denied": (
                 metadata.get("error_code") == "PERSONA_HISTORY_SCOPE_DENIED"
             ),
+            # A closed, privacy-safe classification of the failed handoff.
+            # Never disclose prompts, model IDs, raw evidence or arbitrary
+            # diagnostics in CI output.
+            "reasoning_activation_class": (
+                metadata.get("reasoning_activation")
+                if metadata.get("reasoning_activation") in {
+                    "core_defaults", "runtime_composed"
+                } else "other"
+            ),
+            "reasoning_status_class": (
+                metadata.get("reasoning_status")
+                if metadata.get("reasoning_status") in {
+                    "success", "completed", "partial", "abstained",
+                    "failed", "budget_exhausted"
+                } else "other"
+            ),
+            "reasoning_modes_class": sorted({
+                mode for mode in (metadata.get("reasoning_modes") or [])
+                if isinstance(mode, str) and mode in {
+                    "verification", "causal", "counterfactual",
+                    "soft_exploration", "deductive", "inductive",
+                    "abductive", "metacognition", "reflection",
+                    "refinement", "critical_thinking",
+                }
+            }) if isinstance(metadata.get("reasoning_modes"), list) else [],
+            "reasoning_model_calls_class": (
+                "zero" if metadata.get("reasoning_model_calls") == 0
+                else "nonzero" if isinstance(metadata.get("reasoning_model_calls"), int)
+                else "unavailable"
+            ),
+            "reasoning_generation_mode_class": (
+                "model_after_authorized_reasoning"
+                if metadata.get("reasoning_generation_mode")
+                   == "model_after_authorized_reasoning"
+                else "other"
+            ),
+            "reasoning_degradation_reason_present": bool(
+                metadata.get("degradation_reason")
+            ),
         }
         raise LiveProofError(
             "Default ChatRuntime ignored the saved Ollama selection or fell back; "

@@ -173,6 +173,14 @@ jobs:
             tests/core/test_runtime_decision_pipeline.py \
             -q --timeout=300 --tb=short
 
+      - name: KCON-211 explicit model / authorized reasoning parity
+        run: |
+          pytest \
+            tests/core/runtime/test_authorized_reasoning_selection.py \
+            tests/core/runtime/test_reasoning_model_attribution_truth.py \
+            tests/core/runtime/test_reasoning_provider_synthesis.py \
+            -q --timeout=300 --tb=short
+
       - name: Architecture authority contracts
         run: |
           pytest tests/architecture/test_ci_dependency_authority.py -q
