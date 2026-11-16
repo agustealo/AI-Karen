@@ -174,6 +174,46 @@ def test_unauthenticated_catalog_cannot_expose_tenant_voices(
     )
 
 
+def test_unauthenticated_synthesis_never_returns_audio(
+    live_host: LivePocketHost,
+) -> None:
+    """Authenticated ingress must deny anonymous inference, not only catalog."""
+    with httpx.Client(
+        base_url=live_host.origin, timeout=30, follow_redirects=False, trust_env=False
+    ) as client:
+        response = client.post(
+            f"/api/voice/engines/{_ENGINE}/synthesis",
+            json={"text": _SAMPLE, "voice_id": "not-authorized"},
+        )
+    assert response.status_code in (401, 403), (
+        f"Anonymous synthesis returned unexpected HTTP {response.status_code}"
+    )
+    assert not response.headers.get("content-type", "").startswith("audio/wav")
+
+
+def test_unapproved_voice_is_rejected_before_native_inference(
+    live_host: LivePocketHost,
+) -> None:
+    """A ready model may never silently substitute for a caller's invented voice."""
+    with httpx.Client(
+        base_url=live_host.origin, timeout=httpx.Timeout(180),
+        follow_redirects=False, trust_env=False,
+    ) as client:
+        engine = _get_catalog(client, live_host)
+        approved_ids = {voice["id"] for voice in engine["voices"]}
+        candidate = "karenUnapprovedVoice"
+        assert candidate not in approved_ids
+        response = client.post(
+            f"/api/voice/engines/{_ENGINE}/synthesis",
+            headers=live_host.headers("application/json"),
+            json={"text": _SAMPLE, "voice_id": candidate},
+        )
+    assert response.status_code == 422, (
+        f"Invented voice returned unexpected HTTP {response.status_code}"
+    )
+    assert not response.headers.get("content-type", "").startswith("audio/wav")
+
+
 def test_live_pocket_generates_complete_non_silent_audio_via_voice_runtime(
     live_host: LivePocketHost,
     record_property: object,
