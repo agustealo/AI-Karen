@@ -213,28 +213,41 @@ describe('Governed plugin model setup', () => {
         }
         return initialGet?.(url);
       });
-      render(<PluginRecommendedModels pluginId="pocket-tts" />);
-      await screen.findByText('Pocket TTS English 18.2M (REFL)');
-      fireEvent.click(screen.getByRole('checkbox'));
-      fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
-      await screen.findByText(/download job is queued/);
-      expect(screen.getByText(/Download job: queued/)).toBeTruthy();
-
-      vi.useFakeTimers();
-      try {
-        await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
-      } finally {
-        vi.useRealTimers();
-      }
-      expect(mocks.get).toHaveBeenCalledWith(
-        `/api/runtime/model-library/my-downloads/${jobId}`,
+      // Capture only the component's 4-second polling callback without
+      // changing the timers used by Testing Library's async assertions.
+      const nativeTimeout = window.setTimeout.bind(window);
+      let poll: (() => void) | null = null;
+      const timeoutSpy = vi.spyOn(window, 'setTimeout').mockImplementation(
+        (handler, delay, ...args) => {
+          if (delay === 4000 && typeof handler === 'function') {
+            poll = () => handler(...args);
+            return 123 as ReturnType<typeof window.setTimeout>;
+          }
+          return nativeTimeout(handler, delay, ...args);
+        },
       );
-      const retry = screen.getByRole('button', { name: 'Download recommended model' });
-      expect(retry.hasAttribute('disabled')).toBe(false);
-      expect(screen.getByText(/Model download did not complete/)).toBeTruthy();
+      try {
+        render(<PluginRecommendedModels pluginId="pocket-tts" />);
+        await screen.findByText('Pocket TTS English 18.2M (REFL)');
+        fireEvent.click(screen.getByRole('checkbox'));
+        fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+        await screen.findByText(/download job is queued/);
+        expect(screen.getByText(/Download job: queued/)).toBeTruthy();
+        await waitFor(() => expect(poll).not.toBeNull());
 
-      fireEvent.click(retry);
-      await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(4));
+        await act(async () => { poll?.(); await Promise.resolve(); });
+        expect(mocks.get).toHaveBeenCalledWith(
+          `/api/runtime/model-library/my-downloads/${jobId}`,
+        );
+        const retry = screen.getByRole('button', { name: 'Download recommended model' });
+        expect(retry.hasAttribute('disabled')).toBe(false);
+        expect(screen.getByText(/Model download did not complete/)).toBeTruthy();
+
+        fireEvent.click(retry);
+        await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(4));
+      } finally {
+        timeoutSpy.mockRestore();
+      }
     },
   );
 
