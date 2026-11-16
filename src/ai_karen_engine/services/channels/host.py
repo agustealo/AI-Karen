@@ -271,9 +271,15 @@ class ChannelHostServices:
         )
         if current != connection:
             raise PermissionError("Telegram webhook connection changed")
+        identify_bot = getattr(adapter, "identify_bot", None)
+        if not callable(identify_bot):
+            raise PermissionError("Telegram bot identity verification unavailable")
+        provider_bot_id = await identify_bot(connection=connection)
+        if type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63:
+            raise PermissionError("Telegram bot identity verification unavailable")
         claim_token = await self.repository.claim_telegram_webhook_registration(
             tenant_id=tenant_id, connection_id=connection_id,
-            expected_revision=connection.revision,
+            expected_revision=connection.revision, provider_bot_id=provider_bot_id,
         )
         if claim_token is None:
             raise PermissionError(
