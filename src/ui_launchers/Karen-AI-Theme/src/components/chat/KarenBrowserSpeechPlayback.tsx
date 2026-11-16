@@ -166,6 +166,25 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
       if (session.current === stopSession) session.current = null;
       setState("idle");
     };
+    const beginChunk = (resolve: () => void, reject: (error: SafeSpeechError) => void) => {
+      let settled = false;
+      function done(): void { settle(); }
+      function settle(error?: SafeSpeechError): void {
+        if (settled) return;
+        settled = true;
+        // A late event from a retired chunk must not clear the cancellation
+        // resolver belonging to the next WAV or browser utterance.
+        if (pendingResolve === done) pendingResolve = null;
+        if (error) reject(error);
+        else resolve();
+      }
+      pendingResolve = done;
+      return {
+        done,
+        fail: (message: string) => settle(new SafeSpeechError(message)),
+      };
+    };
+
     session.current = stopSession;
     activePlayback = stopSession;
     publishPlaybackPhase("preparing");
@@ -189,31 +208,19 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
       for (const chunk of chunks) {
         if (stopped) break;
         await new Promise<void>((resolve, reject) => {
-          // Cancellation and media callbacks must settle only their own
-          // chunk. A delayed event from a completed chunk must not clear the
-          // resolver for a subsequent chunk.
-          let settled = false;
-          const settle = (failure?: SafeSpeechError) => {
-            if (settled) return;
-            settled = true;
-            if (pendingResolve === cancelChunk) pendingResolve = null;
-            if (failure) reject(failure);
-            else resolve();
-          };
-          const cancelChunk = () => settle();
-          pendingResolve = cancelChunk;
+          const completion = beginChunk(resolve, reject);
           const utterance = new SpeechSynthesisUtterance(chunk);
           utterance.voice = selected;
           utterance.lang = selected.lang;
-          utterance.onend = cancelChunk;
-          utterance.onerror = () => settle(new SafeSpeechError("Browser speech playback failed."));
+          utterance.onend = completion.done;
+          utterance.onerror = () => completion.fail("Browser speech playback failed.");
           try {
             synth.speak(utterance);
             if (!stopped && activePlayback === stopSession) {
               publishPlaybackPhase("speaking");
             }
           } catch {
-            settle(new SafeSpeechError("The browser could not start speech playback."));
+            completion.fail("The browser could not start speech playback.");
           }
         });
       }
@@ -228,27 +235,14 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
         audio = new Audio(objectUrl);
         const playing = audio;
         await new Promise<void>((resolve, reject) => {
-          // Retired Audio events and delayed play() failures cannot erase
-          // the pending cancellation handle of a newer WAV chunk.
-          let settled = false;
-          const settle = (failure?: SafeSpeechError) => {
-            if (settled) return;
-            settled = true;
-            if (pendingResolve === cancelChunk) pendingResolve = null;
-            if (failure) reject(failure);
-            else resolve();
-          };
-          const cancelChunk = () => settle();
-          pendingResolve = cancelChunk;
-          playing.onended = cancelChunk;
-          playing.onerror = () => settle(new SafeSpeechError("Karen's local speech could not be played."));
+          const completion = beginChunk(resolve, reject);
+          playing.onended = completion.done;
+          playing.onerror = () => completion.fail("Karen's local speech could not be played.");
           void playing.play().then(() => {
             if (!stopped && activePlayback === stopSession) {
               publishPlaybackPhase("speaking");
             }
-          }).catch(() => settle(new SafeSpeechError(
-            "Karen's local speech could not be played."
-          )));
+          }).catch(() => completion.fail("Karen's local speech could not be played."));
         });
         if (stopped) break;
         playing.pause();
