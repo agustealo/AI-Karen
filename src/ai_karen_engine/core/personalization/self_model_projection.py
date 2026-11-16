@@ -22,6 +22,7 @@ from typing import Protocol
 
 from .contracts import (
     CapabilityBelief,
+    CapabilityBeliefType,
     IdentityDomain,
     IdentityFacet,
     ModelPropertyStatus,
@@ -73,6 +74,9 @@ class SelfModelEvidenceReceipt:
     subject: SelfModelEvidenceSubject
     verified_at: datetime
     valid_until: datetime | None = None
+    # Mandatory binding to the exact property/value, not merely its source.
+    # Empty legacy receipts are intentionally non-authoritative.
+    claim_sha256: str = ""
 
 
 class SelfModelEvidenceReader(Protocol):
@@ -147,6 +151,52 @@ def _references(model: SelfModel) -> tuple[str, ...]:
     return tuple(sorted(seen))
 
 
+def self_model_claim_sha256(item: IdentityFacet | CapabilityBelief) -> str | None:
+    """Fingerprint only the asserted property, not an untrusted source pointer.
+
+    A genuine configuration receipt must not be reusable to 'prove' a
+    different value or a spurious model skill. Unsupported values fail closed.
+    """
+    if isinstance(item, IdentityFacet):
+        if not isinstance(item.domain, IdentityDomain) or not isinstance(item.key, str):
+            return None
+        if not isinstance(item.description, str) or type(item.is_limitation) is not bool:
+            return None
+        payload = {
+            "kind": "identity_facet",
+            "domain": item.domain.value,
+            "key": item.key,
+            "value": item.value,
+            "description": item.description,
+            "is_limitation": item.is_limitation,
+        }
+    elif isinstance(item, CapabilityBelief):
+        if (
+            not isinstance(item.belief_type, CapabilityBeliefType)
+            or not isinstance(item.capability, str)
+            or not isinstance(item.description, str)
+            or type(item.is_self_reference) is not bool
+        ):
+            return None
+        payload = {
+            "kind": "capability_belief",
+            "capability": item.capability,
+            "belief_type": item.belief_type.value,
+            "description": item.description,
+            "is_self_reference": item.is_self_reference,
+        }
+    else:
+        return None
+    try:
+        body = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    return hashlib.sha256(body).hexdigest()
+
+
 def _active_receipt(
     ref: str,
     receipts: Mapping[str, SelfModelEvidenceReceipt],
@@ -169,6 +219,9 @@ def _active_receipt(
         or not receipt.receipt_id.strip()
         or not isinstance(receipt.source_revision, str)
         or not receipt.source_revision.strip()
+        or not isinstance(receipt.claim_sha256, str)
+        or len(receipt.claim_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in receipt.claim_sha256)
         or receipt.status is not SelfModelEvidenceStatus.ACTIVE
         or _utc(receipt.verified_at) > at
         or (
@@ -204,6 +257,9 @@ def _valid_provenance(
             return False
     if independent and provenance.status is not ModelPropertyStatus.CONFIRMED:
         return False
+    expected_claim = self_model_claim_sha256(item)
+    if expected_claim is None:
+        return False
 
     refs = (
         *provenance.evidence_refs,
@@ -215,7 +271,10 @@ def _valid_provenance(
         _active_receipt(ref.strip(), receipts, tenant_id=tenant_id, at=at)
         for ref in refs
     ]
-    if any(receipt is None for receipt in verified):
+    if any(
+        receipt is None or receipt.claim_sha256 != expected_claim
+        for receipt in verified
+    ):
         return False
     if independent:
         return all(
@@ -398,7 +457,8 @@ class SelfModelProjector:
         digest = (
             hashlib.sha256(
                 json.dumps(
-                    lineage, sort_keys=True, separators=(",", ":"),
+                    {"tenant_id": tenant_id, "evidence": lineage},
+                    sort_keys=True, separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()
             if lineage else ""
@@ -428,4 +488,5 @@ __all__ = [
     "SelfModelEvidenceReader",
     "OperationalSelfModelRead",
     "SelfModelProjector",
+    "self_model_claim_sha256",
 ]

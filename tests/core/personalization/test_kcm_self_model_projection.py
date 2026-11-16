@@ -23,6 +23,7 @@ from ai_karen_engine.core.personalization.self_model_projection import (
     SelfModelEvidenceSubject,
     SelfModelProjectionHealth,
     SelfModelProjector,
+    self_model_claim_sha256,
 )
 
 NOW = datetime(2026, 11, 16, 16, 0, tzinfo=timezone.utc)
@@ -111,7 +112,12 @@ def receipt(
     ),
     subject: SelfModelEvidenceSubject = SelfModelEvidenceSubject.KAREN_SELF,
     expires: datetime | None = None,
+    claim_sha256: str | None = None,
 ) -> SelfModelEvidenceReceipt:
+    if claim_sha256 is None:
+        candidate = facet(ref=ref) if ref.startswith("config") else belief(ref=ref)
+        claim_sha256 = self_model_claim_sha256(candidate)
+    assert claim_sha256 is not None
     return SelfModelEvidenceReceipt(
         evidence_ref=ref,
         tenant_id=tenant,
@@ -122,6 +128,7 @@ def receipt(
         subject=subject,
         verified_at=NOW - timedelta(hours=1),
         valid_until=expires,
+        claim_sha256=claim_sha256,
     )
 
 
@@ -250,6 +257,7 @@ async def test_skill_identity_facet_does_not_bypass_independent_evaluation() -> 
     port.receipts["config-1"] = receipt(
         "config-1",
         authority=SelfModelEvidenceAuthority.INDEPENDENT_EVALUATION,
+        claim_sha256=self_model_claim_sha256(skill),
     )
     verified = await projector(port).project(
         model=model(principles=[skill]), tenant_id=TENANT, at=NOW
@@ -455,3 +463,30 @@ def test_verifier_and_budget_must_be_explicit() -> None:
         SelfModelProjector(evidence_reader=None, max_evidence_refs=10)
     with pytest.raises(ValueError, match="positive max_evidence_refs"):
         SelfModelProjector(evidence_reader=EvidenceReader(), max_evidence_refs=0)
+
+
+@pytest.mark.asyncio
+async def test_valid_source_receipt_cannot_certify_forged_claim_value() -> None:
+    forged = facet()
+    forged.value = "arbitrary-invented-skill"
+    port = EvidenceReader({"config-1": receipt("config-1")})
+    result = await projector(port).project(
+        model=model(principles=[forged]), tenant_id=TENANT, at=NOW,
+    )
+    assert result.health is SelfModelProjectionHealth.UNAVAILABLE
+    assert result.verified_claims == 0
+    assert not result.model.principles
+
+
+@pytest.mark.asyncio
+async def test_legacy_receipt_without_property_binding_is_not_authoritative() -> None:
+    port = EvidenceReader({
+        "config-1": replace(
+            receipt("config-1"), claim_sha256="",
+        ),
+    })
+    result = await projector(port).project(
+        model=model(principles=[facet()]), tenant_id=TENANT, at=NOW,
+    )
+    assert result.health is SelfModelProjectionHealth.UNAVAILABLE
+    assert not result.model.principles
