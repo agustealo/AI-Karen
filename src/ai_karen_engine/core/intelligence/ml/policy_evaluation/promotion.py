@@ -8,6 +8,7 @@ policies, authorize runtime behavior, or bypass RuntimePolicy/CORTEX.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -95,7 +96,48 @@ def evaluate_promotion(
         reasons.append(PromotionBlockReason.INSUFFICIENT_EVIDENCE)
         messages.append("snips estimate missing")
 
+    # A positive candidate policy value is NOT proof of gain over the
+    # active baseline. Require the same estimator on the same logged sample
+    # window and a conservative separation of reported confidence bounds.
+    # This is a screening rule, not a formal paired-difference confidence
+    # interval. The runtime still owns any activation decision.
     for name, estimate in candidate_estimates.items():
+        baseline = evidence.estimates.get(f"baseline_{name}")
+        if baseline is None:
+            reasons.append(PromotionBlockReason.INSUFFICIENT_EVIDENCE)
+            messages.append(f"{name} baseline-relative estimate missing")
+        else:
+            fields = (
+                estimate.estimate, estimate.lower_bound, estimate.upper_bound,
+                estimate.confidence_level, estimate.effective_sample_size,
+                baseline.estimate, baseline.lower_bound, baseline.upper_bound,
+                baseline.confidence_level, baseline.effective_sample_size,
+            )
+            if (
+                any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in fields
+                )
+                or estimate.lower_bound > estimate.upper_bound
+                or baseline.lower_bound > baseline.upper_bound
+                or not estimate.lower_bound <= estimate.estimate <= estimate.upper_bound
+                or not baseline.lower_bound <= baseline.estimate <= baseline.upper_bound
+                or estimate.sample_count != evidence.sample_count
+                or baseline.sample_count != evidence.sample_count
+                or estimate.effective_sample_size <= 0
+                or baseline.effective_sample_size <= 0
+                or baseline.confidence_level < config.min_confidence
+            ):
+                reasons.append(PromotionBlockReason.INSUFFICIENT_EVIDENCE)
+                messages.append(f"{name} baseline comparison is unverified or invalid")
+            elif estimate.lower_bound - baseline.upper_bound <= config.min_gain:
+                reasons.append(PromotionBlockReason.INSUFFICIENT_EVIDENCE)
+                messages.append(
+                    f"{name} conservative gain lower bound does not beat baseline"
+                )
+
         if estimate.confidence_level < config.min_confidence:
             reasons.append(PromotionBlockReason.CONFIDENCE_TOO_LOW)
             messages.append(
