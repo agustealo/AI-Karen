@@ -286,7 +286,10 @@ class ChannelHostServices:
                 "Telegram webhook registration pending reconciliation"
             )
         try:
-            result = await register(connection=connection, public_origin=origin)
+            result = await register(
+                connection=connection, public_origin=origin,
+                expected_bot_id=provider_bot_id,
+            )
             fresh = await self.repository.get_enabled_connection(
                 tenant_id=tenant_id, connection_id=connection_id,
             )
