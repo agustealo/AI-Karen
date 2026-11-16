@@ -11,6 +11,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   AlertTriangle,
   Loader2,
@@ -43,6 +44,7 @@ import {
 
 import pluginStoreService from '@/lib/PluginStoreService';
 import { usePluginStore } from '@/stores/PluginStore';
+import { usePluginRegistry } from '@/plugin_host/registry';
 import type { PluginCategory } from '@/types/plugin';
 
 import { CategoryFilter } from './CategoryFilter';
@@ -72,6 +74,12 @@ const getErrorMessage = (error: unknown): string => {
 };
 
 export default function PluginStorePage() {
+  const router = useRouter();
+  const {
+    getPlugin,
+    loading: extensionCatalogLoading,
+    error: extensionCatalogError,
+  } = usePluginRegistry();
   const {
     plugins,
     installedPlugins,
@@ -122,6 +130,18 @@ export default function PluginStorePage() {
   const [uninstallId, setUninstallId] = useState('');
   const [uninstalling, setUninstalling] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+
+  // Marketplace installation alone is not voice capability evidence. Use the
+  // authenticated extension catalog, not plugin tags, names or a settings schema.
+  const selectedExtension = selectedPlugin?.plugin
+    ? getPlugin(selectedPlugin.plugin.id)
+    : undefined;
+  const canOpenVoiceStudio = Boolean(
+    !extensionCatalogLoading &&
+    !extensionCatalogError &&
+    selectedPlugin?.installed &&
+    selectedExtension?.supportsVoiceOutput,
+  );
 
   const safeCategories = useMemo(() => (Array.isArray(categories) ? categories : []), [categories]);
 
@@ -639,6 +659,12 @@ export default function PluginStorePage() {
           const plugin = selectedPlugin?.plugin;
           if (plugin) void handleDisable(plugin.id);
         }}
+        onOpenVoiceStudio={canOpenVoiceStudio ? () => {
+          // The dashboard settings panel owns the actual voice workflow.
+          setDetailsOpen(false);
+          clearSelectedPlugin();
+          router.push('/dashboard?view=settings&section=voice');
+        } : undefined}
       />
     </div>
   );
