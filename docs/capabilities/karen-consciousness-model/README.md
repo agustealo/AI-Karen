@@ -1,6 +1,6 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Governed foundation on main (PRs #915 and #924). KCM dataset evidence preflight is in development; neural training remains disabled.  
+**Status:** Governed foundation and evidence preflight on main (PRs #915, #924, #930). Durable learning-revocation storage is under development. Neural training remains disabled.  
 **Research cutoff:** 2026-11-16  
 **Repository baseline audited:** `agustealo/AI-Karen` `main` at `e570d950501915a9fce9e089ac91e583a71eb80e`  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
@@ -42,6 +42,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [15 — Research and references](15-research.md) | Primary literature, standards and implementer sources |
 | [16 — Development progress and acceptance](16-development-status.md) | Actual merged PRs, exact-head verification, outstanding gates |
 | [17 — Dataset evidence preflight](17-evidence-preflight.md) | Fresh rights/outcome/consent receipt checks and revocation constraints |
+| [18 — Durable revocation and source lineage](18-durable-revocation-lineage.md) | Owner-scoped epoch, source ancestry and incomplete integration gates |
 
 ### Machine-readable proposed contracts
 
