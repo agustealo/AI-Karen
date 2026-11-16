@@ -1960,6 +1960,21 @@ class SqlChannelRepository:
             )
             return result.scalar_one_or_none() is not None
 
+    @staticmethod
+    async def _lock_provider_status_retention(
+        session: Any, *, tenant_id: str, connection_id: str,
+    ) -> None:
+        """Serialize receipt insert and scrub for one exact tenant connection.
+
+        Without this lock a signed retry could race an orphan scrub and
+        restore recipient metadata after its tombstone was committed.
+        Keep order: advisory lock, then connection/status row locks.
+        """
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:scope, 0))"),
+            {"scope": f"karen:channel-status:{tenant_id}:{connection_id}"},
+        )
+
     async def prune_unmatched_provider_statuses(
         self, *, tenant_id: str, connection_id: str,
         expected_revision: int, retention_days: int,
@@ -2058,6 +2073,10 @@ class SqlChannelRepository:
                 SELECT COUNT(*) FROM deleted
             """
         async with async_transaction_scope(tenant_id) as session:
+            if not dry_run:
+                await self._lock_provider_status_retention(
+                    session, tenant_id=tenant_id, connection_id=connection_id,
+                )
             count = (await session.execute(
                 text(sql),
                 {
@@ -2194,6 +2213,10 @@ class SqlChannelRepository:
             "error_code": status.error_code,
         }
         async with async_transaction_scope(tenant_id) as session:
+            await self._lock_provider_status_retention(
+                session, tenant_id=tenant_id,
+                connection_id=connection.connection_id,
+            )
             inserted = (await session.execute(
                 text("""
                     INSERT INTO public.channel_provider_status_events (
@@ -2313,6 +2336,10 @@ class SqlChannelRepository:
             "error_code": status.error_code,
         }
         async with async_transaction_scope(tenant_id) as session:
+            await self._lock_provider_status_retention(
+                session, tenant_id=tenant_id,
+                connection_id=connection.connection_id,
+            )
             inserted = (await session.execute(
                 text("""
                     INSERT INTO public.channel_provider_status_events (
