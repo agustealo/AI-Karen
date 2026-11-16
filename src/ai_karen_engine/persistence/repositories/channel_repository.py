@@ -2066,8 +2066,8 @@ class SqlChannelRepository:
                     "retention_days": retention_days,
                     "limit": limit,
                 },
-            )).scalar_one()
-        return int(count)
+            )).scalar_one_or_none()
+        return int(count or 0)
 
     @staticmethod
     def _status_event_digest(status: ChannelProviderStatusEvent) -> str:
@@ -2208,6 +2208,12 @@ class SqlChannelRepository:
                       AND c.connection_id = :connection
                       AND c.enabled = true
                       AND c.revision = :revision
+                      AND NOT EXISTS (
+                          SELECT 1 FROM public.channel_provider_status_tombstones t
+                          WHERE t.tenant_id = c.tenant_id
+                            AND t.connection_id = c.connection_id
+                            AND t.receipt_id = :receipt
+                      )
                     ON CONFLICT (tenant_id, connection_id, receipt_id)
                     DO NOTHING
                     RETURNING receipt_id
@@ -2231,6 +2237,30 @@ class SqlChannelRepository:
                     args,
                 )).scalar_one_or_none()
                 if existing is None:
+                    # A previously archived signed callback may be retried.
+                    # Exact digest-only tombstones acknowledge replay without
+                    # restoring purged provider/recipient information.
+                    archived = (await session.execute(
+                        text("""
+                            SELECT t.event_digest
+                            FROM public.channel_provider_status_tombstones t
+                            JOIN public.channel_connections c
+                              ON c.tenant_id = t.tenant_id
+                             AND c.connection_id = t.connection_id
+                            WHERE t.tenant_id = CAST(:tenant AS uuid)
+                              AND t.connection_id = :connection
+                              AND t.receipt_id = :receipt
+                              AND c.enabled = true
+                              AND c.revision = :revision
+                        """),
+                        args,
+                    )).scalar_one_or_none()
+                    if archived == digest:
+                        return True
+                    if archived is not None:
+                        raise ChannelAdmissionConflict(
+                            "Archived provider status digest mismatch"
+                        )
                     raise ChannelAdmissionDenied(
                         "No active tenant connection for provider status"
                     )
@@ -2311,6 +2341,12 @@ class SqlChannelRepository:
                       AND o.claim_token IS NULL
                       AND o.attempt_count > 0
                       AND o.status IN ('sent', 'delivered', 'read', 'failed')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM public.channel_provider_status_tombstones t
+                          WHERE t.tenant_id = c.tenant_id
+                            AND t.connection_id = c.connection_id
+                            AND t.receipt_id = :receipt
+                      )
                     ON CONFLICT (tenant_id, connection_id, receipt_id)
                     DO NOTHING
                     RETURNING connection_revision
