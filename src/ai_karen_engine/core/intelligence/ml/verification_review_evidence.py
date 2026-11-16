@@ -14,7 +14,9 @@ import hashlib
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
+
+from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
 from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
     ActionRiskClass,
     DecisionType,
@@ -36,23 +38,6 @@ _PERMISSION = "intelligence.ml.verification_review"
 _ACTIONS = frozenset(item.value for item in VerificationAction)
 _ALLOWED_SOURCES = frozenset({"human_review", "independent_test"})
 _MAX_CASES = 500
-
-
-@runtime_checkable
-class AuthenticatedEvidencePrincipal(Protocol):
-    """Minimal interface of the principal supplied by the trusted auth boundary.
-
-    The host authenticates and constructs the canonical principal; evaluation
-    cannot import the HTTP-heavy auth package into lightweight ML workers.
-    The protocol does NOT itself authenticate externally provided objects.
-    """
-
-    user_id: str
-    tenant_id: str
-
-    def has_permission(self, permission: str) -> bool: ...
-
-    def is_expired(self) -> bool: ...
 
 
 class GovernedVerificationReviewEvidence:
@@ -145,11 +130,11 @@ class GovernedVerificationReviewEvidence:
 
     @staticmethod
     def _require_review_authority(
-        reviewer: AuthenticatedEvidencePrincipal,
+        reviewer: AuthenticatedPrincipal,
         tenant_id: str,
         subject_user_id: str,
     ) -> None:
-        if not isinstance(reviewer, AuthenticatedEvidencePrincipal):
+        if not isinstance(reviewer, AuthenticatedPrincipal):
             raise PermissionError("A trusted authenticated reviewer principal is required")
         if (
             reviewer.tenant_id != tenant_id
@@ -161,12 +146,12 @@ class GovernedVerificationReviewEvidence:
 
     @staticmethod
     def _require_subject_authority(
-        subject: AuthenticatedEvidencePrincipal,
+        subject: AuthenticatedPrincipal,
         tenant_id: str,
         subject_user_id: str,
     ) -> None:
         if (
-            not isinstance(subject, AuthenticatedEvidencePrincipal)
+            not isinstance(subject, AuthenticatedPrincipal)
             or subject.tenant_id != tenant_id
             or subject.user_id != subject_user_id
             or subject.is_expired()
@@ -321,4 +306,4 @@ class GovernedVerificationReviewEvidence:
         }
 
 
-__all__ = ["AuthenticatedEvidencePrincipal", "GovernedVerificationReviewEvidence"]
+__all__ = ["GovernedVerificationReviewEvidence"]
