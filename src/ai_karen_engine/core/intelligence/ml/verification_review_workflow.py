@@ -9,9 +9,9 @@ never the policy propensities, eligible actions or frozen feature snapshots.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import math
-import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -169,12 +169,17 @@ class VerificationReviewWorkflow:
         if risk not in {ActionRiskClass.LOW, ActionRiskClass.MODERATE}:
             raise PermissionError("Review cannot weaken high-risk runtime policy")
 
-        nonce = uuid.uuid4().hex
+        # Stable, domain-separated IDs prevent different labels being
+        # appended for the same decision after a replay or concurrent review.
+        identity = "\\x1f".join(
+            (reviewer.tenant_id, judgement.subject_user_id, recorded.decision_observation_id)
+        )
+        receipt_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         label_metadata = {
             "reward_evidence_type": "human_review",
-            "reward_evidence_ref": f"review:{nonce}:reward",
+            "reward_evidence_ref": f"review:v1:{receipt_key}:reward",
             "verification_label_source": "human_review",
-            "verification_label_ref": f"review:{nonce}:need",
+            "verification_label_ref": f"review:v1:{receipt_key}:need",
             "verification_needed": judgement.verification_needed,
         }
         observed = PolicyObservation(
