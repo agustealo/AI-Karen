@@ -654,6 +654,72 @@ async def register_telegram_webhook(
         raise HTTPException(503, "Telegram webhook registration unverified") from None
 
 
+class TelegramReconciliationObservation(BaseModel):
+    """Read-only evidence; cannot unlock a provider mutation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claim_state: Literal["absent", "in_flight", "uncertain", "verified"]
+    claim_revision_matches: StrictBool
+    claim_expired: StrictBool
+    provider_url_matches: StrictBool
+    provider_webhook_registered: StrictBool
+    live_connected: Literal[False]
+    claim_released: Literal[False]
+    reconciliation_authorized: Literal[False]
+
+
+@router.get(
+    "/operator/telegram/connections/{connection_id}/reconciliation",
+    response_model=TelegramReconciliationObservation,
+)
+async def inspect_telegram_registration_reconciliation(
+    connection_id: UUID,
+    expected_revision: int,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> TelegramReconciliationObservation:
+    """Require fresh operator policy, never mutate remote webhook or SQL claims."""
+    if type(expected_revision) is not int or expected_revision < 1:
+        raise HTTPException(422, "Positive revision required")
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        connection = await host.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != str(connection_id)
+            or connection.installation_id != "telegram-bot"
+            or connection.revision != expected_revision
+        ):
+            raise PermissionError("Telegram reconciliation unavailable")
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="telegram-bot", action="channel.inspect",
+        )
+        result = await host.inspect_telegram_registration_evidence(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            user_id=user_id, session_id=session_id,
+            authorized_plan=plan, expected_revision=expected_revision,
+        )
+    except PermissionError:
+        raise HTTPException(403, "Telegram reconciliation inspection denied") from None
+    except Exception as exc:
+        logger.error(
+            "channel.telegram.reconciliation.unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "Telegram reconciliation inspection unavailable") from None
+    try:
+        return TelegramReconciliationObservation.model_validate(result)
+    except ValidationError:
+        logger.error("channel.telegram.reconciliation.invalid_projection")
+        raise HTTPException(503, "Telegram reconciliation inspection unavailable") from None
+
+
 class PersonalConsentRecoveryItem(BaseModel):
     connection_id: str
     provider_id: str
