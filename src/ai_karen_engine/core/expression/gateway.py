@@ -17,6 +17,16 @@ from ..model_runtime.provider_policy import evaluate_provider_policy
 
 logger = logging.getLogger(__name__)
 
+# Only sources emitted by governed generative engines may complete a chat turn.
+# An unavailable/static response can carry nonempty text and a provider label,
+# but it is not an observed model generation.
+MODEL_GENERATION_RESPONSE_SOURCES = frozenset({
+    "provider_runtime",
+    "fallback_provider_runtime",
+    "openai_compatible_engine",
+    "model",
+})
+
 
 def _emit_routing_event(event_name: str, **kwargs: Any) -> None:
     """Emit a routing observability event using structured logging."""
@@ -304,12 +314,27 @@ class ExpressionGateway:
 
                 has_text = bool(result.text and result.text.strip())
                 is_valid = validate_response_text(result.text) if has_text else False
+                # Treat every engine result as an execution receipt, not as
+                # a trusted answer based on its text or provider label alone.
+                # A missing model ID, foreign task, or non-generative source
+                # must not be promoted into a successful model response.
                 has_model_source = (
-                    bool(result.provider)
-                    and result.response_source != "model_unavailable"
+                    result.task_id == task.task_id
+                    and isinstance(result.provider, str)
+                    and bool(result.provider.strip())
+                    and isinstance(result.model, str)
+                    and bool(result.model.strip())
+                    and result.response_source in MODEL_GENERATION_RESPONSE_SOURCES
                 )
 
                 if has_text and is_valid and has_model_source:
+                    # The gateway decides fallback level. Even if a secondary
+                    # engine forgot to mark its result degraded, recovery is
+                    # never a healthy primary completion.
+                    if level > 0:
+                        result.degraded = True
+                        if not result.degradation_reason:
+                            result.degradation_reason = "model_engine_fallback"
                     # A token-limited answer is usable partial output, not a
                     # normally completed model response or a fallback trigger.
                     if (result.metadata or {}).get("output_truncated") is True:
