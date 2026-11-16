@@ -315,8 +315,10 @@ the request's direct inspection plan is authorized and has remaining budget;
 a separate fresh PluginService RuntimePolicy decision grants the actual plugin
 action; the canonical executor validates invocation inputs and grants; and
 the result returns a matching success receipt for plugin, user, tenant,
-session, conversation, correlation and policy. The inspection plan is **not**
-reused as an execution grant.
+session, conversation, correlation and policy **and an explicit nested
+plugin-level status of success without an error**. An outer executor receipt
+with an empty, pending, malformed or error-only payload does not establish
+completion. The inspection plan is **not** reused as an execution grant.
 
 Communication transports and voice modality plugins are excluded from this
 generic executor. ChannelHost and VoiceRuntime remain the only respective
