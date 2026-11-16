@@ -387,7 +387,7 @@ async def test_read_only_policy_probe_survives_trajectory_without_ope_promotion(
     assert strategy.action_probabilities == {}
     assert strategy.ope_eligible is False
     assert strategy.ope_ineligible_reason == OpeEligibilityReason.MISSING_PROPENSITY.value
-    assert strategy.metadata["alternative_authorization"] == "not_established"
+    assert strategy.metadata["alternative_execution_eligibility"] == "not_established"
     assert "verification_policy_snapshot" not in strategy.metadata
 
 
