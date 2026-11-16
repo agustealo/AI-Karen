@@ -486,6 +486,16 @@ bypass credential, license, tenant, resource, policy or lifecycle controls.
 The optional native dependency is still installed by an operator and
 remains distinct from approved model weight installation.
 
+**Audio channel policy compatibility:** The canonical `plugin_audio`
+channel has `admin_only: false` by default. This is **not** an install
+prohibition: the existing authenticated model-management endpoints enforce
+administrator role requirements, while `effective_enabled`, download policy,
+revision/license validation and tenant scope govern a permitted install.
+The host UX must never require `channel.admin_only === true` to enable an
+administrator's download button. Regression tests use the real backend channel
+shape and separately deny a disabled audio channel. This correction removes
+an incorrect client-only block, not backend RBAC enforcement.
+
 Acceptance evidence includes
 `tests/plugins/plugin-recommended-models.test.tsx`,
 `tests/plugins/plugin-details-settings.test.tsx`, and
