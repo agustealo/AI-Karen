@@ -1980,6 +1980,7 @@ async def test_telegram_inbox_recovery_denies_stale_revision_before_backlog_read
         revision=4, enabled=True,
     ))
     host.repository.list_recoverable_inbound = AsyncMock()
+    host.worker.submit = AsyncMock()
     host.activation._authorize = AsyncMock()
     with pytest.raises(PermissionError):
         await host.recover_inbox(
