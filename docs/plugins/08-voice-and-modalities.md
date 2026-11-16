@@ -210,6 +210,33 @@ slice**, not another runtime or model registry.
   system. No operating-system-specific executable or packaged speech binary
   is shipped by the UI slice.
 
+### Global read-aloud lifecycle (follow-on source slice)
+
+CopilotKit now displays the active output phase (**Preparing speech** or
+**Karen is speaking**) and a global **Stop audio** control in the same dock,
+even when the assistant message that initiated playback is scrolled away.
+
+The existing `KarenBrowserSpeechPlayback` module is the **sole per-tab
+playback owner**. Its `useAssistantPlaybackPhase` subscription shares only an
+ephemeral phase value; `stopAssistantPlayback` delegates to the current
+session's existing abort/cancel handler. It does **not** retain speech text,
+audio blobs, voice credentials, or execution context. The message's own Stop
+button and unmount cleanup remain in force. Starting another assistant reply
+still preempts the previous reply; no automatic speech starts on chat mount,
+history replay, draft edit or agent completion.
+
+Provider and transport errors never show raw backend exception messages in
+the chat. Explicit local UX errors remain actionable, including missing
+saved engines and unavailable browser voices. Local synthesis aborts before
+creating playable audio if the user clicks Stop while it is preparing.
+
+**Proof:** `tests/chat/browser-speech-playback.test.tsx` verifies
+preparing/speaking/idle status, global cancellation during pending local
+inference, single active reply, no autoplay and error redaction.
+`tests/chat/copilotkit-consumer-architecture.test.ts` verifies the dock
+delegates to this existing owner instead of synthesizing speech itself.
+These are source/browser-API unit tests, **not** non-mocked device proof.
+
 **Source proof:**
 [Copilot voice dock tests](../../src/ui_launchers/Karen-AI-Theme/tests/chat/copilotkit-voice-dock.test.tsx)
 cover no-engine truth, separate STT readiness, backend-acknowledged settings,

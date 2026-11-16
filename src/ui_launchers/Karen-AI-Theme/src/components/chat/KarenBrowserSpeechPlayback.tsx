@@ -5,7 +5,7 @@
  * device-dependent browser speech. User preference comes from authenticated
  * backend state. No voice output occurs during rendering or chat hydration.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Volume2, Square } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
@@ -13,7 +13,47 @@ import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
 type SpeechPart = { type?: unknown; text?: unknown };
 type SpeechState = "idle" | "speaking";
 
+/**
+ * Per-tab shared output lifecycle. This is the already-existing playback
+ * authority, not another voice runtime, preference store, or persistence path.
+ * No transcript or generated audio is held in the observable state.
+ */
+export type AssistantPlaybackPhase = "idle" | "preparing" | "speaking";
 let activePlayback: (() => void) | null = null;
+let activePlaybackPhase: AssistantPlaybackPhase = "idle";
+const playbackListeners = new Set<() => void>();
+
+function publishPlaybackPhase(phase: AssistantPlaybackPhase): void {
+  if (activePlaybackPhase === phase) return;
+  activePlaybackPhase = phase;
+  playbackListeners.forEach((listener) => listener());
+}
+
+function subscribePlayback(listener: () => void): () => void {
+  playbackListeners.add(listener);
+  return () => { playbackListeners.delete(listener); };
+}
+
+function getPlaybackPhase(): AssistantPlaybackPhase {
+  return activePlaybackPhase;
+}
+
+export function useAssistantPlaybackPhase(): AssistantPlaybackPhase {
+  return useSyncExternalStore(subscribePlayback, getPlaybackPhase, () => "idle");
+}
+
+/** Stop active read-aloud from anywhere in the current Copilot workspace. */
+export function stopAssistantPlayback(): void {
+  activePlayback?.();
+}
+
+/** Only locally-authored, fixed guidance can be displayed as an error. */
+class SafeSpeechError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SafeSpeechError";
+  }
+}
 
 export function extractAssistantSpeech(message: unknown): string {
   if (!message || typeof message !== "object") return "";
@@ -102,28 +142,32 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
       }
       pendingResolve?.();
       pendingResolve = null;
-      if (activePlayback === stopSession) activePlayback = null;
+      if (activePlayback === stopSession) {
+        activePlayback = null;
+        publishPlaybackPhase("idle");
+      }
       if (session.current === stopSession) session.current = null;
       setState("idle");
     };
     session.current = stopSession;
     activePlayback = stopSession;
+    publishPlaybackPhase("preparing");
     setState("speaking");
 
     const playBrowser = async (chunks: string[]) => {
       if (!synth || typeof SpeechSynthesisUtterance === "undefined") {
-        throw new Error("This browser does not support speech playback.");
+        throw new SafeSpeechError("This browser does not support speech playback.");
       }
       const available = synth.getVoices();
       if (!available.length) {
-        throw new Error("No browser voices are available. Check Voice settings.");
+        throw new SafeSpeechError("No browser voices are available. Check Voice settings.");
       }
       const savedURI = savedBrowserVoiceURI();
       const selected = savedURI
         ? available.find((voice) => voice.voiceURI === savedURI)
         : available.find((voice) => voice.default) || available[0];
       if (!selected) {
-        throw new Error("The saved browser voice is unavailable. Update Voice settings.");
+        throw new SafeSpeechError("The saved browser voice is unavailable. Update Voice settings.");
       }
       for (const chunk of chunks) {
         if (stopped) break;
@@ -138,13 +182,16 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
           };
           utterance.onerror = () => {
             pendingResolve = null;
-            reject(new Error("Browser speech playback failed."));
+            reject(new SafeSpeechError("Browser speech playback failed."));
           };
           try {
             synth.speak(utterance);
+            if (!stopped && activePlayback === stopSession) {
+              publishPlaybackPhase("speaking");
+            }
           } catch {
             pendingResolve = null;
-            reject(new Error("The browser could not start speech playback."));
+            reject(new SafeSpeechError("The browser could not start speech playback."));
           }
         });
       }
@@ -166,9 +213,15 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
           };
           playing.onerror = () => {
             pendingResolve = null;
-            reject(new Error("Karen's local speech could not be played."));
+            reject(new SafeSpeechError("Karen's local speech could not be played."));
           };
-          void playing.play().catch(reject);
+          void playing.play().then(() => {
+            if (!stopped && activePlayback === stopSession) {
+              publishPlaybackPhase("speaking");
+            }
+          }).catch(() => reject(new SafeSpeechError(
+            "Karen's local speech could not be played."
+          )));
         });
         if (stopped) break;
         playing.pause();
@@ -191,7 +244,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
         const chunks = speechChunks(text);
         if (choice.engine_id !== null && choice.voice_id !== null) {
           if (!preference.available) {
-            throw new Error("Saved local speech engine is unavailable. Update Voice settings.");
+            throw new SafeSpeechError("Saved local speech engine is unavailable. Update Voice settings.");
           }
           await playLocal(choice.engine_id, choice.voice_id, chunks);
         } else {
@@ -199,7 +252,10 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
         }
       } catch (cause) {
         if (!stopped) {
-          setError(cause instanceof Error ? cause.message : "Speech playback failed.");
+          // Do not render backend exception strings, filesystem paths or
+          // user text returned by a failed provider request.
+          setError(cause instanceof SafeSpeechError ? cause.message :
+            "Karen could not prepare speech. Check Voice settings or try again.");
         }
       } finally {
         stopSession();
