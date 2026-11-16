@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
@@ -19,6 +20,7 @@ from ai_karen_engine.core.adaptive.learning.estimators import (
     IPSEstimator,
     SNIPSEstimator,
     compute_overlap_diagnostics,
+    validate_observation,
 )
 from ai_karen_engine.core.adaptive.drift import DriftStatus
 from ai_karen_engine.core.adaptive.learning.policy_contracts import (
@@ -129,16 +131,83 @@ class OfflinePolicyEvaluator:
             self._evaluations.append(result)
             return result
 
-        for obs in observations:
-            if not obs.candidate_probabilities:
-                try:
-                    decision = candidate_policy.score_actions(obs.context, obs.context.eligible_actions)
-                    obs.candidate_probabilities = dict(decision.probabilities)
-                    obs.candidate_policy_id = decision.policy_id
-                    obs.candidate_policy_version = decision.policy_version
-                except Exception:
-                    pass
+        # The candidate must have been evaluated against a pinned,
+        # versioned snapshot before entering OPE. Scoring a mutable policy
+        # after the fact would fabricate a historical candidate distribution.
+        # Work on one detached snapshot: never modify a caller's observations.
+        frozen_observations = deepcopy(observations)
+        invalid_reason: str | None = None
+        if (
+            not isinstance(candidate_id, str)
+            or not candidate_id.strip()
+            or candidate_id == "unknown"
+            or not isinstance(candidate_version, str)
+            or not candidate_version.strip()
+            or candidate_version == "unknown"
+        ):
+            invalid_reason = "candidate_policy_identity_missing"
+        else:
+            for observation in frozen_observations:
+                if not isinstance(observation, PolicyObservation):
+                    invalid_reason = "noncanonical_policy_observation"
+                    break
+                if (
+                    not observation.context
+                    or not isinstance(observation.context.feature_snapshot_id, str)
+                    or not observation.context.feature_snapshot_id.strip()
+                ):
+                    invalid_reason = "decision_time_snapshot_missing"
+                    break
+                if (
+                    observation.candidate_policy_id != candidate_id
+                    or observation.candidate_policy_version != candidate_version
+                ):
+                    invalid_reason = "candidate_policy_version_mismatch"
+                    break
+                if not all(
+                    isinstance(value, str) and value.strip()
+                    for value in (
+                        observation.behavior_policy_id,
+                        observation.behavior_policy_version,
+                    )
+                ):
+                    invalid_reason = "behavior_policy_provenance_missing"
+                    break
+                error = validate_observation(observation)
+                if error is not None:
+                    invalid_reason = "invalid_logged_policy_observation"
+                    break
 
+        if invalid_reason is not None:
+            result = {
+                "evaluation_id": evaluation_id,
+                "policy_id": candidate_id,
+                "policy_version": candidate_version,
+                "baseline_policy_id": baseline_id,
+                "baseline_policy_version": baseline_version,
+                "utility_policy_version": self._utility_policy.utility_policy_version,
+                "sample_count": len(observations),
+                "eligible_count": 0,
+                "observed_success_rate": None,
+                "baseline_success_rate": None,
+                "candidate_success_rate": None,
+                "baseline_observed_count": 0,
+                "candidate_observed_count": 0,
+                "rate_source": "rejected_unverified_policy_observations",
+                "estimates": {},
+                "overlap_diagnostics": None,
+                "segment_metrics": {},
+                "drift_status": "unknown",
+                "promotion_decision": PromotionDecision.OPE_INELIGIBLE.value,
+                "reason_codes": [invalid_reason],
+                "messages": [
+                    "Frozen, versioned, complete policy evidence is required for OPE"
+                ],
+            }
+            self._evaluations.append(result)
+            return result
+
+        observations = frozen_observations
         estimates: dict[str, PolicyEstimate] = {}
         try:
             ips = IPSEstimator(max_importance_weight=self._max_importance_weight)
