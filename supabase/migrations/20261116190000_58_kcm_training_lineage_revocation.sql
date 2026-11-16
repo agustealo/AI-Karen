@@ -3,6 +3,10 @@
 -- No example is authorized for training by this migration.
 BEGIN;
 
+-- Privileged mutation functions are not exposed through the public Data API.
+CREATE SCHEMA IF NOT EXISTS kcm_internal;
+REVOKE ALL ON SCHEMA kcm_internal FROM PUBLIC;
+
 CREATE TABLE public.kcm_training_scope_state (
     tenant_id uuid NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
     user_id uuid NOT NULL REFERENCES public.auth_users(user_id) ON DELETE CASCADE,
@@ -123,7 +127,7 @@ CREATE POLICY kcm_revocation_owner_select
 
 -- Safe, idempotent provisioning for the trusted host only. No training grant
 -- is created. Missing rows remain unavailable rather than implicitly epoch 0.
-CREATE FUNCTION public.kcm_provision_training_scope(
+CREATE FUNCTION kcm_internal.kcm_provision_training_scope(
     p_tenant_id uuid, p_user_id uuid
 ) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, public AS $kcm_provision$
@@ -151,7 +155,7 @@ $kcm_provision$;
 -- the identical source/revision returns its existing epoch without bumping.
 -- No training lock is handed out; a later worker must implement its own
 -- transactionally held start/promotion fence against this same owner row.
-CREATE FUNCTION public.kcm_revoke_training_source(
+CREATE FUNCTION kcm_internal.kcm_revoke_training_source(
     p_tenant_id uuid,
     p_user_id uuid,
     p_source_event_id uuid,
@@ -218,9 +222,9 @@ $kcm_revoke$;
 -- By default no application role may call either privileged mutation
 -- function. Grant to a *dedicated, audited host execution role* in a
 -- subsequent review; grants are not silently inferred from tenant RLS.
-REVOKE ALL ON FUNCTION public.kcm_provision_training_scope(uuid, uuid)
+REVOKE ALL ON FUNCTION kcm_internal.kcm_provision_training_scope(uuid, uuid)
     FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.kcm_revoke_training_source(
+REVOKE ALL ON FUNCTION kcm_internal.kcm_revoke_training_source(
     uuid, uuid, uuid, char(64), text
 ) FROM PUBLIC;
 DO $kcm_function_roles$
@@ -228,14 +232,15 @@ DECLARE role_name text;
 BEGIN
     FOREACH role_name IN ARRAY ARRAY['anon', 'authenticated'] LOOP
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+            EXECUTE format('REVOKE ALL ON SCHEMA kcm_internal FROM %I', role_name);
             EXECUTE format(
                 'REVOKE ALL ON FUNCTION '
-                'public.kcm_provision_training_scope(uuid,uuid) FROM %I',
+                'kcm_internal.kcm_provision_training_scope(uuid,uuid) FROM %I',
                 role_name
             );
             EXECUTE format(
                 'REVOKE ALL ON FUNCTION '
-                'public.kcm_revoke_training_source(uuid,uuid,uuid,character(64),text) FROM %I',
+                'kcm_internal.kcm_revoke_training_source(uuid,uuid,uuid,character(64),text) FROM %I',
                 role_name
             );
         END IF;
