@@ -146,7 +146,7 @@ async def test_host_requires_separate_policy_and_reports_only_database_truth(dry
         expected_revision=5, retention_days=90, limit=100,
         dry_run=dry_run,
     )
-    assert result["eligible_count"] == (3 if dry_run else 0)
+    assert result["eligible_count"] == 3
     assert result["deleted_count"] == (0 if dry_run else 3)
     assert result["connection_revision"] == 5
 
