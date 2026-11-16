@@ -8,6 +8,9 @@ grant runtime activation or authorize plugin execution.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Protocol
@@ -111,6 +114,22 @@ class ChannelProviderStatusEvent(_ChannelRecord):
     provider_receipt_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     error_code: str | None = Field(default=None, max_length=80)
 
+    @staticmethod
+    def receipt_for(
+        *, provider_message_id: str, recipient_id: str,
+        state: ChannelDeliveryState, provider_timestamp: int,
+    ) -> str:
+        """Stable ID for Meta's unsigned-unique-id status observation fields."""
+        evidence = {
+            "message_id": provider_message_id,
+            "recipient": recipient_id,
+            "state": state.value,
+            "timestamp": provider_timestamp,
+        }
+        return hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+
     @model_validator(mode="after")
     def supported_status(self) -> "ChannelProviderStatusEvent":
         if self.state not in {
@@ -118,6 +137,12 @@ class ChannelProviderStatusEvent(_ChannelRecord):
             ChannelDeliveryState.READ, ChannelDeliveryState.FAILED,
         }:
             raise ValueError("Unsupported signed provider status")
+        if self.provider_receipt_id != self.receipt_for(
+            provider_message_id=self.provider_message_id,
+            recipient_id=self.recipient_id, state=self.state,
+            provider_timestamp=self.provider_timestamp,
+        ):
+            raise ValueError("Provider status receipt does not match signed fields")
         if self.state is ChannelDeliveryState.FAILED:
             if self.error_code != "whatsapp_provider_failed":
                 raise ValueError("Provider failure must use a redacted symbolic code")
