@@ -420,6 +420,35 @@ async def test_fixture_result_with_no_correct_cases_is_not_automatically_certifi
     assert result.general_skill_certified is False
 
 
+@pytest.mark.asyncio
+async def test_missing_evidence_read_does_not_create_sqlite_or_registry(tmp_path):
+    empty = tmp_path / "already-configured-empty-registry"
+    empty.mkdir()
+    view = KcmBenchmarkTaskProjector(
+        registry_dir=empty,
+        minimum_cases=1, maximum_cases=10,
+        store=InMemoryOutcomeStore(),
+    )
+    result = await view.inspect(
+        principal=identity(), tenant_id=TENANT, user_id=USER,
+        task=TASK, model_id=model_id(), receipt_id="absent-receipt",
+    )
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert not (empty / "benchmark_evidence.sqlite3").exists()
+
+    absent = tmp_path / "unknown-registry"
+    missing = await KcmBenchmarkTaskProjector(
+        registry_dir=absent,
+        minimum_cases=1, maximum_cases=10,
+        store=InMemoryOutcomeStore(),
+    ).inspect(
+        principal=identity(), tenant_id=TENANT, user_id=USER,
+        task=TASK, model_id=model_id(), receipt_id="absent-receipt",
+    )
+    assert missing.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert not absent.exists()
+
+
 def test_benchmark_bounds_are_explicit_and_validated(tmp_path):
     for minimum, maximum in ((0, 10), (10, 9), (1, 1001), (True, 2)):
         with pytest.raises(ValueError):
