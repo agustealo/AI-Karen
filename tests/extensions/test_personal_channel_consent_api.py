@@ -1282,3 +1282,103 @@ def test_retirement_api_rejects_forged_historical_verified_status_clearance():
     ):
         with pytest.raises(ValidationError):
             api.PersonalRetirementEvidenceItem(**{**valid, **changed})
+
+
+@pytest.mark.asyncio
+async def test_telegram_inspection_issues_separate_operator_plan_without_client_identity():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="telegram-account",
+        credential_handle="vault://telegram", revision=4, enabled=True,
+    ))
+    host.inspect_channel_webhook = AsyncMock(return_value={
+        "registered": True, "path_matches": True,
+        "pending_update_count": 2, "provider_reported_error": False,
+        "endpoint_origin_verified": False,
+    })
+    result = await api.inspect_telegram_webhook(
+        connection_id=api.UUID(CONNECTION), request=request,
+        user=actor(roles=["admin"]),
+    )
+    assert result.registered is True
+    assert result.endpoint_origin_verified is False
+    assert host.activation.issue_action_plan.await_args.kwargs["action"] == "channel.inspect"
+    assert host.activation.issue_action_plan.await_args.kwargs["tenant_id"] == TENANT
+    assert host.activation.issue_action_plan.await_args.kwargs["user_id"] == USER
+    assert host.inspect_channel_webhook.await_args.kwargs["authorized_plan"] == "trusted-plan"
+    assert host.inspect_channel_webhook.await_args.kwargs["session_id"] == (
+        host.activation.issue_action_plan.await_args.kwargs["session_id"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("installation", ["whatsapp-cloud", "telegram-other"])
+async def test_telegram_inspection_refuses_other_installations_before_policy(installation):
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id=installation, provider_account_id="provider",
+        credential_handle="vault://ref", revision=2, enabled=True,
+    ))
+    host.inspect_channel_webhook = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await api.inspect_telegram_webhook(
+            connection_id=api.UUID(CONNECTION), request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.inspect_channel_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_inspection_never_mints_plan_for_absent_connection():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=None)
+    host.inspect_channel_webhook = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await api.inspect_telegram_webhook(
+            connection_id=api.UUID(CONNECTION), request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.inspect_channel_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_inspection_policy_denial_does_not_read_provider():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="provider",
+        credential_handle="vault://ref", revision=1, enabled=True,
+    ))
+    host.activation.issue_action_plan.side_effect = PermissionError("RBAC denied")
+    host.inspect_channel_webhook = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await api.inspect_telegram_webhook(
+            connection_id=api.UUID(CONNECTION), request=request, user=actor(),
+        )
+    assert error.value.status_code == 403
+    host.inspect_channel_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_inspection_rejects_invented_live_origin_and_secrets():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="provider",
+        credential_handle="vault://ref", revision=1, enabled=True,
+    ))
+    host.inspect_channel_webhook = AsyncMock(return_value={
+        "registered": True, "path_matches": True,
+        "pending_update_count": 1, "provider_reported_error": False,
+        "endpoint_origin_verified": True, "bot_token": "secret",
+    })
+    with pytest.raises(HTTPException) as error:
+        await api.inspect_telegram_webhook(
+            connection_id=api.UUID(CONNECTION), request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 503
+    assert "secret" not in str(error.value.detail)
