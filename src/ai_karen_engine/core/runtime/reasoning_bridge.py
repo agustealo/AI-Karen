@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Sequence
 
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
+from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionTopology,
@@ -20,7 +21,6 @@ from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.policy import ResponseStrategyPolicyProbe
 
 if TYPE_CHECKING:
-    from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
     from ai_karen_engine.core.runtime.soft_reasoning_composition import (
         ComposedSoftReasoning,
     )
@@ -294,8 +294,6 @@ class RuntimeReasoningBridge:
         from ai_karen_engine.core.reasoning.defaults import (
             get_default_strategies,
         )
-        from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
-
         strategies = get_default_strategies(optional_strategies=optional_strategies)
         return ReasoningActivation(
             executor=ReasoningExecutor(strategies=strategies),
