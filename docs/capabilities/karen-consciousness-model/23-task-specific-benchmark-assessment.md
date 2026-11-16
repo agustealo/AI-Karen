@@ -19,7 +19,7 @@ It does not certify a general skill, execute a capability, change CORTEX policy,
 | KCM task view | core/personalization/benchmark_task_assessment.py | Read-only join and descriptive confidence interval |
 | Skills and execution eligibility | CapabilityRegistry, CORTEX, RuntimePolicy | **Unchanged; no permission derived from scores** |
 
-This slice upgrades new benchmark receipts with case hashes, exact feature revision and observed correctness count. Historical receipts lacking the exact case-membership field are **not** promoted into KCM evidence, although their original promotion compatibility is retained.
+This slice upgrades new benchmark receipts with case hashes, per-case correctness verdicts, exact feature revision and observed correctness count. Historical receipts lacking the exact case-membership field are **not** promoted into KCM evidence, although their original promotion compatibility is retained.
 
 ## Exact join contract
 
@@ -27,8 +27,8 @@ A KCM report requires all of the following:
 
 1. The current authenticated principal's tenant and user must match the exact request. Arbitrary dictionaries and expired identities fail closed.
 2. The model ID must belong to the authenticated tenant's canonical registry namespace. The current model artifact, path, purpose, model version, feature revision and SHA-256 must match the benchmark receipt.
-3. The receipt must have been issued by canonical EvaluationEvidenceStore for that exact model and dataset, with an explicit sample count, correctness count, and unique SHA-256 case-family reference hashes.
-4. Every expected case must appear in the current scoped OutcomeStore as a held-out-evaluation outcome referencing exactly that receipt and case hash. All must agree on the task, model, feature version, correctness and no fallback.
+3. The receipt must have been issued by canonical EvaluationEvidenceStore for that exact model and dataset, with an explicit sample count, correctness count, and unique SHA-256 case-family reference hashes **each bound to its own pass/fail verdict**.
+4. Every expected case must appear in the current scoped OutcomeStore as a held-out-evaluation outcome referencing exactly that receipt and case hash. All must agree on the task, model, feature version, the exact per-case correctness verdict and no fallback. Swapping positive and negative labels while preserving the overall score is rejected.
 5. The entire cohort must be present within the explicitly configured sample budget. Missing, revoked, duplicate, altered, ambiguous or cross-principal cases result in **unavailable**, not a favorable subset estimate.
 6. The artifact and receipt are read again after the asynchronous outcome query; any detected drift fails closed. This is read-only freshness inspection, **not** a transactional trainer lock.
 
@@ -58,7 +58,7 @@ A sample mean or its numerical interval does not establish general intelligence 
 
 ## Proof and release boundaries
 
-The focused KCM suite creates a real isolated ML model registry with a hashed artifact, uses canonical benchmark issuance over SQLite, persists numeric cases through the canonical OutcomeStore test adapter, and checks the exact combined read. Regression cases include missing/deleted receipts, artifact mutation, mislabelled outcomes, missing/duplicate cases, model/feature drift, invalid bounds and principals, all-failed benchmarks and denial of general skill certification.
+The focused KCM suite creates a real isolated ML model registry with a hashed artifact, uses canonical benchmark issuance over SQLite, persists numeric cases through the canonical OutcomeStore test adapter, and checks the exact combined read. Regression cases include missing/deleted receipts, artifact mutation, mislabelled outcomes, swapped case verdicts with unchanged aggregate accuracy, missing/duplicate cases, model/feature drift, invalid bounds and principals, all-failed benchmarks and denial of general skill certification.
 
 Existing KCM real PostgreSQL security gates, Main Quality, backend/frontend, cognitive execution-authority and first-boot remain mandatory for a merge.
 
