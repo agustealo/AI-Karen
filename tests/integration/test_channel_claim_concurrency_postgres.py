@@ -915,7 +915,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             """INSERT INTO public.channel_connections
                (connection_id, tenant_id, installation_id, provider_account_id,
                 credential_handle, enabled, revision)
-               VALUES ($1,$2,'whatsapp-cloud','10987654321','vault://meta',
+               VALUES ($1,$2,'whatsapp-cloud','20987654321','vault://meta',
                        true,1)""",
             historical_id, tenant_a,
         )
@@ -976,7 +976,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             connection=ChannelConnection(
                 tenant_id=str(tenant_a), connection_id=historical_id,
                 installation_id="whatsapp-cloud",
-                provider_account_id="10987654321",
+                provider_account_id="20987654321",
                 credential_handle="vault://meta", revision=1, enabled=True,
             ),
             status=pending_status,
@@ -1005,7 +1005,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         ) == "delivered"
         history = ChannelConnection(
             tenant_id=str(tenant_a), connection_id=historical_id,
-            installation_id="whatsapp-cloud", provider_account_id="10987654321",
+            installation_id="whatsapp-cloud", provider_account_id="20987654321",
             credential_handle="vault://meta", revision=2, enabled=False,
         )
         historical_status = ChannelProviderStatusEvent(
