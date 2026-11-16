@@ -52,6 +52,19 @@ class TrainingAdmissionPolicy:
         )
     )
 
+    @classmethod
+    def from_settings(cls) -> "TrainingAdmissionPolicy":
+        """Read the single canonical learning config; no shadow flag source."""
+        from ai_karen_engine.config.learning import get_learning_settings
+
+        settings = get_learning_settings()
+        return cls(
+            enabled=settings.kcm_training_admission_enabled,
+            minimum_quality=settings.kcm_training_min_quality,
+            minimum_correctness=settings.kcm_training_min_correctness,
+            minimum_provenance=settings.kcm_training_min_provenance,
+        )
+
     def __post_init__(self) -> None:
         for name in ("minimum_quality", "minimum_correctness", "minimum_provenance"):
             value = getattr(self, name)
@@ -131,7 +144,7 @@ class TrainingAdmissionEvaluator:
         policy: TrainingAdmissionPolicy | None = None,
         evidence_resolver: TrainingEvidenceResolver | None = None,
     ) -> None:
-        self.policy = policy or TrainingAdmissionPolicy()
+        self.policy = policy or TrainingAdmissionPolicy.from_settings()
         self.evidence_resolver = evidence_resolver
 
     def _result(

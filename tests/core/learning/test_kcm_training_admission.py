@@ -74,7 +74,7 @@ def evaluator(port: EvidencePort | BrokenPort | None = None) -> TrainingAdmissio
 
 @pytest.mark.asyncio
 async def test_disabled_by_default_even_for_important_ltm() -> None:
-    result = await TrainingAdmissionEvaluator().evaluate(
+    result = await TrainingAdmissionEvaluator(policy=TrainingAdmissionPolicy()).evaluate(
         Artifact(), objective="procedural_skill"
     )
     assert result.status is TrainingAdmissionStatus.POLICY_BLOCKED
