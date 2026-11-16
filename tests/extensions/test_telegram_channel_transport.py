@@ -394,3 +394,33 @@ async def test_real_telegram_adapter_receipt_flows_through_canonical_delivery_se
     assert recorded.provider_message_id == ("432" if status == 200 else None)
     if expected is ChannelDeliveryState.UNKNOWN:
         assert recorded.error_code == "telegram_response_uncertain"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [201, 202, 204, 301, 302, 307, 308])
+async def test_non_200_telegram_response_cannot_fabricate_sent(status):
+    _, adapter, _, client = load_transport(response=httpx.Response(
+        status, json={"ok": True, "result": {
+            "message_id": 432, "chat": {"id": 901},
+        }},
+    ))
+    await adapter.start(connection=connection())
+    receipt = await adapter.send(connection=connection(), delivery=delivery())
+    assert receipt.state is ChannelDeliveryState.UNKNOWN
+    assert receipt.provider_message_id is None
+    client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_boolean_chat_id_cannot_impersonate_integer_recipient():
+    _, adapter, _, client = load_transport(response=httpx.Response(
+        200, json={"ok": True, "result": {
+            "message_id": 432, "chat": {"id": True},
+        }},
+    ))
+    await adapter.start(connection=connection())
+    outgoing = delivery().model_copy(update={"destination_id": "1"})
+    receipt = await adapter.send(connection=connection(), delivery=outgoing)
+    assert receipt.state is ChannelDeliveryState.UNKNOWN
+    assert receipt.provider_message_id is None
+    client.post.assert_awaited_once()
