@@ -192,6 +192,72 @@ class TestDecisionObservationValidatesActions:
             == OpeEligibilityReason.INCOMPLETE_CANDIDATE_SET.value
         )
 
+    @pytest.mark.parametrize(
+        "probabilities,selected_probability",
+        [
+            ({"REASONING": float("nan")}, 1.0),
+            ({"REASONING": float("inf")}, 1.0),
+            ({"REASONING": True}, 1.0),
+            ({"REASONING": 0.7}, 0.7),
+            ({"REASONING": 1.0}, float("nan")),
+            ({"REASONING": 1.0}, float("inf")),
+            ({"REASONING": 1.0}, True),
+            ({"REASONING": 1.0}, 0.5),
+            ({"REASONING": 0.0, "DIRECT": 1.0}, 0.0),
+            ({"REASONING": 1.0, "DIRECT": 1.0}, 1.0),
+            ({"REASONING": 0.5, "UNKNOWN": 0.5}, 0.5),
+        ],
+    )
+    def test_invalid_or_misrepresented_probabilities_never_persist(
+        self,
+        probabilities: dict[str, float],
+        selected_probability: float,
+    ) -> None:
+        with pytest.raises(ValueError):
+            self._obs(
+                action_probabilities=probabilities,
+                chosen_probability=selected_probability,
+            )
+
+    def test_explicit_ope_eligible_cannot_override_missing_provenance(self) -> None:
+        with pytest.raises(ValueError, match="cannot override"):
+            self._obs(
+                chosen_probability=None,
+                action_probabilities={},
+                ope_eligible=True,
+                ope_ineligible_reason=OpeEligibilityReason.MISSING_PROPENSITY.value,
+            )
+        with pytest.raises(ValueError, match="cannot override"):
+            self._obs(behavior_policy_id="", ope_eligible=True)
+        with pytest.raises(ValueError, match="ineligibility reason"):
+            self._obs(
+                ope_eligible=True,
+                ope_ineligible_reason=OpeEligibilityReason.MISSING_PROPENSITY.value,
+            )
+
+    def test_unauthorized_record_can_never_be_promoted_by_probability(self) -> None:
+        obs = self._obs(
+            ope_eligible=False,
+            ope_ineligible_reason=OpeEligibilityReason.MISSING_PROPENSITY.value,
+        )
+        assert obs.chosen_probability == 1.0
+        assert obs.ope_eligible is False
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"candidate_actions": ("DIRECT", "DIRECT")},
+            {"eligible_actions": ("REASONING", "REASONING")},
+            {"eligible_actions": ("REASONING", "UNKNOWN")},
+            {"candidate_actions": ("DIRECT",)},
+        ],
+    )
+    def test_unregistered_or_duplicate_candidate_set_fails_closed(
+        self, overrides: dict[str, object],
+    ) -> None:
+        with pytest.raises(ValueError):
+            self._obs(**overrides)
+
     def test_round_trips_through_dict(self) -> None:
         obs = self._obs()
         restored = DecisionObservation.from_dict(obs.to_dict())
