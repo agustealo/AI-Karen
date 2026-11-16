@@ -188,6 +188,62 @@ describe("canonical assistant speech playback", () => {
     expect(revoke).toHaveBeenCalledWith("blob:karen");
   });
 
+  it("retired WAV chunk callbacks cannot interrupt or erase cancellation for the next chunk", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    api.synthesizeLocalVoice.mockResolvedValue(
+      new Blob([new Uint8Array(48)], { type: "audio/wav" }),
+    );
+    const urls = ["blob:chunk-one", "blob:chunk-two", "blob:chunk-three"];
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true, value: vi.fn(() => urls.shift()),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    const played: Array<{
+      src: string;
+      onended: (() => void) | null;
+      onerror: (() => void) | null;
+      pause: ReturnType<typeof vi.fn>;
+      play: ReturnType<typeof vi.fn>;
+    }> = [];
+    vi.stubGlobal("Audio", class {
+      src: string;
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      pause = vi.fn();
+      play = vi.fn().mockResolvedValue(undefined);
+      constructor(url: string) {
+        this.src = url;
+        played.push(this);
+      }
+    });
+    // At least two local WAV requests through the shared bounded chunker.
+    render(<>
+      <KarenBrowserSpeechPlayback message={{ content: "word ".repeat(230) }} />
+      <PlaybackDock />
+    </>);
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(played).toHaveLength(1));
+    const oldEnd = played[0].onended;
+    const oldError = played[0].onerror;
+    act(() => oldEnd?.());
+    await waitFor(() => expect(played).toHaveLength(2));
+    await act(async () => {
+      oldEnd?.();
+      oldError?.();
+    });
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("speaking");
+    expect(played[1].pause).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalledWith("blob:chunk-two");
+    fireEvent.click(screen.getByRole("button", { name: "Stop speech from dock" }));
+    expect(played[1].pause).toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledWith("blob:chunk-two");
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
+    expect(api.synthesizeLocalVoice).toHaveBeenCalledTimes(2);
+  });
+
   it("never falls back to vendor speech when selected model is unavailable", async () => {
     api.getVoiceSelection.mockResolvedValue({
       voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: false,
