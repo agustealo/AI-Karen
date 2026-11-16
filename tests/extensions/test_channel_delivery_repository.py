@@ -838,3 +838,40 @@ async def test_telegram_registration_rejects_invalid_claim_scope(monkeypatch, re
             expected_revision=revision, lease_seconds=lease,
         )
     assert not session.calls
+
+
+@pytest.mark.asyncio
+async def test_telegram_reconciliation_claim_reader_is_tenant_scoped_and_redacted(monkeypatch):
+    session = FakeSession(RowResult(row={
+        "state": "uncertain", "connection_revision": 2, "expired": True,
+    }))
+    install(monkeypatch, session)
+    evidence = await SqlChannelRepository().inspect_telegram_webhook_claim(
+        tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2,
+    )
+    assert evidence == {
+        "claim_state": "uncertain",
+        "claim_revision_matches": True,
+        "claim_expired": True,
+    }
+    sql, params = session.calls[0]
+    assert "channel_telegram_webhook_claims" in sql
+    assert "w.tenant_id = CAST(:tenant AS uuid)" in sql
+    assert "claim_token" not in sql
+    assert params["tenant"] == TENANT
+    assert params["connection"] == "telegram-connect"
+
+
+@pytest.mark.asyncio
+async def test_telegram_reconciliation_claim_reader_reports_missing_without_releasing(monkeypatch):
+    session = FakeSession(RowResult(row=None))
+    install(monkeypatch, session)
+    evidence = await SqlChannelRepository().inspect_telegram_webhook_claim(
+        tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2,
+    )
+    assert evidence == {
+        "claim_state": "absent",
+        "claim_revision_matches": False,
+        "claim_expired": False,
+    }
+    assert len(session.calls) == 1
