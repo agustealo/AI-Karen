@@ -53,17 +53,18 @@ const policy = {
   block_new_downloads: false,
   require_license_acceptance: true,
 };
-const channels = { channels: [{ id: 'plugin_audio', admin_only: true, effective_enabled: true }] };
+// Match ModelDownloadControlService: plugin_audio is enabled but not admin_only.
+const channels = { channels: [{ id: 'plugin_audio', admin_only: false, effective_enabled: true }] };
 
 const catalog = (overrides: Record<string, unknown> = {}) => ({
   recommendations: [{ ...recommendation, ...overrides }],
 });
 
-const getImpl = (source = catalog(), nextPolicy = policy, jobs: unknown[] = []) =>
+const getImpl = (source = catalog(), nextPolicy = policy, jobs: unknown[] = [], nextChannels = channels) =>
   mocks.get.mockImplementation(async (url: string) => {
     if (url === '/api/models/download/recommendations') return source;
     if (url === '/api/models/download/policy') return nextPolicy;
-    if (url === '/api/models/download/channels') return channels;
+    if (url === '/api/models/download/channels') return nextChannels;
     if (url === '/api/runtime/model-library/my-downloads?limit=200') {
       return { jobs, total: jobs.length, scope: 'authenticated_user' };
     }
@@ -138,6 +139,18 @@ describe('Governed plugin model setup', () => {
       pin: true,
     });
     expect(await screen.findByText(/download job is queued/)).toBeTruthy();
+  });
+
+  it('keeps the download blocked when the actual audio channel is disabled', async () => {
+    getImpl(catalog(), policy, [], {
+      channels: [{ id: 'plugin_audio', admin_only: false, effective_enabled: false }],
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    expect(screen.getByText(/disabled channel/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download recommended model' })
+      .hasAttribute('disabled')).toBe(true);
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 
   it('rejects inconsistent backend validation without queueing any model', async () => {
