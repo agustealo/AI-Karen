@@ -36,9 +36,13 @@ $channel_tombstone_roles$;
 
 ALTER TABLE public.channel_provider_status_tombstones ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.channel_provider_status_tombstones FORCE ROW LEVEL SECURITY;
-CREATE POLICY channel_status_tombstone_tenant_scope
-    ON public.channel_provider_status_tombstones FOR ALL
-    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
+-- No UPDATE or DELETE RLS policy exists, even if someone later grants
+-- table privileges to a non-superuser role. Immutable evidence survives.
+CREATE POLICY channel_status_tombstone_tenant_read
+    ON public.channel_provider_status_tombstones FOR SELECT
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
+CREATE POLICY channel_status_tombstone_tenant_insert
+    ON public.channel_provider_status_tombstones FOR INSERT
     WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
 
 CREATE OR REPLACE FUNCTION public.channel_status_tombstone_immutable()
