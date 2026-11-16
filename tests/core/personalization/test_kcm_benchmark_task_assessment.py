@@ -68,7 +68,9 @@ def outcome(
 ) -> PredictionOutcome:
     prediction = Prediction(
         task=TASK,
-        label="verified-expected" if correct else "different",
+        label=(
+            oracle_case.expected_label if correct else "incorrect-canonical-label"
+        ) if oracle_case else ("verified-expected" if correct else "different"),
         model_id=model.model_id,
         model_version=model.model_version,
         feature_version=prediction_feature or model.feature_version,
@@ -488,6 +490,30 @@ async def test_actual_canonical_curated_oracle_snapshot_is_verified_not_independ
     assert result.artifact_architecture == "trained"
     assert result.independent_trial_groups_verified is False
     assert result.production_environment_verified is False
+    assert result.general_skill_certified is False
+
+
+@pytest.mark.asyncio
+async def test_declared_correctness_not_scored_by_canonical_evaluator_is_not_oracle_proof(
+    tmp_path, monkeypatch,
+):
+    from ai_karen_engine.core.intelligence.ml.evaluation import runner as runner_module
+
+    original = runner_module.BenchmarkRunner._is_correct
+    monkeypatch.setattr(
+        runner_module.BenchmarkRunner, "_is_correct",
+        lambda self, case, prediction: False,
+    )
+    # The canonical scoring rule disagrees with the injected 'correct'
+    # flags. A durable baseline evaluation receipt is still allowed,
+    # but it cannot gain verified curated oracle provenance.
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, use_canonical_curated_oracles=True,
+    )
+    monkeypatch.setattr(runner_module.BenchmarkRunner, "_is_correct", original)
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert result.curated_oracle_source_verified is False
     assert result.general_skill_certified is False
 
 
