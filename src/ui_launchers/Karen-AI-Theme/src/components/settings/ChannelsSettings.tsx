@@ -107,6 +107,89 @@ function readableFailure(error: unknown): string {
 }
 
 
+type TelegramWebhookObservation = {
+  registered: boolean;
+  path_matches: boolean;
+  pending_update_count: number;
+  provider_reported_error: boolean;
+  endpoint_origin_verified: false;
+};
+
+function parseTelegramWebhookObservation(value: unknown): TelegramWebhookObservation {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Telegram webhook evidence is unavailable.');
+  }
+  const result = value as Record<string, unknown>;
+  if (
+    typeof result.registered !== 'boolean' ||
+    typeof result.path_matches !== 'boolean' ||
+    typeof result.provider_reported_error !== 'boolean' ||
+    result.endpoint_origin_verified !== false ||
+    typeof result.pending_update_count !== 'number' ||
+    !Number.isInteger(result.pending_update_count) ||
+    result.pending_update_count < 0 ||
+    result.pending_update_count > 1_000_000 ||
+    (!result.registered && result.path_matches) ||
+    Object.keys(result).some((key) => ![
+      'registered', 'path_matches', 'pending_update_count',
+      'provider_reported_error', 'endpoint_origin_verified',
+    ].includes(key))
+  ) {
+    throw new Error('Karen returned invalid Telegram webhook evidence.');
+  }
+  return result as TelegramWebhookObservation;
+}
+
+function TelegramWebhookInspection({ connectionId }: { connectionId: string }) {
+  const [observation, setObservation] = useState<TelegramWebhookObservation | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const inspect = useCallback(async () => {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    setObservation(null);
+    try {
+      const response = await apiClient.get<unknown>(
+        '/api/channels/personal/connections/' +
+          encodeURIComponent(connectionId) + '/telegram-webhook',
+      );
+      setObservation(parseTelegramWebhookObservation(response));
+    } catch (cause) {
+      setError(cause instanceof ApiError && cause.status === 403
+        ? 'Telegram inspection is not authorized for this account or connection.'
+        : 'Telegram webhook status could not be verified. No connection claim is available.');
+    } finally {
+      setLoading(false);
+    }
+  }, [connectionId, loading]);
+
+  return (
+    <section className="space-y-2 border-t border-border/50 pt-3" aria-label="Telegram webhook diagnostics">
+      <p className="text-xs text-muted-foreground">
+        Provider-reported webhook metadata only. This cannot prove incoming messages,
+        webhook origin, or a working conversation.
+      </p>
+      <Button type="button" size="sm" variant="outline" onClick={() => void inspect()}
+        disabled={loading} aria-label="Inspect Telegram webhook">
+        {loading ? 'Inspecting Telegram...' : 'Inspect Telegram webhook'}
+      </Button>
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {observation && (
+        <div role="status" className="space-y-1 text-xs">
+          <p>Telegram webhook: {observation.registered ? 'Registered (provider reported)' : 'Not registered'}</p>
+          <p>Connection path: {observation.path_matches ? 'Matches tenant connection path' : 'Not verified for this connection'}</p>
+          <p>Pending provider updates: {observation.pending_update_count}</p>
+          <p>Provider delivery error: {observation.provider_reported_error ? 'Reported' : 'Not reported in this response'}</p>
+          <p>Endpoint origin: Not verified</p>
+          <p className="font-medium">End-to-end Telegram connectivity: Not verified</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 type ConsentStatus = {
   acknowledged: boolean;
   has_active_consent: boolean;
@@ -1134,6 +1217,13 @@ export default function ChannelsSettings() {
                   <strong>QR available:</strong>{' '}
                   {channel.qr_available ? 'Reported available by Karen' : 'No'}
                 </p>
+                {channel.installation_id === 'telegram-bot' &&
+                  (user?.roles || []).some((role) => role === 'admin' || role === 'super_admin') && (
+                    <TelegramWebhookInspection
+                      key={principalKey + ':' + channel.connection_id}
+                      connectionId={channel.connection_id}
+                    />
+                  )}
                 {channel.last_observed_phase && (
                   <p>
                     <strong>Last persisted provider event:</strong>{' '}
