@@ -82,17 +82,34 @@ function savedBrowserVoiceURI(): string | null {
 }
 
 function speechChunks(text: string): string[] {
-  // Both the browser speech layer and model-backed synthesis use bounded
-  // chunks. Never silently discard words at a 2,000-character API limit.
+  // Browser speech and model-backed synthesis share bounded chunks. A single
+  // very long word/URL previously bypassed the 700-char budget and could
+  // exceed the local API's 2,000-char limit. Split without dropping text or
+  // bisecting a UTF-16 surrogate pair.
+  const limit = 700;
   const words = text.replace(/\s+/g, " ").trim().split(" ");
   const chunks: string[] = [];
   let current = "";
   for (const word of words) {
-    if (current && current.length + word.length + 1 > 700) {
+    let remaining = word;
+    while (remaining.length > limit) {
+      if (current) {
+        chunks.push(current);
+        current = "";
+      }
+      let boundary = limit;
+      const last = remaining.charCodeAt(boundary - 1);
+      const next = remaining.charCodeAt(boundary);
+      if (last >= 0xd800 && last <= 0xdbff &&
+          next >= 0xdc00 && next <= 0xdfff) boundary--;
+      chunks.push(remaining.slice(0, boundary));
+      remaining = remaining.slice(boundary);
+    }
+    if (current && current.length + remaining.length + 1 > limit) {
       chunks.push(current);
       current = "";
     }
-    current = current ? current + " " + word : word;
+    current = current ? current + " " + remaining : remaining;
   }
   if (current) chunks.push(current);
   return chunks;
