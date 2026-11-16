@@ -19,6 +19,8 @@ on:
       - 'src/ai_karen_engine/config/runtime.py'
       - 'src/ai_karen_engine/core/runtime/policy/**'
       - 'src/ai_karen_engine/core/runtime/decision_pipeline.py'
+      - 'src/ai_karen_engine/core/runtime/reasoning_bridge.py'
+      - 'tests/core/runtime/test_verification_alternative_readiness.py'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'tests/core/test_runtime_reasoning_policy.py'
       - 'tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py'
@@ -57,6 +59,8 @@ on:
       - 'src/ai_karen_engine/config/runtime.py'
       - 'src/ai_karen_engine/core/runtime/policy/**'
       - 'src/ai_karen_engine/core/runtime/decision_pipeline.py'
+      - 'src/ai_karen_engine/core/runtime/reasoning_bridge.py'
+      - 'tests/core/runtime/test_verification_alternative_readiness.py'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'tests/core/test_runtime_reasoning_policy.py'
       - 'tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py'
@@ -254,6 +258,15 @@ jobs:
             tests/core/test_runtime_decision_pipeline.py \
             tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py \
             tests/core/intelligence/ml/test_verification_review_workflow.py \
+            -q --timeout=300 --tb=short
+
+      - name: Prove KCOG-01C1B2A read-only readiness and non-OPE invariants
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/runtime/test_verification_alternative_readiness.py \
+            tests/core/test_runtime_decision_pipeline.py \
+            tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py \
             -q --timeout=300 --tb=short
 
       - name: Compile KCOG cognitive-state and policy boundary

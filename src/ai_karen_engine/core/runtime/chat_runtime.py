@@ -571,9 +571,72 @@ class ChatRuntime:
                 conversation_id=conversation_id,
                 start_time=start,
                 decision=decision,
+                authorized_plan=plan,
+                meter=meter,
             )
             if fallback is not None and fallback.answer:
-                if decision.memory_write_allowed:
+                # A recovered model answer is not a completed conversation
+                # until the same transcript owner used by ordinary chat has
+                # durably admitted the user and assistant turn. Never allow
+                # model recovery to become an unpersisted UI success.
+                recovery_meta = fallback.metadata.to_dict()
+                try:
+                    transcript_result = await self._persist_transcript(
+                        request,
+                        fallback.answer,
+                        recovery_meta,
+                        trajectory_id=trajectory.trajectory_id,
+                    )
+                except Exception as persistence_exc:
+                    logger.error(
+                        "chat.recovery_transcript_persistence_failed",
+                        extra={
+                            "correlation_id": ctx.correlation_id,
+                            "error_type": type(persistence_exc).__name__,
+                        },
+                    )
+                    transcript_result = TranscriptPersistenceResult(
+                        status="failed",
+                        conversation_id=conversation_id,
+                        reason="storage_unavailable",
+                        error_type=type(persistence_exc).__name__,
+                    )
+                    self._emitter.emit(
+                        RuntimeEventType.PERSISTENCE_FAILED,
+                        error_type=type(persistence_exc).__name__,
+                        metadata={
+                            "target": "transcript",
+                            "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                        },
+                    )
+                transcript_meta = transcript_result.to_metadata()
+                recovery_meta.update(transcript_meta)
+                fallback.metadata.extra.update(transcript_meta)
+                fallback.metadata.assistant_message_id = (
+                    transcript_result.assistant_message_id
+                )
+                fallback.metadata.used_fallback = True
+                fallback.metadata.latency_ms = (time.time() - start) * 1000.0
+                if not transcript_result.success:
+                    fallback.answer = ""
+                    fallback.status = ChatExecutionStatus.ERROR
+                    fallback.metadata.degradation_reason = (
+                        "transcript_persistence_failed"
+                    )
+                    fallback.metadata.extra["error_code"] = (
+                        "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+                    )
+                    recovery_meta["degradation_reason"] = (
+                        "transcript_persistence_failed"
+                    )
+                    self._emitter.emit(
+                        RuntimeEventType.REQUEST_FAILED,
+                        status="error",
+                        metadata={
+                            "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                        },
+                    )
+                elif decision.memory_write_allowed:
                     await self._persist_memory(
                         request,
                         fallback.answer,
@@ -586,7 +649,7 @@ class ChatRuntime:
                     fallback.answer,
                     start,
                     meter,
-                    provider_meta or {},
+                    recovery_meta,
                     memory_recall_meta,
                     error=f"fallback:{error_type}",
                 )
@@ -599,7 +662,7 @@ class ChatRuntime:
                     meter,
                     memory_recall_meta,
                     success=False,
-                    provider_meta=provider_meta or {},
+                    provider_meta=recovery_meta,
                 )
                 return fallback
             await self._record_trajectory_completion(
@@ -1167,6 +1230,8 @@ class ChatRuntime:
                         conversation_id=conversation_id,
                         start_time=stream_start,
                         decision=decision,
+                        authorized_plan=plan,
+                        meter=meter,
                     )
             except Exception as fallback_exc:
                 logger.error(
@@ -5149,6 +5214,39 @@ class ChatRuntime:
             ):
                 probe = None
 
+            # The readiness assessment is not an execution grant and must
+            # not create a second eligible action or synthetic propensity.
+            readiness = decision.policy_constraints.get(
+                "verification_alternative_readiness",
+            )
+            if not (
+                probe is not None
+                and isinstance(readiness, dict)
+                and readiness.get("schema_version")
+                == "verification_alternative_readiness_v1"
+                and readiness.get("source_decision_id")
+                == decision.policy_decision_id
+                and readiness.get("source_policy_version")
+                == decision.policy_version
+                and readiness.get("alternative_policy_decision_id")
+                == probe.get("alternative_policy_decision_id")
+                and readiness.get("status")
+                in {"not_permitted", "blocked", "unverified"}
+                and isinstance(readiness.get("reason_codes"), list)
+                and 1 <= len(readiness["reason_codes"]) <= 16
+                and all(
+                    isinstance(code, str)
+                    and code.isascii()
+                    and 1 <= len(code) <= 96
+                    and all(char.islower() or char == "_" for char in code)
+                    for code in readiness["reason_codes"]
+                )
+                and readiness.get("execution_eligibility_established") is False
+                and readiness.get("randomized_selection") is False
+                and readiness.get("ope_eligible") is False
+            ):
+                readiness = None
+
             snapshot = self._trajectory_recorder.build_feature_snapshot(
                 trajectory,
                 feature_version=TOPOLOGY_FEATURES_V1,
@@ -5192,6 +5290,10 @@ class ChatRuntime:
                     **(
                         {"response_strategy_policy_probe": dict(probe)}
                         if probe is not None else {}
+                    ),
+                    **(
+                        {"verification_alternative_readiness": dict(readiness)}
+                        if readiness is not None else {}
                     ),
                 },
             )
@@ -5264,6 +5366,10 @@ class ChatRuntime:
                         **(
                             {"response_strategy_policy_probe": dict(probe)}
                             if probe is not None else {}
+                        ),
+                        **(
+                            {"verification_alternative_readiness": dict(readiness)}
+                            if readiness is not None else {}
                         ),
                     },
                 )

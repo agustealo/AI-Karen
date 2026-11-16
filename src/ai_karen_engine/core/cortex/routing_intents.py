@@ -320,6 +320,7 @@ class PluginInspectionRequest:
     operation: str
     target: Optional[str] = None
     requested_action: Optional[str] = None
+    goal: Optional[str] = None
 
 
 _PLUGIN_LOOKUP_PATTERNS = (
@@ -438,6 +439,7 @@ def parse_plugin_inspection_request(query: str) -> Optional[PluginInspectionRequ
                 return None
             return PluginInspectionRequest(
                 operation="use", target=target, requested_action="execute",
+                goal=goal.strip(),
             )
         return PluginInspectionRequest(
             operation="manage", target=target, requested_action=action,

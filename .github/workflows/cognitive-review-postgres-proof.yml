@@ -11,6 +11,8 @@ on:
       - "src/ai_karen_engine/core/runtime/chat_runtime.py"
       - "src/ai_karen_engine/core/runtime/policy/**"
       - "src/ai_karen_engine/core/runtime/decision_pipeline.py"
+      - "src/ai_karen_engine/core/runtime/reasoning_bridge.py"
+      - "tests/core/runtime/test_verification_alternative_readiness.py"
       - "src/ai_karen_engine/config/runtime.py"
       - "tests/core/test_runtime_reasoning_policy.py"
       - "tests/core/test_runtime_decision_pipeline.py"
@@ -109,6 +111,7 @@ jobs:
           pytest tests/core/runtime/trajectory/test_learning_contracts.py -q --timeout=300 --tb=short
           pytest tests/core/test_runtime_reasoning_policy.py -q --timeout=300 --tb=short
           pytest tests/core/test_runtime_decision_pipeline.py -q --timeout=300 --tb=short
+          pytest tests/core/runtime/test_verification_alternative_readiness.py -q --timeout=300 --tb=short
           pytest tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_policy_decision_time_provenance.py -q --timeout=300 --tb=short
 

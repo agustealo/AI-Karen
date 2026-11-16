@@ -259,6 +259,80 @@ Do not surface secret handles or raw provider URLs in user-facing responses.
 - Exact-head quality, plugin backend/frontend/security, production boot and
   architecture authority checks pass before merge.
 
+## Universal conversational read-action contract (intermediate execution slice)
+
+The first executable chat contract is deliberately small and provider-neutral:
+an installed, verified generic plugin may opt into a **fixed-parameter,
+side-effect-free** operation through its canonical execution manifest. Chat
+language such as "Use my Time Query plugin to tell me the time" can then
+execute using the **same PluginService and ExtensionExecutionService as the
+existing API**, not a Telegram, clock or application-UI special case.
+
+For generic plugins, the authoritative field is
+\`governance.conversational_actions\` in the loader-selected
+\`plugin_manifest.json\` (not a similarly named UI manifest). Version 1
+contains 1–16 distinct actions. Each action must declare exactly:
+
+- \`id\`: a stable, scoped action identifier
+- \`utterances\`: bounded, exact user-goal phrases normalized for whitespace,
+  case and trailing punctuation
+- \`parameters\`: bounded, literal scalar invocation inputs, never interpolated
+  user text or credentials
+- \`side_effect_level\`: exactly \`none\`
+- \`requires_confirmation\`: exactly \`false\`
+
+Example from the installed Time Query capability:
+
+\`\`\`json
+{
+  "conversational_actions": {
+    "version": 1,
+    "actions": [
+      {
+        "id": "clock.current_datetime",
+        "utterances": ["tell me the time", "show current time"],
+        "parameters": {"mode": "datetime"},
+        "side_effect_level": "none",
+        "requires_confirmation": false
+      }
+    ]
+  }
+}
+\`\`\`
+
+The above is nested inside the existing manifest \`governance\` object.
+Only the canonical manifest version is authoritative. Plugins that have not
+opted in continue through the read-only inspection route, with a truthful
+"not performed" answer. No arbitrary natural-language argument is passed
+through this v1 action mechanism. Complex semantic extraction and dynamic
+parameters require a future separately reviewed, typed prompt contract.
+
+Execution is permitted only when *all* of the following are true: a unique
+validated installed manifest resolves the plugin; the plugin is enabled and
+eligible for generic execution; the authenticated principal's current roles
+match its declared roles; exactly one fixed read-only action matches the goal;
+the request's direct inspection plan is authorized and has remaining budget;
+a separate fresh PluginService RuntimePolicy decision grants the actual plugin
+action; the canonical executor validates invocation inputs and grants; and
+the result returns a matching success receipt for plugin, user, tenant,
+session, conversation, correlation and policy **and an explicit nested
+plugin-level status of success without an error**. An outer executor receipt
+with an empty, pending, malformed or error-only payload does not establish
+completion. The inspection plan is **not** reused as an execution grant.
+
+Communication transports and voice modality plugins are excluded from this
+generic executor. ChannelHost and VoiceRuntime remain the only respective
+host authorities. Setup, enable, disable, install, send, publish and delete
+remain blocked until independently approved action contracts are implemented.
+A plugin-returned error, missing receipt, mismatched identity or unverifiable
+status never produces a success response.
+
+Proof is in \`tests/core/runtime/test_conversational_plugin_action.py\`,
+executed explicitly by Main Quality and Plugin Backend. Its sample receipt
+fixtures are test-only; they are not evidence of a production plugin execution
+or real provider delivery.
+
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and
