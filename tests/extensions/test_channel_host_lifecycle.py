@@ -1649,3 +1649,49 @@ async def test_telegram_provider_registration_unknown_persists_nonreclaimable_cl
         verified=False,
     )
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_reconciliation_host_reads_evidence_without_releasing_claim():
+    from dataclasses import replace
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    host.settings = replace(
+        host.settings, telegram_webhook_public_origin="https://hooks.example.org",
+    )
+    conn = ChannelConnection(
+        connection_id="telegram-connect",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=conn)
+    host.repository.inspect_telegram_webhook_claim = AsyncMock(return_value={
+        "claim_state": "uncertain", "claim_revision_matches": True,
+        "claim_expired": True,
+    })
+    adapter.observe_registration = AsyncMock(return_value={
+        "provider_url_matches": True, "provider_webhook_registered": True,
+        "live_connected": False,
+    })
+    await host.initialize()
+    host.activation._authorize = AsyncMock()
+    result = await host.inspect_telegram_registration_evidence(
+        tenant_id=conn.tenant_id, connection_id=conn.connection_id,
+        user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        session_id="operator", authorized_plan=object(),
+        expected_revision=2,
+    )
+    assert result["claim_state"] == "uncertain"
+    assert result["claim_released"] is False
+    assert result["reconciliation_authorized"] is False
+    assert result["provider_url_matches"] is True
+    host.activation._authorize.assert_awaited_once()
+    assert host.activation._authorize.await_args.kwargs["action"] == "channel.inspect"
+    host.repository.inspect_telegram_webhook_claim.assert_awaited_once()
+    adapter.observe_registration.assert_awaited_once_with(
+        connection=conn, public_origin="https://hooks.example.org",
+    )
+    await host.shutdown()
