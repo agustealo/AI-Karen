@@ -29,12 +29,14 @@ revocations **atomically with** the authoritative memory/consent mutation.
 | Memory event tombstone / valid_to change | Revoke the affected event revision and increment owner epoch |
 | Memory event hard deletion | Revoke that source and block reintroduction |
 | Memory event payload, source hash, sensitivity or consent modification | Revoke the old source revision |
-| New event superseding a previous memory event | Revoke the superseded event revision |
-| Consent scope granted to denied, revoked_at set or scope identity changed | Invalidate owner KCM lineage and revoke all currently quarantined sources |
+| New event superseding a previous memory | Resolve the parent assertion ID to its event revision and revoke that source |
+| Consent scope first inserted as denied, granted to denied, revoked_at set or scope identity changed | Invalidate owner KCM lineage and revoke all currently quarantined sources |
 | Granted consent scope deleted | Invalidate KCM owner scope and its enrolled sources |
 | Privacy erasure request enters in_progress or completed | Invalidate owner lineage before data removal is finalized |
 
-Consent revocation is conservative. Arbitrarily named memory consent scopes
+Consent revocation is conservative. An absent scope is treated as granted
+by current memory recall and NeuroVault checks, so its first denied INSERT
+is also a genuine withdrawal. Arbitrarily named memory consent scopes
 can govern source content; a withdrawal therefore fences **all currently
 quarantined KCM lineage for that owner**, not solely records with a training
 prefix. This may generate extra revocation epochs but cannot grant training.
@@ -91,7 +93,8 @@ karen_kcm_test for the original scope/RLS lineage proof and
 karen_kcm_lifecycle_test for the lifecycle-mutation proof.
 
 The latter verifies actual PostgreSQL revocation on tombstone, hard deletion,
-payload alteration, supersession, consent withdrawal and privacy erasure,
+payload alteration, assertion-ID supersession, first denied consent INSERT,
+consent withdrawal and privacy erasure,
 owner isolation, anti-replay, RLS access, and rollback when the revocation
 write is deliberately made to fail.
 
