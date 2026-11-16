@@ -73,6 +73,8 @@ class DirectCapabilityResult:
                 "automation_receipt",
                 "missing_fields",
                 "plugin_inspection",
+                "plugin_action_receipt",
+                "requested_action_executed",
             )
             if self.payload.get(key) is not None
         }
@@ -559,6 +561,198 @@ class DirectCapabilityExecutor:
         )
 
 
+    async def _execute_declared_plugin_read_action(
+        self, *, request: ChatExecutionRequest, principal: Any,
+        service: Any, plugin: Dict[str, Any], goal: str,
+        meter: ExecutionBudgetMeter, started: float,
+    ) -> Optional[DirectCapabilityResult]:
+        """Execute one opted-in read action through the canonical plugin owner.
+
+        A prior plugin.inspect plan does not authorize execution. PluginService
+        must independently issue and enforce a fresh plugin_execution policy
+        decision from canonical RBAC permissions, with a tenant-scoped receipt.
+        """
+        if (
+            plugin.get("execution_route") != "plugin_executor"
+            or plugin.get("role_eligible") is not True
+            or plugin.get("readiness") != "ready"
+            or plugin.get("generic_execution_enabled") is not True
+        ):
+            return None
+        plugin_id = str(plugin.get("installation_id") or "")
+        try:
+            contract = service.resolve_conversational_read_action(
+                plugin_id=plugin_id, goal=goal,
+                caller_roles=list(principal.roles or []),
+            )
+        except Exception as exc:
+            logger.warning(
+                "plugin.conversation.action_contract_unavailable",
+                extra={
+                    "plugin_id": plugin_id,
+                    "tenant_id": request.context.tenant_id,
+                    "correlation_id": request.context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return None
+        if not isinstance(contract, dict):
+            return None
+        action_id = str(contract.get("action_id") or "")
+        parameters = contract.get("parameters")
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", action_id)
+            or not isinstance(parameters, dict)
+            or contract.get("authorization_required") != "fresh_plugin_execution_policy"
+            or contract.get("manifest_source") != "plugin_kernel"
+        ):
+            return None
+        if not await meter.consume_tool_call():
+            return DirectCapabilityResult(
+                handled=True, degraded=True,
+                text="Plugin execution budget exhausted. No action was run.",
+                error="plugin_action_budget_exhausted",
+            )
+        from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
+
+        granted = sorted(
+            permission.value
+            for permission in get_rbac_manager().get_user_permissions(principal)
+        )
+        logger.info(
+            "plugin.conversation.action_requested",
+            extra={
+                "tenant_id": request.context.tenant_id,
+                "user_id": request.context.user_id,
+                "correlation_id": request.context.correlation_id,
+                "plugin_id": plugin_id,
+                "action_id": action_id,
+            },
+        )
+        try:
+            execution = await service.execute_plugin(
+                plugin_name=plugin_id,
+                parameters=dict(parameters),
+                user_id=str(principal.user_id),
+                tenant_id=str(principal.tenant_id),
+                session_id=request.context.session_id,
+                conversation_id=request.context.conversation_id,
+                correlation_id=request.context.correlation_id,
+                roles=list(principal.roles or []),
+                permissions=granted,
+                # Never reuse plugin.inspect as an execution grant. The
+                # application service mints its own fresh RuntimePolicy plan.
+                authorized_plan=None,
+            )
+        except Exception as exc:
+            logger.warning(
+                "plugin.conversation.action_failed",
+                extra={
+                    "tenant_id": request.context.tenant_id,
+                    "user_id": request.context.user_id,
+                    "correlation_id": request.context.correlation_id,
+                    "plugin_id": plugin_id,
+                    "action_id": action_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return DirectCapabilityResult(
+                handled=True, degraded=True,
+                text="The plugin action failed. I cannot confirm an execution.",
+                error="plugin_action_execution_unavailable",
+            )
+        output = execution.result if isinstance(execution.result, dict) else None
+        completed = (
+            execution.status is ExecutionStatus.COMPLETED
+            and execution.error is None
+            and bool(execution.request_id)
+            and bool(execution.policy_decision_id)
+            and execution.plugin_id == plugin_id
+            and execution.user_id == str(principal.user_id)
+            and execution.tenant_id == str(principal.tenant_id)
+            and execution.session_id == str(request.context.session_id or "")
+            and execution.conversation_id
+            == str(request.context.conversation_id or "")
+            and execution.correlation_id == request.context.correlation_id
+            and isinstance(output, dict)
+            and str(output.get("status", "")).casefold()
+            not in {"error", "failed", "failure", "unavailable"}
+        )
+        logger.info(
+            "plugin.conversation.action_completed",
+            extra={
+                "tenant_id": request.context.tenant_id,
+                "user_id": request.context.user_id,
+                "correlation_id": request.context.correlation_id,
+                "plugin_id": plugin_id,
+                "action_id": action_id,
+                "status": "completed" if completed else "failed",
+                "error_code": None if completed else "plugin_action_unverified",
+            },
+        )
+        if not completed:
+            return DirectCapabilityResult(
+                handled=True, degraded=True,
+                text=(
+                    f"{plugin.get('display_name') or plugin_id} did not return "
+                    "a verified successful execution receipt. I cannot claim "
+                    "the requested action completed."
+                ),
+                error="plugin_action_unverified",
+                payload={
+                    "status": "execution_unverified",
+                    "requested_action_executed": False,
+                    "action_id": action_id,
+                },
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+            )
+
+        # Render only bounded ordinary data fields. Raw plugin payloads may
+        # include instructions or secrets and are never injected into a system
+        # prompt or copied wholesale to conversational metadata.
+        human_value = next(
+            (
+                value.strip()[:500]
+                for key in ("formatted", "value", "time", "date")
+                for value in [output.get(key)]
+                if isinstance(value, str)
+                and value.strip()
+                and len(value) <= 2000
+            ),
+            None,
+        )
+        description = (
+            f"{plugin.get('display_name') or plugin_id} completed the "
+            f"authorized read-only action {action_id!r}."
+        )
+        receipt = {
+            "plugin_id": plugin_id,
+            "action_id": action_id,
+            "request_id": execution.request_id,
+            "policy_decision_id": execution.policy_decision_id,
+            "correlation_id": execution.correlation_id,
+            "execution_status": "completed",
+            "execution_owner": "PluginService",
+            "requested_action_executed": True,
+            "provider_delivery_verified": False,
+        }
+        return DirectCapabilityResult(
+            handled=True, success=True, source="plugin_execution",
+            source_id=plugin_id,
+            text=f"{description} Result: {human_value}" if human_value else description,
+            payload={
+                "status": "completed",
+                "requested_action_executed": True,
+                "plugin_action_receipt": receipt,
+            },
+            attempts=[{
+                "type": "plugin", "id": plugin_id,
+                "action_id": action_id, "status": "success",
+                "source": "canonical_extension_executor",
+            }],
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
     async def _inspect_plugins(
         self, request: ChatExecutionRequest, plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
@@ -611,8 +805,9 @@ class DirectCapabilityExecutor:
                 },
                 latency_ms=(time.perf_counter() - started) * 1000.0,
             )
+        service = get_plugin_service()
         try:
-            result = await get_plugin_service().inspect_for_conversation(
+            result = await service.inspect_for_conversation(
                 tenant_id=str(principal.tenant_id),
                 target=parsed.target,
                 caller_roles=list(principal.roles or []),
@@ -636,6 +831,17 @@ class DirectCapabilityExecutor:
 
         status = str(result.get("status") or "unavailable")
         matches = list(result.get("matches") or ())
+        if (
+            parsed.operation == "use" and parsed.goal
+            and status == "found" and len(matches) == 1
+        ):
+            action_result = await self._execute_declared_plugin_read_action(
+                request=request, principal=principal, service=service,
+                plugin=matches[0], goal=parsed.goal, meter=meter,
+                started=started,
+            )
+            if action_result is not None:
+                return action_result
         if status == "not_found":
             text = (
                 f"No validated registered plugin matched {parsed.target!r}. "
