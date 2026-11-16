@@ -10,10 +10,10 @@ from ai_karen_engine.core.expression.settings import ExpressionSettings, EngineC
 async def test_gateway_fallback_loop():
     # Setup settings with two enabled engines
     settings = ExpressionSettings(
-        active_engine="builtin",
-        engine_fallback_order=["builtin", "openai_compatible_local"]
+        active_engine="local",
+        engine_fallback_order=["local", "openai_compatible_local"]
     )
-    settings.engines["builtin"] = EngineConfig(enabled=True, type="builtin_provider_engine", fallback_eligible=True)
+    settings.engines["local"] = EngineConfig(enabled=True, type="openai_compatible", fallback_eligible=True)
     settings.engines["openai_compatible_local"] = EngineConfig(enabled=True, type="openai_compatible")
     
     gateway = ExpressionGateway(settings=settings)
@@ -48,7 +48,7 @@ async def test_gateway_fallback_loop():
     ))
     
     def get_engine_mock(engine_id, engine_type):
-        if engine_id == "builtin":
+        if engine_id == "local":
             return mock_builtin
         if engine_id == "openai_compatible_local":
             return mock_openai
@@ -67,8 +67,8 @@ async def test_gateway_fallback_loop():
 @pytest.mark.asyncio
 async def test_gateway_emergency_fallback():
     # Setup settings where all fail
-    settings = ExpressionSettings(active_engine="builtin")
-    settings.engines["builtin"] = EngineConfig(enabled=True, type="builtin_provider_engine")
+    settings = ExpressionSettings(active_engine="local", engine_fallback_order=[])
+    settings.engines["local"] = EngineConfig(enabled=True, type="openai_compatible")
     
     gateway = ExpressionGateway(settings=settings)
     task = ExpressionTask(
@@ -102,7 +102,7 @@ async def test_gateway_emergency_fallback():
         ))
         
         def side_effect(engine_id, engine_type):
-            if engine_id == "builtin": return mock_builtin
+            if engine_id == "local": return mock_builtin
             return mock_disabled
             
         mock_get_engine.side_effect = side_effect
