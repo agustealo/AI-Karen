@@ -362,6 +362,7 @@ async def test_deactivated_whatsapp_rejects_signature_mismatch_and_mixed_batch()
             statuses=[status],
             messages=[{
                 "id": "wamid.untrusted-inbound", "from": "15551234567",
+                "timestamp": "1770000000",
                 "type": "text", "text": {"body": "Do not execute"},
             }],
         )}]}],
