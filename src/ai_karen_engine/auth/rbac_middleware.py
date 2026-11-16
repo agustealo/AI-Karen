@@ -48,6 +48,9 @@ class Permission(str, Enum):
     TRAINING_WRITE = "training:write"
     TRAINING_DELETE = "training:delete"
     TRAINING_EXECUTE = "training:execute"
+    # Independent review of frozen verification-policy decisions. Unlike
+    # TRAINING_EXECUTE, this never grants model or live-policy activation.
+    VERIFICATION_REVIEW = "intelligence.ml.verification_review"
 
     TRAINING_DATA_READ = "training_data:read"
     TRAINING_DATA_WRITE = "training_data:write"
