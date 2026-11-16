@@ -258,6 +258,46 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
 
 
 
+        # KWA-01D4: recovery never turns an unexpired or in-flight claim
+        # into permission to retry. A provider read-back must be independently
+        # supplied by the host before this narrowly fenced SQL transition.
+        assert await webhook_store.verify_uncertain_telegram_webhook_claim(
+            tenant_id=str(tenant_a), connection_id=webhook_connection,
+            expected_revision=1, provider_bot_id=123456,
+        ) is False
+        await raw.execute(
+            """UPDATE public.channel_telegram_webhook_claims
+               SET claim_expires_at = clock_timestamp() - interval '1 second'
+               WHERE tenant_id = $1 AND connection_id = $2""",
+            tenant_a, webhook_connection,
+        )
+        assert await webhook_store.verify_uncertain_telegram_webhook_claim(
+            tenant_id=str(tenant_b), connection_id=webhook_connection,
+            expected_revision=1, provider_bot_id=123456,
+        ) is False
+        assert await webhook_store.verify_uncertain_telegram_webhook_claim(
+            tenant_id=str(tenant_a), connection_id=webhook_connection,
+            expected_revision=1, provider_bot_id=987654,
+        ) is False
+        assert await webhook_store.verify_uncertain_telegram_webhook_claim(
+            tenant_id=str(tenant_a), connection_id=webhook_connection,
+            expected_revision=2, provider_bot_id=123456,
+        ) is False
+        assert await webhook_store.verify_uncertain_telegram_webhook_claim(
+            tenant_id=str(tenant_a), connection_id=webhook_connection,
+            expected_revision=1, provider_bot_id=123456,
+        ) is True
+        assert await webhook_store.verify_uncertain_telegram_webhook_claim(
+            tenant_id=str(tenant_a), connection_id=webhook_connection,
+            expected_revision=1, provider_bot_id=123456,
+        ) is False
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_telegram_bot_owners
+               WHERE tenant_id = $1 AND connection_id = $2
+                 AND provider_bot_id = 123456""",
+            tenant_a, webhook_connection,
+        ) == 1
+
         # KWA-01C2: real SQL proves a signed Meta customer timestamp,
         # a closed 24h window, a later customer reset, immutable evidence,
         # and denial of tenant/recipient substitution after a one-shot claim.
