@@ -348,3 +348,116 @@ async def test_status_receipt_forgery_and_disabled_connection_denied_before_sql(
             connection=active, status=spoofed,
         )
     assert not session.calls
+
+
+def disabled_whatsapp_connection():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    return ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://whatsapp", revision=4, enabled=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_deactivated_status_matches_only_existing_finalized_send(monkeypatch):
+    event = provider_status(state=ChannelDeliveryState.READ)
+    session = FakeSession(
+        RowResult(scalar=3),
+        RowResult(scalar=DELIVERY),
+    )
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().record_deactivated_provider_status(
+        connection=disabled_whatsapp_connection(), status=event,
+    ) is True
+    sql, args = session.calls[0]
+    for guard in (
+        "c.installation_id = 'whatsapp-cloud'",
+        "c.enabled = false",
+        "c.revision = :current_revision",
+        "i.connection_revision < c.revision",
+        "o.provider_message_id = :message",
+        "o.destination_id = :recipient",
+        "o.claim_token IS NULL",
+        "o.attempt_count > 0",
+        "o.status IN ('sent', 'delivered', 'read', 'failed')",
+    ):
+        assert guard in sql
+    assert args["current_revision"] == 4
+    assert args["recipient"] == event.recipient_id
+    assert args["tenant"] == TENANT
+    reconcile, params = session.calls[1]
+    assert "UPDATE public.channel_outbox" in reconcile
+    assert "c.enabled = false" in reconcile
+    assert "i.connection_revision = :revision" in reconcile
+    assert params["historical"] is True
+    assert params["revision"] == 3
+    assert params["current_revision"] == 4
+
+
+@pytest.mark.asyncio
+async def test_deactivated_status_unmatched_cannot_create_history(monkeypatch):
+    session = FakeSession(RowResult(scalar=None), RowResult(row=None))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().record_deactivated_provider_status(
+        connection=disabled_whatsapp_connection(), status=provider_status(),
+    ) is False
+    assert len(session.calls) == 2
+    assert "o.provider_message_id = :message" in session.calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_deactivated_status_replay_must_match_canonical_digest(monkeypatch):
+    event = provider_status()
+    store = SqlChannelRepository()
+    session = FakeSession(
+        RowResult(scalar=None),
+        RowResult(row={
+            "event_digest": store._status_event_digest(event),
+            "connection_revision": 2,
+        }),
+        RowResult(scalar=None),
+    )
+    install(monkeypatch, session)
+    assert await store.record_deactivated_provider_status(
+        connection=disabled_whatsapp_connection(), status=event,
+    )
+    assert session.calls[2][1]["revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_deactivated_status_digest_collision_denied_before_reconcile(monkeypatch):
+    event = provider_status()
+    session = FakeSession(
+        RowResult(scalar=None),
+        RowResult(row={"event_digest": "0" * 64, "connection_revision": 2}),
+    )
+    install(monkeypatch, session)
+    with pytest.raises(module.ChannelAdmissionConflict, match="digest"):
+        await SqlChannelRepository().record_deactivated_provider_status(
+            connection=disabled_whatsapp_connection(), status=event,
+        )
+    assert len(session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_deactivated_status_does_not_widen_active_or_non_whatsapp_scope(monkeypatch):
+    connection = disabled_whatsapp_connection()
+    session = FakeSession()
+    install(monkeypatch, session)
+    for invalid in (
+        connection.model_copy(update={"enabled": True}),
+        connection.model_copy(update={"installation_id": "telegram-bot"}),
+    ):
+        with pytest.raises(module.ChannelAdmissionDenied):
+            await SqlChannelRepository().record_deactivated_provider_status(
+                connection=invalid, status=provider_status(),
+            )
+    with pytest.raises(ValueError, match="does not match"):
+        await SqlChannelRepository().record_deactivated_provider_status(
+            connection=connection,
+            status=provider_status().model_copy(
+                update={"provider_receipt_id": "0" * 64},
+            ),
+        )
+    assert session.calls == []
