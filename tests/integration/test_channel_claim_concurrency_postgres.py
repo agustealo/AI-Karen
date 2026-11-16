@@ -1129,6 +1129,67 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 status=early_read,
             )
 
+        # KWA-01C5C1: the original signed receipt SQL now admits a bounded
+        # batch in one tenant-RLS transaction and one replay/prune lock.
+        # This is a functional/transaction proof, not a latency claim.
+        batch_repo = SqlChannelRepository()
+        bulk_statuses = tuple(
+            signed_status(
+                ChannelDeliveryState.DELIVERED,
+                message_id=f"wamid.bulk-proof-{index}",
+            )
+            for index in range(100)
+        )
+        before_bulk = await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        )
+        assert await batch_repo.record_provider_status_batch(
+            connection=account, statuses=bulk_statuses,
+        ) == 100
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+        assert await batch_repo.record_provider_status_batch(
+            connection=account, statuses=bulk_statuses,
+        ) == 100
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+        new_event = signed_status(
+            ChannelDeliveryState.READ,
+            message_id="wamid.bulk-rollback-proof",
+        )
+        # receipt ID is stable across error_code changes, while the evidence
+        # digest is not. Conflict on the second event must roll back the first.
+        conflicting_old = delivered_early.model_copy(update={
+            "error_code": "conflicting-signed-evidence",
+        })
+        with pytest.raises(module.ChannelAdmissionConflict, match="changed evidence"):
+            await batch_repo.record_provider_status_batch(
+                connection=account, statuses=(new_event, conflicting_old),
+            )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+        with pytest.raises(module.ChannelAdmissionDenied):
+            await batch_repo.record_provider_status_batch(
+                connection=account.model_copy(update={"revision": 2}),
+                statuses=(new_event,),
+            )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+
         # KWA-01C3: a disabled WhatsApp connection can receive verified
         # status-only evidence for a *known previously finalized* send.
         # No new inbox admission, send, or connection reactivation follows.

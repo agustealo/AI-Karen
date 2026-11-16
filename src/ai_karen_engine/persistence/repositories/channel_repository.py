@@ -2271,22 +2271,23 @@ class SqlChannelRepository:
         )
         return result.scalar_one_or_none() is not None
 
-    async def record_provider_status(
-        self, *, connection: ChannelConnection, status: ChannelProviderStatusEvent,
-    ) -> bool:
-        """Store an authenticated native receipt once and reconcile if possible.
-
-        Only ChannelIngressService may supply the previously signature-verified
-        canonical adapter event. The DB independently fences tenant, revision
-        and connection; status events contain no Karen user identity.
-        """
+    @staticmethod
+    def _validate_active_provider_status(
+        *, connection: ChannelConnection, status: ChannelProviderStatusEvent,
+    ) -> ChannelProviderStatusEvent:
         if not isinstance(status, ChannelProviderStatusEvent):
             raise ChannelAdmissionDenied("Invalid provider status contract")
-        # Validate again to reject model_copy(update=...) bypasses.
+        # Revalidate to prevent model_copy(update=...) from bypassing signature-derived fields.
         status = ChannelProviderStatusEvent.model_validate(status.model_dump())
         if not connection.enabled or status.connection_id != connection.connection_id:
             raise ChannelAdmissionDenied("Status connection is inactive or mismatched")
-        tenant_id = _tenant_uuid(connection.tenant_id)
+        return status
+
+    async def _record_provider_status_locked(
+        self, *, session: Any, connection: ChannelConnection,
+        status: ChannelProviderStatusEvent, tenant_id: str,
+    ) -> bool:
+        """Reuse the exact ledger, tombstone, digest and monotonic reconciliation SQL."""
         digest = self._status_event_digest(status)
         args = {
             "tenant": tenant_id,
@@ -2300,96 +2301,140 @@ class SqlChannelRepository:
             "digest": digest,
             "error_code": status.error_code,
         }
+        inserted = (await session.execute(
+            text("""
+                INSERT INTO public.channel_provider_status_events (
+                    tenant_id, connection_id, connection_revision,
+                    provider_message_id, recipient_id, state,
+                    provider_timestamp, receipt_id, event_digest, error_code
+                )
+                SELECT c.tenant_id, c.connection_id, c.revision,
+                       :message, :recipient, :state,
+                       :provider_timestamp, :receipt, :digest, :error_code
+                FROM public.channel_connections c
+                WHERE c.tenant_id = CAST(:tenant AS uuid)
+                  AND c.connection_id = :connection
+                  AND c.enabled = true
+                  AND c.revision = :revision
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.channel_provider_status_tombstones t
+                      WHERE t.tenant_id = c.tenant_id
+                        AND t.connection_id = c.connection_id
+                        AND t.receipt_id = :receipt
+                  )
+                ON CONFLICT (tenant_id, connection_id, receipt_id)
+                DO NOTHING
+                RETURNING receipt_id
+            """),
+            args,
+        )).scalar_one_or_none()
+        if inserted is None:
+            existing = (await session.execute(
+                text("""
+                    SELECT e.event_digest
+                    FROM public.channel_provider_status_events e
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = e.tenant_id
+                     AND c.connection_id = e.connection_id
+                    WHERE e.tenant_id = CAST(:tenant AS uuid)
+                      AND e.connection_id = :connection
+                      AND e.connection_revision = :revision
+                      AND e.receipt_id = :receipt
+                      AND c.enabled = true AND c.revision = :revision
+                """),
+                args,
+            )).scalar_one_or_none()
+            if existing is None:
+                # A previously archived signed callback may be retried.
+                # Exact digest-only tombstones acknowledge replay without
+                # restoring purged provider/recipient information.
+                archived = (await session.execute(
+                    text("""
+                        SELECT t.event_digest
+                        FROM public.channel_provider_status_tombstones t
+                        JOIN public.channel_connections c
+                          ON c.tenant_id = t.tenant_id
+                         AND c.connection_id = t.connection_id
+                        WHERE t.tenant_id = CAST(:tenant AS uuid)
+                          AND t.connection_id = :connection
+                          AND t.receipt_id = :receipt
+                          AND c.enabled = true
+                          AND c.revision = :revision
+                    """),
+                    args,
+                )).scalar_one_or_none()
+                if archived == digest:
+                    return True
+                if archived is not None:
+                    raise ChannelAdmissionConflict(
+                        "Archived provider status digest mismatch"
+                    )
+                raise ChannelAdmissionDenied(
+                    "No active tenant connection for provider status"
+                )
+            if existing != digest:
+                raise ChannelAdmissionConflict(
+                    "Provider status identifier reused with changed evidence"
+                )
+        # A status may reach Karen before the provider's send response.
+        # Preserve it without inventing success, and recheck after send.
+        await self._reconcile_provider_status(
+            session, tenant_id=tenant_id,
+            connection_id=connection.connection_id,
+            revision=connection.revision,
+            provider_message_id=status.provider_message_id,
+            recipient_id=status.recipient_id,
+        )
+        return True
+
+    async def record_provider_status(
+        self, *, connection: ChannelConnection, status: ChannelProviderStatusEvent,
+    ) -> bool:
+        """Commit one verified status with the shared replay/prune lock."""
+        status = self._validate_active_provider_status(
+            connection=connection, status=status,
+        )
+        tenant_id = _tenant_uuid(connection.tenant_id)
         async with async_transaction_scope(tenant_id) as session:
             await self._lock_provider_status_retention(
                 session, tenant_id=tenant_id,
                 connection_id=connection.connection_id,
             )
-            inserted = (await session.execute(
-                text("""
-                    INSERT INTO public.channel_provider_status_events (
-                        tenant_id, connection_id, connection_revision,
-                        provider_message_id, recipient_id, state,
-                        provider_timestamp, receipt_id, event_digest, error_code
-                    )
-                    SELECT c.tenant_id, c.connection_id, c.revision,
-                           :message, :recipient, :state,
-                           :provider_timestamp, :receipt, :digest, :error_code
-                    FROM public.channel_connections c
-                    WHERE c.tenant_id = CAST(:tenant AS uuid)
-                      AND c.connection_id = :connection
-                      AND c.enabled = true
-                      AND c.revision = :revision
-                      AND NOT EXISTS (
-                          SELECT 1 FROM public.channel_provider_status_tombstones t
-                          WHERE t.tenant_id = c.tenant_id
-                            AND t.connection_id = c.connection_id
-                            AND t.receipt_id = :receipt
-                      )
-                    ON CONFLICT (tenant_id, connection_id, receipt_id)
-                    DO NOTHING
-                    RETURNING receipt_id
-                """),
-                args,
-            )).scalar_one_or_none()
-            if inserted is None:
-                existing = (await session.execute(
-                    text("""
-                        SELECT e.event_digest
-                        FROM public.channel_provider_status_events e
-                        JOIN public.channel_connections c
-                          ON c.tenant_id = e.tenant_id
-                         AND c.connection_id = e.connection_id
-                        WHERE e.tenant_id = CAST(:tenant AS uuid)
-                          AND e.connection_id = :connection
-                          AND e.connection_revision = :revision
-                          AND e.receipt_id = :receipt
-                          AND c.enabled = true AND c.revision = :revision
-                    """),
-                    args,
-                )).scalar_one_or_none()
-                if existing is None:
-                    # A previously archived signed callback may be retried.
-                    # Exact digest-only tombstones acknowledge replay without
-                    # restoring purged provider/recipient information.
-                    archived = (await session.execute(
-                        text("""
-                            SELECT t.event_digest
-                            FROM public.channel_provider_status_tombstones t
-                            JOIN public.channel_connections c
-                              ON c.tenant_id = t.tenant_id
-                             AND c.connection_id = t.connection_id
-                            WHERE t.tenant_id = CAST(:tenant AS uuid)
-                              AND t.connection_id = :connection
-                              AND t.receipt_id = :receipt
-                              AND c.enabled = true
-                              AND c.revision = :revision
-                        """),
-                        args,
-                    )).scalar_one_or_none()
-                    if archived == digest:
-                        return True
-                    if archived is not None:
-                        raise ChannelAdmissionConflict(
-                            "Archived provider status digest mismatch"
-                        )
-                    raise ChannelAdmissionDenied(
-                        "No active tenant connection for provider status"
-                    )
-                if existing != digest:
-                    raise ChannelAdmissionConflict(
-                        "Provider status identifier reused with changed evidence"
-                    )
-            # A status may reach Karen before the provider's send response.
-            # Preserve it without inventing success, and recheck after send.
-            await self._reconcile_provider_status(
+            return await self._record_provider_status_locked(
+                session=session, connection=connection, status=status,
+                tenant_id=tenant_id,
+            )
+
+    async def record_provider_status_batch(
+        self, *, connection: ChannelConnection,
+        statuses: tuple[ChannelProviderStatusEvent, ...],
+    ) -> int:
+        """Atomically commit 1..100 signed status receipts under a single tenant lock.
+
+        SQL admission is identical to the single-event method. Any invalid,
+        conflicting or revision-mismatched receipt rolls back the whole batch;
+        an exact replay is accepted without restoring tombstoned personal data.
+        """
+        if not isinstance(statuses, tuple) or not 1 <= len(statuses) <= 100:
+            raise ChannelAdmissionDenied("Provider status batch must contain 1..100 receipts")
+        validated = tuple(
+            self._validate_active_provider_status(
+                connection=connection, status=status,
+            )
+            for status in statuses
+        )
+        tenant_id = _tenant_uuid(connection.tenant_id)
+        async with async_transaction_scope(tenant_id) as session:
+            await self._lock_provider_status_retention(
                 session, tenant_id=tenant_id,
                 connection_id=connection.connection_id,
-                revision=connection.revision,
-                provider_message_id=status.provider_message_id,
-                recipient_id=status.recipient_id,
             )
-        return True
+            for status in validated:
+                await self._record_provider_status_locked(
+                    session=session, connection=connection, status=status,
+                    tenant_id=tenant_id,
+                )
+        return len(validated)
 
     async def record_deactivated_provider_status(
         self, *, connection: ChannelConnection, status: ChannelProviderStatusEvent,
