@@ -460,9 +460,11 @@ The model setup panel:
    Failed or malformed reads disable the install control instead of
    inventing a missing model or a healthy download worker.
 3. Explains the pinned model ID, revision, missing/registered state and
-   current download jobs. A registered model is **not** proof of an eligible
-   tenant installation, optional `pocket-tts` Python dependency, successful
-   inference load or available voice.
+   current download jobs. Pinned plugin recommendations qualify their
+   **installed** label against the authenticated tenant's completed, licensed,
+   safe-code download receipt and the local snapshot directory, not another
+   tenant's registry entry. This still does **not** prove optional
+   `pocket-tts` Python dependency, successful inference load or available voice.
 4. Demands an explicit per-revision acceptance of the verified source's
    license and gated-access terms, with a model-source link. It rejects
    mutable/unverified revisions, unavailable access terms, disallowed
@@ -485,6 +487,7 @@ remains distinct from approved model weight installation.
 Acceptance evidence includes
 `tests/plugins/plugin-recommended-models.test.tsx`,
 `tests/plugins/plugin-details-settings.test.tsx`, and
-`tests/extensions/test_pocket_tts_recommendation_contract.py`.
+`tests/extensions/test_pocket_tts_recommendation_contract.py`, and
+`tests/core/model_runtime/test_plugin_model_recommendation_tenant_truth.py`.
 Real licensed-account, model download, tenant-specific readiness and CPU
 synthesis remain hardware/operator acceptance requirements, not UI claims.
