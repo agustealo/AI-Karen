@@ -130,6 +130,7 @@ def evaluate_verification_effort_candidate(
             "eligible_count": count,
             "observed_descriptive_rates": observed,
             "policy_activated": False,
+            "durable_review_receipts_verified": False,
         }
 
     # This analysis still requires logged policy propensities, overlap and
