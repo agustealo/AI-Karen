@@ -96,6 +96,51 @@ class ChannelDeliveryReceipt(_ChannelRecord):
 
 
 
+class ChannelProviderStatusEvent(_ChannelRecord):
+    """Authenticated transport observation, not a ChatRuntime or user action.
+
+    Receipt IDs are derived from signed native event fields. They are
+    idempotency evidence, not proof of a provider-side unique event identifier.
+    """
+
+    connection_id: str = Field(min_length=1)
+    provider_message_id: str = Field(min_length=7, max_length=256, pattern=r"^wamid\\.")
+    recipient_id: str = Field(min_length=1, max_length=32, pattern=r"^[0-9]+$")
+    state: ChannelDeliveryState
+    provider_timestamp: int = Field(ge=1, le=4102444800)
+    provider_receipt_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    error_code: str | None = Field(default=None, max_length=80)
+
+    @model_validator(mode="after")
+    def supported_status(self) -> "ChannelProviderStatusEvent":
+        if self.state not in {
+            ChannelDeliveryState.SENT, ChannelDeliveryState.DELIVERED,
+            ChannelDeliveryState.READ, ChannelDeliveryState.FAILED,
+        }:
+            raise ValueError("Unsupported signed provider status")
+        if self.state is ChannelDeliveryState.FAILED:
+            if self.error_code != "whatsapp_provider_failed":
+                raise ValueError("Provider failure must use a redacted symbolic code")
+        elif self.error_code is not None:
+            raise ValueError("Only provider failure may carry an error code")
+        return self
+
+
+class ChannelWebhookBatch(_ChannelRecord):
+    """Bounded, already signature-verified observations from one adapter."""
+
+    messages: tuple[InboundChannelEvent, ...] = ()
+    statuses: tuple[ChannelProviderStatusEvent, ...] = ()
+    ignored_count: int = Field(default=0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def limit(self) -> "ChannelWebhookBatch":
+        if len(self.messages) + len(self.statuses) + self.ignored_count > 100:
+            raise ValueError("Native event batch exceeds bounded admission")
+        return self
+
+
+
 class PersonalSessionHealthState(str, Enum):
     """Health result is a vetted adapter observation, never an inferred DB state."""
 
@@ -259,6 +304,8 @@ class ChannelAdapter(Protocol):
 
 __all__ = [
     "ChannelAdapter",
+    "ChannelWebhookBatch",
+    "ChannelProviderStatusEvent",
     "ChannelCapabilitySet",
     "ChannelConnection",
     "ChannelDeliveryReceipt",
