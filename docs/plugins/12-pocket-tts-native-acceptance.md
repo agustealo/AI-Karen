@@ -23,6 +23,7 @@
 | Enabled `plugin_audio` channel downloads from plugin management | [PR #925](https://github.com/agustealo/AI-Karen/pull/925) | **Merged**; frontend policy/contract wiring, not real licensed download |
 | Authenticated real Pocket server audio acceptance runner | `tests/core/voice/test_pocket_tts_live_acceptance.py` | **Operator opt-in only**; no target run or captured device artifact |
 | Pocket deactivation fences queued native calls | `test_queued_request_is_denied_after_plugin_shutdown` | **Source-only regression**; model/device evidence still open |
+| Curated Pocket download patterns and native loader parity | `tests/extensions/test_pocket_tts_recommendation_contract.py::test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec` | **Source-only contract**; licensed device download still unverified |
 | Target hardware runtime + licensed model install | No attested target artifact | **Not proven** |
 | Native Pocket audio and WAV integrity | No non-mocked target WAV | **Not proven** |
 | Browser preview/read-aloud on real target | No device/browser capture | **Not proven** |
@@ -34,6 +35,16 @@ CI is green. Streaming, cloning, uploaded engines and cloud fallback remain
 out of scope.
 
 ## Exact implementation and authority
+
+The curated `plugin_audio` download is deliberately restricted to the pinned
+English 18M REFL model weights, SentencePiece `tokenizer.model`, and
+`embeddings/*.safetensors` for that same language revision. Unrelated models,
+non-state embedding files and repository extras are not required for first-party
+Pocket inference. The native model specification remains the loader authority;
+`tests/extensions/test_pocket_tts_recommendation_contract.py::test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec` checks the
+separate curated download catalog against it. A matching source contract is
+not evidence that a gated download or native inference succeeded on a device.
+
 
 - Runtime/model version: `pocket-tts==4.0.1`, `kyutai/pocket-tts` at
   `db04f0e653473e5c7333c69686ac92b7460b0c1d`.
