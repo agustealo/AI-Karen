@@ -144,14 +144,18 @@ class RuntimeReasoningBridge:
 
         # Use the same actual default-strategy factory as activate(). Merely
         # declaring a mode in a request is not evidence of a loaded executor.
-        strategies = [
+        # Multiple registered strategies may legitimately handle the same
+        # mode (for example, the verifier and metacognition). Identify the
+        # canonical verifier by its registered strategy ID, not by assuming
+        # that the mode maps to exactly one strategy.
+        verifiers = [
             item for item in get_default_strategies()
-            if item.can_handle(["verification"])
+            if item.strategy_id == "verify" and item.can_handle(["verification"])
         ]
-        verifier = strategies[0] if len(strategies) == 1 else None
+        verifier = verifiers[0] if len(verifiers) == 1 else None
         if verifier is None:
             blocked = True
-            reasons.append("verification_strategy_not_uniquely_registered")
+            reasons.append("canonical_verification_strategy_unavailable")
         elif not verifier.supports_model_calls:
             # A deterministic verifier alone cannot generate the final reply.
             reasons.append("verification_strategy_nongenerative")
