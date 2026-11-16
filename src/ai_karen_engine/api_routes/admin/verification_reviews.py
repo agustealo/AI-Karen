@@ -12,7 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, Field, StrictBool, StrictFloat
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.rbac_middleware import (
@@ -40,7 +40,7 @@ class VerificationReviewRequest(BaseModel):
         min_length=1, max_length=256, pattern=r"^[A-Za-z0-9._:/-]+$",
     )
     subject_user_id: UUID
-    reward: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    reward: StrictFloat = Field(ge=0.0, le=1.0, allow_inf_nan=False)
     verification_needed: StrictBool
 
 
