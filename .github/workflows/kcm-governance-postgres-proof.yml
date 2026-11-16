@@ -10,6 +10,8 @@ on:
       - "src/ai_karen_engine/core/personalization/self_model_projection.py"
       - "src/ai_karen_engine/core/personalization/system_persona_evidence.py"
       - "src/ai_karen_engine/core/personalization/reviewed_decision_evidence.py"
+      - "src/ai_karen_engine/core/personalization/benchmark_task_assessment.py"
+      - "src/ai_karen_engine/core/intelligence/ml/evaluation/evidence.py"
       - "src/ai_karen_engine/core/intelligence/ml/verification_review_evidence.py"
       - "src/ai_karen_engine/core/persona/contracts.py"
       - "src/ai_karen_engine/learning/kcm_dataset_preflight.py"
@@ -18,6 +20,7 @@ on:
       - "tests/core/personalization/test_kcm_self_model_projection.py"
       - "tests/core/personalization/test_kcm_system_persona_evidence.py"
       - "tests/core/personalization/test_kcm_reviewed_decision_evidence.py"
+      - "tests/core/personalization/test_kcm_benchmark_task_assessment.py"
       - "tests/integration/test_kcm_governance_postgres.py"
       - "tests/integration/test_kcm_lifecycle_revocation_postgres.py"
       - "requirements/ci/**"
@@ -98,6 +101,8 @@ jobs:
           pytest tests/core/personalization/test_kcm_system_persona_evidence.py -q --tb=short
           python -m compileall -q src/ai_karen_engine/core/personalization/reviewed_decision_evidence.py tests/core/personalization/test_kcm_reviewed_decision_evidence.py
           pytest tests/core/personalization/test_kcm_reviewed_decision_evidence.py -q --tb=short
+          python -m compileall -q src/ai_karen_engine/core/personalization/benchmark_task_assessment.py tests/core/personalization/test_kcm_benchmark_task_assessment.py src/ai_karen_engine/core/intelligence/ml/evaluation/evidence.py
+          pytest tests/core/personalization/test_kcm_benchmark_task_assessment.py -q --tb=short
           pytest tests/integration/test_kcm_governance_postgres.py -q --tb=short
           python -m compileall -q tests/integration/test_kcm_lifecycle_revocation_postgres.py
           pytest tests/integration/test_kcm_lifecycle_revocation_postgres.py -q --tb=short

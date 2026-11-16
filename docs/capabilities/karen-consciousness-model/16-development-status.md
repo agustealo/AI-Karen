@@ -19,7 +19,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-01D2B: canonical memory, consent and privacy SQL revocation hooks | [PR #938](https://github.com/agustealo/AI-Karen/pull/938), merge `99a7ee5e4c6445496c8584d80ddc3ef355b20580` | Merged; 12/12 exact-head checks passed, live PostgreSQL proof |
 | KCM-02A: canonical evidence-gated SelfModel projection | [PR #940](https://github.com/agustealo/AI-Karen/pull/940), merge `edc5ce785f25f6727a6c96ab13890aaad26ca44d` | Merged; 8/8 exact-head checks passed |
 | KCM-02B1: current built-in Persona configuration and exact claim bindings | [PR #946](https://github.com/agustealo/AI-Karen/pull/946), merge `b10e27d030c4ab35438af9917b6521371fcbfd41` | Merged; 8/8 exact-head checks passed |
-| KCM-02B2: scoped independently reviewed verification-policy decision evidence | [22 — Reviewed decisions](22-reviewed-decision-evidence.md) | Development; narrow user-scoped diagnostic only, no skill certification |
+| KCM-02B2: scoped independently reviewed verification-policy decision evidence | [PR #951](https://github.com/agustealo/AI-Karen/pull/951), merge `c8544ef54afbebfd8ed99bccbbf76c8527ec1b67` | Merged; 8/8 exact-head checks passed |
+| KCM-02B3A: exact ML task benchmark artifact and evaluated case projection | [23 — Task benchmark assessment](23-task-specific-benchmark-assessment.md) | Development; descriptive evidence only, not skill certification |
 
 ## Configuration
 
@@ -67,10 +68,9 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** KCM-02B2 reuses the existing authenticated,
-user-scoped verification review authority to report exact independently
-reviewed shadow-policy decisions without declaring skill mastery. KCM-02B3
-must define real capability assessment oracles and versioned task conditions
-before reporting independently certified proficiency. Training rights,
-checkpoint ancestry and transactional model start/promotion fencing remain
-separately blocked.
+**Next controlled slice:** Verify KCM-02B3A's exact benchmark receipt,
+model/feature/case join and conservative interval against canonical evaluated
+outcomes. KCM-02B3B must independently certify task families, real environment
+conditions, accuracy oracles, reviewer authority and recency before any
+proficiency tier is exposed. Training rights, checkpoint ancestry and
+transactional model start/promotion fencing remain separately blocked.
