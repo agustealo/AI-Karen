@@ -343,3 +343,43 @@ def test_reasoning_required_never_receives_optional_direct_policy_probe(
         assert "response_strategy_policy_probe" not in decision.policy_constraints
 
     asyncio.run(run())
+
+
+def test_optional_probe_failure_never_blocks_authorized_direct_chat(
+    monkeypatch,
+) -> None:
+    from ai_karen_engine.core.runtime import decision_pipeline
+
+    class BrokenAlternativePolicy(RuntimePolicyEnforcer):
+        async def evaluate(self, request):  # type: ignore[no-untyped-def]
+            if request.requested_reasoning_modes == ["verification"]:
+                raise RuntimeError("shadow evaluator unavailable")
+            return await super().evaluate(request)
+
+    async def run() -> None:
+        monkeypatch.setattr(
+            decision_pipeline,
+            "get_runtime_settings",
+            lambda: RuntimeSettings(
+                features=FeatureFlags(
+                    enable_verification_strategy_policy_probe=True,
+                )
+            ),
+        )
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(
+                ExecutionDecision(
+                    topology=ExecutionTopology.DIRECT,
+                    intent_confidence=0.96,
+                )
+            ),  # type: ignore[arg-type]
+            policy=BrokenAlternativePolicy(),
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        result = await pipeline.decide(_request())
+        assert result.topology == ExecutionTopology.DIRECT
+        assert result.reasoning_modes == []
+        assert result.policy_decision_id is not None
+        assert "response_strategy_policy_probe" not in result.policy_constraints
+
+    asyncio.run(run())
