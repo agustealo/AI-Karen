@@ -64,13 +64,16 @@ def _validate_observation(obs: PolicyObservation) -> str | None:
 
 
 def _effective_sample_size(weights: np.ndarray) -> float:
-    if weights.size <= 1:
+    """Kish effective sample size, never more than observed sample count."""
+    if weights.size == 0 or not np.all(np.isfinite(weights)):
         return 0.0
-    variance = float(np.var(weights))
-    if variance <= 1e-12:
-        return float(weights.size)
-    mean = float(np.mean(weights))
-    return float((mean * mean) / variance)
+    if np.any(weights < 0):
+        return 0.0
+    weight_sum = float(np.sum(weights))
+    squared_sum = float(np.sum(np.square(weights)))
+    if squared_sum <= 0.0:
+        return 0.0
+    return float(min(weights.size, (weight_sum * weight_sum) / squared_sum))
 
 
 def _confidence_interval(values: np.ndarray, estimate: float) -> tuple[float, float]:
@@ -181,6 +184,14 @@ class SNIPSEstimator(OffPolicyEstimator):
 
 
 class DoublyRobustEstimator(OffPolicyEstimator):
+    """Action-conditioned doubly robust policy-value estimator.
+
+    Without a separately validated reward model, there is no DR estimate.
+    A model predicting only the observed reward or ignoring the chosen action
+    cannot supply a counterfactual expected outcome. Do not silently replace
+    absent model estimates with the logged reward.
+    """
+
     def __init__(
         self,
         reward_model: Any = None,
@@ -189,20 +200,31 @@ class DoublyRobustEstimator(OffPolicyEstimator):
         self.reward_model = reward_model
         self.max_importance_weight = max_importance_weight
 
-    def _predict_reward(self, observation: PolicyObservation) -> float:
-        if self.reward_model is None:
-            return observation.reward
-        try:
-            features = np.asarray(
-                list(observation.context.normalized_features.values()),
-                dtype=np.float64,
+    def _predict_reward(self, observation: PolicyObservation, action: str) -> float:
+        scorer = getattr(self.reward_model, "predict_reward", None)
+        if not callable(scorer):
+            raise OPEIneligibleError(
+                OPEIneligibilityReason.MISSING_REWARD,
+                "Action-conditioned reward predictor required for DR",
             )
-            if features.size == 0:
-                return observation.reward
-            prediction = self.reward_model.predict(features.reshape(1, -1))[0]
-            return float(np.clip(prediction, 0.0, 1.0))
-        except Exception:
-            return observation.reward
+        try:
+            prediction = scorer(observation.context, action)
+        except Exception as exc:
+            raise OPEIneligibleError(
+                OPEIneligibilityReason.MISSING_REWARD,
+                "Reward predictor failed; DR cannot be estimated",
+            ) from exc
+        if (
+            isinstance(prediction, (bool, np.bool_))
+            or not isinstance(prediction, (int, float, np.number))
+            or not np.isfinite(prediction)
+            or not 0.0 <= float(prediction) <= 1.0
+        ):
+            raise OPEIneligibleError(
+                OPEIneligibilityReason.MISSING_REWARD,
+                "Reward predictor must return a finite 0-1 estimate",
+            )
+        return float(prediction)
 
     def estimate(
         self,
@@ -211,7 +233,14 @@ class DoublyRobustEstimator(OffPolicyEstimator):
     ) -> PolicyEstimate:
         del candidate_policy
         if not observations:
-            raise OPEIneligibleError(OPEIneligibilityReason.MISSING_REWARD, "empty observations")
+            raise OPEIneligibleError(
+                OPEIneligibilityReason.MISSING_REWARD, "empty observations"
+            )
+        if not callable(getattr(self.reward_model, "predict_reward", None)):
+            raise OPEIneligibleError(
+                OPEIneligibilityReason.MISSING_REWARD,
+                "No independently fitted action-conditioned reward model",
+            )
 
         values: list[float] = []
         weights: list[float] = []
@@ -219,15 +248,33 @@ class DoublyRobustEstimator(OffPolicyEstimator):
         for obs in observations:
             error = _validate_observation(obs)
             if error:
-                raise OPEIneligibleError(OPEIneligibilityReason.INVALID_PROPENSITY, error)
+                raise OPEIneligibleError(
+                    OPEIneligibilityReason.INVALID_PROPENSITY, error
+                )
+            predictions = {
+                action: self._predict_reward(obs, action)
+                for action in obs.context.eligible_actions
+            }
+            if set(predictions) != set(obs.candidate_probabilities):
+                raise OPEIneligibleError(
+                    OPEIneligibilityReason.INVALID_PROPENSITY,
+                    "Candidate action distribution is incomplete",
+                )
+            expected_reward = sum(
+                obs.candidate_probabilities[action] * predictions[action]
+                for action in predictions
+            )
             behavior_probability = obs.behavior_probabilities[obs.chosen_action]
             candidate_probability = obs.candidate_probabilities[obs.chosen_action]
             importance_weight = candidate_probability / behavior_probability
             if importance_weight > self.max_importance_weight:
                 importance_weight = self.max_importance_weight
                 clipped_count += 1
-            direct_reward = self._predict_reward(obs)
-            values.append(direct_reward + importance_weight * (obs.reward - direct_reward))
+            values.append(
+                expected_reward
+                + importance_weight
+                * (obs.reward - predictions[obs.chosen_action])
+            )
             weights.append(importance_weight)
 
         values_array = np.asarray(values, dtype=np.float64)
@@ -253,39 +300,56 @@ def compute_overlap_diagnostics(
     candidate_policy: Any,
     max_importance_weight: float,
 ) -> OverlapDiagnostics:
+    """Count actually sampled policy actions, not merely advertised options."""
     del candidate_policy
     weights: list[float] = []
     propensities: list[float] = []
     action_support: dict[str, int] = {}
+    eligible_actions: set[str] = set()
+    required_target_actions: set[str] = set()
     unsupported_actions: set[str] = set()
 
     for obs in observations:
+        eligible_actions.update(obs.context.eligible_actions)
         for action in obs.context.eligible_actions:
-            action_support[action] = action_support.get(action, 0) + 1
+            if obs.candidate_probabilities.get(action, 0.0) > 0.0:
+                required_target_actions.add(action)
+        action_support[obs.chosen_action] = action_support.get(obs.chosen_action, 0) + 1
         behavior_probability = obs.behavior_probabilities.get(obs.chosen_action, 0.0)
         candidate_probability = obs.candidate_probabilities.get(obs.chosen_action, 0.0)
-        if behavior_probability <= 0.0 or candidate_probability <= 0.0:
+        if behavior_probability <= 0.0:
             unsupported_actions.add(obs.chosen_action)
             continue
         propensities.append(behavior_probability)
         weights.append(candidate_probability / behavior_probability)
 
-    weights_array = np.asarray(weights, dtype=np.float64)
-    minimum_propensity = min(propensities) if propensities else 0.0
-    maximum_importance_weight = max(weights) if weights else 0.0
-    is_supported = bool(action_support) and minimum_propensity > 0.0
-    if maximum_importance_weight > max_importance_weight:
-        is_supported = False
-    if unsupported_actions:
-        is_supported = False
+    for action in required_target_actions:
+        if action_support.get(action, 0) == 0:
+            unsupported_actions.add(action)
 
+    weight_array = np.asarray(weights, dtype=np.float64)
+    minimum_propensity = min(propensities) if propensities else 0.0
+    maximum_weight = max(weights) if weights else 0.0
+    coverage = (
+        len(required_target_actions.difference(unsupported_actions))
+        / len(required_target_actions)
+        if required_target_actions else 0.0
+    )
+    is_supported = (
+        bool(observations)
+        and bool(required_target_actions)
+        and not unsupported_actions
+        and minimum_propensity > 0.0
+        and maximum_weight <= max_importance_weight
+        and np.all(np.isfinite(weight_array))
+    )
     return OverlapDiagnostics(
-        effective_sample_size=_effective_sample_size(weights_array),
+        effective_sample_size=_effective_sample_size(weight_array),
         minimum_propensity=float(minimum_propensity),
-        maximum_importance_weight=float(maximum_importance_weight),
-        coverage=len(action_support) / max(len(observations), 1),
+        maximum_importance_weight=float(maximum_weight),
+        coverage=float(coverage),
         action_support=action_support,
-        is_supported=is_supported,
+        is_supported=bool(is_supported),
         unsupported_actions=sorted(unsupported_actions),
     )
 
