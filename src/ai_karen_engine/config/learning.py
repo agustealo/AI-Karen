@@ -31,6 +31,11 @@ class LearningSettings:
     # labels to existing tenant-RLS OutcomeStore only when explicitly enabled
     # and its forward-only schema migration is applied.
     verified_evaluation_outcomes_enabled: bool = False
+    # KCM is an independently governed, non-promoting admission capability.
+    kcm_training_admission_enabled: bool = False
+    kcm_training_min_quality: float = 0.82
+    kcm_training_min_correctness: float = 0.90
+    kcm_training_min_provenance: float = 0.80
     model_routing_min_samples: int = 12
     model_routing_history_limit: int = 500
     model_routing_history_days: int = 90
@@ -39,6 +44,14 @@ class LearningSettings:
     model_routing_min_reliability_gain: float = 0.2
 
     def __post_init__(self) -> None:
+        for setting in (
+            "kcm_training_min_quality",
+            "kcm_training_min_correctness",
+            "kcm_training_min_provenance",
+        ):
+            value = getattr(self, setting)
+            if not isinstance(value, (int, float)) or not 0.0 < value <= 1.0:
+                raise ValueError(f"{setting} must be in (0, 1]")
         if not 5 <= self.model_routing_min_samples <= 1000:
             raise ValueError("Learning minimum model sample count must be 5-1000")
         if not 10 <= self.model_routing_history_limit <= 1000:
@@ -117,7 +130,21 @@ class LearningSettings:
             self.verified_evaluation_outcomes_enabled = normalized in {
                 "1", "true", "yes", "on",
             }
+        kcm_admission_enabled = env("KCM_TRAINING_ADMISSION_ENABLED")
+        if kcm_admission_enabled is not None:
+            normalized = kcm_admission_enabled.strip().lower()
+            if normalized not in {
+                "1", "0", "true", "false", "yes", "no", "on", "off",
+            }:
+                raise ValueError("KCM_TRAINING_ADMISSION_ENABLED must be boolean")
+            self.kcm_training_admission_enabled = normalized in {
+                "1", "true", "yes", "on",
+            }
+
         numeric_settings = (
+            ("KCM_TRAINING_MIN_QUALITY", "kcm_training_min_quality", float),
+            ("KCM_TRAINING_MIN_CORRECTNESS", "kcm_training_min_correctness", float),
+            ("KCM_TRAINING_MIN_PROVENANCE", "kcm_training_min_provenance", float),
             ("LEARNING_MODEL_ROUTING_MIN_SAMPLES", "model_routing_min_samples", int),
             ("LEARNING_MODEL_ROUTING_HISTORY_LIMIT", "model_routing_history_limit", int),
             ("LEARNING_MODEL_ROUTING_HISTORY_DAYS", "model_routing_history_days", int),
