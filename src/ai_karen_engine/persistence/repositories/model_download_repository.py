@@ -418,6 +418,49 @@ class ModelDownloadRepository:
             result = await session.execute(text(sql), params)
             return [dict(row) for row in result.mappings().all()]
 
+    async def list_completed_model_installations(
+        self, *, tenant_id: str, model_id: str, revision: str,
+        channel_id: str, limit: int = 128,
+    ) -> list[dict[str, Any]]:
+        """SQL-scoped model eligibility evidence for authorized plugin inference.
+
+        Never scan or return unowned legacy jobs (tenant_id IS NULL / '').
+        Migration 42 explicitly reserves them for administrator reconciliation,
+        not consumer model execution. Filter before pagination so unrelated
+        tenants cannot exhaust the eligible result window.
+        """
+        if not tenant_id or tenant_id == "default" or not all(
+            (model_id, revision, channel_id)
+        ):
+            raise PermissionError("model_installation_tenant_scope_required")
+        if not 1 <= limit <= 128:
+            raise ValueError("installation result limit out of bounds")
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text("""
+                    SELECT job_id, model_id, revision, channel_id, status,
+                           tenant_id, license_accepted, trust_remote_code,
+                           install_path
+                    FROM public.model_download_jobs
+                    WHERE tenant_id = :tenant_id
+                      AND model_id = :model_id
+                      AND revision = :revision
+                      AND channel_id = :channel_id
+                      AND status = 'completed'
+                      AND license_accepted IS TRUE
+                      AND trust_remote_code IS NOT TRUE
+                    ORDER BY created_at DESC LIMIT :limit
+                """),
+                {
+                    "tenant_id": tenant_id,
+                    "model_id": model_id,
+                    "revision": revision,
+                    "channel_id": channel_id,
+                    "limit": limit,
+                },
+            )
+            return [dict(row) for row in result.mappings().all()]
+
     async def list_owned_jobs(
         self, *, tenant_id: str, user_id: str, limit: int = 50
     ) -> list[dict[str, Any]]:

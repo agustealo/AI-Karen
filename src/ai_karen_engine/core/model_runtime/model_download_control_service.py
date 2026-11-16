@@ -578,6 +578,38 @@ class ModelDownloadControlService:
         rows = await self._repository.list_jobs(status=status, limit=limit)
         return [self._job_payload(row) for row in rows]
 
+    async def list_completed_model_installations(
+        self, *, tenant_id: str, model_id: str, revision: str,
+        channel_id: str, limit: int = 128,
+    ) -> list[dict[str, Any]]:
+        """Trusted host-only installation evidence, never a consumer job list.
+
+        The database filters exact tenant/model/revision/channel, completed
+        status, license acceptance, and safe-code policy *before* pagination.
+        Legacy jobs without tenant identity are not implicitly shared.
+        PluginService remains responsible for RBAC admission to the caller.
+        """
+        try:
+            uuid.UUID(tenant_id)
+        except (ValueError, TypeError, AttributeError):
+            raise ModelOrchestratorError(
+                E_PERM, "Verified model installation tenant required"
+            ) from None
+        if not model_id or not revision or not channel_id:
+            raise ModelOrchestratorError(
+                E_INVALID, "Model installation identity required"
+            )
+        if not 1 <= limit <= 128:
+            raise ModelOrchestratorError(E_INVALID, "Invalid installation candidate limit")
+        await self.initialize()
+        return await self._repository.list_completed_model_installations(
+            tenant_id=tenant_id,
+            model_id=model_id,
+            revision=revision,
+            channel_id=channel_id,
+            limit=limit,
+        )
+
     async def list_owned_jobs(
         self, *, tenant_id: str, user_id: str, limit: int = 50
     ) -> list[dict[str, Any]]:

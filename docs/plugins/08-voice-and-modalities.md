@@ -273,6 +273,33 @@ Proof source: `tests/core/voice/test_voice_plugin_http.py` and
 Exact-head CI and real licensed Pocket model/browser audio remain separate
 required gates; no new runtime, model registry or installer was introduced.
 
+
+### Tenant-scoped Pocket model installation provenance (2026-11-16)
+
+Pocket TTS previously read only the last 500 globally completed download jobs,
+then filtered their metadata in the plugin. An older authorized model could
+disappear behind other tenants' downloads. Worse, its tenant filter accepted
+empty tenant identities, even though migration 42 explicitly classifies
+unowned legacy downloads as administrator-only pending reconciliation.
+
+The **existing model-download PostgreSQL repository** now performs the exact
+tenant/model/revision/channel, completed-state, accepted-license and
+non-remote-code checks **before** pagination. VoiceRuntime and PluginService
+still own authenticated caller admission and RBAC; Pocket receives eligible
+installation evidence only through ModelDownloadControlService and continues
+to inspect model assets for trusted paths and symlinks. The new filtered index
+in migration 55 supports this canonical query without a second registry.
+
+An unowned or foreign-tenant completed job is never promoted to consumer
+inference eligibility, even when its model files exist on the shared host.
+There is no migration of existing job ownership, silent fallback, automatic
+license acceptance, or direct plugin database access.
+
+Source proofs: `tests/core/model_runtime/test_model_installation_tenant_admission.py`
+and `tests/core/voice/test_pocket_tts_plugin.py`. Run integration acceptance
+with the actual PostgreSQL schema and a real authorized Pocket model before
+claiming production tenant isolation or consumer-ready audio.
+
 ## UI behavior
 
 User settings should offer separate *speech output* and *speech input*
