@@ -396,7 +396,18 @@ def parse_plugin_inspection_request(query: str) -> Optional[PluginInspectionRequ
         match = pattern.fullmatch(raw)
         if match is not None:
             target = match.group("target").strip(" .?!")
-            if target and re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{1,64}", target):
+            # Never downgrade compound requests with possible side effects
+            # into an apparently harmless setup inspection.
+            compound = re.search(
+                r"\b(?:and|then|send|message|delete|share|post|execute|"
+                r"run|with\s+(?:token|password|secret)|for\s+someone)\b",
+                target, flags=re.IGNORECASE,
+            )
+            if (
+                target
+                and not compound
+                and re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{1,64}", target)
+            ):
                 return PluginInspectionRequest(operation=operation, target=target)
     return None
 
