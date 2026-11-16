@@ -20,10 +20,6 @@ from ai_karen_engine.auth.rbac_middleware import (
     get_rbac_manager,
     require_permission,
 )
-from ai_karen_engine.core.intelligence.ml.verification_review_workflow import (
-    ReviewJudgement,
-    VerificationReviewWorkflow,
-)
 from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 from ai_karen_engine.core.runtime.trajectory.store import TrajectoryStoreError
 from ai_karen_engine.core.security.auth_config import auth_config
@@ -54,7 +50,14 @@ class VerificationReviewResponse(BaseModel):
     decision_provenance: str
 
 
-def get_verification_review_workflow() -> VerificationReviewWorkflow:
+def get_verification_review_workflow() -> Any:
+    # Keep API registration/import independent of optional OPE/SciPy packages.
+    # The authenticated reviewer request resolves its Intelligence owner only
+    # when a review is actually executed.
+    from ai_karen_engine.core.intelligence.ml.verification_review_workflow import (
+        VerificationReviewWorkflow,
+    )
+
     return VerificationReviewWorkflow()
 
 
@@ -65,9 +68,7 @@ async def submit_verification_review(
     current_user: UserData = Depends(
         require_permission(Permission.VERIFICATION_REVIEW)
     ),
-    workflow: VerificationReviewWorkflow = Depends(
-        get_verification_review_workflow
-    ),
+    workflow: Any = Depends(get_verification_review_workflow),
 ) -> VerificationReviewResponse:
     """Issue a review only after live session/RBAC and stored lineage validation."""
     if auth_config.should_bypass_auth():
@@ -99,6 +100,10 @@ async def submit_verification_review(
         correlation_id = None
 
     try:
+        from ai_karen_engine.core.intelligence.ml.verification_review_workflow import (
+            ReviewJudgement,
+        )
+
         result = await workflow.submit(
             ReviewJudgement(
                 decision_observation_id=body.decision_observation_id,
