@@ -320,6 +320,7 @@ class ExpressionGateway:
                 # must not be promoted into a successful model response.
                 has_model_source = (
                     result.task_id == task.task_id
+                    and result.engine_id == engine_id
                     and isinstance(result.provider, str)
                     and bool(result.provider.strip())
                     and isinstance(result.model, str)
@@ -328,13 +329,25 @@ class ExpressionGateway:
                 )
 
                 if has_text and is_valid and has_model_source:
-                    # The gateway decides fallback level. Even if a secondary
-                    # engine forgot to mark its result degraded, recovery is
-                    # never a healthy primary completion.
-                    if level > 0:
+                    # An engine may have selected a different registered
+                    # provider within its own execution (for example when
+                    # a preferred endpoint is unavailable). Do not overwrite
+                    # that observed fallback with the gateway's engine index.
+                    internal_level = (result.metadata or {}).get("fallback_level", 0)
+                    if (
+                        isinstance(internal_level, bool)
+                        or not isinstance(internal_level, int)
+                        or internal_level < 0
+                    ):
+                        raise EngineUnavailableError("invalid_provider_fallback_receipt")
+                    effective_level = level + internal_level
+                    if effective_level > 0:
                         result.degraded = True
                         if not result.degradation_reason:
-                            result.degradation_reason = "model_engine_fallback"
+                            result.degradation_reason = (
+                                "model_engine_fallback" if level > 0
+                                else "provider_fallback"
+                            )
                     # A token-limited answer is usable partial output, not a
                     # normally completed model response or a fallback trigger.
                     if (result.metadata or {}).get("output_truncated") is True:
@@ -355,7 +368,7 @@ class ExpressionGateway:
                     attempt_recorded = True
                     result.metadata = {
                         **(result.metadata or {}),
-                        "fallback_level": level,
+                        "fallback_level": effective_level,
                         "skipped_engines": skipped_engines,
                         "engine_attempt_timings": list(attempt_timings),
                     }
@@ -370,7 +383,7 @@ class ExpressionGateway:
                             latency_ms=result.latency_ms,
                             gateway_attempt_ms=observed_attempt_ms,
                             degraded=result.degraded,
-                            fallback_level=level,
+                            fallback_level=effective_level,
                         ),
                     )
                     return result
