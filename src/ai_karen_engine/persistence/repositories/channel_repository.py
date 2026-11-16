@@ -2043,6 +2043,7 @@ class SqlChannelRepository:
                     SELECT tenant_id, connection_id, receipt_id, event_digest,
                            created_at
                     FROM candidates
+                    WHERE true
                     ON CONFLICT (tenant_id, connection_id, receipt_id)
                     DO NOTHING
                     RETURNING tenant_id, connection_id, receipt_id
