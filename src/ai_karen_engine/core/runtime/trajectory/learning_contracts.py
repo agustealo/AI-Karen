@@ -317,15 +317,15 @@ def validate_probability_distribution(
             or not action
             or isinstance(value, bool)
             or not isinstance(value, (int, float))
-            or not math.isfinite(value)
             or not 0.0 <= value <= 1.0
+            or not math.isfinite(value)
         ):
             return invalid
     if chosen_probability is not None and (
         isinstance(chosen_probability, bool)
         or not isinstance(chosen_probability, (int, float))
-        or not math.isfinite(chosen_probability)
         or not 0.0 <= chosen_probability <= 1.0
+        or not math.isfinite(chosen_probability)
     ):
         return invalid
 
@@ -498,6 +498,9 @@ def create_decision_observation(
             f"invalid probability distribution: "
             f"{dist_reason.value if dist_reason is not None else 'invalid'}"
         )
+
+    if ope_eligible is not None and not isinstance(ope_eligible, bool):
+        raise ValueError("OPE eligibility override must be boolean")
 
     eligible, reason = compute_ope_eligibility(
         candidate_actions,
