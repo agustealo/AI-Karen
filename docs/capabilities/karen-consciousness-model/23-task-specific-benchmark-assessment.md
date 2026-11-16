@@ -19,7 +19,7 @@ It does not certify a general skill, execute a capability, change CORTEX policy,
 | KCM task view | core/personalization/benchmark_task_assessment.py | Read-only join and descriptive confidence interval |
 | Skills and execution eligibility | CapabilityRegistry, CORTEX, RuntimePolicy | **Unchanged; no permission derived from scores** |
 
-This slice upgrades new benchmark receipts with case hashes, per-case correctness verdicts, exact feature revision and observed correctness count. Historical receipts lacking the exact case-membership field are **not** promoted into KCM evidence, although their original promotion compatibility is retained.
+This slice adds case hashes, exact per-case verdicts, feature revision and correctness counts to new benchmark receipts **only when every observed predictor feature revision matches the registered model**. Existing benchmark promotion semantics are preserved: legacy feature-mismatched evaluations still receive their historical receipt, but are not KCM-admissible. Older receipts without exact case membership likewise cannot be promoted into KCM evidence.
 
 ## Exact join contract
 
