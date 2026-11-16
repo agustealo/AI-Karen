@@ -6,6 +6,8 @@ separate authorized host integration. These tests cannot confer that authority.
 from __future__ import annotations
 
 import asyncio
+import io
+import wave
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,6 +22,17 @@ from ai_karen_engine.core.voice.contracts import (
 from ai_karen_engine.services.voice_runtime import VoiceRuntime
 
 
+def _wav() -> bytes:
+    """Keep contract fixtures valid PCM, not a fake RIFF prefix."""
+    output = io.BytesIO()
+    with wave.open(output, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(24_000)
+        writer.writeframes(b"\\x00\\x00\\x01\\x00")
+    return output.getvalue()
+
+
 class VerifiedSynthesisFixture:
     """Contract-only fake: it is never registered in a running application."""
 
@@ -29,7 +42,7 @@ class VerifiedSynthesisFixture:
         self.is_ready = AsyncMock(return_value=ready)
         self.synthesize = AsyncMock(
             return_value=SynthesizedSpeech(
-                audio=b"RIFFtest-payload",
+                audio=_wav(),
                 engine=self.engine_id,
                 voice_id=self.voice_id,
             )
@@ -93,7 +106,7 @@ async def test_generic_synthesis_tracks_verified_engine_and_voice_id():
 async def test_generic_synthesis_rejects_mismatched_engine_provenance():
     engine = VerifiedSynthesisFixture()
     engine.synthesize.return_value = SynthesizedSpeech(
-        audio=b"RIFFtest-payload", engine="unapproved", voice_id=engine.voice_id,
+        audio=_wav(), engine="unapproved", voice_id=engine.voice_id,
     )
     runtime = VoiceRuntime(synthesis_engine=engine)
     with pytest.raises(VoiceContractError, match="synthesis_engine_result_mismatch"):
@@ -110,7 +123,7 @@ async def test_cancelled_client_does_not_release_native_model_capacity_early():
         started.set()
         await release.wait()
         return SynthesizedSpeech(
-            audio=b"RIFFtest-payload",
+            audio=_wav(),
             engine=engine.engine_id,
             voice_id=engine.voice_id,
         )
