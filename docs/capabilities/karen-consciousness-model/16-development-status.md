@@ -15,7 +15,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-01A/B: memory-to-training containment, read-only admission, tenant-scoped memory/consent verification | [PR #915](https://github.com/agustealo/AI-Karen/pull/915), merge `9a1ee696ddaa7b6d2d36ad3cac632033e1c1a757` | Merged; exact-head 13/13 checks passed |
 | KCM-01C: immutable frozen-manifest/dataset integrity inspection and schema alignment | [PR #924](https://github.com/agustealo/AI-Karen/pull/924), merge `8821b72c53a101555567349ba941563c5359daf0` | Merged; exact-head 6/6 GitHub Actions checks passed |
 | KCM-01D1: fresh provenance and rights/target receipt revalidation | [PR #930](https://github.com/agustealo/AI-Karen/pull/930), merge `b1baefb781de9d7eaa2fd446d570ab6e42a64397` | Merged; 6/6 exact-head GitHub checks passed |
-| KCM-01D2A: durable owner-scoped revocation epoch and source ancestry | [18 — Durable lineage](18-durable-revocation-lineage.md) | Development; not yet wired to memory mutations |
+| KCM-01D2A: durable owner-scoped revocation epoch and source ancestry | [PR #931](https://github.com/agustealo/AI-Karen/pull/931), merge `ee4629f666fa291df9081f95d5979a363e88f568` | Merged; 12/12 exact-head checks passed, real PostgreSQL proof |
+| KCM-01D2B: canonical memory, consent and privacy SQL revocation hooks | [19 — Lifecycle hooks](19-memory-consent-erasure-hooks.md) | Development; exact-head tests pending |
 
 ## Configuration
 
@@ -39,12 +40,13 @@ training, model installation, parameter updates or checkpoint promotion.
    Ordinary runtime tool success and user feedback do not establish correct
    supervision targets. Governed rights and independent target review must be
    introduced with actual approval and revocation receipts.
-2. **Durable source and model ancestry:** Canonical tenant-RLS dataset membership,
-   immutable manifest storage, model/dataset ancestry, signed attestations,
-   and source deletion propagation are not implemented.
-3. **Atomic deletion fencing:** The epoch reader and training-start lease need
-   durable, transactional storage before model training. Double-reading a
-   timestamp/epoch is not a reliable replacement for a lock.
+2. **Dataset-to-model ancestry:** Tenant-RLS source-to-dataset ancestry is
+   merged. Immutable manifest persistence, checkpoint ancestry, independent
+   signed attestations and model lineage remain unimplemented.
+3. **Training-start and promotion fencing:** Durable deletion epochs and source
+   revocation exist. Canonical lifecycle hooks are in development, but a
+   transactionally fenced training-start and model promotion lease remains
+   unimplemented; preflight epoch reads are not an atomic training lock.
 4. **Operational self-model projection:** No verified KCM runtime self-model
    or skill-proficiency projection has been activated.
 5. **Model training/evaluation:** No KCM neural weights or Persona adapters
@@ -59,8 +61,8 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Connect KCM source revocation to all memory deletion,
-consent withdrawal, rights withdrawal and privacy erasure paths, then verify
-RLS and concurrency on a migrated PostgreSQL instance. Rights/target attestations
-and source-to-checkpoint ancestry remain separate gates. All learning remains
-fail-closed until those authorities are proven.
+**Next controlled slice:** Verify KCM-01D2B memory/consent/erasure triggers
+against a disposable, migrated PostgreSQL database. Independently verified
+rights/target attestation withdrawal, source-to-checkpoint ancestry and an
+atomic training-start/promotion lease remain separate gates. All learning
+remains fail-closed until those authorities are proven.
