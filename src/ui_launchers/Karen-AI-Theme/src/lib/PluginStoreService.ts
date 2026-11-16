@@ -175,6 +175,13 @@ class PluginStoreService {
     );
   }
 
+  async enablePlugin(pluginId: string): Promise<{ success: boolean; message: string }> {
+    return apiClient.post<{ success: boolean; message: string }>(
+      `/api/plugins/${encodeURIComponent(pluginId)}/enable`,
+      {},
+    );
+  }
+
   async ratePlugin(request: PluginRatingRequest): Promise<PluginRatingResponse> {
     return apiClient.post<PluginRatingResponse>(`${this.baseUrl}/rate`, request);
   }

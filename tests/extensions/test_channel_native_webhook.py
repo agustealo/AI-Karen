@@ -222,7 +222,8 @@ def test_webhook_does_not_claim_success_if_database_is_unavailable():
     assert "private database" not in response.text
 
 
-def test_global_auth_allows_only_exact_native_post_without_session(monkeypatch):
+def test_global_auth_allows_only_exact_native_post_without_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
     from ai_karen_engine.server import routers as canonical_routers
     from ai_karen_engine.auth.auth_middleware import AuthenticationError
 

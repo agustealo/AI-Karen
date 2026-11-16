@@ -164,15 +164,22 @@ const isPluginUiRegistered = (pluginId: string): boolean => {
   return getNormalizedRegisteredPluginIds().includes(normalizedId);
 };
 
-const getBackendBadgeConfig = (state: BackendState): BadgeConfig => {
-  switch (state) {
-    case 'active':
-      return {
-        icon: CheckCircle2,
-        color: 'text-green-600 dark:text-green-400',
-        label: 'active',
-      };
+const isBackendActive = (state: string): boolean => {
+  const normalized = cleanString(state).toLowerCase();
+  return ['active', 'enabled', 'loaded', 'registered'].includes(normalized);
+};
 
+const getBackendBadgeConfig = (state: BackendState): BadgeConfig => {
+  const normalized = cleanString(state).toLowerCase();
+  if (['active', 'enabled', 'loaded', 'registered'].includes(normalized)) {
+    return {
+      icon: CheckCircle2,
+      color: 'text-green-600 dark:text-green-400',
+      label: normalized === 'active' ? 'active' : 'enabled',
+    };
+  }
+
+  switch (normalized) {
     case 'error':
       return {
         icon: XCircle,
@@ -241,10 +248,12 @@ const getBackendBadgeConfig = (state: BackendState): BadgeConfig => {
 const deriveBackendStatusDetail = (
   backendState: BackendState,
 ): BackendStatusDetail => {
-  switch (backendState) {
-    case 'active':
-      return 'enabled';
+  const normalized = cleanString(backendState).toLowerCase();
+  if (['active', 'enabled', 'loaded', 'registered'].includes(normalized)) {
+    return 'enabled';
+  }
 
+  switch (normalized) {
     case 'error':
     case 'broken':
       return 'broken';
@@ -271,12 +280,16 @@ const deriveBackendStatusDetail = (
 };
 
 const deriveUiInstallStatus = (backendState: BackendState): UIInstallStatus => {
-  switch (backendState) {
-    case 'active':
-    case 'disabled':
-    case 'validated':
-      return 'installed';
+  const normalized = cleanString(backendState).toLowerCase();
+  if (
+    ['active', 'enabled', 'loaded', 'registered', 'disabled', 'validated'].includes(
+      normalized,
+    )
+  ) {
+    return 'installed';
+  }
 
+  switch (normalized) {
     case 'error':
     case 'broken':
       return 'error';
@@ -366,16 +379,28 @@ function BackendStateBadge({
   return (
     <span className="inline-flex items-center gap-1 text-xs">
       <Icon className={`h-3 w-3 ${config.color}`} aria-hidden={true} />
-      {detailLabel ? `${config.label} (${detailLabel})` : config.label}
+      {detailLabel && detailLabel.toLowerCase() !== config.label.toLowerCase()
+        ? `${config.label} (${detailLabel})`
+        : config.label}
     </span>
   );
 }
 
 function FrontendStateBadge({
   state,
+  hasGui,
 }: {
   state: FrontendMountState | 'registered';
+  hasGui?: boolean;
 }) {
+  if (hasGui === false) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+        <CheckCircle2 className="h-3 w-3 text-muted-foreground/60" aria-hidden={true} /> not registered (headless)
+      </span>
+    );
+  }
+
   switch (state) {
     case 'mounted':
       return (
@@ -541,6 +566,11 @@ function PluginHealthCard({
 
   const derivedUiInstallStatus = useMemo(
     () => deriveUiInstallStatus(health.backendState),
+    [health.backendState],
+  );
+
+  const isBackendActiveState = useMemo(
+    () => isBackendActive(health.backendState),
     [health.backendState],
   );
 
@@ -836,7 +866,7 @@ function PluginHealthCard({
         </Alert>
       )}
 
-      {health.backendState === 'active' && health.frontendMountState === 'error' && (
+      {isBackendActiveState && health.frontendMountState === 'error' && (
         <Alert variant="destructive" className="px-3 py-2">
           <AlertTriangle className="h-3 w-3" aria-hidden={true} />
           <AlertDescription className="text-xs">
@@ -856,14 +886,14 @@ function PluginHealthCard({
       )}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {hasUiCapabilities && uiInstallStatus === 'installed' && health.backendState === 'active' && (
+        {hasUiCapabilities && uiInstallStatus === 'installed' && isBackendActiveState && (
           <div className="flex items-center gap-2 text-xs text-green-600">
             <CheckCircle2 className="h-3 w-3" aria-hidden={true} />
             UI Mounted
           </div>
         )}
 
-        {hasUiCapabilities && uiInstallStatus === 'installed' && health.backendState !== 'active' && (
+        {hasUiCapabilities && uiInstallStatus === 'installed' && !isBackendActiveState && (
           <div className="flex items-center gap-2 text-xs text-amber-600">
             <AlertTriangle className="h-3 w-3" aria-hidden={true} />
             UI Unmounted
@@ -896,7 +926,7 @@ function PluginHealthCard({
 
         {!isCommunicationChannel && health.backendState !== 'error' && (
           <>
-            {health.backendState === 'active' && (
+            {isBackendActiveState && (
               <Button
                 type="button"
                 variant="outline"
@@ -908,7 +938,7 @@ function PluginHealthCard({
               </Button>
             )}
 
-            {health.backendState !== 'active' && health.backendState !== 'error' && (
+            {!isBackendActiveState && health.backendState !== 'error' && (
               <Button
                 type="button"
                 variant="outline"

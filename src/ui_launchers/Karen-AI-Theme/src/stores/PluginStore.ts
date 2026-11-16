@@ -29,6 +29,7 @@ interface PluginStoreState {
   refreshPlugins: () => Promise<void>;
   getPluginDetails: (pluginId: string) => Promise<void>;
   installPlugin: (pluginId: string, version?: string) => Promise<void>;
+  enablePlugin: (pluginId: string) => Promise<void>;
   disablePlugin: (pluginId: string) => Promise<void>;
   loadCategories: () => Promise<void>;
   loadTrending: () => Promise<void>;
@@ -201,6 +202,38 @@ export const usePluginStore = create<PluginStoreState>((set, get) => ({
     if (refreshError || installedError) {
       throw new Error(
         'Plugin installation request succeeded, but the plugin list could not be refreshed: ' +
+          (refreshError || installedError),
+      );
+    }
+  },
+
+  enablePlugin: async (pluginId: string) => {
+    set((state) => ({
+      installingPlugins: new Set([...state.installingPlugins, pluginId]),
+      error: null,
+    }));
+
+    try {
+      await pluginStoreService.enablePlugin(pluginId);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Failed to enable plugin';
+      set({ error: message });
+      throw new Error(message);
+    } finally {
+      set((state) => {
+        const installingPlugins = new Set(state.installingPlugins);
+        installingPlugins.delete(pluginId);
+        return { installingPlugins };
+      });
+    }
+
+    await get().searchPlugins();
+    const refreshError = get().error;
+    await get().loadInstalled();
+    const installedError = get().installedError;
+    if (refreshError || installedError) {
+      throw new Error(
+        'Plugin enable request succeeded, but the plugin list could not be refreshed: ' +
           (refreshError || installedError),
       );
     }

@@ -96,6 +96,7 @@ export default function PluginStorePage() {
     loadInstalled,
     refreshPlugins,
     installPlugin,
+    enablePlugin,
     disablePlugin,
     loadCategories,
     loadTrending,
@@ -175,6 +176,22 @@ export default function PluginStorePage() {
       }
     },
     [installPlugin, clearSelectedPlugin],
+  );
+
+  const handleEnable = useCallback(
+    async (pluginId: string) => {
+      setOperationError('');
+      setOperationSuccess('');
+      try {
+        await enablePlugin(pluginId);
+        setDetailsOpen(false);
+        clearSelectedPlugin();
+        setOperationSuccess(`Plugin '${pluginId}' enabled successfully.`);
+      } catch (cause) {
+        setOperationError(getErrorMessage(cause));
+      }
+    },
+    [enablePlugin, clearSelectedPlugin],
   );
 
   const handleDisable = useCallback(
@@ -616,7 +633,7 @@ export default function PluginStorePage() {
         }}
         onEnable={() => {
           const plugin = selectedPlugin?.plugin;
-          if (plugin) void handleInstall(plugin.id);
+          if (plugin) void handleEnable(plugin.id);
         }}
         onDisable={() => {
           const plugin = selectedPlugin?.plugin;

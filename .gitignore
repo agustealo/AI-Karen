@@ -127,6 +127,7 @@ firestore-debug.log
 .env.cuda
 .env_karen/
 .karen_env/
+.karen-manual-*
 .kren_env/
 .kilo_env/
 .env_kari/
