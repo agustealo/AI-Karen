@@ -5258,7 +5258,7 @@ class ChatRuntime:
                     metadata={
                         "selection_source": "runtime_authorized_plan",
                         "selection_rule": "authorized_topology_and_reasoning_mode",
-                        "alternative_authorization": "not_established",
+                        "alternative_execution_eligibility": "not_established",
                         "execution_status": "not_observed_at_decision_time",
                         "candidate_probability_status": "not_recorded",
                         **(
