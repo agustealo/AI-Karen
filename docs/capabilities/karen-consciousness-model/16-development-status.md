@@ -1,77 +1,63 @@
-# 16 | Development progress and acceptance
+# 16 | Karen Consciousness-Model development status
 
-[← Index](README.md) · [Previous](15-research.md)
+[← Index](README.md) · [Previous](15-research.md) · [Next →](17-evidence-preflight.md)
 
-**Feature name:** `karen-consciousness-model` (**KCM**).
+**Feature:** `karen-consciousness-model` (KCM)
 
-## First code slice: containment + non-promoting admission
+**Architecture:** CORTEX decides, RuntimePolicy authorizes, ChatRuntime executes.
+NeuroVault/NeuroRecall govern memory; EchoCore evaluates potential training
+evidence. Memory promotion is never model-training permission.
 
-Draft implementation: [PR #915](https://github.com/agustealo/AI-Karen/pull/915). The pull request is **not merged**.\n\nThe initial pull request adds:
+## Merged foundations
 
-- Containment of legacy `EchoPolicyEngine` importance/retention-only training queueing. `DefaultEchoCoreManager` must reject unsafe `should_queue_training` requests even from legacy or injected policy engines.
-- `echocore/training_admission.py`, a deterministic, side-effect-free evaluator that produces policy-blocked, needs-verification, review, or approved decisions, **but never queues or executes training**.
-- Purpose-scoped, source-version-bound evidence resolved through a **trusted host-owned port**, not through user-controlled `metadata["verified"]` or an LLM's confidence.
-- Fail-closed checks for training consent, rights, tenant/user binding, privacy/taint, source validity, target verification, provenance, and independent quality dimensions.
-- Focused regression tests for high-importance LTM, privacy vetoes, disabled-by-default admission, forged metadata, cross-tenant evidence, missing verification, poor quality, and resolver failure.
-
-**Not included:** model training, LoRA, KCM runtime self-projection, dataset manifests persisted to PostgreSQL, UI, or automatic model promotion.
-
-## Proof ledger
-
-| Proof item | Status |
-|---|---|
-| Independent admission evaluator: isolated local tests | 13 passing in development sandbox; not full-repo CI |
-| Legacy ingest containment regression suite | Authored; requires repository test/CI execution |
-| `python -m compileall src` on live repository | Not run |
-| Full `pytest tests/ -q` on live repository | Not run |
-| `ruff check`, `mypy` | Not run (not available in isolated sandbox) |
-| Runtime provider/routing/fallback parity | Not run |
-| Security/RBAC, RLS, deletion, lineage | Not yet implemented or verified |
-| Live first boot / full GitHub checks | Not yet verified |
-
-## Canonical configuration (default fail-closed)
-
-The existing `src/ai_karen_engine/config/learning.py` owns KCM admission switches. Environment overrides are validated and startup fails on malformed values:
-
-| Environment variable | Default | Purpose |
+| Slice | Repository evidence | Status |
 |---|---|---|
-| `KCM_TRAINING_ADMISSION_ENABLED` | `false` | Activate **read-only assessment**, not model training |
-| `KCM_TRAINING_MIN_QUALITY` | `0.82` | Proposed overall quality minimum |
-| `KCM_TRAINING_MIN_CORRECTNESS` | `0.90` | Independent target correctness floor |
-| `KCM_TRAINING_MIN_PROVENANCE` | `0.80` | Independent provenance quality floor |
+| KCM-01A/B: memory-to-training containment, read-only admission, tenant-scoped memory/consent verification | [PR #915](https://github.com/agustealo/AI-Karen/pull/915), merge `9a1ee696ddaa7b6d2d36ad3cac632033e1c1a757` | Merged; exact-head 13/13 checks passed |
+| KCM-01C: immutable frozen-manifest/dataset integrity inspection and schema alignment | [PR #924](https://github.com/agustealo/AI-Karen/pull/924), merge `8821b72c53a101555567349ba941563c5359daf0` | Merged; exact-head 6/6 GitHub Actions checks passed |
+| KCM-01D1: fresh provenance and rights/target receipt revalidation | [17 — Evidence preflight](17-evidence-preflight.md) | Draft; no training path |
 
-Enabling admission does not enable training, dataset creation, or checkpoint promotion. No live training path is connected by this slice. Thresholds remain experimental until calibrated on held-out evidence.
+## Configuration
 
-## Follow-up development
+The single source of learning configuration is
+`src/ai_karen_engine/config/learning.py`.
 
-1. Wire the evaluator to trusted tenant-scoped consent/evidence/outcome stores and emit immutable decision audit receipts.
-2. Extend canonical dataset owner with source-version/consent ancestry, immutable manifests and RLS.
-3. Implement KCM operational self-model projection from current cognitive, memory and skills evidence with *no weight training*.
-4. Benchmark compact adapters offline only after the dataset and governance gates pass.
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `KCM_TRAINING_ADMISSION_ENABLED` | `false` | Opt into **read-only assessment**, not model training |
+| `KCM_TRAINING_MIN_QUALITY` | `0.82` | Experimental overall quality floor |
+| `KCM_TRAINING_MIN_CORRECTNESS` | `0.90` | Experimental verified-target correctness floor |
+| `KCM_TRAINING_MIN_PROVENANCE` | `0.80` | Experimental provenance floor |
 
-Approval is not proof of training. Only an independently authorized and lineage-backed training job may consume an approved dataset.
+Neither these settings nor a successful evidence inspection can trigger model
+training, model installation, parameter updates or checkpoint promotion.
 
+## Uncompleted acceptance requirements
 
-## KCM-01B: Governed PostgreSQL source and consent verification (draft)
+1. **Authoritative rights and outcome receipts:** The existing memory consent
+   table proves only purpose-scoped consent; it is not a training license.
+   Ordinary runtime tool success and user feedback do not establish correct
+   supervision targets. Governed rights and independent target review must be
+   introduced with actual approval and revocation receipts.
+2. **Durable source and model ancestry:** Canonical tenant-RLS dataset membership,
+   immutable manifest storage, model/dataset ancestry, signed attestations,
+   and source deletion propagation are not implemented.
+3. **Atomic deletion fencing:** The epoch reader and training-start lease need
+   durable, transactional storage before model training. Double-reading a
+   timestamp/epoch is not a reliable replacement for a lock.
+4. **Operational self-model projection:** No verified KCM runtime self-model
+   or skill-proficiency projection has been activated.
+5. **Model training/evaluation:** No KCM neural weights or Persona adapters
+   were trained, approved or deployed.
 
-- A read-only resolver verifies canonical memory-event UUID, payload SHA-256 revision, owner tenant/user scope, active retention and no superseding event.
-- Requires the newest current grant of the purpose-specific scope named kcm.training.<objective>. General memory-write consent is insufficient.
-- Performs source and consent reads under one transaction with both tenant and user RLS context and explicit query predicates.
-- Does NOT infer data rights or target correctness from LTM admission, execution success or consent. Their receipts are absent; this resolver cannot approve training.
-- Unit tests cover valid source reference, consent missing/denied/revoked, sensitive and superseded events, stale digest, malformed scope and no accidental approval.
-- Local isolated SQLAlchemy-compatible test doubles pass; real PostgreSQL RLS and full exact-head CI are separate acceptance requirements.
-- No user-facing API, database migration, model training, or provider/runtime changes. Admission remains default-disabled.
+## Required proof
 
-**Follow-up:** independently verified rights and target receipts, dataset manifest lineage, retraining/revocation fencing, and live PostgreSQL RLS tests before any promotion.
+Every PR requires exact-head CI, unit tests, source-reference audit and
+appropriate PostgreSQL RLS integration tests. Any training release further
+requires data-rights verification, immutable source-to-model lineage, verified
+held-out evaluation, rollback and erasure/unlearning governance. Do not treat
+documentation, tool mocks, or independently verified subset tests as live
+database or production readiness proof.
 
-
-## KCM-01C: Immutable dataset integrity inspection (stacked draft)
-
-- New pure helper: `learning/kcm_dataset_integrity.py`, owned by the canonical learning dataset domain.
-- The inspector verifies frozen-manifest structure, actual dataset bytes against SHA-256, canonical source-revision digests, unique assessment/source identities, leakage-group split isolation, deterministic membership ordering, timezone-aware timestamps, and current governance deletion epoch.
-- The manifest schema and examples now require owner_user_id and lineage receipt references. Source revisions are SHA-256 identifiers, matching the current PostgreSQL memory ledger.
-- Passing integrity returns `training_authorized=False` by construction. Consent receipts, data rights, source ownership, and target correctness still require host-owned, live verification before training and again before model promotion.
-- Local isolated verification: 13 pure-Python pytest cases passed. This is not live PostgreSQL, rights, or training readiness evidence.
-- No migration, plugin, model trainer, provider router, or memory store is created. Training remains disabled.
-
-**Next:** implement source-to-dataset membership persistence with tenant RLS and independently verified rights/outcome receipts, then source revocation fences for any training or derived checkpoint.
+**Next controlled slice:** KCM-01D2 durable deletion epoch, rights/target
+attestations and source-to-dataset lineage; retain fail-closed behavior
+until those authorities exist and are proven.
