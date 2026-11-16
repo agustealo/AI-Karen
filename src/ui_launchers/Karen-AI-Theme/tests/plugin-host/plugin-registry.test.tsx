@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { PluginRegistryProvider, usePluginRegistry, usePluginHealth, setPluginMountState } from '../../src/plugin_host/registry';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
 
 // Mock fetch for API calls
@@ -12,16 +12,17 @@ vi.mock('@/lib/useAuth', () => ({
   useAuth: () => ({ user: { id: 'test-user', roles: ['user', 'admin'] } })
 }));
 
-// Mock apiClient to avoid actual network calls
+// Both the legacy default import and the canonical named import must use
+// the same controlled HTTP mock. Production registry uses the named export.
+const mockGet = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', () => ({
   ApiError: class ApiError extends Error {
     constructor(public status: number, message: string) {
       super(message);
     }
   },
-  default: {
-    get: vi.fn()
-  }
+  default: { get: mockGet },
+  apiClient: { get: mockGet },
 }));
 import apiClient from '@/lib/api';
 
@@ -32,6 +33,46 @@ describe('Plugin Registry', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('projects backend-declared TTS without claiming a plugin frontend or a ready model', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce([{
+      name: 'pocket-tts',
+      status: 'enabled',
+      version: '1.0.0',
+      display_name: 'Pocket TTS',
+      capabilities: {
+        provides_ui: false,
+        voice_modality: { version: '1.0.0', modalities: ['tts'] },
+      },
+      rbac: { allowed_roles: ['user', 'admin'] },
+    }]);
+
+    const { result } = renderHook(() => usePluginRegistry(), {
+      wrapper: ({ children }) => React.createElement(PluginRegistryProvider, null, children),
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const entry = result.current.getPlugin('pocket-tts');
+    expect(entry?.supportsVoiceOutput).toBe(true);
+    expect(entry?.has_gui).toBe(false);
+    expect(entry?.rawStatus).toBe('enabled');
+  });
+
+  it('fails closed on unsupported voice modality versions', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce([{
+      name: 'future-voice',
+      status: 'enabled',
+      version: '1.0.0',
+      capabilities: {
+        provides_ui: false,
+        voice_modality: { version: '2.0.0', modalities: ['tts'] },
+      },
+    }]);
+    const { result } = renderHook(() => usePluginRegistry(), {
+      wrapper: ({ children }) => React.createElement(PluginRegistryProvider, null, children),
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.getPlugin('future-voice')?.supportsVoiceOutput).toBe(false);
   });
 
   it('should provide plugin health status', () => {

@@ -225,7 +225,7 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 
 export default function DashboardPage() {
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
-  const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model'>('behavior');
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model' | 'voice'>('behavior');
   const [karenPanelOpen, setKarenPanelOpen] = useState(false);
   const karenLauncherRef = useRef<HTMLButtonElement | null>(null);
   const karenPanelRef = useRef<HTMLDivElement | null>(null);
@@ -395,7 +395,10 @@ export default function DashboardPage() {
           <PersonaSettings />
         </section>
       ),
-      pluginOverview: <PluginOverviewPage />,
+      pluginOverview: <PluginOverviewPage onOpenVoiceStudio={() => {
+        setSettingsInitialSection('voice');
+        setActiveMainView('settings');
+      }} />,
       agentsOverview: <AgentsOverviewPage onManageTasks={() => setActiveMainView("tasks")} onManageSequences={() => setActiveMainView("jobs")} />,
       agents: <AgentWorkspaceView openChat={() => setActiveMainView("chat")} />,
       tasks: <TasksPage />,

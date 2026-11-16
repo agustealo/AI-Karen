@@ -77,15 +77,16 @@ class ExtensionCoreManager:
         )
 
     @staticmethod
-    def _extension_capabilities(manifest: Any) -> Dict[str, bool]:
-        """Project manifest-declared capabilities, not inferred UI/install state.
+    def _extension_capabilities(manifest: Any) -> Dict[str, Any]:
+        """Project reviewed declarations without implying runtime readiness.
 
-        Communication adapters remain disabled in generic plugin execution and
-        are governed by ChannelHost per tenant connection. The frontend needs
-        this distinction to avoid presenting a fictitious UI registration fix.
+        The host's modality UI is independent of plugin-supplied frontend
+        bundles. This catalog declares *what a plugin supports*, never that a
+        model has been installed, licensed or authorized for this consumer.
+        Actual availability comes only from VoiceRuntime.engine_catalog().
         """
         capabilities = getattr(manifest, "capabilities", manifest)
-        return {
+        projection: Dict[str, Any] = {
             "provides_ui": bool(getattr(capabilities, "provides_ui", False)),
             "provides_api": bool(getattr(capabilities, "provides_api", False)),
             "provides_background_tasks": bool(
@@ -98,6 +99,16 @@ class ExtensionCoreManager:
                 getattr(capabilities, "communication_channel", None) is not None
             ),
         }
+        voice = getattr(capabilities, "voice_modality", None)
+        if voice is not None:
+            # ExtensionManifest already validates the version and the allowed
+            # modality vocabulary. Project only navigation-relevant fields;
+            # runtime health, model inventory and permissions are not leaked.
+            projection["voice_modality"] = {
+                "version": str(voice.version),
+                "modalities": list(voice.modalities),
+            }
+        return projection
 
     @classmethod
     def _status_from_record(cls, record: Dict[str, Any]) -> Dict[str, Any]:

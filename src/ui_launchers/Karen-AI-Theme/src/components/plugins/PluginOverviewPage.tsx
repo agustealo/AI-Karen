@@ -126,6 +126,8 @@ type PluginHealthCardProps = {
   version: string;
   declaresUi: boolean;
   isCommunicationChannel: boolean;
+  supportsVoiceOutput: boolean;
+  onOpenVoiceStudio?: () => void;
 };
 
 type OperationOverrideState = {
@@ -536,6 +538,8 @@ function PluginHealthCard({
   version,
   declaresUi,
   isCommunicationChannel,
+  supportsVoiceOutput,
+  onOpenVoiceStudio,
 }: PluginHealthCardProps) {
   const { refresh } = usePluginRegistry();
   const health = usePluginHealth(pluginId);
@@ -850,6 +854,14 @@ function PluginHealthCard({
         </p>
       )}
 
+      {supportsVoiceOutput && !hasUiCapabilities && (
+        <p className="text-xs text-muted-foreground" role="note">
+          Speech controls belong to Karen&apos;s Voice Studio. Backend-only
+          means this extension does not ship a separate frontend; it does not
+          establish model installation, voice availability or playback readiness.
+        </p>
+      )}
+
       {isCommunicationChannel && (
         <p className="text-xs text-muted-foreground" role="note">
           This is a communication transport governed by ChannelHost, not a
@@ -886,6 +898,13 @@ function PluginHealthCard({
       )}
 
       <div className="mt-3 flex flex-wrap gap-2">
+        {supportsVoiceOutput && onOpenVoiceStudio && (
+          <Button type="button" size="sm" variant="default"
+            onClick={onOpenVoiceStudio} aria-label={`Open Voice Studio for ${displayName}`}>
+            <Settings2 className="mr-1.5 h-4 w-4" aria-hidden={true} />
+            Open Voice Studio
+          </Button>
+        )}
         {hasUiCapabilities && uiInstallStatus === 'installed' && isBackendActiveState && (
           <div className="flex items-center gap-2 text-xs text-green-600">
             <CheckCircle2 className="h-3 w-3" aria-hidden={true} />
@@ -980,7 +999,9 @@ function PluginHealthCard({
   );
 }
 
-export default function PluginOverviewPage() {
+export default function PluginOverviewPage({
+  onOpenVoiceStudio,
+}: { onOpenVoiceStudio?: () => void } = {}) {
   const { plugins, loading, error } = usePluginRegistry();
 
   return (
@@ -1069,6 +1090,8 @@ export default function PluginOverviewPage() {
                   version={plugin.version}
                   declaresUi={plugin.has_gui}
                   isCommunicationChannel={plugin.isCommunicationChannel === true}
+                  supportsVoiceOutput={plugin.supportsVoiceOutput === true}
+                  onOpenVoiceStudio={onOpenVoiceStudio}
                 />
               ))}
             </div>
