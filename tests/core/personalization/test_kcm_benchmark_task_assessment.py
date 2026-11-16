@@ -348,12 +348,12 @@ async def test_wrong_tenant_and_user_identity_are_blocked(tmp_path):
 @pytest.mark.asyncio
 async def test_unknown_tenant_model_prefix_rejected(tmp_path):
     manifest, receipt, store, _ = await fixture(tmp_path)
-    outcome = await inspect(
-        tmp_path, manifest, receipt, store,
-        principal=identity(OTHER_TENANT, OTHER_USER),
-        tenant=OTHER_TENANT, user=OTHER_USER,
-    )
-    assert outcome.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    with pytest.raises(PermissionError, match="tenant mismatch"):
+        await inspect(
+            tmp_path, manifest, receipt, store,
+            principal=identity(OTHER_TENANT, OTHER_USER),
+            tenant=OTHER_TENANT, user=OTHER_USER,
+        )
 
 
 @pytest.mark.asyncio
