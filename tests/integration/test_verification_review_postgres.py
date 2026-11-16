@@ -520,6 +520,73 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             permission_strategy.decision_observation_id,
         ) == 0
 
+        # KCOG-01C1B2B1: persist a real, scoped *unverified* execution
+        # observation through the existing runtime OutcomeRecorder. Neither
+        # an empty model receipt nor a saved diagnostic is a verification
+        # judgment, and the selected-only row remains reviewer-ineligible.
+        import time
+        from types import SimpleNamespace
+
+        from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
+        from ai_karen_engine.platform.observability.context import (
+            CorrelationContext,
+            reset_correlation_context,
+            set_correlation_context,
+        )
+
+        runtime._outcome_recorder = OutcomeRecorder(
+            store=PostgresOutcomeStore(),
+        )
+        observation_context = set_correlation_context(CorrelationContext(
+            correlation_id=permission_traj.correlation_id,
+            request_id=permission_traj.request_id,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        ))
+        try:
+            await runtime._record_execution_outcome(
+                trajectory_id=permission_traj.trajectory_id,
+                decision=direct_plan,
+                decision_observation_id=permission_strategy.decision_observation_id,
+                text="",
+                start=time.time(),
+                meter=SimpleNamespace(
+                    model_calls=0, tool_calls=0, reasoning_steps=0,
+                ),
+                memory_meta={},
+                success=False,
+                transcript_meta={"transcript_persistence_status": "skipped"},
+                provider_meta={},
+            )
+        finally:
+            reset_correlation_context(observation_context)
+        assert await raw.fetchval(
+            """SELECT payload->'metadata'->'selected_strategy_execution'
+                      ->>'status'
+               FROM public.outcome_records
+               WHERE source='runtime.execution'
+                 AND decision_observation_id=$1""",
+            permission_strategy.decision_observation_id,
+        ) == "unverified"
+        assert await raw.fetchval(
+            """SELECT payload->'metadata'->'selected_strategy_execution'
+                      ->>'ope_eligible'
+               FROM public.outcome_records
+               WHERE source='runtime.execution'
+                 AND decision_observation_id=$1""",
+            permission_strategy.decision_observation_id,
+        ) == "false"
+        with pytest.raises(ValueError, match="not verification-OPE eligible"):
+            await authenticated_review.submit(
+                ReviewJudgement(
+                    decision_observation_id=permission_strategy.decision_observation_id,
+                    subject_user_id=subject_a,
+                    reward=1.0,
+                    verification_needed=True,
+                ),
+                reviewer=reviewer,
+            )
+
         # A second attempted decision with an original *label* ID causes
         # statement two to conflict. Statement one MUST roll back as well.
         conflict = _observation(2, tenant_a)
