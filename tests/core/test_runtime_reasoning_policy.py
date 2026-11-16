@@ -255,3 +255,27 @@ def test_optional_verification_probe_requires_independent_policy_grant() -> None
         assert result.alternative_policy_decision_id is None
 
     asyncio.run(run())
+
+
+def test_policy_probe_feature_flag_is_default_off_and_strictly_configured(
+    monkeypatch,
+) -> None:
+    import pytest
+
+    from ai_karen_engine.config.runtime import RuntimeSettings
+
+    settings = RuntimeSettings()
+    assert settings.features.enable_verification_strategy_policy_probe is False
+    monkeypatch.setenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE", "true")
+    settings.apply_env_overrides()
+    assert settings.features.enable_verification_strategy_policy_probe is True
+    assert settings.validate() == []
+    monkeypatch.setenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE", "off")
+    settings.apply_env_overrides()
+    assert settings.features.enable_verification_strategy_policy_probe is False
+    monkeypatch.setenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE", "maybe")
+    with pytest.raises(ValueError, match="must be a boolean"):
+        settings.apply_env_overrides()
+    monkeypatch.delenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE")
+    settings.features.enable_verification_strategy_policy_probe = "true"
+    assert any("policy probe flag must be boolean" in issue for issue in settings.validate())
