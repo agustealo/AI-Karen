@@ -95,8 +95,6 @@ class EvaluationEvidenceStore:
                 or outcome.prediction.model_id != manifest.model_id
                 or outcome.prediction.model_version != manifest.model_version
                 or outcome.prediction.task != result.task
-                or not outcome.prediction.feature_version
-                or outcome.prediction.feature_version != manifest.feature_version
                 or outcome.fallback_used
                 or outcome.prediction.fallback_used
                 for outcome in result.outcomes
@@ -120,33 +118,46 @@ class EvaluationEvidenceStore:
             "reasons": reasons,
             "sample_count": result.sample_count,
             "error_count": result.error_count,
-            # New receipts retain *hashed* case membership. Historical
-            # benchmark receipts remain valid for promotion, but are not
-            # sufficient for KCM's exact per-case provenance projection.
-            "kcm_case_receipt_version": "benchmark_cases_v1",
-            "feature_version": manifest.feature_version,
-            "correct_count": sum(item.correct for item in result.outcomes),
-            "case_hashes": sorted(
-                hashlib.sha256(item.case_id.encode("utf-8")).hexdigest()[:24]
-                for item in result.outcomes
-            ),
-            "case_verdicts": sorted(
-                [
-                    {
-                        "case_hash": hashlib.sha256(
-                            item.case_id.encode("utf-8")
-                        ).hexdigest()[:24],
-                        "correct": item.correct,
-                    }
-                    for item in result.outcomes
-                ],
-                key=lambda item: item["case_hash"],
-            ),
             "metrics": {
                 name: {"value": metric.value, "sample_count": metric.sample_count}
                 for name, metric in result.metrics.items()
             },
         }
+        # Preserve existing benchmark-promotion compatibility: older
+        # evaluators may emit the Prediction default feature version even
+        # when the registered manifest has a more specific version.
+        # Such receipts remain valid for their *existing* purpose but are
+        # not sufficiently attributed for KCM's exact task assessment.
+        if (
+            isinstance(manifest.feature_version, str)
+            and bool(manifest.feature_version)
+            and all(
+                item.prediction is not None
+                and item.prediction.feature_version == manifest.feature_version
+                for item in result.outcomes
+            )
+        ):
+            evidence.update({
+                "kcm_case_receipt_version": "benchmark_cases_v1",
+                "feature_version": manifest.feature_version,
+                "correct_count": sum(item.correct for item in result.outcomes),
+                "case_hashes": sorted(
+                    hashlib.sha256(item.case_id.encode("utf-8")).hexdigest()[:24]
+                    for item in result.outcomes
+                ),
+                "case_verdicts": sorted(
+                    [
+                        {
+                            "case_hash": hashlib.sha256(
+                                item.case_id.encode("utf-8")
+                            ).hexdigest()[:24],
+                            "correct": item.correct,
+                        }
+                        for item in result.outcomes
+                    ],
+                    key=lambda item: item["case_hash"],
+                ),
+            })
         with self._connect() as db:
             db.execute(
                 """INSERT INTO benchmark_receipts
