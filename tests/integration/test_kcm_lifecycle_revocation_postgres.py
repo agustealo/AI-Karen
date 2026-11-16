@@ -184,8 +184,8 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
         await _make_source(conn, TENANT_A, USER_A, event_payload)
         await conn.execute(
             "UPDATE public.memory_event "
-            "SET payload='{"+'"revised"'+":true}'::jsonb WHERE event_id=$1",
-            event_payload,
+            "SET payload=CAST($2 AS jsonb) WHERE event_id=$1",
+            event_payload, '{"revised":true}',
         )
         assert await _source_status(conn, event_payload) == "revoked"
         assert await _epoch(conn, TENANT_A, USER_A) == 2
