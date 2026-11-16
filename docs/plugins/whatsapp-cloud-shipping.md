@@ -9,7 +9,7 @@ Status: **candidate, not a live WhatsApp connection**. Canonical plugin: `src/ai
 - **Plugins & Tools Overview** must show “Frontend: not required (backend-only)” for this adapter, not “UI installed but not registered”. The “Retry Registration”, generic “Enable/Disable”, and “Remove UI” controls are inapplicable.
 - `ChannelHostServices` is the sole live process owner for an installed transport. Its disabled-by-default settings and `ChannelActivationService` separately govern each tenant connection with existing RuntimePolicy, RBAC, and SQL revision checks.
 - `CredentialVaultService` is the sole secret owner. The transport receives only a host-injected `ChannelVaultSecretResolver`; native event bodies cannot select an installation, tenant, user, credential handle, or provider.
-- `ChannelIngressService` verifies signed raw POST content, normalizes text-only inbound events, and commits inbox records before returning 202; the shared worker handles ChatRuntime turns and durable outbox dispatch.
+- `ChannelIngressService` verifies signed raw POST content, normalizes text-only inbound events, and commits inbox records before returning 200; the shared worker handles ChatRuntime turns and durable outbox dispatch.
 - API routes remain thin. Cloud API receipts confirming **sent** are not the same as delivery/read receipts.
 
 ## KWA-01C first slice: Meta phone identity preflight
@@ -146,9 +146,9 @@ send is finalized, pending signed receipts may advance \`sent\` to \`delivered\`
 or \`read\`. Out-of-order \`sent\` and contradictory lower-confidence
 \`failed\` observations cannot reduce \`read\`. A terminal \`failed\` row is
 not reopened. The unique scoped provider-message index fails a migration
-rather than allowing ambiguous attribution. A POST webhook returns 202 only
+rather than allowing ambiguous attribution. A POST webhook returns 200 only
 after every supported event is committed; partial failures are retried safely
-through unique inbox IDs and status receipt digests. An HTTP 202 is only
+through unique inbox IDs and status receipt digests. An HTTP 200 is only
 **durable admission**, never proof of ChatRuntime success or provider delivery.
 
 **Still blocked:** production data migration rollout and review of existing
