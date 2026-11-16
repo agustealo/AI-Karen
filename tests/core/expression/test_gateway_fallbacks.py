@@ -62,7 +62,7 @@ async def test_gateway_fallback_loop():
         assert result.metadata["fallback_level"] == 1
         assert result.degraded is True
         assert result.degradation_reason == "model_engine_fallback"
-        assert any(s["engine_id"] == "builtin" and s["reason"] == "exception" for s in result.metadata["skipped_engines"])
+        assert any(s["engine_id"] == "local" and s["reason"] == "exception" for s in result.metadata["skipped_engines"])
 
 @pytest.mark.asyncio
 async def test_gateway_emergency_fallback():
