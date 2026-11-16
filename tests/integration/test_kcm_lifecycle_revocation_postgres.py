@@ -116,6 +116,10 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
             "sensitivity_class varchar(50) DEFAULT 'normal',"
             "payload jsonb NOT NULL DEFAULT '{}'::jsonb,"
             "supersedes uuid);"
+            "CREATE TABLE public.memory_assertion("
+            "assertion_id uuid PRIMARY KEY,"
+            "event_id uuid NOT NULL REFERENCES public.memory_event(event_id),"
+            "tenant_id uuid NOT NULL,user_id uuid NOT NULL);"
             "CREATE TABLE public.consent_scope("
             "scope_id uuid PRIMARY KEY,"
             "tenant_id uuid NOT NULL,user_id uuid NOT NULL,"
@@ -218,12 +222,20 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
         # Supersession invalidates the previous source without requiring a
         # separate UPDATE of its old memory-event row.
         event_old, event_new = uuid.uuid4(), uuid.uuid4()
+        parent_memory_id = uuid.uuid4()
         await _make_source(conn, TENANT_A, USER_A, event_old)
+        # Real NeuroVault uses MemoryAssertion.assertion_id for the memory
+        # identity and MemoryEvent.event_id for ledger identity.
+        await conn.execute(
+            "INSERT INTO public.memory_assertion "
+            "(assertion_id,event_id,tenant_id,user_id) VALUES($1,$2,$3,$4)",
+            parent_memory_id, event_old, TENANT_A, USER_A,
+        )
         await conn.execute(
             "INSERT INTO public.memory_event "
             "(event_id,tenant_id,user_id,payload_hash,event_type,payload,supersedes) "
             "VALUES($1,$2,$3,$4,'memory_persisted','{}'::jsonb,$5)",
-            event_new, TENANT_A, USER_A, "d" * 64, event_old,
+            event_new, TENANT_A, USER_A, "d" * 64, parent_memory_id,
         )
         assert await _source_status(conn, event_old) == "revoked"
         assert await _epoch(conn, TENANT_A, USER_A) == 4
@@ -261,6 +273,28 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
         assert await _epoch(conn, TENANT_B, USER_B) == 0
         assert await _source_status(conn, foreign_event) == "quarantined"
 
+        # In the canonical control repository the *first* denial of a
+        # previously absent consent scope is an INSERT with is_granted=False.
+        # Previously absent scopes are considered granted for memory recall,
+        # so this must invalidate existing KCM lineage immediately.
+        first_denial_event = uuid.uuid4()
+        first_denial_id = uuid.uuid4()
+        await _make_source(conn, TENANT_A, USER_A, first_denial_event)
+        await conn.execute(
+            "INSERT INTO public.consent_scope "
+            "(scope_id,tenant_id,user_id,scope_name,is_granted) "
+            "VALUES($1,$2,$3,'previously-implicit',FALSE)",
+            first_denial_id, TENANT_A, USER_A,
+        )
+        assert await _source_status(conn, first_denial_event) == "revoked"
+        assert await _epoch(conn, TENANT_A, USER_A) == 9
+        assert await conn.fetchval(
+            "SELECT count(*) FROM public.kcm_training_scope_invalidations "
+            "WHERE tenant_id=$1 AND user_id=$2 "
+            "AND reason_code='consent_revoked'",
+            TENANT_A, USER_A,
+        ) == 2
+
         # A revoked source cannot be reintroduced into another dataset.
         with pytest.raises(asyncpg.CheckViolationError):
             await conn.execute(
@@ -284,7 +318,7 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
             "VALUES($1,$2,$3,'erasure','pending')",
             privacy_id, TENANT_A, USER_A,
         )
-        assert await _epoch(conn, TENANT_A, USER_A) == 7
+        assert await _epoch(conn, TENANT_A, USER_A) == 9
         await conn.execute(
             "UPDATE public.privacy_requests SET status='in_progress' "
             "WHERE request_id=$1", privacy_id,
@@ -296,7 +330,7 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
             "AND reason_code='privacy_erasure'",
             TENANT_A, USER_A,
         ) == 1
-        assert await _epoch(conn, TENANT_A, USER_A) == 9
+        assert await _epoch(conn, TENANT_A, USER_A) == 11
 
         # Fail-closed atomicity: failure to persist a revocation makes the
         # original memory mutation rollback, not silently succeed.
@@ -343,7 +377,7 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
             f'TO "{reader_role}"'
         )
         for tenant, user, expected in (
-            (TENANT_A, USER_A, 2),
+            (TENANT_A, USER_A, 3),
             (TENANT_B, USER_B, 0),
             (TENANT_A, USER_B, 0),
         ):
