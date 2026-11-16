@@ -330,8 +330,9 @@ class RuntimePolicyEnforcer:
             or topology.get("agent_delegation")
             or topology.get("workflow_id")
             or any(
-                capability == "memory.write"
-                or capability.startswith(("channel.", "automation.", "model.personal_key."))
+                capability.startswith(
+                    ("channel.", "automation.", "model.personal_key.")
+                )
                 for capability in request.requested_capabilities
             )
         ):
