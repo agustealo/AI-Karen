@@ -20,6 +20,7 @@ from ai_karen_engine.extensions.channels.contracts import (
     ChannelDeliveryReceipt,
     ChannelDeliveryRequest,
     ChannelDeliveryState,
+    ChannelProviderStatusEvent,
     InboundChannelEvent,
     VerifiedIdentityBinding,
 )
@@ -1840,6 +1841,171 @@ class SqlChannelRepository:
                  "claim": str(uuid.UUID(claim_token)), "seconds": lease_seconds},
             )
             return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def _reconcile_provider_status(
+        session: Any, *, tenant_id: str, connection_id: str,
+        revision: int, provider_message_id: str, recipient_id: str,
+    ) -> bool:
+        """Apply strongest signed receipt to one finalized send, never a prompt.
+
+        The SQL joins the current tenant, connection revision, original inbox
+        revision, provider message identifier and exact recipient. The outbox
+        row UPDATE is the serialization lock against finalizing a live send.
+        Read > delivered > failed > sent resolves out-of-order observations;
+        only forward transitions are legal. Terminal FAILED is not reopened.
+        """
+        result = await session.execute(
+            text("""
+                WITH best AS (
+                    SELECT state, receipt_id, error_code
+                    FROM public.channel_provider_status_events
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND connection_revision = :revision
+                      AND provider_message_id = :message
+                      AND recipient_id = :recipient
+                    ORDER BY CASE state
+                        WHEN 'read' THEN 4
+                        WHEN 'delivered' THEN 3
+                        WHEN 'failed' THEN 2
+                        ELSE 1 END DESC,
+                        provider_timestamp DESC, receipt_id DESC
+                    LIMIT 1
+                )
+                UPDATE public.channel_outbox o
+                   SET status = best.state,
+                       provider_receipt_id = best.receipt_id,
+                       last_error_code = best.error_code,
+                       updated_at = clock_timestamp()
+                  FROM best, public.channel_inbox i,
+                       public.channel_connections c
+                 WHERE o.tenant_id = CAST(:tenant AS uuid)
+                   AND o.connection_id = :connection
+                   AND o.provider_message_id = :message
+                   AND o.destination_id = :recipient
+                   AND o.attempt_count > 0
+                   AND o.claim_token IS NULL
+                   AND c.tenant_id = o.tenant_id
+                   AND c.connection_id = o.connection_id
+                   AND c.enabled = true
+                   AND c.revision = :revision
+                   AND i.tenant_id = o.tenant_id
+                   AND i.connection_id = o.connection_id
+                   AND i.inbox_id = o.inbox_id
+                   AND i.connection_revision = c.revision
+                   AND (
+                       (o.status = 'sent'
+                           AND best.state IN ('delivered', 'read', 'failed'))
+                       OR (o.status = 'delivered' AND best.state = 'read')
+                   )
+                RETURNING o.delivery_id
+            """),
+            {
+                "tenant": tenant_id,
+                "connection": connection_id,
+                "revision": revision,
+                "message": provider_message_id,
+                "recipient": recipient_id,
+            },
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def record_provider_status(
+        self, *, connection: ChannelConnection, status: ChannelProviderStatusEvent,
+    ) -> bool:
+        """Store an authenticated native receipt once and reconcile if possible.
+
+        Only ChannelIngressService may supply the previously signature-verified
+        canonical adapter event. The DB independently fences tenant, revision
+        and connection; status events contain no Karen user identity.
+        """
+        if not isinstance(status, ChannelProviderStatusEvent):
+            raise ChannelAdmissionDenied("Invalid provider status contract")
+        # Validate again to reject model_copy(update=...) bypasses.
+        status = ChannelProviderStatusEvent.model_validate(status.model_dump())
+        if not connection.enabled or status.connection_id != connection.connection_id:
+            raise ChannelAdmissionDenied("Status connection is inactive or mismatched")
+        tenant_id = _tenant_uuid(connection.tenant_id)
+        digest = hashlib.sha256(json.dumps(
+            {
+                "connection_id": status.connection_id,
+                "message_id": status.provider_message_id,
+                "recipient_id": status.recipient_id,
+                "state": status.state.value,
+                "timestamp": status.provider_timestamp,
+                "receipt_id": status.provider_receipt_id,
+                "error_code": status.error_code,
+            }, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        args = {
+            "tenant": tenant_id,
+            "connection": connection.connection_id,
+            "revision": connection.revision,
+            "message": status.provider_message_id,
+            "recipient": status.recipient_id,
+            "state": status.state.value,
+            "provider_timestamp": status.provider_timestamp,
+            "receipt": status.provider_receipt_id,
+            "digest": digest,
+            "error_code": status.error_code,
+        }
+        async with async_transaction_scope(tenant_id) as session:
+            inserted = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_provider_status_events (
+                        tenant_id, connection_id, connection_revision,
+                        provider_message_id, recipient_id, state,
+                        provider_timestamp, receipt_id, event_digest, error_code
+                    )
+                    SELECT c.tenant_id, c.connection_id, c.revision,
+                           :message, :recipient, :state,
+                           :provider_timestamp, :receipt, :digest, :error_code
+                    FROM public.channel_connections c
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND c.enabled = true
+                      AND c.revision = :revision
+                    ON CONFLICT (tenant_id, connection_id, receipt_id)
+                    DO NOTHING
+                    RETURNING receipt_id
+                """),
+                args,
+            )).scalar_one_or_none()
+            if inserted is None:
+                existing = (await session.execute(
+                    text("""
+                        SELECT e.event_digest
+                        FROM public.channel_provider_status_events e
+                        JOIN public.channel_connections c
+                          ON c.tenant_id = e.tenant_id
+                         AND c.connection_id = e.connection_id
+                        WHERE e.tenant_id = CAST(:tenant AS uuid)
+                          AND e.connection_id = :connection
+                          AND e.connection_revision = :revision
+                          AND e.receipt_id = :receipt
+                          AND c.enabled = true AND c.revision = :revision
+                    """),
+                    args,
+                )).scalar_one_or_none()
+                if existing is None:
+                    raise ChannelAdmissionDenied(
+                        "No active tenant connection for provider status"
+                    )
+                if existing != digest:
+                    raise ChannelAdmissionConflict(
+                        "Provider status identifier reused with changed evidence"
+                    )
+            # A status may reach Karen before the provider's send response.
+            # Preserve it without inventing success, and recheck after send.
+            await self._reconcile_provider_status(
+                session, tenant_id=tenant_id,
+                connection_id=connection.connection_id,
+                revision=connection.revision,
+                provider_message_id=status.provider_message_id,
+                recipient_id=status.recipient_id,
+            )
+        return True
 
     async def finalize_outbound_claim(
         self, *, tenant_id: str, claim_token: str,
