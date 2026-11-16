@@ -154,7 +154,7 @@ export default function LocalVoiceEngineSettings() {
         stop();
       };
       await audio.play();
-    } catch (cause) {
+    } catch {
       if (!controller.signal.aborted) {
         setError("Karen could not complete the local voice preview. Verify the engine and try again.");
         stop();
