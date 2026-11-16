@@ -7,13 +7,13 @@ activation remains an explicit per-tenant RuntimePolicy decision.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import ipaddress
 import json
 import os
 import re
-from urllib.parse import urlsplit
+from dataclasses import dataclass, field
 from typing import Mapping
+from urllib.parse import urlsplit
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
