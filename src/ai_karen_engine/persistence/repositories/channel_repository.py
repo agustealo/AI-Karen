@@ -1961,9 +1961,25 @@ class SqlChannelRepository:
             return result.scalar_one_or_none() is not None
 
     @staticmethod
+    def _status_event_digest(status: ChannelProviderStatusEvent) -> str:
+        """Canonical exact-replay digest of already signed Meta status fields."""
+        return hashlib.sha256(json.dumps(
+            {
+                "connection_id": status.connection_id,
+                "message_id": status.provider_message_id,
+                "recipient_id": status.recipient_id,
+                "state": status.state.value,
+                "timestamp": status.provider_timestamp,
+                "receipt_id": status.provider_receipt_id,
+                "error_code": status.error_code,
+            }, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+
+    @staticmethod
     async def _reconcile_provider_status(
         session: Any, *, tenant_id: str, connection_id: str,
         revision: int, provider_message_id: str, recipient_id: str,
+        historical: bool = False, current_revision: int | None = None,
     ) -> bool:
         """Apply strongest signed receipt to one finalized send, never a prompt.
 
@@ -2006,12 +2022,19 @@ class SqlChannelRepository:
                    AND o.claim_token IS NULL
                    AND c.tenant_id = o.tenant_id
                    AND c.connection_id = o.connection_id
-                   AND c.enabled = true
-                   AND c.revision = :revision
                    AND i.tenant_id = o.tenant_id
                    AND i.connection_id = o.connection_id
                    AND i.inbox_id = o.inbox_id
-                   AND i.connection_revision = c.revision
+                   AND (
+                       (c.enabled = true
+                           AND c.revision = :revision
+                           AND i.connection_revision = c.revision
+                           AND :historical = false)
+                       OR (c.enabled = false
+                           AND :historical = true
+                           AND c.revision = :current_revision
+                           AND i.connection_revision = :revision)
+                   )
                    AND (
                        (o.status = 'sent'
                            AND best.state IN ('delivered', 'read', 'failed'))
@@ -2023,6 +2046,8 @@ class SqlChannelRepository:
                 "tenant": tenant_id,
                 "connection": connection_id,
                 "revision": revision,
+                "current_revision": current_revision if historical else revision,
+                "historical": historical,
                 "message": provider_message_id,
                 "recipient": recipient_id,
             },
@@ -2045,17 +2070,7 @@ class SqlChannelRepository:
         if not connection.enabled or status.connection_id != connection.connection_id:
             raise ChannelAdmissionDenied("Status connection is inactive or mismatched")
         tenant_id = _tenant_uuid(connection.tenant_id)
-        digest = hashlib.sha256(json.dumps(
-            {
-                "connection_id": status.connection_id,
-                "message_id": status.provider_message_id,
-                "recipient_id": status.recipient_id,
-                "state": status.state.value,
-                "timestamp": status.provider_timestamp,
-                "receipt_id": status.provider_receipt_id,
-                "error_code": status.error_code,
-            }, sort_keys=True, separators=(",", ":"),
-        ).encode("utf-8")).hexdigest()
+        digest = self._status_event_digest(status)
         args = {
             "tenant": tenant_id,
             "connection": connection.connection_id,
@@ -2125,6 +2140,129 @@ class SqlChannelRepository:
             )
         return True
 
+    async def record_deactivated_provider_status(
+        self, *, connection: ChannelConnection, status: ChannelProviderStatusEvent,
+    ) -> bool:
+        """Reconcile a signed status for a known prior send, without reopening chat.
+
+        Unlike active status admission, this path never stores an unmatched
+        receipt. The original finalized outbox, exact recipient and inbox
+        revision must prove historical attribution in the SAME SQL transaction.
+        Revisions and disabled state are freshly rechecked in SQL.
+        """
+        if not isinstance(status, ChannelProviderStatusEvent):
+            raise ChannelAdmissionDenied("Invalid historical provider status contract")
+        status = ChannelProviderStatusEvent.model_validate(status.model_dump())
+        if (
+            connection.enabled
+            or connection.installation_id != "whatsapp-cloud"
+            or status.connection_id != connection.connection_id
+        ):
+            raise ChannelAdmissionDenied("Historical WhatsApp status scope denied")
+        tenant_id = _tenant_uuid(connection.tenant_id)
+        args = {
+            "tenant": tenant_id,
+            "connection": connection.connection_id,
+            "current_revision": connection.revision,
+            "message": status.provider_message_id,
+            "recipient": status.recipient_id,
+            "state": status.state.value,
+            "provider_timestamp": status.provider_timestamp,
+            "receipt": status.provider_receipt_id,
+            "digest": self._status_event_digest(status),
+            "error_code": status.error_code,
+        }
+        async with async_transaction_scope(tenant_id) as session:
+            inserted = (await session.execute(
+                text("""
+                    INSERT INTO public.channel_provider_status_events (
+                        tenant_id, connection_id, connection_revision,
+                        provider_message_id, recipient_id, state,
+                        provider_timestamp, receipt_id, event_digest, error_code
+                    )
+                    SELECT c.tenant_id, c.connection_id, i.connection_revision,
+                           :message, :recipient, :state, :provider_timestamp,
+                           :receipt, :digest, :error_code
+                    FROM public.channel_connections c
+                    JOIN public.channel_outbox o
+                      ON o.tenant_id = c.tenant_id
+                     AND o.connection_id = c.connection_id
+                    JOIN public.channel_inbox i
+                      ON i.tenant_id = o.tenant_id
+                     AND i.connection_id = o.connection_id
+                     AND i.inbox_id = o.inbox_id
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.connection_id = :connection
+                      AND c.installation_id = 'whatsapp-cloud'
+                      AND c.enabled = false
+                      AND c.revision = :current_revision
+                      AND i.connection_revision < c.revision
+                      AND o.provider_message_id = :message
+                      AND o.destination_id = :recipient
+                      AND o.claim_token IS NULL
+                      AND o.attempt_count > 0
+                      AND o.status IN ('sent', 'delivered', 'read', 'failed')
+                    ON CONFLICT (tenant_id, connection_id, receipt_id)
+                    DO NOTHING
+                    RETURNING connection_revision
+                """),
+                args,
+            )).scalar_one_or_none()
+            if inserted is None:
+                # Historical duplicate or an unknown/rotated send: read exactly
+                # the same scoped completed send, never a tenant-wide receipt.
+                existing = (await session.execute(
+                    text("""
+                        SELECT e.event_digest, e.connection_revision
+                        FROM public.channel_provider_status_events e
+                        JOIN public.channel_connections c
+                          ON c.tenant_id = e.tenant_id
+                         AND c.connection_id = e.connection_id
+                        JOIN public.channel_outbox o
+                          ON o.tenant_id = e.tenant_id
+                         AND o.connection_id = e.connection_id
+                         AND o.provider_message_id = e.provider_message_id
+                         AND o.destination_id = e.recipient_id
+                        JOIN public.channel_inbox i
+                          ON i.tenant_id = o.tenant_id
+                         AND i.connection_id = o.connection_id
+                         AND i.inbox_id = o.inbox_id
+                         AND i.connection_revision = e.connection_revision
+                        WHERE e.tenant_id = CAST(:tenant AS uuid)
+                          AND e.connection_id = :connection
+                          AND e.receipt_id = :receipt
+                          AND e.provider_message_id = :message
+                          AND e.recipient_id = :recipient
+                          AND c.installation_id = 'whatsapp-cloud'
+                          AND c.enabled = false
+                          AND c.revision = :current_revision
+                          AND i.connection_revision < c.revision
+                          AND o.claim_token IS NULL
+                          AND o.attempt_count > 0
+                          AND o.status IN ('sent', 'delivered', 'read', 'failed')
+                    """),
+                    args,
+                )).mappings().one_or_none()
+                if existing is None:
+                    return False
+                if existing["event_digest"] != args["digest"]:
+                    raise ChannelAdmissionConflict(
+                        "Historical provider status identifier digest mismatch"
+                    )
+                original_revision = int(existing["connection_revision"])
+            else:
+                original_revision = int(inserted)
+            await self._reconcile_provider_status(
+                session, tenant_id=tenant_id,
+                connection_id=connection.connection_id,
+                revision=original_revision,
+                current_revision=connection.revision,
+                historical=True,
+                provider_message_id=status.provider_message_id,
+                recipient_id=status.recipient_id,
+            )
+        return True
+
     async def finalize_outbound_claim(
         self, *, tenant_id: str, claim_token: str,
         receipt: ChannelDeliveryReceipt,
@@ -2189,12 +2327,17 @@ class SqlChannelRepository:
                 current = (await session.execute(
                     text("""
                         SELECT o.connection_id, o.destination_id,
-                               i.connection_revision
+                               i.connection_revision,
+                               c.enabled AS connection_enabled,
+                               c.revision AS current_revision
                         FROM public.channel_outbox o
                         JOIN public.channel_inbox i
                           ON i.tenant_id = o.tenant_id
                          AND i.connection_id = o.connection_id
                          AND i.inbox_id = o.inbox_id
+                        JOIN public.channel_connections c
+                          ON c.tenant_id = o.tenant_id
+                         AND c.connection_id = o.connection_id
                         WHERE o.tenant_id = CAST(:tenant AS uuid)
                           AND o.delivery_id = CAST(:delivery AS uuid)
                           AND o.provider_message_id = :provider_message
@@ -2210,10 +2353,19 @@ class SqlChannelRepository:
                     raise ChannelAdmissionDenied(
                         "Finalized send lost tenant-scoped inbox attribution"
                     )
+                original_revision = int(current["connection_revision"])
+                current_revision = int(current["current_revision"])
+                historical = current["connection_enabled"] is False
+                if historical and current_revision <= original_revision:
+                    raise ChannelAdmissionDenied(
+                        "Historical send revision cannot exceed disabled connection fence"
+                    )
                 await self._reconcile_provider_status(
                     session, tenant_id=tenant_id,
                     connection_id=str(current["connection_id"]),
-                    revision=int(current["connection_revision"]),
+                    revision=original_revision,
+                    current_revision=current_revision,
+                    historical=historical,
                     provider_message_id=receipt.provider_message_id,
                     recipient_id=str(current["destination_id"]),
                 )

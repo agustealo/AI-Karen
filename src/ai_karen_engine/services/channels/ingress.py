@@ -16,6 +16,7 @@ from typing import Mapping
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelAdapter,
     ChannelConnection,
+    ChannelProviderStatusEvent,
     ChannelWebhookBatch,
     InboundChannelEvent,
     VerifiedIdentityBinding,
@@ -259,7 +260,77 @@ class ChannelIngressService:
         initial = await self._repository.get_enabled_connection(
             tenant_id=tenant_id, connection_id=connection_id,
         )
-        if initial is None or initial.tenant_id != tenant_id:
+        if initial is None:
+            # Disabled WhatsApp connections may receive delayed *status-only*
+            # webhooks for already-finalized sends. Never reopen inbound chat,
+            # sender linking, plugin execution, worker scheduling, or dispatch.
+            disabled = await self._repository.get_connection(
+                tenant_id=tenant_id, connection_id=connection_id,
+            )
+            if (
+                disabled is None or disabled.enabled
+                or disabled.tenant_id != tenant_id
+                or disabled.connection_id != connection_id
+                or disabled.installation_id != "whatsapp-cloud"
+                or not isinstance(body, bytes)
+                or not 0 < len(body) <= self._max_native_body_bytes
+                or self._kernel.get_channel_activation_manifest(
+                    disabled.installation_id
+                ) is None
+            ):
+                raise ChannelAdmissionDenied("Channel connection is unavailable")
+            try:
+                adapter = self._kernel.loader.load_extension(disabled.installation_id)
+            except Exception:
+                raise ChannelAdmissionDenied("Historical channel adapter unavailable") from None
+            if not self._kernel.is_canonical_channel_adapter(
+                disabled.installation_id, adapter,
+            ):
+                raise ChannelAdmissionDenied("Historical channel adapter not canonical")
+            verifier = getattr(adapter, "normalize_deactivated_statuses", None)
+            if not callable(verifier):
+                raise ChannelAdmissionDenied("Historical channel status capability unavailable")
+            try:
+                statuses = await verifier(
+                    connection=disabled, headers=headers, body=body,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "channel.ingress.historical_status_verification_denied",
+                    extra={
+                        "tenant_id": tenant_id, "connection_id": connection_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                raise ChannelAdmissionDenied("Historical native status rejected") from None
+            if (
+                not isinstance(statuses, tuple)
+                or not 1 <= len(statuses) <= 100
+                or any(
+                    not isinstance(status, ChannelProviderStatusEvent)
+                    or status.connection_id != disabled.connection_id
+                    for status in statuses
+                )
+            ):
+                raise ChannelAdmissionDenied("Invalid historical native status batch")
+            matched = 0
+            for status in statuses:
+                if await self._repository.record_deactivated_provider_status(
+                    connection=disabled, status=status,
+                ):
+                    matched += 1
+            logger.info(
+                "channel.ingress.historical_status_committed",
+                extra={
+                    "tenant_id": tenant_id,
+                    "connection_id": connection_id,
+                    "historical_status_count": len(statuses),
+                    "matched_status_count": matched,
+                    "inbound_count": 0,
+                },
+            )
+            return "status_recorded" if matched else "ignored"
+        if initial.tenant_id != tenant_id:
             raise ChannelAdmissionDenied("Channel connection is unavailable")
         if self._kernel.get_channel_activation_manifest(initial.installation_id) is None:
             raise ChannelAdmissionDenied("Installed channel is not available")

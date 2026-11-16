@@ -1069,6 +1069,176 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 status=early_read,
             )
 
+        # KWA-01C3: a disabled WhatsApp connection can receive verified
+        # status-only evidence for a *known previously finalized* send.
+        # No new inbox admission, send, or connection reactivation follows.
+        historical_id = f"wa-status-{uuid.uuid4().hex}"
+        historical_binding, historical_inbox, historical_delivery = [
+            uuid.uuid4() for _ in range(3)
+        ]
+        historical_msg = "wamid.historical-finalized"
+        historical_recipient = "15550001234"
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id, provider_account_id,
+                credential_handle, enabled, revision)
+               VALUES ($1,$2,'whatsapp-cloud','20987654321','vault://meta',
+                       true,1)""",
+            historical_id, tenant_a,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_identity_bindings
+               (binding_id,tenant_id,connection_id,external_sender_id,user_id,
+                verified_at)
+               VALUES ($1,$2,$3,$4,$5,now())""",
+            historical_binding, tenant_a, historical_id, historical_recipient, user,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id,tenant_id,connection_id,connection_revision,
+                external_event_id,external_sender_id,external_conversation_id,
+                message_kind,message_text,event_digest,status,binding_id,user_id)
+               VALUES ($1,$2,$3,1,'status-before-deactivation',$4,$4,'text',
+                       'customer question',$5,'completed',$6,$7)""",
+            historical_inbox, tenant_a, historical_id,
+            historical_recipient, "e" * 64, historical_binding, user,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_outbox
+               (delivery_id,tenant_id,connection_id,inbox_id,destination_id,
+                idempotency_key,message_kind,message_text,status,
+                provider_message_id,attempt_count)
+               VALUES ($1,$2,$3,$4,$5,'historical-unique','text','answer',
+                       'sent',$6,1)""",
+            historical_delivery, tenant_a, historical_id,
+            historical_inbox, historical_recipient, historical_msg,
+        )
+        # Provider status may arrive before the HTTP send receipt, then
+        # operator deactivation may occur before that receipt is finalized.
+        pending_id = uuid.uuid4()
+        pending_provider_id = "wamid.sent-before-disable"
+        await raw.execute(
+            """INSERT INTO public.channel_outbox
+               (delivery_id,tenant_id,connection_id,inbox_id,destination_id,
+                idempotency_key,message_kind,message_text)
+               VALUES ($1,$2,$3,$4,$5,'pending-before-disable','text','Reply')""",
+            pending_id, tenant_a, historical_id,
+            historical_inbox, historical_recipient,
+        )
+        history_repo = SqlChannelRepository()
+        pending_status = ChannelProviderStatusEvent(
+            connection_id=historical_id,
+            provider_message_id=pending_provider_id,
+            recipient_id=historical_recipient,
+            state=ChannelDeliveryState.DELIVERED,
+            provider_timestamp=1770000009,
+            provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                provider_message_id=pending_provider_id,
+                recipient_id=historical_recipient,
+                state=ChannelDeliveryState.DELIVERED,
+                provider_timestamp=1770000009,
+            ),
+        )
+        assert await history_repo.record_provider_status(
+            connection=ChannelConnection(
+                tenant_id=str(tenant_a), connection_id=historical_id,
+                installation_id="whatsapp-cloud",
+                provider_account_id="20987654321",
+                credential_handle="vault://meta", revision=1, enabled=True,
+            ),
+            status=pending_status,
+        )
+        pending_claim = await history_repo.claim_outbound(
+            tenant_id=str(tenant_a), delivery_id=str(pending_id),
+            lease_seconds=90,
+        )
+        assert pending_claim is not None
+        await raw.execute(
+            """UPDATE public.channel_connections
+               SET enabled=false,revision=2
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        )
+        assert await history_repo.finalize_outbound_claim(
+            tenant_id=str(tenant_a), claim_token=pending_claim.claim_token,
+            receipt=ChannelDeliveryReceipt(
+                delivery_id=str(pending_id), state=ChannelDeliveryState.SENT,
+                provider_message_id=pending_provider_id,
+            ),
+        )
+        assert await raw.fetchval(
+            "SELECT status FROM public.channel_outbox WHERE delivery_id=$1",
+            pending_id,
+        ) == "delivered"
+        history = ChannelConnection(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            installation_id="whatsapp-cloud", provider_account_id="20987654321",
+            credential_handle="vault://meta", revision=2, enabled=False,
+        )
+        historical_status = ChannelProviderStatusEvent(
+            connection_id=historical_id, provider_message_id=historical_msg,
+            recipient_id=historical_recipient, state=ChannelDeliveryState.READ,
+            provider_timestamp=1770000010,
+            provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                provider_message_id=historical_msg,
+                recipient_id=historical_recipient, state=ChannelDeliveryState.READ,
+                provider_timestamp=1770000010,
+            ),
+        )
+        assert await history_repo.record_deactivated_provider_status(
+            connection=history, status=historical_status,
+        )
+        assert await history_repo.record_deactivated_provider_status(
+            connection=history, status=historical_status,
+        )
+        assert await raw.fetchval(
+            "SELECT status FROM public.channel_outbox WHERE delivery_id=$1",
+            historical_delivery,
+        ) == "read"
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        ) == 2
+        assert await history_repo.get_enabled_connection(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+        ) is None
+        assert not await history_repo.record_deactivated_provider_status(
+            connection=history,
+            status=historical_status.model_copy(update={
+                "recipient_id": "15559999999",
+                "provider_receipt_id": ChannelProviderStatusEvent.receipt_for(
+                    provider_message_id=historical_msg, recipient_id="15559999999",
+                    state=ChannelDeliveryState.READ, provider_timestamp=1770000010,
+                ),
+            }),
+        )
+        assert not await history_repo.record_deactivated_provider_status(
+            connection=history.model_copy(update={"tenant_id": str(tenant_b)}),
+            status=historical_status,
+        )
+        assert not await history_repo.record_deactivated_provider_status(
+            connection=history.model_copy(update={"revision": 3}),
+            status=historical_status,
+        )
+        # Re-enabling (new revision) cannot silently reuse a disabled snapshot.
+        await raw.execute(
+            """UPDATE public.channel_connections
+               SET enabled=true,revision=3
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        )
+        assert not await history_repo.record_deactivated_provider_status(
+            connection=history, status=historical_status,
+        )
+        # Remove isolated historical fixture so the test's pre-existing RLS
+        # census remains exact, rather than weakening its assertions.
+        await raw.execute(
+            "DELETE FROM public.channel_connections "
+            "WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_a, historical_id,
+        )
+
         # Duplicate provider IDs for two outbox deliveries are forbidden:
         # receipt evidence must not ambiguously update multiple records.
         extra_inbox = uuid.uuid4()

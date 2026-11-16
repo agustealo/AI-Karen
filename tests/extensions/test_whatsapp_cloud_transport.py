@@ -311,6 +311,102 @@ async def test_meta_subscription_does_not_accept_missing_host_secret_or_stale_re
 
 
 
+@pytest.mark.asyncio
+async def test_deactivated_whatsapp_accepts_only_signed_statuses_not_chat_or_sends():
+    _, adapter, active, _, client = adapter_components()
+    disabled = active.model_copy(update={"enabled": False, "revision": 2})
+    status = {
+        "id": "wamid.historical-status", "recipient_id": "15551234567",
+        "status": "read", "timestamp": "1770000000",
+    }
+    body, headers = signed_batch({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": webhook_value(
+            statuses=[status],
+        )}]}],
+    })
+    result = await adapter.normalize_deactivated_statuses(
+        connection=disabled, headers=headers, body=body,
+    )
+    assert len(result) == 1
+    assert result[0].state is ChannelDeliveryState.READ
+    assert result[0].provider_message_id == "wamid.historical-status"
+    assert (await adapter.health(connection=disabled))["running"] is False
+    with pytest.raises(PermissionError):
+        await adapter.send(connection=disabled, delivery=delivery())
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deactivated_whatsapp_rejects_signature_mismatch_and_mixed_batch():
+    _, adapter, active, _, client = adapter_components()
+    disabled = active.model_copy(update={"enabled": False, "revision": 2})
+    status = {
+        "id": "wamid.historical-status", "recipient_id": "15551234567",
+        "status": "delivered", "timestamp": "1770000000",
+    }
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": webhook_value(
+            statuses=[status],
+        )}]}],
+    }
+    body, headers = signed_batch(payload)
+    with pytest.raises(PermissionError, match="signature"):
+        await adapter.normalize_deactivated_statuses(
+            connection=disabled, headers={
+                "X-Hub-Signature-256": "sha256=" + "0" * 64,
+            }, body=body,
+        )
+    mixed, mixed_headers = signed_batch({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": webhook_value(
+            statuses=[status],
+            messages=[{
+                "id": "wamid.untrusted-inbound", "from": "15551234567",
+                "timestamp": "1770000000",
+                "type": "text", "text": {"body": "Do not execute"},
+            }],
+        )}]}],
+    })
+    with pytest.raises(ValueError, match="statuses only"):
+        await adapter.normalize_deactivated_statuses(
+            connection=disabled, headers=mixed_headers, body=mixed,
+        )
+    with pytest.raises(PermissionError):
+        await adapter.normalize_deactivated_statuses(
+            connection=active, headers=headers, body=body,
+        )
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deactivated_whatsapp_rejects_unknown_only_and_wrong_account():
+    _, adapter, active, _, _ = adapter_components()
+    disabled = active.model_copy(update={"enabled": False, "revision": 2})
+    unknown, headers = signed_batch({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "unsupported", "value": {}}]}],
+    })
+    with pytest.raises(ValueError, match="statuses only"):
+        await adapter.normalize_deactivated_statuses(
+            connection=disabled, headers=headers, body=unknown,
+        )
+    payload, headers = signed_batch({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": webhook_value(
+            statuses=[{
+                "id": "wamid.status", "recipient_id": "15551234567",
+                "status": "sent", "timestamp": "1770000000",
+            }], phone="99999999999",
+        )}]}],
+    })
+    with pytest.raises(ValueError, match="phone account mismatch"):
+        await adapter.normalize_deactivated_statuses(
+            connection=disabled, headers=headers, body=payload,
+        )
+
+
 def signed_batch(payload):
     body = json.dumps(payload).encode("utf-8")
     headers = {

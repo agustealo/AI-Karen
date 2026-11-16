@@ -49,6 +49,11 @@ def gateway(*, text="Hello Karen", verified=True, enabled=True, canonical=True):
     )
     repo = SimpleNamespace(
         get_enabled_connection=AsyncMock(return_value=conn if enabled else None),
+        # Native host must distinguish a persisted disabled non-WhatsApp
+        # connection from an eligible historical WhatsApp receipt path.
+        get_connection=AsyncMock(return_value=(
+            conn if enabled else conn.model_copy(update={"enabled": False})
+        )),
         consume_verified_link=AsyncMock(return_value=VerifiedIdentityBinding(
             tenant_id=TENANT, user_id=USER, connection_id=CONNECTION,
             external_sender_id="901",
