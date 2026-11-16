@@ -1076,7 +1076,7 @@ class ChannelHostServices:
     async def recover_inbox(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,
-        limit: int = 100,
+        expected_revision: int, limit: int = 100,
     ) -> int:
         """Requeue durably admitted work after explicit current policy admission.
 
@@ -1090,7 +1090,9 @@ class ChannelHostServices:
             or self.activation is None
         ):
             raise PermissionError("Channel recovery host is unavailable")
-        if not 1 <= limit <= 1000:
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Positive expected connection revision required")
+        if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("Channel recovery limit must be 1..1000")
         connection = await self.repository.get_enabled_connection(
             tenant_id=tenant_id, connection_id=connection_id,
@@ -1099,6 +1101,7 @@ class ChannelHostServices:
             connection is None or connection.tenant_id != tenant_id
             or connection.connection_id != connection_id
             or connection.installation_id not in self._installed
+            or connection.revision != expected_revision
         ):
             raise PermissionError("Channel recovery connection is unavailable")
         await self.activation._authorize(
@@ -1113,6 +1116,13 @@ class ChannelHostServices:
         receipts = await self.repository.list_recoverable_inbound(
             tenant_id=tenant_id, connection_id=connection_id, limit=limit,
         )
+        # A lifecycle revision may have changed while the SQL backlog was
+        # being enumerated. Reject stale scheduling, leaving SQL claims intact.
+        fresh = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if fresh != connection:
+            raise PermissionError("Channel recovery connection changed")
         scheduled = 0
         for receipt in receipts:
             if self._closed:
