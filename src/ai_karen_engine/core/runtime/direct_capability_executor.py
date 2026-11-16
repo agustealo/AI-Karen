@@ -7,7 +7,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.core.cortex.routing_intents import CAPABILITY_ROUTES
+from ai_karen_engine.core.cortex.routing_intents import (
+    CAPABILITY_ROUTES,
+    parse_plugin_inspection_request,
+)
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.contracts import (
     ActionExecutionGate,
@@ -69,6 +72,7 @@ class DirectCapabilityResult:
                 "timer_receipt",
                 "automation_receipt",
                 "missing_fields",
+                "plugin_inspection",
             )
             if self.payload.get(key) is not None
         }
@@ -554,6 +558,193 @@ class DirectCapabilityExecutor:
             latency_ms=(time.perf_counter() - started) * 1000.0,
         )
 
+
+    async def _inspect_plugins(
+        self, request: ChatExecutionRequest, plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ) -> DirectCapabilityResult:
+        """Authenticated read-only catalog inspection, never plugin execution."""
+        started = time.perf_counter()
+        if (
+            "plugin.inspect" not in set(plan.allowed_capabilities)
+            or not await ActionExecutionGate.authorize(plan, "plugin.inspect")
+        ):
+            return DirectCapabilityResult(
+                handled=True, text="Plugin inspection is not authorized.",
+                degraded=True, error="plugin_inspection_denied",
+            )
+        if not plan.matches_execution_scope(
+            user_id=request.context.user_id,
+            tenant_id=request.context.tenant_id,
+            session_id=request.context.session_id,
+        ):
+            return DirectCapabilityResult(
+                handled=True, text="Plugin inspection is not authorized.",
+                degraded=True, error="plugin_principal_scope_denied",
+            )
+        try:
+            principal = request.context.require_authenticated_user()
+        except PermissionError:
+            return DirectCapabilityResult(
+                handled=True, text="Sign in to inspect your plugins.",
+                degraded=True, error="authenticated_principal_required",
+            )
+        parsed = parse_plugin_inspection_request(
+            self._latest_user_text(request)
+        )
+        if parsed is None:
+            return DirectCapabilityResult(handled=False)
+        if not await meter.consume_tool_call():
+            return DirectCapabilityResult(
+                handled=True, text="Plugin inspection budget exhausted.",
+                degraded=True, error="execution_budget_exhausted",
+            )
+        if parsed.operation == "resume" and parsed.target is None:
+            return DirectCapabilityResult(
+                handled=True, success=True, source="plugin_catalog",
+                source_id="plugin.inspect",
+                text="Which plugin would you like to continue setting up?",
+                payload={
+                    "status": "needs_input",
+                    "next_action": "ask_plugin_target",
+                    "mutation_performed": False,
+                },
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+            )
+        try:
+            result = await get_plugin_service().inspect_for_conversation(
+                tenant_id=str(principal.tenant_id),
+                target=parsed.target,
+                caller_roles=list(principal.roles or []),
+            )
+        except Exception as exc:
+            logger.warning(
+                "plugin.conversation.inspect_unavailable",
+                extra={
+                    "tenant_id": request.context.tenant_id,
+                    "user_id": request.context.user_id,
+                    "correlation_id": request.context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return DirectCapabilityResult(
+                handled=True,
+                text="I couldn't verify the registered plugin catalog right now. No plugin was changed.",
+                degraded=True, error="plugin_catalog_unavailable",
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+            )
+
+        status = str(result.get("status") or "unavailable")
+        matches = list(result.get("matches") or ())
+        if status == "not_found":
+            text = (
+                f"No validated registered plugin matched {parsed.target!r}. "
+                "I haven't installed or configured anything."
+            )
+        elif status == "ambiguous":
+            names = ", ".join(
+                str(entry.get("display_name") or entry.get("installation_id"))
+                for entry in matches[:10]
+            )
+            text = (
+                f"More than one registered plugin matches {parsed.target!r}: "
+                f"{names}. Please choose the specific plugin. Nothing was changed."
+            )
+        elif parsed.operation in {"list", "discover"}:
+            names = ", ".join(
+                str(entry.get("display_name") or entry.get("installation_id"))
+                for entry in matches[:12]
+            )
+            text = (
+                f"Registered plugin catalog: {names or 'no validated entries'}."
+                + (
+                    " These are catalog candidates, not verified matches to "
+                    "your requested task. "
+                    if parsed.operation == "discover" else " "
+                )
+                + "Package inventory does not prove permission, connection, "
+                "or execution readiness. No plugin was executed."
+            )
+        elif matches:
+            plugin = matches[0]
+            name = str(plugin.get("display_name") or plugin.get("installation_id"))
+            if parsed.operation in {"manage", "use"}:
+                action = str(parsed.requested_action or "execute")
+                role_notice = (
+                    " Your account does not match the plugin's declared "
+                    "operator roles."
+                    if plugin.get("role_eligible") is False else ""
+                )
+                text = (
+                    f"{name} was found in Karen's plugin catalog. "
+                    f"The requested {action} action has NOT been performed."
+                    f"{role_notice} This read-only inspection does not authorize "
+                    "plugin execution or lifecycle mutations. A separate "
+                    "RuntimePolicy approval and canonical host/plugin action "
+                    "are required. No credentials or provider operations were used."
+                )
+            elif parsed.operation == "features":
+                declared = ", ".join(plugin.get("declared_features") or [])
+                text = (
+                    f"{name}'s manifest declares: "
+                    f"{declared or 'no additional features'}. "
+                    "These are metadata declarations, not verified execution "
+                    "or account readiness. No plugin was executed."
+                )
+            elif plugin.get("execution_route") == "channel_host":
+                features = ", ".join(plugin.get("declared_features") or [])
+                text = (
+                    f"{name} is present in Karen's registered channel catalog. "
+                    + (
+                        f"Declared (not live-verified) features: {features}. "
+                        if parsed.operation == "features" and features else ""
+                    )
+                    + "Channel connection, credentials, bot activation, webhook, "
+                    "identity link, and reply delivery have not been verified by "
+                    "this catalog inspection. The next step is an authorized "
+                    "channel-owner inspection. No setup action was performed."
+                )
+            elif plugin.get("readiness") == "ready":
+                text = (
+                    f"{name} is registered and its generic plugin configuration "
+                    "passes current readiness checks. No action was executed."
+                )
+            else:
+                text = (
+                    f"{name} is registered, but its current readiness is "
+                    f"{plugin.get('readiness')}. Next step: "
+                    f"{plugin.get('next_action')}. No plugin was changed."
+                )
+        else:
+            return DirectCapabilityResult(
+                handled=True,
+                text="Plugin catalog inspection returned no verifiable entries.",
+                degraded=True, error="plugin_catalog_unavailable",
+            )
+        return DirectCapabilityResult(
+            handled=True, success=True, source="plugin_catalog",
+            source_id="plugin.inspect", text=text,
+            payload={
+                "status": status,
+                "plugin_inspection": result,
+                "requested_operation": parsed.operation,
+                "requested_action": parsed.requested_action,
+                "requested_action_executed": False,
+                "requires_fresh_action_authorization": parsed.operation in {
+                    "setup", "resume", "manage", "use",
+                },
+                "next_action": (
+                    matches[0]["next_action"] if len(matches) == 1
+                    else "select_plugin" if status == "ambiguous" else None
+                ),
+            },
+            attempts=[{
+                "type": "capability", "id": "plugin.inspect",
+                "status": "success", "source": "plugin_kernel",
+            }],
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
     def can_handle(self, decision: ExecutionDecision) -> bool:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
         if not route or not route.get("requires_live_data"):
@@ -575,6 +766,9 @@ class DirectCapabilityExecutor:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
         if not route:
             return DirectCapabilityResult(handled=False)
+
+        if decision.intent == "plugin.inspect":
+            return await self._inspect_plugins(request, plan, meter)
 
         if decision.intent == "timer.manage":
             return await self._execute_timer(request, plan, meter)

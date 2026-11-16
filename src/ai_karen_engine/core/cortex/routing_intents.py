@@ -3,6 +3,15 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    "plugin.inspect": {
+        # Read-only catalog discovery only. Side effects belong to a later,
+        # separately authorized host/plugin action, never this direct route.
+        "triggers": ["set up my plugin", "my plugins", "plugin status"],
+        "patterns": [],
+        "required_capability": "plugin.inspect",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "automation.create": {
         # Mutating recurring task requests must enter RuntimePolicy and obtain
         # a durable database receipt, never fall back to a model-only script.
@@ -303,7 +312,176 @@ class CapabilityDecision:
         return asdict(self)
 
 
+
+@dataclass(frozen=True, slots=True)
+class PluginInspectionRequest:
+    """CORTEX recognition only, never an execution or authorization grant."""
+
+    operation: str
+    target: Optional[str] = None
+    requested_action: Optional[str] = None
+
+
+_PLUGIN_LOOKUP_PATTERNS = (
+    (
+        "setup",
+        re.compile(
+            r"^(?:please\s+)?(?:set\s*up|connect|configure|link)\s+"
+            r"(?:(?:my|the)\s+)?(?:plugin\s+)?"
+            r"(?P<target>[a-z][a-z0-9 _-]{1,64}?)"
+            r"(?:\s+(?:plugin|integration))?[?!.]*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "resume",
+        re.compile(
+            r"^(?:please\s+)?(?:continue|resume)\s+(?:setting\s+up|configuring|connecting)\s+"
+            r"(?:(?:my|the)\s+)?(?P<target>[a-z][a-z0-9 _-]{1,64}?)[?!.]*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "status",
+        re.compile(
+            r"^(?:is|has)\s+my\s+(?P<target>[a-z][a-z0-9 _-]{1,64}?)\s+"
+            r"(?:connected|configured|ready|installed|enabled|been\s+set\s+up)[?!.]*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "features",
+        re.compile(
+            r"^(?:what\s+can|which\s+features\s+can)\s+my\s+"
+            r"(?P<target>[a-z][a-z0-9 _-]{1,64}?)\s+"
+            r"(?:plugin\s+)?(?:do|use|provide)[?!.]*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "status",
+        re.compile(
+            r"^(?P<target>[a-z][a-z0-9 _-]{1,64}?)\s+plugin\s+"
+            r"(?:status|readiness|features)[?!.]*$",
+            re.IGNORECASE,
+        ),
+    ),
+)
+
+
+# This recognition contract is shared by every installed plugin. It classifies
+# the user's requested lifecycle/action purpose but grants only catalog reads.
+# Actual mutations and invocation must obtain fresh, action-specific authority.
+_PLUGIN_ACTION_PATTERNS = (
+    re.compile(
+        r"^(?:please\s+)?(?P<action>enable|disable|activate|deactivate|"
+        r"install|uninstall|remove|update|upgrade)\s+"
+        r"(?:(?:my|the|installed)\s+)?(?:plugin\s+)?"
+        r"(?P<target>[a-z][a-z0-9 _-]{1,64}?)"
+        r"(?:\s+(?:plugin|integration))?[?!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:please\s+)?(?P<action>use|invoke|run)\s+"
+        r"(?:(?:my|the|installed)\s+)?(?:plugin\s+)?"
+        r"(?P<target>[a-z][a-z0-9 _-]{1,64}?)"
+        r"(?:\s+plugin)?\s+(?:to|for)\s+(?P<goal>.+)$",
+        re.IGNORECASE,
+    ),
+)
+
+_PLUGIN_DISCOVERY = re.compile(
+    r"^(?:which|what)\s+(?:of\s+the\s+)?(?:installed\s+|available\s+)?"
+    r"plugins?\s+(?:can|could|should)\s+(?:i|you|karen)\s+"
+    r"(?:use\s+)?(?:to|for)\s+.+[?!.]*$",
+    re.IGNORECASE,
+)
+
+_PLUGIN_INVENTORY = re.compile(
+    r"^(?:(?:please\s+)?(?:show|list)(?:\s+me)?\s+(?:my|the|available|installed)\s+plugins"
+    r"|(?:which|what)\s+plugins\s+(?:are\s+(?:installed|available)|can\s+you\s+use|do\s+i\s+have)"
+    r"|what\s+plugins\s+do\s+i\s+have)[?!.]*$",
+    re.IGNORECASE,
+)
+
+
+def parse_plugin_inspection_request(query: str) -> Optional[PluginInspectionRequest]:
+    """Match explicit plugin setup/status talk without inferring authority.
+
+    The target is only a catalog lookup hint. Runtime resolves it against
+    installed manifests and never executes a named plugin from this request.
+    """
+    raw = " ".join(str(query or "").strip().split())
+    if not raw or len(raw) > 160:
+        return None
+    if _PLUGIN_INVENTORY.fullmatch(raw):
+        return PluginInspectionRequest(operation="list")
+    if _PLUGIN_DISCOVERY.fullmatch(raw):
+        return PluginInspectionRequest(operation="discover")
+    for action_pattern in _PLUGIN_ACTION_PATTERNS:
+        match = action_pattern.fullmatch(raw)
+        if match is None:
+            continue
+        action = match.group("action").casefold()
+        target = match.group("target").strip(" .?!")
+        # A bounded, explicitly named plugin is mandatory. Compound provider
+        # actions are not silently reduced to catalog inspection.
+        if (
+            not target
+            or re.search(r"\b(?:and|then|with\s+(?:token|secret|password))\b", target, re.I)
+            or not re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{1,64}", target)
+        ):
+            return None
+        if action in {"use", "invoke", "run"}:
+            goal = match.group("goal") or ""
+            if not 1 <= len(goal.strip()) <= 240:
+                return None
+            return PluginInspectionRequest(
+                operation="use", target=target, requested_action="execute",
+            )
+        return PluginInspectionRequest(
+            operation="manage", target=target, requested_action=action,
+        )
+    if re.fullmatch(
+        r"(?:please\s+)?(?:continue|resume)\s+setting\s+it\s+up[?!.]*",
+        raw,
+        flags=re.IGNORECASE,
+    ):
+        return PluginInspectionRequest(operation="resume")
+    for operation, pattern in _PLUGIN_LOOKUP_PATTERNS:
+        match = pattern.fullmatch(raw)
+        if match is not None:
+            target = match.group("target").strip(" .?!")
+            # Never downgrade compound requests with possible side effects
+            # into an apparently harmless setup inspection.
+            compound = re.search(
+                r"\b(?:and|then|send|message|delete|share|post|execute|"
+                r"run|with\s+(?:token|password|secret)|for\s+someone)\b",
+                target, flags=re.IGNORECASE,
+            )
+            if (
+                target
+                and not compound
+                and re.fullmatch(r"[A-Za-z][A-Za-z0-9 _-]{1,64}", target)
+            ):
+                return PluginInspectionRequest(operation=operation, target=target)
+    return None
+
+
 def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
+    plugin_request = parse_plugin_inspection_request(query)
+    if plugin_request is not None:
+        route = CAPABILITY_ROUTES["plugin.inspect"]
+        return CapabilityDecision(
+            intent="plugin.inspect",
+            subtype=plugin_request.operation,
+            confidence=confidence,
+            requires_tool=True,
+            requires_live_data=True,
+            capability=str(route["required_capability"]),
+            allow_llm_only=False,
+            requires_chat_capable_model=False,
+        )
     # Normalize surface spelling for matching only. Keep the original request
     # untouched for tool parameters, provenance and conversational evidence.
     # Common apostrophe omissions must not convert live-information questions

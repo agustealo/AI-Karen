@@ -1150,6 +1150,225 @@ class PluginService:
             ]
         return list(plugins)
 
+
+    @staticmethod
+    def _inspection_key(value: object) -> str:
+        """Canonical comparison of catalog names; no fuzzy execution aliases."""
+        return " ".join(re.findall(r"[a-z0-9]+", str(value or "").casefold()))
+
+    async def inspect_for_conversation(
+        self, *, tenant_id: str, target: Optional[str] = None, limit: int = 25,
+        caller_roles: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Read-only, redacted plugin catalog for authenticated ChatRuntime.
+
+        Runtime checks the authenticated user and plugin.inspect authorization
+        before invoking this facade. A channel extension remains disabled for
+        generic invocation even when the host may separately activate a tenant
+        connection. Neither credential readiness nor live delivery may be
+        deduced from a manifest or this catalog projection.
+        """
+        if not isinstance(tenant_id, str) or not tenant_id.strip():
+            raise PermissionError("Authenticated tenant scope required")
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError("Invalid plugin inspection result bound")
+        if target is not None and (
+            not isinstance(target, str)
+            or not 1 <= len(target) <= 80
+            or self._inspection_key(target) == ""
+        ):
+            raise ValueError("Invalid plugin inspection target")
+
+        # Caller roles come solely from ChatExecutionContext's verified
+        # principal, never from user prose, tool output or plugin metadata.
+        role_set = {
+            str(role).casefold().strip()
+            for role in (caller_roles or [])
+            if isinstance(role, str) and role.strip()
+        }
+        records = await self.list_plugins()
+        kernel = self._get_kernel()
+        requested_key = self._inspection_key(target) if target is not None else None
+        candidates: list[tuple[int, Dict[str, Any]]] = []
+        for record in records:
+            manifest = record.get("manifest")
+            if manifest is None:
+                continue
+            plugin_id = str(getattr(manifest, "name", "") or "")
+            if not plugin_id:
+                continue
+            display_name = str(
+                getattr(manifest, "display_name", "") or plugin_id
+            )
+            tags = [
+                str(tag) for tag in (getattr(manifest, "tags", None) or ())
+                if isinstance(tag, str) and 0 < len(tag) <= 48
+            ]
+            aliases = (
+                {self._inspection_key(plugin_id): 3,
+                 self._inspection_key(display_name): 2}
+            )
+            for tag in tags:
+                aliases.setdefault(self._inspection_key(tag), 1)
+            score = aliases.get(requested_key, 0) if requested_key is not None else 1
+            if not score:
+                continue
+            candidate = {
+                "record": record, "manifest": manifest,
+                "plugin_id": plugin_id, "display_name": display_name,
+            }
+            candidates.append((score, candidate))
+
+        if requested_key is not None and candidates:
+            best_score = max(item[0] for item in candidates)
+            candidates = [item for item in candidates if item[0] == best_score]
+
+        # Never silently pick the first plugin for an ambiguous capability
+        # name, and never load or execute a plugin handler during inspection.
+        candidates.sort(key=lambda item: item[1]["plugin_id"])
+        selected = candidates[:limit]
+        projections: list[Dict[str, Any]] = []
+        for _, item in selected:
+            record = item["record"]
+            manifest = item["manifest"]
+            plugin_id = item["plugin_id"]
+            display_name = item["display_name"]
+            channel = getattr(
+                getattr(manifest, "capabilities", None),
+                "communication_channel", None,
+            )
+            validated = record.get("is_valid") is True
+            registration_state = str(record.get("status") or "unknown")
+            blocked = bool(record.get("activation_blocked_reason"))
+            manifest_roles = {
+                str(getattr(role, "value", role)).casefold().strip()
+                for role in (
+                    getattr(getattr(manifest, "rbac", None), "allowed_roles", ())
+                    or ()
+                )
+            }
+            role_eligible = bool(manifest_roles.intersection(role_set))
+            capabilities = getattr(manifest, "capabilities", None)
+            declared_generic_features = [
+                label
+                for flag, label in (
+                    ("provides_api", "plugin.api"),
+                    ("provides_ui", "plugin.ui"),
+                    ("provides_background_tasks", "plugin.background_tasks"),
+                    ("provides_webhooks", "plugin.webhooks"),
+                )
+                if bool(getattr(capabilities, flag, False))
+            ]
+            voice = getattr(capabilities, "voice_modality", None)
+            if voice is not None:
+                declared_generic_features.extend(
+                    f"voice.{modality}"
+                    for modality in list(getattr(voice, "modalities", ()) or ())[:10]
+                    if isinstance(modality, str)
+                )
+            if channel is not None:
+                host_eligible = bool(
+                    validated and not blocked
+                    and kernel.get_channel_activation_manifest(plugin_id) is not None
+                )
+                next_action = (
+                    "channel.inspect_owned_connections"
+                    if host_eligible else "channel.installation_review"
+                )
+                readiness = "requires_authorized_channel_inspection"
+                execution_route = "channel_host"
+                features = [
+                    *(
+                        f"channel.inbound.{kind}"
+                        for kind in sorted(getattr(channel, "inbound", ()) or ())
+                    ),
+                    *(
+                        f"channel.outbound.{kind}"
+                        for kind in sorted(getattr(channel, "outbound", ()) or ())
+                    ),
+                ][:20]
+            elif voice is not None:
+                # Voice plugins execute through the existing governed
+                # VoiceRuntime engine catalog, not a second chat voice runner.
+                # A manifest declaration alone is not a ready local engine.
+                host_eligible = False
+                execution_route = "voice_runtime"
+                features = declared_generic_features[:20]
+                if not validated or blocked:
+                    readiness = "invalid_or_blocked"
+                    next_action = "plugin.installation_review"
+                elif registration_state not in {"enabled", "active"}:
+                    readiness = "disabled"
+                    next_action = "plugin.enable_with_approval"
+                else:
+                    readiness = "requires_authorized_voice_catalog"
+                    next_action = "voice.inspect_engine_catalog"
+            else:
+                host_eligible = False
+                execution_route = "plugin_executor"
+                features = declared_generic_features[:20]
+                if not validated or blocked:
+                    readiness = "invalid_or_blocked"
+                    next_action = "plugin.installation_review"
+                elif registration_state not in {"enabled", "active"}:
+                    readiness = "disabled"
+                    next_action = "plugin.enable_with_approval"
+                else:
+                    reason = await self._execution_configuration_readiness(
+                        plugin_id, tenant_id
+                    )
+                    readiness = "ready" if reason is None else reason
+                    next_action = (
+                        "plugin.use_authorized_capability"
+                        if reason is None else "plugin.configure_securely"
+                    )
+            projections.append({
+                "installation_id": plugin_id,
+                "display_name": (
+                    display_name if len(display_name) <= 80
+                    and all(char.isprintable() for char in display_name)
+                    else plugin_id
+                ),
+                "category": str(getattr(manifest, "category", "") or "")[:40],
+                "registered": validated,
+                "role_eligible": role_eligible,
+                "role_check_source": "manifest_rbac",
+                "generic_execution_enabled": (
+                    channel is None and registration_state in {"enabled", "active"}
+                    and validated and not blocked
+                ),
+                # Installation status and manifest role eligibility are
+                # independent from a fresh action-specific RuntimePolicy grant.
+                "authorized_to_execute": False,
+                "execution_route": execution_route,
+                "channel_host_eligible": host_eligible,
+                "connection_status": (
+                    "not_inspected" if channel is not None else "not_applicable"
+                ),
+                "credential_status": "not_inspected",
+                "webhook_verified": False,
+                "runtime_execution_verified": False,
+                "provider_send_verified": False,
+                "provider_delivery_verified": False,
+                "readiness": readiness,
+                "next_action": next_action,
+                "declared_features": features,
+            })
+
+        status = (
+            "not_found" if requested_key is not None and not candidates
+            else "ambiguous" if requested_key is not None and len(candidates) > 1
+            else "found"
+        )
+        return {
+            "status": status,
+            "target": target,
+            "catalog_source": "plugin_kernel",
+            "matches": projections,
+            "truncated": len(candidates) > limit,
+            "mutation_performed": False,
+        }
+
     def get_plugins_by_category(self, category: str) -> List[Dict[str, Any]]:
         if not self.initialized or self.kernel is None:
             return []
