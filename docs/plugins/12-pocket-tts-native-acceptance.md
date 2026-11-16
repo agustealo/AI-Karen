@@ -199,7 +199,8 @@ following variables in the operator's private, secured environment:
   process ID**. Do not supply a browser, model-download worker, unrelated
   process or container-host proxy PID. If Karen is containerized, run the
   benchmark within the target process's PID namespace with access to its
-  actual runtime process, or record hardware measurements separately.
+  actual runtime process (including PID 1 for an exec-launched server), or
+  record hardware measurements separately.
 
 Use the **existing** operator-licensed, enabled Pocket runtime. The benchmark
 does not download assets, change permissions, start the server or persist raw
