@@ -565,8 +565,13 @@ async def get_download_runtime_telemetry(
 async def get_download_recommendations(
     current_user: Any = Depends(get_current_user),
 ):
-    del current_user
-    return await _control_service().get_recommendations()
+    # Recommendation install truth is tenant-specific for pinned plugin
+    # models. Use the already-authenticated model route principal, never
+    # a client-supplied tenant identifier.
+    tenant_id = str(_principal_payload(current_user).get("tenant_id") or "")
+    return await _control_service().get_recommendations(
+        tenant_id=tenant_id or None,
+    )
 
 
 @router.get("/download/storage", response_model=Dict[str, Any])
