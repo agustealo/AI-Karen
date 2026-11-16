@@ -317,3 +317,36 @@ def test_optional_policy_probe_cannot_accept_cross_principal_decision() -> None:
         assert probe.to_metadata()["execution_eligibility_established"] is False
 
     asyncio.run(run())
+
+def test_optional_verification_probe_rejects_cross_principal_source_lineage() -> None:
+    from dataclasses import replace
+
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        selected_request = PolicyEvaluationRequest(
+            user_id="subject",
+            tenant_id="tenant-a",
+            session_id="session-a",
+            correlation_id="correlation-a",
+            max_model_calls=10,
+        )
+        selected = await policy.evaluate(selected_request)
+        assert selected.allowed is True
+        mismatched_requests = (
+            replace(selected_request, user_id="other-user"),
+            replace(selected_request, tenant_id="another-tenant"),
+            replace(selected_request, session_id="another-session"),
+            replace(selected_request, correlation_id="another-correlation"),
+        )
+        for unrelated_request in mismatched_requests:
+            probe = await policy.probe_optional_verification(
+                unrelated_request,
+                selected,
+                direct_plan_authorized=True,
+            )
+            assert probe.status == "not_authorized"
+            assert probe.policy_permitted_actions == ()
+            assert probe.alternative_policy_decision_id is None
+            assert probe.to_metadata()["ope_eligible"] is False
+
+    asyncio.run(run())
