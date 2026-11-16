@@ -192,7 +192,9 @@ class MainExtension(ExtensionBase):
         self._loaded_key: tuple[str, str, str] | None = None
 
     async def initialize(self) -> None:
-        self._active = True
+        # Initialization and retirement share the native inference lock.
+        async with self._lock:
+            self._active = True
 
     async def shutdown(self) -> None:
         # Retire only after the kernel fences new work and active inference.
@@ -325,8 +327,6 @@ class MainExtension(ExtensionBase):
             raise
 
     async def run(self, params: dict[str, Any], context: Any) -> dict[str, Any]:
-        if not self._active:
-            raise RuntimeError("pocket_plugin_disabled")
         tenant_id = str(getattr(context, "tenant_id", "") or "")
         try:
             uuid.UUID(tenant_id)
@@ -335,6 +335,10 @@ class MainExtension(ExtensionBase):
         if not isinstance(params, dict) or params.get("operation") not in ("catalog", "synthesize"):
             raise ValueError("pocket_operation_unsupported")
         async with self._lock:
+            # Recheck admission after waiting. Shutdown can retire the plugin
+            # while an already-validated call is queued on this same lock.
+            if not self._active:
+                raise RuntimeError("pocket_plugin_disabled")
             ready = await self._exclusively(lambda: self._ensure_ready(tenant_id))
             if params["operation"] == "catalog":
                 return {
