@@ -580,11 +580,16 @@ async def test_explicit_telegram_registration_submits_secret_and_verifies_exact_
     client.post.return_value = httpx.Response(200, json={
         "ok": True, "result": True,
     })
-    client.get.return_value = httpx.Response(200, json={
-        "ok": True, "result": {"url": destination, "pending_update_count": 0},
-    })
+    client.get.side_effect = [
+        httpx.Response(200, json={
+        "ok": True, "result": {"id": 123456, "is_bot": True},
+    }),
+        httpx.Response(200, json={
+            "ok": True, "result": {"url": destination, "pending_update_count": 0},
+        }),
+    ]
     result = await adapter.register_webhook(
-        connection=connection(), public_origin="https://hooks.example.org",
+        connection=connection(), public_origin="https://hooks.example.org", expected_bot_id=123456,
     )
     assert result == {
         "provider_registration_verified": True, "live_connected": False,
@@ -613,7 +618,7 @@ async def test_telegram_registration_invalid_origin_never_mutates_provider(origi
     await adapter.start(connection=connection())
     client.post.reset_mock()
     with pytest.raises(PermissionError, match="registration unavailable"):
-        await adapter.register_webhook(connection=connection(), public_origin=origin)
+        await adapter.register_webhook(connection=connection(), public_origin=origin, expected_bot_id=123456)
     client.post.assert_not_awaited()
 
 
@@ -631,9 +636,9 @@ async def test_telegram_registration_denial_never_reports_provider_success(provi
     client.get.reset_mock()
     with pytest.raises(PermissionError, match="unverified"):
         await adapter.register_webhook(
-            connection=connection(), public_origin="https://hooks.example.org",
+            connection=connection(), public_origin="https://hooks.example.org", expected_bot_id=123456,
         )
-    client.get.assert_not_awaited()
+    client.get.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -641,14 +646,19 @@ async def test_telegram_registration_unknown_after_provider_post_does_not_fake_r
     _, adapter, _, client = load_transport()
     await adapter.start(connection=connection())
     client.post.return_value = httpx.Response(200, json={"ok": True, "result": True})
-    client.get.return_value = httpx.Response(200, json={
-        "ok": True, "result": {
-            "url": f"https://foreign.example/api/channels/webhooks/{TENANT}/telegram-conn-1",
-        },
-    })
+    client.get.side_effect = [
+        httpx.Response(200, json={
+        "ok": True, "result": {"id": 123456, "is_bot": True},
+    }),
+        httpx.Response(200, json={
+            "ok": True, "result": {
+                "url": f"https://foreign.example/api/channels/webhooks/{TENANT}/telegram-conn-1",
+            },
+        }),
+    ]
     with pytest.raises(PermissionError, match="unverified"):
         await adapter.register_webhook(
-            connection=connection(), public_origin="https://hooks.example.org",
+            connection=connection(), public_origin="https://hooks.example.org", expected_bot_id=123456,
         )
     client.post.assert_awaited_once()
     client.get.assert_awaited()
@@ -661,7 +671,7 @@ async def test_telegram_registration_network_uncertainty_masks_bot_token():
     client.post.side_effect = httpx.TimeoutException(f"secret {TOKEN}")
     with pytest.raises(PermissionError) as error:
         await adapter.register_webhook(
-            connection=connection(), public_origin="https://hooks.example.org",
+            connection=connection(), public_origin="https://hooks.example.org", expected_bot_id=123456,
         )
     assert TOKEN not in str(error.value)
 
