@@ -179,6 +179,8 @@ class FeatureFlags:
     enable_ag_ui_durable_runs: bool = False
     # CK-07E0: gated journal of actual projected events; no model reattachment.
     enable_ag_ui_event_journal: bool = False
+    # KCOG-01C1B: read-only alternative-mode permission check, never exploration.
+    enable_verification_strategy_policy_probe: bool = False
     enable_memory_integration: bool = True
     enable_proactive_suggestions: bool = True
     enable_performance_optimization: bool = True
@@ -450,6 +452,17 @@ class RuntimeSettings:
         if env_ag_ui_event_journal is not None:
             self.features.enable_ag_ui_event_journal = as_bool(env_ag_ui_event_journal)
 
+        env_strategy_probe = env("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE")
+        if env_strategy_probe is not None:
+            normalized = env_strategy_probe.strip().lower()
+            if normalized not in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
+                raise ValueError(
+                    "KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE must be a boolean"
+                )
+            self.features.enable_verification_strategy_policy_probe = (
+                normalized in {"1", "true", "yes", "on"}
+            )
+
         env_chat_run_lease = env("KARI_CHAT_RUN_LEASE_SECONDS")
         if env_chat_run_lease is not None:
             self.timeouts.chat_run_lease_seconds = as_int(
@@ -535,6 +548,9 @@ class RuntimeSettings:
 
         if not 2400 <= self.task_verification.max_answer_chars <= 262144:
             issues.append("Task review answer limit must be between 2400 and 262144 characters")
+
+        if not isinstance(self.features.enable_verification_strategy_policy_probe, bool):
+            issues.append("Verification strategy policy probe flag must be boolean")
 
         if self.features.enable_ag_ui_event_journal and not (
             self.features.enable_ag_ui_bridge

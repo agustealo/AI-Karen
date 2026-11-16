@@ -5132,6 +5132,23 @@ class ChatRuntime:
             if not await self._trajectory_recorder.persist_async(trajectory):
                 return None
 
+            # A policy probe is decision-time permission evidence only.
+            # It cannot establish action eligibility, execution, or propensity.
+            probe = decision.policy_constraints.get(
+                "response_strategy_policy_probe",
+            )
+            if not (
+                isinstance(probe, dict)
+                and probe.get("schema_version") == "response_strategy_policy_probe_v1"
+                and probe.get("source_decision_id") == decision.policy_decision_id
+                and probe.get("source_policy_version") == decision.policy_version
+                and probe.get("selected_action") == "respond_direct"
+                and probe.get("execution_eligibility_established") is False
+                and probe.get("randomized_selection") is False
+                and probe.get("ope_eligible") is False
+            ):
+                probe = None
+
             snapshot = self._trajectory_recorder.build_feature_snapshot(
                 trajectory,
                 feature_version=TOPOLOGY_FEATURES_V1,
@@ -5171,6 +5188,10 @@ class ChatRuntime:
                     "reason_codes": list(decision.reason_codes),
                     "policy_reason_codes": list(
                         decision.policy_reason_codes
+                    ),
+                    **(
+                        {"response_strategy_policy_probe": dict(probe)}
+                        if probe is not None else {}
                     ),
                 },
             )
@@ -5237,9 +5258,13 @@ class ChatRuntime:
                     metadata={
                         "selection_source": "runtime_authorized_plan",
                         "selection_rule": "authorized_topology_and_reasoning_mode",
-                        "alternative_authorization": "not_established",
+                        "alternative_execution_eligibility": "not_established",
                         "execution_status": "not_observed_at_decision_time",
                         "candidate_probability_status": "not_recorded",
+                        **(
+                            {"response_strategy_policy_probe": dict(probe)}
+                            if probe is not None else {}
+                        ),
                     },
                 )
                 await self._trajectory_recorder.record_decision_observation_async(

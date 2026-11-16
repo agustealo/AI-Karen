@@ -16,6 +16,12 @@ on:
       - 'src/ai_karen_engine/core/runtime/soft_reasoning_verifier.py'
       - 'src/ai_karen_engine/core/runtime/workflow_runtime.py'
       - 'src/ai_karen_engine/core/runtime/workflow_generation.py'
+      - 'src/ai_karen_engine/config/runtime.py'
+      - 'src/ai_karen_engine/core/runtime/policy/**'
+      - 'src/ai_karen_engine/core/runtime/decision_pipeline.py'
+      - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
+      - 'tests/core/test_runtime_reasoning_policy.py'
+      - 'tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py'
       - 'src/ai_karen_engine/agent_medusa/**'
       - 'src/ai_karen_engine/core/adaptive/**'
       - 'src/ai_karen_engine/core/personalization/**'
@@ -48,6 +54,12 @@ on:
       - 'src/ai_karen_engine/core/runtime/soft_reasoning_verifier.py'
       - 'src/ai_karen_engine/core/runtime/workflow_runtime.py'
       - 'src/ai_karen_engine/core/runtime/workflow_generation.py'
+      - 'src/ai_karen_engine/config/runtime.py'
+      - 'src/ai_karen_engine/core/runtime/policy/**'
+      - 'src/ai_karen_engine/core/runtime/decision_pipeline.py'
+      - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
+      - 'tests/core/test_runtime_reasoning_policy.py'
+      - 'tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py'
       - 'src/ai_karen_engine/agent_medusa/**'
       - 'src/ai_karen_engine/core/adaptive/**'
       - 'src/ai_karen_engine/core/personalization/**'
@@ -232,6 +244,16 @@ jobs:
             tests/core/intelligence/ml/test_policy_decision_time_provenance.py \
             tests/core/intelligence/ml/test_verification_review_workflow.py \
             tests/core/intelligence/ml/test_ope_frozen_candidate_evidence.py \
+            -q --timeout=300 --tb=short
+
+      - name: Prove KCOG-01C1B1 scoped policy permission probe and frozen non-OPE lineage
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/test_runtime_reasoning_policy.py \
+            tests/core/test_runtime_decision_pipeline.py \
+            tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py \
+            tests/core/intelligence/ml/test_verification_review_workflow.py \
             -q --timeout=300 --tb=short
 
       - name: Compile KCOG cognitive-state and policy boundary

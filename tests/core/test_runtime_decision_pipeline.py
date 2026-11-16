@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from ai_karen_engine.config.runtime import FeatureFlags, RuntimeSettings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -228,5 +229,157 @@ def test_denied_memory_context_degrades_to_no_recall_without_denial_of_chat() ->
         assert "memory" in result.policy_constraints["context_denied_sources"]
         assert result.policy_decision_id is not None
         assert result.execution_mode != RuntimeExecutionMode.DEGRADED
+
+    asyncio.run(run())
+
+
+def test_optional_verification_policy_probe_is_default_off(monkeypatch) -> None:
+    from ai_karen_engine.core.runtime import decision_pipeline
+
+    async def run() -> None:
+        monkeypatch.setattr(
+            decision_pipeline,
+            "get_runtime_settings",
+            lambda: RuntimeSettings(),
+        )
+        cognitive = ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            intent_confidence=0.95,
+            policy_constraints={
+                "response_strategy_policy_probe": {
+                    "schema_version": "forged_by_cortex",
+                    "policy_permitted_actions": ["verify_then_respond"],
+                }
+            },
+        )
+        policy = RecordingPolicy()
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
+            policy=policy,
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        decision = await pipeline.decide(_request())
+        assert decision.topology == ExecutionTopology.DIRECT
+        assert decision.reasoning_modes == []
+        assert "response_strategy_policy_probe" not in decision.policy_constraints
+        assert policy.actions.count("general_assist") == 1
+
+    asyncio.run(run())
+
+
+def test_read_only_probe_reuses_scoped_runtime_policy_without_rerouting(
+    monkeypatch,
+) -> None:
+    from ai_karen_engine.core.runtime import decision_pipeline
+
+    async def run() -> None:
+        monkeypatch.setattr(
+            decision_pipeline,
+            "get_runtime_settings",
+            lambda: RuntimeSettings(
+                features=FeatureFlags(
+                    enable_verification_strategy_policy_probe=True,
+                )
+            ),
+        )
+        policy = RecordingPolicy()
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(
+                ExecutionDecision(
+                    topology=ExecutionTopology.DIRECT,
+                    intent_confidence=0.95,
+                )
+            ),  # type: ignore[arg-type]
+            policy=policy,
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        decision = await pipeline.decide(_request())
+        proof = decision.policy_constraints["response_strategy_policy_probe"]
+        assert proof["schema_version"] == "response_strategy_policy_probe_v1"
+        assert proof["source_decision_id"] == decision.policy_decision_id
+        assert proof["source_policy_version"] == decision.policy_version
+        assert proof["policy_permitted_actions"] == [
+            "respond_direct", "verify_then_respond",
+        ]
+        assert proof["execution_eligibility_established"] is False
+        assert proof["randomized_selection"] is False
+        assert proof["ope_eligible"] is False
+        assert policy.actions.count("general_assist") == 2
+        assert decision.topology == ExecutionTopology.DIRECT
+        assert decision.reasoning_modes == []
+
+    asyncio.run(run())
+
+
+def test_reasoning_required_never_receives_optional_direct_policy_probe(
+    monkeypatch,
+) -> None:
+    from ai_karen_engine.core.runtime import decision_pipeline
+
+    async def run() -> None:
+        monkeypatch.setattr(
+            decision_pipeline,
+            "get_runtime_settings",
+            lambda: RuntimeSettings(
+                features=FeatureFlags(
+                    enable_verification_strategy_policy_probe=True,
+                )
+            ),
+        )
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(
+                ExecutionDecision(
+                    topology=ExecutionTopology.REASONING,
+                    reasoning_modes=["verification"],
+                    intent_confidence=0.91,
+                )
+            ),  # type: ignore[arg-type]
+            policy=RuntimePolicyEnforcer(),
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        decision = await pipeline.decide(_request())
+        assert decision.topology == ExecutionTopology.REASONING
+        assert decision.reasoning_modes == ["verification"]
+        assert "response_strategy_policy_probe" not in decision.policy_constraints
+
+    asyncio.run(run())
+
+
+def test_optional_probe_failure_never_blocks_authorized_direct_chat(
+    monkeypatch,
+) -> None:
+    from ai_karen_engine.core.runtime import decision_pipeline
+
+    class BrokenAlternativePolicy(RuntimePolicyEnforcer):
+        async def evaluate(self, request):  # type: ignore[no-untyped-def]
+            if request.requested_reasoning_modes == ["verification"]:
+                raise RuntimeError("shadow evaluator unavailable")
+            return await super().evaluate(request)
+
+    async def run() -> None:
+        monkeypatch.setattr(
+            decision_pipeline,
+            "get_runtime_settings",
+            lambda: RuntimeSettings(
+                features=FeatureFlags(
+                    enable_verification_strategy_policy_probe=True,
+                )
+            ),
+        )
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(
+                ExecutionDecision(
+                    topology=ExecutionTopology.DIRECT,
+                    intent_confidence=0.96,
+                )
+            ),  # type: ignore[arg-type]
+            policy=BrokenAlternativePolicy(),
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        result = await pipeline.decide(_request())
+        assert result.topology == ExecutionTopology.DIRECT
+        assert result.reasoning_modes == []
+        assert result.policy_decision_id is not None
+        assert "response_strategy_policy_probe" not in result.policy_constraints
 
     asyncio.run(run())
