@@ -69,6 +69,7 @@ interface BackendPluginEntry {
     provides_background_tasks?: boolean;
     provides_webhooks?: boolean;
     communication_channel?: boolean;
+    voice_modality?: { version?: string; modalities?: string[] };
   };
   /** Whether the plugin has a UI component */
   has_component?: boolean;
@@ -145,6 +146,8 @@ export interface PluginCatalogEntry {
   has_gui: boolean;
   /** Backend-declared communication transport. Older catalog fixtures omit it. */
   isCommunicationChannel?: boolean;
+  /** Backend-declared synthesis modality, not proof the model is installed. */
+  supportsVoiceOutput?: boolean;
   /** Whether the plugin passes prompt-first validation */
   promptFirstValid: boolean;
   /** Normalised UI manifest (present when has_gui is true) */
@@ -262,6 +265,9 @@ function normaliseEntry(raw: BackendPluginEntry): PluginCatalogEntry {
     enabled,
     has_gui,
     isCommunicationChannel: raw.capabilities?.communication_channel === true,
+    supportsVoiceOutput: raw.capabilities?.voice_modality?.version === '1.0.0' &&
+      Array.isArray(raw.capabilities.voice_modality.modalities) &&
+      raw.capabilities.voice_modality.modalities.includes('tts'),
     promptFirstValid: isPromptFirstValid(raw),
     rawStatus: raw.status,
     allowedRoles: raw.rbac?.allowed_roles || [],
