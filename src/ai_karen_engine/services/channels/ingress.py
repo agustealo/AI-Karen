@@ -16,6 +16,7 @@ from typing import Mapping
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelAdapter,
     ChannelConnection,
+    ChannelWebhookBatch,
     InboundChannelEvent,
     VerifiedIdentityBinding,
 )
@@ -55,8 +56,9 @@ class ChannelIngressService:
         adapter: ChannelAdapter,
         headers: Mapping[str, str],
         body: bytes,
-    ) -> tuple[ChannelConnection, InboundChannelEvent]:
-        """Authenticate a native event using one shared, host-governed path."""
+        allow_batch: bool = False,
+    ) -> tuple[ChannelConnection, InboundChannelEvent | ChannelWebhookBatch]:
+        """Authenticate native bytes once, then normalize through the canonical adapter."""
         if not tenant_id or not connection_id:
             raise ChannelAdmissionDenied("Host tenant and connection are required")
         if not isinstance(body, bytes):
@@ -101,9 +103,15 @@ class ChannelIngressService:
             raise ChannelAdmissionDenied("Native channel verification failed")
 
         try:
-            event = await adapter.normalize_event(
-                connection=connection, headers=headers, body=body,
-            )
+            batch_normalizer = getattr(adapter, "normalize_events", None) if allow_batch else None
+            if callable(batch_normalizer):
+                event = await batch_normalizer(
+                    connection=connection, headers=headers, body=body,
+                )
+            else:
+                event = await adapter.normalize_event(
+                    connection=connection, headers=headers, body=body,
+                )
         except Exception as exc:
             logger.warning(
                 "channel.ingress.normalization_failed",
@@ -111,13 +119,18 @@ class ChannelIngressService:
                        "connection_id": connection_id},
             )
             raise ChannelAdmissionDenied("Native channel normalization failed") from None
-        if not isinstance(event, InboundChannelEvent):
+        if not isinstance(event, (InboundChannelEvent, ChannelWebhookBatch)):
             raise ChannelAdmissionDenied("Adapter returned invalid event contract")
-        if event.connection_id != connection.connection_id:
-            raise ChannelAdmissionDenied("Adapter event connection mismatch")
-
-        if event.message_kind not in channel_capability.inbound:
-            raise ChannelAdmissionDenied("Unsupported inbound channel message kind")
+        native_messages = event.messages if isinstance(event, ChannelWebhookBatch) else (event,)
+        for message in native_messages:
+            if message.connection_id != connection.connection_id:
+                raise ChannelAdmissionDenied("Adapter event connection mismatch")
+            if message.message_kind not in channel_capability.inbound:
+                raise ChannelAdmissionDenied("Unsupported inbound channel message kind")
+        if isinstance(event, ChannelWebhookBatch):
+            for status in event.statuses:
+                if status.connection_id != connection.connection_id:
+                    raise ChannelAdmissionDenied("Provider status connection mismatch")
         return connection, event
 
     @property
@@ -215,6 +228,8 @@ class ChannelIngressService:
             tenant_id=tenant_id, connection_id=connection_id,
             adapter=adapter, headers=headers, body=body,
         )
+        if not isinstance(event, InboundChannelEvent):
+            raise ChannelAdmissionDenied("Single-message admission does not allow batches")
         return await self._admit_event(connection=connection, event=event)
 
     async def verify_and_link(
@@ -226,6 +241,8 @@ class ChannelIngressService:
             tenant_id=tenant_id, connection_id=connection_id,
             adapter=adapter, headers=headers, body=body,
         )
+        if not isinstance(event, InboundChannelEvent):
+            raise ChannelAdmissionDenied("Single-link admission does not allow batches")
         return await self._link_event(connection=connection, event=event)
 
     async def verify_and_route_installed(
@@ -256,7 +273,7 @@ class ChannelIngressService:
             raise ChannelAdmissionDenied("Noncanonical channel adapter")
         connection, event = await self._verify_native_event(
             tenant_id=tenant_id, connection_id=connection_id,
-            adapter=adapter, headers=headers, body=body,
+            adapter=adapter, headers=headers, body=body, allow_batch=True,
         )
         # Rotation between adapter resolution and signature verification must
         # not authorize a different installation.
@@ -265,6 +282,37 @@ class ChannelIngressService:
             or connection.revision != initial.revision
         ):
             raise ChannelAdmissionDenied("Channel connection changed during ingress")
+        if isinstance(event, ChannelWebhookBatch):
+            # A link token must never be combined with unrelated provider
+            # messages or status receipts. Fail before mutating the ledger.
+            link_events = [message for message in event.messages if self._is_link_command(message)]
+            if link_events and (
+                len(event.messages) != 1 or event.statuses or event.ignored_count
+            ):
+                raise ChannelAdmissionDenied("Link proof cannot share a native batch")
+            if link_events:
+                await self._link_event(connection=connection, event=link_events[0])
+                return "linked"
+            # Each inbox insert is idempotent; a partial provider retry will
+            # never run the same user turn twice. Status rows have a separate
+            # durable receipt path, never ChatRuntime, memory, or tool routing.
+            for message in event.messages:
+                await self._admit_event(connection=connection, event=message)
+            for status in event.statuses:
+                await self._repository.record_provider_status(
+                    connection=connection, status=status,
+                )
+            logger.info(
+                "channel.ingress.batch_processed",
+                extra={
+                    "tenant_id": connection.tenant_id,
+                    "connection_id": connection.connection_id,
+                    "inbound_count": len(event.messages),
+                    "status_count": len(event.statuses),
+                    "ignored_count": event.ignored_count,
+                },
+            )
+            return "admitted" if event.messages else "status_recorded" if event.statuses else "ignored"
         if self._is_link_command(event):
             await self._link_event(connection=connection, event=event)
             return "linked"
