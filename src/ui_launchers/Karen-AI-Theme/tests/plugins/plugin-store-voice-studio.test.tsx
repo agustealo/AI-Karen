@@ -143,7 +143,7 @@ describe('Plugin Store to governed Voice Studio navigation', () => {
     ['no TTS declaration', false, false, null],
     ['catalog is loading', true, true, null],
     ['catalog unavailable', true, false, 'extension catalog unavailable'],
-  ])('does not invent a Voice Studio action when %s', (_label, needsVoice, loading, error) => {
+  ] as const)('does not invent a Voice Studio action when %s', (_label, needsVoice, loading, error) => {
     state.catalogLoading = loading;
     state.catalogError = error;
     state.getPlugin.mockReturnValue({
@@ -157,9 +157,18 @@ describe('Plugin Store to governed Voice Studio navigation', () => {
     expect(state.push).not.toHaveBeenCalled();
   });
 
-  it('never exposes the shortcut for an uninstalled package or mismatched catalog record', () => {
+  it('never exposes the shortcut for an uninstalled package', () => {
     if (!state.selectedPlugin) throw new Error('missing test fixture');
     state.selectedPlugin = { ...state.selectedPlugin, installed: false };
+    render(<PluginStorePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open plugin details' }));
+    expect(screen.queryByRole('button', { name: /Open Voice Studio/ })).toBeNull();
+    expect(state.push).not.toHaveBeenCalled();
+  });
+
+  it('does not use a different extension record as permission to configure voice', () => {
+    state.getPlugin.mockImplementation((id: string) =>
+      id === 'pocket-tts' ? undefined : { supportsVoiceOutput: true });
     render(<PluginStorePage />);
     fireEvent.click(screen.getByRole('button', { name: 'Open plugin details' }));
     expect(screen.queryByRole('button', { name: /Open Voice Studio/ })).toBeNull();
