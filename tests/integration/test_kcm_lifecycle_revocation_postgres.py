@@ -157,6 +157,22 @@ async def test_live_kcm_memory_consent_privacy_revocation_is_atomic() -> None:
                 tenant, user,
             ) == 0
 
+        # A normal memory that is not enrolled in KCM must not generate
+        # a derivative revocation record or advance training epochs.
+        unenrolled = uuid.uuid4()
+        await _make_source(
+            conn, TENANT_A, USER_A, unenrolled, insert_lineage=False,
+        )
+        await conn.execute(
+            "UPDATE public.memory_event SET valid_to=clock_timestamp() "
+            "WHERE event_id=$1", unenrolled,
+        )
+        assert await _epoch(conn, TENANT_A, USER_A) == 0
+        assert await conn.fetchval(
+            "SELECT count(*) FROM public.kcm_training_source_revocations "
+            "WHERE source_event_id=$1", unenrolled,
+        ) == 0
+
         # Memory lifecycle revocation is committed together with validity.
         event_tombstone = uuid.uuid4()
         await _make_source(conn, TENANT_A, USER_A, event_tombstone)
