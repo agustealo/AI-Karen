@@ -208,7 +208,7 @@ def test_optional_verification_probe_rejects_unsafe_alternatives() -> None:
             PolicyEvaluationRequest(
                 user_id="subject", tenant_id="tenant-a",
                 max_model_calls=10,
-                requested_capabilities=["memory.write"],
+                requested_capabilities=["model.personal_key.execute"],
             ),
         ]
         for request in requests:
