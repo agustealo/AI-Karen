@@ -183,6 +183,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         if (updated.status === "completed") {
           setNotice("Model download completed. Refresh Voice Studio to verify that the runtime can load it.");
         } else if (updated.status === "failed" || updated.status === "cancelled") {
+          setNotice(null);
           setProblem("Model download did not complete. Check Models & Runtime for job details.");
         }
       }).catch(() => {
