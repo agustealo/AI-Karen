@@ -58,7 +58,7 @@
 - **Proof:** direct promotion positive-negative fixtures, unpaired/missing baseline, tie, insufficient margin, nonfinite confidence bounds, different sample counts, missing baseline DR, logged baseline-only measurement, mixed/version mismatch, and no mutation of original observations. Gate alongside existing KCOG-01B2/01B3 regressions.
 - **Limits:** these are statistical eligibility checks only. Independent held-out correctness labels, verified propensity logging, appropriate reward-model provenance and RuntimePolicy authorization remain requirements before any live verification strategy can change.
 
-## KCOG-01B5: Deterministic-target OPE and full-support validation (draft)
+## KCOG-01B5: Deterministic-target OPE and full-support validation (merged #905)
 
 - **Baseline:** #904 merged to live `main` as `8107835e510e292a5362bcdc57c03f3f615b6b91`. This slice does not activate a learned policy.
 - **Ownership:** `core/intelligence/ml/policy_evaluation/estimators.py` for shared IPS/SNIPS/DR propensity validation and overlap; `core/intelligence/ml/policy_evaluation/promotion.py` for promotion eligibility. No duplicate estimators, controller decisions, or new persistence.
@@ -67,6 +67,16 @@
 - **Support proof:** target-demanded actions must have actual logged observations and positive behavior support in their decision-time contexts; an unseen target or all-zero effective weights fails overlap. Missing, unverified, or zero-ESS overlap diagnostics fail the existing promotion gate closed.
 - **Proof:** deterministic 0/1 target distributions across IPS/SNIPS/DR, exact ESS, negative propensity and malformed-distribution cases, missing target-action support, per-context zero behavior support, and missing/zero-overlap promotion denial. Existing KCOG-01B1/B2/B4 cases run in Cognitive Proof CI.
 - **Still out of scope:** policy authorization, live verification switch, independent real outcome labels, reward-model training and causal proof. An observed zero weight does not mean an unsafe action may be skipped.
+
+## KCOG-01B6: Immutable versioned policy-evaluation evidence (draft; CI pending)
+
+- **Base:** KCOG-01B5 #905 merged as `e570d950501915a9fce9e089ac91e583a71eb80e`. This is a source-integrity fix, not a runtime policy change.
+- **Owner:** the existing `core/adaptive/learning/offline_evaluation.py` evaluator. No new evaluator, registry, persistence service, or separate policy router.
+- **Audit defect:** when `candidate_probabilities` was missing, the evaluator called `candidate_policy.score_actions(...)` using the policy's **current mutable state** and inserted its output into the historical observation in place. The fabricated posthoc distribution was neither frozen at decision/evaluation time nor guaranteed to match the candidate version being measured. This violates evidence immutability and can corrupt a counterfactual study.
+- **Fix:** defensively copy the whole observational corpus and validate each typed, frozen `PolicyObservation` before any estimator runs. Require the candidate's exact policy ID and version to match every observation; require a feature snapshot, versioned behavior provenance, and the canonical estimator's complete probability/reward validation. Reject the entire cohort as `ope_ineligible` if *any* row lacks adequate frozen evidence; return structured reason codes, no estimates and no invented observed rates. Do not invoke `candidate_policy.score_actions`, mutate caller rows, or turn missing evidence into an inferred policy value.
+- **Compatibility:** legacy completion-only dictionaries remain descriptive and promotion-ineligible. Valid explicit candidate snapshots still use the canonical IPS/SNIPS, baseline, overlap, DR and promotion owners. No active runtime policy, provider choice, tenant controls, or memory state is changed.
+- **Proof:** missing candidate distribution (including within a large otherwise-valid cohort), stale candidate version, missing snapshot, malformed probabilities/reward, missing behavior provenance, no mutable policy scoring calls, no caller mutation, valid estimator behavior and legacy dict regression. Exact-head Cognitive Proof + Main Quality + First-Boot required.
+- **Remaining evidence:** caller-provided evidence references are **not independently authenticated** by this slice. A durable, tenant/RBAC-authorized, independently issued verification-outcome receipt and source-of-truth lookup remain required before any empirical improvement claim or activation.
 
 ## Scope, product acceptance and exit
 

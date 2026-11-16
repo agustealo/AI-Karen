@@ -190,6 +190,18 @@ jobs:
             tests/core/intelligence/ml/test_verification_policy_evaluation.py \
             -q --timeout=300 --tb=short
 
+      - name: Prove KCOG-01B6 immutable policy evidence and no posthoc rescoring
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/intelligence/ml/test_ope_frozen_candidate_evidence.py \
+            tests/core/intelligence/ml/test_ope_zero_target_support.py \
+            tests/core/intelligence/ml/test_ope_baseline_relative_promotion.py \
+            tests/core/intelligence/ml/test_ope_reporting_provenance.py \
+            tests/core/intelligence/ml/test_verification_policy_evaluation.py \
+            tests/core/intelligence/ml/test_model_policy_evaluation.py \
+            -q --timeout=300 --tb=short
+
       - name: Compile KCOG cognitive-state and policy boundary
         if: ${{ always() }}
         run: |
