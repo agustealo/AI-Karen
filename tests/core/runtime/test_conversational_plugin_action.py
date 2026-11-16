@@ -318,3 +318,94 @@ async def test_setup_and_management_are_not_plugin_execution_grants():
             )
             assert response.payload["requested_action_executed"] is False
     service.execute_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_declared_time_action_runs_actual_installed_handler():
+    """Real local handler proof, separate from mocked policy/receipt unit tests."""
+    from ai_karen_engine.extensions.platform.core.host.loader import ExtensionLoader
+
+    service = _service()
+    action = service.resolve_conversational_read_action(
+        plugin_id="time-query", goal="tell me the time", caller_roles=["user"],
+    )
+    assert action is not None
+    handler = ExtensionLoader._import_handler(
+        PluginKernel.canonical_extensions_root() / "time-query"
+    )
+    observed = await handler.TimeQueryExtension.run(None, action["parameters"])
+    assert observed["status"] == "success"
+    assert isinstance(observed.get("formatted"), str)
+    assert observed["formatted"].strip()
+
+
+def test_utterance_or_action_id_collision_denies_entire_manifest():
+    service = _service()
+    manifest = deepcopy(_installed_clock_manifest())
+    duplicate = deepcopy(manifest.governance["conversational_actions"]["actions"][0])
+    duplicate["utterances"] = ["read local clock"]
+    manifest.governance["conversational_actions"]["actions"].append(duplicate)
+    service._get_kernel = lambda: SimpleNamespace(
+        get_record=lambda plugin_id: {
+            "manifest": manifest, "status": "enabled", "is_valid": True,
+        },
+    )
+    assert service.resolve_conversational_read_action(
+        plugin_id="time-query", goal="tell me the time", caller_roles=["user"],
+    ) is None
+
+
+def test_new_generic_plugin_can_register_action_without_runtime_id_switches():
+    service = _service()
+    manifest = deepcopy(_installed_clock_manifest())
+    manifest.name = "read-echo"
+    manifest.display_name = "Read Echo"
+    manifest.governance["conversational_actions"]["actions"] = [{
+        "id": "echo.read_status", "utterances": ["read echo status"],
+        "parameters": {"operation": "status"},
+        "side_effect_level": "none", "requires_confirmation": False,
+    }]
+    service._get_kernel = lambda: SimpleNamespace(
+        get_record=lambda plugin_id: {
+            "manifest": manifest, "status": "enabled", "is_valid": True,
+        } if plugin_id == "read-echo" else None,
+    )
+    assert service.resolve_conversational_read_action(
+        plugin_id="read-echo", goal="read echo status", caller_roles=["user"],
+    ) == {
+        "action_id": "echo.read_status",
+        "parameters": {"operation": "status"},
+        "authorization_required": "fresh_plugin_execution_policy",
+        "manifest_source": "plugin_kernel",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unavailable_rbac_denies_action_before_invoking_plugin():
+    service = _service()
+    request = _request()
+    rbac = SimpleNamespace(
+        get_user_permissions=lambda principal: (_ for _ in ()).throw(
+            PermissionError("unavailable permissions")
+        ),
+    )
+    with (
+        patch(
+            "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+            return_value=service,
+        ),
+        patch(
+            "ai_karen_engine.auth.rbac_middleware.get_rbac_manager",
+            return_value=rbac,
+        ),
+    ):
+        plan = _plan()
+        response = await DirectCapabilityExecutor().execute(
+            request=request, decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert not response.success
+    assert response.degraded is True
+    assert response.error == "plugin_action_permission_unavailable"
+    assert "unavailable permissions" not in response.text
+    service.execute_plugin.assert_not_awaited()
