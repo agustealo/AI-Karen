@@ -421,3 +421,89 @@ async def test_generic_plugin_inventory_does_not_claim_ability_to_invoke():
 ])
 def test_generic_plugin_intent_does_not_approve_compound_or_unbounded_requests(phrase):
     assert parse_plugin_inspection_request(phrase) is None
+
+
+@pytest.mark.asyncio
+async def test_new_generic_plugin_is_discovered_from_manifest_without_code_alias():
+    service = _catalog()
+    installed = await service.list_plugins()
+    article_writer = SimpleNamespace(
+        name="articlebuttler", display_name="ArticleButtler",
+        category="publishing", tags=["articles", "content-writing"],
+        rbac=SimpleNamespace(allowed_roles=["user", "admin"]),
+        capabilities=SimpleNamespace(
+            communication_channel=None, voice_modality=None,
+            provides_api=True, provides_ui=True,
+        ),
+    )
+    service.list_plugins.return_value = [
+        *installed,
+        {"manifest": article_writer, "status": "enabled", "is_valid": True},
+    ]
+    result = await service.inspect_for_conversation(
+        tenant_id=TENANT, target="ArticleButtler", caller_roles=["user"],
+    )
+    assert result["status"] == "found"
+    plugin = result["matches"][0]
+    assert plugin["installation_id"] == "articlebuttler"
+    assert plugin["category"] == "publishing"
+    assert plugin["execution_route"] == "plugin_executor"
+    assert plugin["role_eligible"] is True
+    assert plugin["authorized_to_execute"] is False
+    assert plugin["declared_features"] == ["plugin.api", "plugin.ui"]
+    service._execution_configuration_readiness.assert_awaited_once_with(
+        "articlebuttler", TENANT,
+    )
+
+
+@pytest.mark.asyncio
+async def test_voice_plugin_is_reported_through_existing_voice_runtime_authority():
+    service = _catalog()
+    installed = await service.list_plugins()
+    voice = SimpleNamespace(
+        name="local-speech", display_name="Local Speech",
+        category="voice", tags=["tts", "speech"],
+        rbac=SimpleNamespace(allowed_roles=["user"]),
+        capabilities=SimpleNamespace(
+            communication_channel=None,
+            voice_modality=SimpleNamespace(modalities=["tts", "stt"]),
+            provides_api=True, provides_ui=False,
+        ),
+    )
+    service.list_plugins.return_value = [
+        *installed,
+        {"manifest": voice, "status": "enabled", "is_valid": True},
+    ]
+    result = await service.inspect_for_conversation(
+        tenant_id=TENANT, target="Local Speech", caller_roles=["user"],
+    )
+    record = result["matches"][0]
+    assert record["installation_id"] == "local-speech"
+    assert record["execution_route"] == "voice_runtime"
+    assert record["readiness"] == "requires_authorized_voice_catalog"
+    assert record["next_action"] == "voice.inspect_engine_catalog"
+    assert record["declared_features"] == ["plugin.api", "voice.tts", "voice.stt"]
+    assert record["authorized_to_execute"] is False
+    service._execution_configuration_readiness.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generic_use_request_does_not_bypass_channel_operator_roles():
+    service = _catalog()
+    service.execute_plugin = AsyncMock()
+    plan = _plan()
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=service,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=_request("Use my Telegram to send hello"),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success
+    assert "does not match the plugin's declared operator roles" in result.text
+    assert result.payload["requested_operation"] == "use"
+    assert result.payload["requested_action"] == "execute"
+    assert result.payload["requested_action_executed"] is False
+    service.execute_plugin.assert_not_awaited()
