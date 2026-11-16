@@ -55,6 +55,7 @@ async def build_runtime_fallback(
         or plan.allowed_plugins
         or plan.approval_requirements
         or not plan.degraded_allowed
+        or decision.max_model_calls <= 0
         or plan.budget.max_model_calls <= meter.model_calls
         or meter.exhausted
         or meter.budget is not plan.budget
@@ -90,7 +91,7 @@ async def build_runtime_fallback(
         )
         text, normalized = "", {}
 
-    if not isinstance(text, str) or not text.strip():
+    if not isinstance(text, str) or not text.strip() or not isinstance(normalized, dict):
         return None
     if (
         not isinstance(normalized.get("actual_provider"), str)
