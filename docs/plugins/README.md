@@ -25,6 +25,7 @@ authentication, arbitrary tenant data, model routing, or system-wide policy.
 | Admin configuring a plugin | [Settings, credentials and persistence](06-settings-and-credentials.md) |
 | UI developer | [Frontend extension guide](07-frontend-integration.md) |
 | Voice/audio plugin author | [Voice and modality integration](08-voice-and-modalities.md) |
+| Operator accepting Pocket TTS on actual hardware | [Pocket native speech acceptance ledger](12-pocket-tts-native-acceptance.md) |
 | Test engineer | [Security, testing and telemetry](09-testing-and-observability.md) |
 | Release engineer | [Packaging, upgrades and operations](10-release-and-operations.md) |
 | Debugging a failure | [Troubleshooting and source map](11-troubleshooting-and-source-map.md) |
