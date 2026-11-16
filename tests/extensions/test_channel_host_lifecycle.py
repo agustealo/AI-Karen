@@ -1469,3 +1469,87 @@ def test_telegram_origin_config_is_opt_in_and_disabled_by_default(monkeypatch):
     monkeypatch.setenv("KAREN_TELEGRAM_WEBHOOK_PUBLIC_ORIGIN", "http://localhost:8000")
     with pytest.raises(ValueError, match="Invalid public channel webhook origin"):
         load_channel_host_settings()
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_registration_host_fences_revision_and_canonical_transport():
+    from dataclasses import replace
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, kernel, _, _, adapter = fake_components()
+    host.settings = replace(
+        host.settings, telegram_webhook_public_origin="https://hooks.example.org",
+    )
+    connection = ChannelConnection(
+        connection_id="telegram-connect",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=connection)
+    adapter.register_webhook = AsyncMock(return_value={
+        "provider_registration_verified": True,
+        "live_connected": False,
+    })
+    await host.initialize()
+    host.activation._authorize = AsyncMock()
+    params = {
+        "tenant_id": connection.tenant_id,
+        "connection_id": connection.connection_id,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "session_id": "authorized-session",
+        "authorized_plan": SimpleNamespace(policy_decision_id="policy-verified"),
+        "expected_revision": 2,
+    }
+    result = await host.register_telegram_webhook(**params)
+    assert result == {"provider_registration_verified": True, "live_connected": False}
+    host.activation._authorize.assert_awaited_once()
+    assert host.activation._authorize.await_args.kwargs["action"] == "channel.webhook.register"
+    adapter.register_webhook.assert_awaited_once_with(
+        connection=connection, public_origin="https://hooks.example.org",
+    )
+
+    adapter.register_webhook.reset_mock()
+    host.repository.get_enabled_connection.return_value = connection.model_copy(
+        update={"revision": 3},
+    )
+    with pytest.raises(PermissionError):
+        await host.register_telegram_webhook(**params)
+    adapter.register_webhook.assert_not_awaited()
+
+    host.repository.get_enabled_connection.return_value = connection
+    host.activation._authorize.side_effect = PermissionError("RBAC denied")
+    with pytest.raises(PermissionError):
+        await host.register_telegram_webhook(**params)
+    adapter.register_webhook.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_webhook_registration_disabled_without_configured_public_origin():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    conn = ChannelConnection(
+        connection_id="telegram-connect",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=conn)
+    adapter.register_webhook = AsyncMock()
+    await host.initialize()
+    host.activation._authorize = AsyncMock()
+    with pytest.raises(PermissionError, match="not configured"):
+        await host.register_telegram_webhook(
+            tenant_id=conn.tenant_id, connection_id=conn.connection_id,
+            user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            session_id="governed",
+            authorized_plan=SimpleNamespace(policy_decision_id="policy"),
+            expected_revision=2,
+        )
+    host.activation._authorize.assert_not_awaited()
+    adapter.register_webhook.assert_not_awaited()
+    await host.shutdown()
