@@ -273,3 +273,25 @@ arbitrary timing thresholds, prove real Meta callback timeouts, measure
 browser/API latency, or establish live WhatsApp connectivity. Latency
 comparison and concurrency/retention contention evidence must inform a
 separate governed release decision before the capacity ceiling can change.
+
+
+## KWA-01C5C3: concurrent bounded batch replay versus retention prune
+
+The existing disposable PostgreSQL channel concurrency suite now creates an
+isolated active WhatsApp connection and records **100 valid normalized status
+receipts**. After aging only those unmatched test receipts, it races an
+identical 100-receipt replay against the canonical destructive retention
+prune. Both operations must finish through the existing shared advisory lock,
+and the final result must contain zero PII-bearing status rows and exactly
+100 digest-only tombstones.
+
+Three more parallel exact batch replays must return successful durable replay
+acknowledgements without restoring deleted metadata. Intentionally corrupting
+one test-only tombstone digest must fail the whole batch closed, with zero
+new status rows. No new plugin code, secret path, data store, migration, HTTP
+endpoint or transport limit is added by this test.
+
+This verifies PostgreSQL concurrency and archival idempotence under the
+existing 64 KiB / 100-event contract, **not** callback throughput,
+live Meta signature interoperability, provider latency SLOs or approval to
+release the WhatsApp transport.
