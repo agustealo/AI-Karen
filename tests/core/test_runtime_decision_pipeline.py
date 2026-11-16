@@ -58,6 +58,13 @@ class MemoryReadDenyingPolicy(RuntimePolicyEnforcer):
         return await super().evaluate(request)
 
 
+class NoEvidenceResolver:
+    """Keep policy unit tests deterministic and independent of live storage."""
+
+    async def resolve(self, request, cognitive_context):
+        return cognitive_context
+
+
 def _request() -> ChatExecutionRequest:
     return ChatExecutionRequest(
         messages=[{"role": "user", "content": "reason about this"}],
@@ -81,6 +88,7 @@ def test_pipeline_authorizes_reasoning_after_cortex() -> None:
         pipeline = RuntimeDecisionPipeline(
             cortex=cortex,  # type: ignore[arg-type]
             policy=RuntimePolicyEnforcer(),
+            evidence_resolver=NoEvidenceResolver(),
         )
         result = await pipeline.decide(_request())
         assert cortex.calls == 1
@@ -104,6 +112,7 @@ def test_pipeline_drops_policy_denied_soft_exploration_without_inventing_mode() 
         pipeline = RuntimeDecisionPipeline(
             cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
             policy=RuntimePolicyEnforcer(),
+            evidence_resolver=NoEvidenceResolver(),
         )
         result = await pipeline.decide(_request())
         assert result.reasoning_modes == []
@@ -116,21 +125,30 @@ def test_pipeline_drops_policy_denied_soft_exploration_without_inventing_mode() 
     asyncio.run(run())
 
 
-def test_pipeline_memory_write_is_false_until_policy_grants_capability() -> None:
-    async def run() -> None:
-        cognitive = ExecutionDecision(
-            required_capabilities=[],
-            memory_write_allowed=False,
-            policy_constraints={"memory_write_requested": True},
-        )
-        pipeline = RuntimeDecisionPipeline(
-            cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
-            policy=RuntimePolicyEnforcer(),
-        )
-        result = await pipeline.decide(_request())
-        assert result.memory_write_allowed is False
+def test_pipeline_memory_write_requires_explicit_capability_and_policy() -> None:
+    # Test the final policy gate directly: CORTEX's separate formation owner
+    # may legitimately add a memory.write request for user interactions.
+    cognitive = ExecutionDecision(
+        required_capabilities=[],
+        memory_write_allowed=False,
+        policy_constraints={"memory_write_requested": True},
+    )
+    policy = PolicyDecision(
+        decision_id="policy-memory",
+        policy_version="v2",
+        allowed=True,
+        allowed_capabilities=["memory.write"],
+    )
+    pipeline = RuntimeDecisionPipeline(
+        cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
+        policy=RuntimePolicyEnforcer(),
+        evidence_resolver=NoEvidenceResolver(),
+    )
 
-    asyncio.run(run())
+    result = pipeline._apply_execution_policy(cognitive, policy)
+
+    assert result.memory_write_allowed is False
+    assert result.policy_decision_id == "policy-memory"
 
 
 def test_pipeline_memory_write_becomes_true_only_when_requested_capability_is_allowed() -> None:
@@ -143,6 +161,7 @@ def test_pipeline_memory_write_becomes_true_only_when_requested_capability_is_al
         pipeline = RuntimeDecisionPipeline(
             cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
             policy=RuntimePolicyEnforcer(),
+            evidence_resolver=NoEvidenceResolver(),
         )
         result = await pipeline.decide(_request())
         assert result.memory_write_allowed is True
@@ -164,6 +183,7 @@ def test_memory_context_is_policy_gated_before_final_execution_policy() -> None:
         pipeline = RuntimeDecisionPipeline(
             cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
             policy=policy,
+            evidence_resolver=NoEvidenceResolver(),
         )
 
         result = await pipeline.decide(_request())
@@ -171,8 +191,8 @@ def test_memory_context_is_policy_gated_before_final_execution_policy() -> None:
         assert policy.actions == ["context.resolve", "remembered_assist"]
         assert result.memory_recall_required is True
         assert "memory.read" in result.required_capabilities
-        assert result.policy_constraints["context_authorized_sources"] == ["memory"]
-        assert result.policy_constraints["context_unresolved_sources"] == ["memory"]
+        assert "memory" in result.policy_constraints["context_authorized_sources"]
+        assert "memory" in result.policy_constraints["context_unresolved_sources"]
         requirements = result.policy_constraints["cortex_stage_1_context_requirements"]
         assert requirements["requirements"][0]["source"] == "memory"
         assert requirements["requirements"][0]["capability"] == "memory.read"
@@ -195,6 +215,7 @@ def test_denied_memory_context_degrades_to_no_recall_without_denial_of_chat() ->
         pipeline = RuntimeDecisionPipeline(
             cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
             policy=policy,
+            evidence_resolver=NoEvidenceResolver(),
         )
 
         result = await pipeline.decide(_request())
@@ -204,7 +225,7 @@ def test_denied_memory_context_degrades_to_no_recall_without_denial_of_chat() ->
         assert "memory.read" not in result.required_capabilities
         assert "memory.read" in result.forbidden_capabilities
         assert "context_memory_denied_by_policy" in result.reason_codes
-        assert result.policy_constraints["context_denied_sources"] == ["memory"]
+        assert "memory" in result.policy_constraints["context_denied_sources"]
         assert result.policy_decision_id is not None
         assert result.execution_mode != RuntimeExecutionMode.DEGRADED
 

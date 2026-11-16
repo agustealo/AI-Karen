@@ -28,6 +28,8 @@ on:
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
       - 'tests/architecture/test_cognitive_execution_authority.py'
+      - 'tests/core/test_cognitive_state_conflict_handoff.py'
+      - 'tests/core/test_runtime_decision_pipeline.py'
       - 'requirements/ci/base.txt'
       - 'requirements/ci/cognitive.txt'
       - '.github/workflows/cognitive-proof-ci.yml'
@@ -58,6 +60,8 @@ on:
       - 'tests/fixtures/cognitive/**'
       - 'tests/architecture/cognitive_contracts/**'
       - 'tests/architecture/test_cognitive_execution_authority.py'
+      - 'tests/core/test_cognitive_state_conflict_handoff.py'
+      - 'tests/core/test_runtime_decision_pipeline.py'
       - 'requirements/ci/base.txt'
       - 'requirements/ci/cognitive.txt'
       - '.github/workflows/cognitive-proof-ci.yml'
@@ -137,6 +141,15 @@ jobs:
         if: ${{ always() }}
         run: |
           pytest tests/core/reasoning -q --timeout=300 --tb=short
+
+      - name: Compile KCOG cognitive-state and policy boundary
+        if: ${{ always() }}
+        run: |
+          python -m py_compile \
+            src/ai_karen_engine/core/cortex/context_stages.py \
+            src/ai_karen_engine/core/runtime/decision_pipeline.py \
+            src/ai_karen_engine/core/runtime/execution_decision.py \
+            tests/core/test_cognitive_state_conflict_handoff.py
 
       - name: Run full cognitive benchmark proof
         if: ${{ always() }}

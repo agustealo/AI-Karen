@@ -166,6 +166,13 @@ jobs:
             src/ai_karen_engine/core/model_runtime/runtime_contracts.py \
             src/ai_karen_engine/core/memory/contracts.py
 
+      - name: KCOG authorized cognitive state and conflict verification
+        run: |
+          pytest \
+            tests/core/test_cognitive_state_conflict_handoff.py \
+            tests/core/test_runtime_decision_pipeline.py \
+            -q --timeout=300 --tb=short
+
       - name: Architecture authority contracts
         run: |
           pytest tests/architecture/test_ci_dependency_authority.py -q

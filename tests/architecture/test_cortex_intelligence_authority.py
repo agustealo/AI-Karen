@@ -33,7 +33,12 @@ def test_runtime_pipeline_owns_policy_authorization_after_cortex() -> None:
     assert "class RuntimeDecisionPipeline" in pipeline
     assert "preliminary = await self._cortex.decide(request)" in pipeline
     assert "policy = await self._evaluate_execution_policy(request, cognitive)" in pipeline
-    assert "return self._apply_execution_policy(cognitive, policy)" in pipeline
+    authorization = "authorized_decision = self._apply_execution_policy(cognitive, policy)"
+    projection = "cognitive_state=self._project_cognitive_state("
+    assert authorization in pipeline
+    assert projection in pipeline
+    assert pipeline.index(authorization) < pipeline.index(projection)
+    assert "return replace(" in pipeline
     assert "RuntimePolicyEnforcer" in pipeline
 
 

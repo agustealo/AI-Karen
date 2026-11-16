@@ -18,10 +18,18 @@ selection exclusively to MemoryRuntimeManager -> NeuroRecall.
 from dataclasses import replace
 from typing import Optional
 
+from ai_karen_engine.core.cognitive.state import (
+    CognitiveState,
+    ContextSnapshot,
+    MetaSnapshot,
+    PolicySnapshot,
+)
 from ai_karen_engine.core.context.contracts import CognitiveContext, ContextRequirements
 from ai_karen_engine.core.cortex.context_stages import (
     build_context_requirements,
     finalize_decision_with_context,
+    scoped_authorized_evidence_ids,
+    scoped_conflict_evidence_ids,
 )
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
@@ -82,7 +90,87 @@ class RuntimeDecisionPipeline:
         )
         cognitive = finalize_decision_with_context(preliminary, cognitive_context)
         policy = await self._evaluate_execution_policy(request, cognitive)
-        return self._apply_execution_policy(cognitive, policy)
+        authorized_decision = self._apply_execution_policy(cognitive, policy)
+        return replace(
+            authorized_decision,
+            cognitive_state=self._project_cognitive_state(
+                request,
+                authorized_decision,
+                cognitive_context,
+            ),
+        )
+
+    @staticmethod
+    def _project_cognitive_state(
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        cognitive_context: CognitiveContext,
+    ) -> CognitiveState:
+        """Project typed, scoped cognitive evidence after the final policy gate.
+
+        This is a request-scoped projection, not a memory store or an extra
+        cognitive executive. Untested numeric calibration is never asserted.
+        """
+        ctx = request.context
+        conflict_ids = scoped_conflict_evidence_ids(cognitive_context)
+        return CognitiveState(
+            state_id=f"cognitive-{cognitive_context.context_id}",
+            request_id=ctx.request_id or cognitive_context.request_id,
+            correlation_id=ctx.correlation_id,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            session_id=ctx.session_id,
+            conversation_id=ctx.conversation_id,
+            context=ContextSnapshot(
+                plan_id=cognitive_context.context_id,
+                selected_count=len(scoped_authorized_evidence_ids(cognitive_context)),
+                policy_version=cognitive_context.policy_version or decision.policy_version,
+                metadata={
+                    "authorized_sources": list(cognitive_context.authorized_sources),
+                    "denied_sources": list(cognitive_context.denied_sources),
+                    "unresolved_sources": list(cognitive_context.unresolved_sources),
+                },
+            ),
+            meta=MetaSnapshot(
+                assessment_id=f"meta-{cognitive_context.context_id}",
+                status="conflicted" if conflict_ids else "unassessed",
+                reason_codes=(
+                    ["source_reported_evidence_conflict"] if conflict_ids else []
+                ),
+                recommended_actions=(
+                    ["verify_conflicting_evidence"] if conflict_ids else []
+                ),
+                metadata={
+                    "calibration_status": "not_evaluated",
+                    "confidence_status": "unverified",
+                    "evidence_conflict_ids": conflict_ids,
+                    "verification_authorized": (
+                        "verification" in decision.reasoning_modes
+                    ),
+                },
+            ),
+            policy=PolicySnapshot(
+                policy_id=decision.policy_decision_id or "",
+                tenant_id=ctx.tenant_id,
+                allowed_behaviors=list(decision.required_capabilities),
+                blocked_behaviors=list(decision.forbidden_capabilities),
+                approval_required=decision.requires_human_gate,
+                policy_version=decision.policy_version,
+                metadata={
+                    "reason_codes": list(decision.policy_reason_codes),
+                    "allowed_reasoning_modes": list(decision.reasoning_modes),
+                },
+            ),
+            policy_version=decision.policy_version,
+            metadata={
+                "epistemic_status": (
+                    "source_conflict_requires_verification"
+                    if conflict_ids else "not_assessed"
+                ),
+                "assessment_method": "authorized_source_conflict_projection_v1",
+                "verified_cognitive_improvement": False,
+            },
+        )
 
     async def _authorize_context(
         self,
@@ -258,7 +346,9 @@ class RuntimeDecisionPipeline:
         )
         allowed_capabilities = list(policy.allowed_capabilities)
         memory_write_allowed = (
-            memory_write_requested and "memory.write" in allowed_capabilities
+            memory_write_requested
+            and "memory.write" in cognitive.required_capabilities
+            and "memory.write" in allowed_capabilities
         )
 
         topology = cognitive.topology
