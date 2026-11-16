@@ -187,6 +187,28 @@ async def test_missing_decision_and_wrong_subject_do_not_leak_or_write():
         ValueError,
     ),
     (
+        lambda obj: replace(obj, chosen_probability=0.9),
+        ValueError,
+    ),
+    (
+        lambda obj: replace(obj, chosen_probability=float("nan")),
+        ValueError,
+    ),
+    (
+        lambda obj: replace(
+            obj,
+            action_probabilities={ACTIONS[0]: 0.2, ACTIONS[1]: 0.2},
+        ),
+        ValueError,
+    ),
+    (
+        lambda obj: replace(
+            obj,
+            action_probabilities={ACTIONS[0]: 0.5, ACTIONS[1]: 0.5, "illegal": 0.0},
+        ),
+        ValueError,
+    ),
+    (
         lambda obj: replace(obj, decision_type="provider_selection"),
         ValueError,
     ),
