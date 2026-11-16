@@ -142,6 +142,13 @@ def test_duplicate_decision_reward_or_verification_label_ref_rejected() -> None:
     with pytest.raises(ValueError, match="Duplicate"):
         evaluate([first, second])
 
+    second = observation(2)
+    second.metadata["verification_label_ref"] = second.metadata["reward_evidence_ref"]
+    with pytest.raises(ValueError, match="distinct evidence receipts"):
+        evaluate([second])
+
+
+
 
 def test_missing_real_behavior_provenance_never_assumed_from_candidate() -> None:
     entry = observation(3)
