@@ -172,14 +172,14 @@ async def test_real_kcm_rls_revocation_concurrency_and_erasure() -> None:
         assert await visible(tenant_a, user_c) == (1, 0)
         assert await visible(tenant_b, user_a) == (0, 0)
 
-        async with conn.transaction():
-            await conn.execute(f'SET LOCAL ROLE "{reader_role}"')
-            await conn.execute(
-                "SELECT set_config('app.current_tenant_id',$1,true),"
-                "set_config('app.current_user_id',$2,true)",
-                str(tenant_a), str(user_a),
-            )
-            with pytest.raises(asyncpg.PostgresError):
+        with pytest.raises(asyncpg.PostgresError):
+            async with conn.transaction():
+                await conn.execute(f'SET LOCAL ROLE "{reader_role}"')
+                await conn.execute(
+                    "SELECT set_config('app.current_tenant_id',$1,true),"
+                    "set_config('app.current_user_id',$2,true)",
+                    str(tenant_a), str(user_a),
+                )
                 await conn.fetchval(
                     "SELECT kcm_internal.kcm_revoke_training_source("
                     "$1,$2,$3,$4,$5)",
