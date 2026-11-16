@@ -149,16 +149,17 @@ async def test_authenticated_independent_review_uses_only_frozen_runtime_lineage
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("actor", [
-    lambda: principal(user=SUBJECT),
-    lambda: principal(tenant=OTHER_TENANT),
-    lambda: principal(permissions=[]),
-    lambda: {"user_id": REVIEWER, "tenant_id": TENANT,
-             "permissions": [PERMISSION]},
+@pytest.mark.parametrize("actor,denial", [
+    (lambda: principal(user=SUBJECT), PermissionError),
+    # Tenant-RLS lookup must not disclose that another tenant has a decision.
+    (lambda: principal(tenant=OTHER_TENANT), LookupError),
+    (lambda: principal(permissions=[]), PermissionError),
+    (lambda: {"user_id": REVIEWER, "tenant_id": TENANT,
+              "permissions": [PERMISSION]}, PermissionError),
 ])
-async def test_untrusted_cross_tenant_and_self_reviewers_cannot_issue(actor):
+async def test_untrusted_cross_tenant_and_self_reviewers_cannot_issue(actor, denial):
     handler, judgement, receipts, _, _ = case()
-    with pytest.raises(PermissionError):
+    with pytest.raises(denial):
         await handler.submit(judgement, reviewer=actor())
     assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
 
