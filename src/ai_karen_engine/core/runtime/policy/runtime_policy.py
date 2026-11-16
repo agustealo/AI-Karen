@@ -299,6 +299,14 @@ class RuntimePolicyEnforcer:
         Neither result proves that the alternative is executable; callers must
         not use this probe for sampling, eligibility, or an OPE receipt.
         """
+        if not direct_plan_authorized or not selected_policy.allowed:
+            return ResponseStrategyPolicyProbe(
+                source_decision_id=selected_policy.decision_id,
+                source_policy_version=selected_policy.policy_version,
+                selected_action="",
+                policy_permitted_actions=(),
+                status="not_authorized",
+            )
         selected_only = ResponseStrategyPolicyProbe(
             source_decision_id=selected_policy.decision_id,
             source_policy_version=selected_policy.policy_version,
@@ -308,8 +316,6 @@ class RuntimePolicyEnforcer:
         )
         topology = request.execution_topology
         if (
-            not direct_plan_authorized
-            or not selected_policy.allowed
             or selected_policy.requires_human_gate
             or selected_policy.risk_level not in {"low", "medium"}
             or not selected_policy.decision_id
@@ -373,7 +379,7 @@ class RuntimePolicyEnforcer:
 
     async def evaluate(self, request: PolicyEvaluationRequest) -> PolicyDecision:
         """Evaluate capabilities and reasoning modes as distinct policy domains."""
-        decision_id = f"policy-{request.tenant_id}-{request.user_id}-{int(time.time() * 1000)}"
+        decision_id = f"policy-{request.tenant_id}-{request.user_id}-{time.time_ns()}"
         policy_version = "v2"
         evaluated_at = time.time()
 
