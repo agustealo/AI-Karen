@@ -233,11 +233,18 @@ class MainExtension(ExtensionBase):
                 state=ChannelDeliveryState.UNKNOWN,
                 error_code="telegram_response_uncertain",
             )
-        if response.status_code >= 400:
+        if 400 <= response.status_code < 500:
             return ChannelDeliveryReceipt(
                 delivery_id=delivery.delivery_id,
                 state=ChannelDeliveryState.FAILED,
                 error_code="telegram_request_rejected",
+            )
+        if response.status_code != 200:
+            # Redirects and unexpected 2xx statuses are not provider evidence.
+            return ChannelDeliveryReceipt(
+                delivery_id=delivery.delivery_id,
+                state=ChannelDeliveryState.UNKNOWN,
+                error_code="telegram_receipt_unverified",
             )
         try:
             result = response.json()
@@ -261,7 +268,11 @@ class MainExtension(ExtensionBase):
                 error_code="telegram_receipt_unverified",
             )
         result_chat = sent.get("chat")
-        if not isinstance(result_chat, dict) or result_chat.get("id") != chat_id:
+        if (
+            not isinstance(result_chat, dict)
+            or type(result_chat.get("id")) is not int
+            or result_chat["id"] != chat_id
+        ):
             return ChannelDeliveryReceipt(
                 delivery_id=delivery.delivery_id,
                 state=ChannelDeliveryState.UNKNOWN,
