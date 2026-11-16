@@ -141,3 +141,15 @@ def test_response_completion_cannot_be_a_candidate_accuracy_receipt() -> None:
     assert report["baseline_observed_count"] == 120
     assert report["rate_source"] == "logged_behavior_policy_reward_threshold"
     assert report["promotion_decision"] == PromotionDecision.PROMOTION_BLOCKED.value
+
+
+def test_empty_evaluation_reports_absent_not_zero_success() -> None:
+    report = evaluate([])
+    assert report["sample_count"] == 0
+    assert report["observed_success_rate"] is None
+    assert report["baseline_success_rate"] is None
+    assert report["candidate_success_rate"] is None
+    assert report["baseline_observed_count"] == 0
+    assert report["candidate_observed_count"] == 0
+    assert report["rate_source"] == "no_observations"
+    assert report["promotion_decision"] == "insufficient_evidence"
