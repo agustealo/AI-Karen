@@ -4059,6 +4059,11 @@ class ChatRuntime:
             return False
         if not ChatRuntime._should_execute_authorized_reasoning(decision, plan):
             return False
+        # Only canonical non-generative strategies may require a separate
+        # provider reply. A runtime-composed strategy can have executed an
+        # inference whose unverified diagnostics reported zero calls.
+        if reasoning_meta.get("reasoning_activation") != "core_defaults":
+            return False
         if reasoning_meta.get("reasoning_model_calls") != 0:
             return False
         if reasoning_meta.get("reasoning_status") in {"failed", "budget_exhausted"}:

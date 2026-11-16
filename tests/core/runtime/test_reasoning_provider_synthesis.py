@@ -23,6 +23,7 @@ def _runtime(*, status: str = "abstained", modes: list[str] | None = None,
     reasoning = {
         "reasoning_id": "reason-evaluated",
         "reasoning_status": status,
+        "reasoning_activation": "core_defaults",
         "reasoning_modes": modes if modes is not None else ["verification"],
         "reasoning_model_calls": model_calls,
         "reasoning_steps": 1,
@@ -100,6 +101,23 @@ async def test_without_selection_no_extra_model_generation() -> None:
     )
     assert content == "unverified analysis"
     assert meta["actual_provider"] is None
+    runtime._run_simple.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_runtime_composed_model_strategy_does_not_generate_twice() -> None:
+    runtime = _runtime(model_calls=0)
+    request, decision, plan, meter = _inputs()
+    text, evidence = await runtime._run_reasoning(request, decision, plan, meter)
+    evidence["reasoning_activation"] = "runtime_composed"
+    runtime._run_reasoning = AsyncMock(return_value=(text, evidence))
+
+    answer, metadata = await runtime._run_reasoning_with_model_synthesis(
+        request, decision, plan, meter,
+    )
+
+    assert answer == text
+    assert metadata["response_source"] == "reasoning"
     runtime._run_simple.assert_not_awaited()
 
 
