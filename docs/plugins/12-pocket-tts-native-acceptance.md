@@ -25,6 +25,7 @@
 | Pocket deactivation fences queued native calls | `test_queued_request_is_denied_after_plugin_shutdown` | **Source-only regression**; model/device evidence still open |
 | Curated Pocket download patterns and native loader parity | `tests/extensions/test_pocket_tts_recommendation_contract.py::test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec` | **Source-only contract**; licensed device download still unverified |
 | Target hardware runtime + licensed model install | No attested target artifact | **Not proven** |
+| Opt-in repeated native performance and local server-process sampling | `test_live_pocket_native_benchmark_with_real_cpu_and_memory` | **Operator-only harness**; no target samples recorded |
 | Native Pocket audio and WAV integrity | No non-mocked target WAV | **Not proven** |
 | Browser preview/read-aloud on real target | No device/browser capture | **Not proven** |
 | CPU/RAM/latency/cancellation measurements | No machine observations | **Not proven** |
@@ -181,9 +182,62 @@ an approved real voice, a real
 fixed harmless phrase, real non-silent PCM frames,
 correct mono PCM16 WAV properties, and a private no-store transport response.
 They report only model/voice IDs and duration/latency/real-time factor metadata;
-they do not save audio, text, paths or the bearer token. The target CPU/RAM
-profile, real human listening, browser playback and actual model/voice licensing
-still require independent evidence and sign-off.
+they do not save audio, text, paths or the bearer token. Human listening,
+browser playback, actual model/voice licensing and cold-start evidence still
+require independent evidence and sign-off.
+
+### Operator-only CPU/RAM and repeated synthesis benchmark
+
+The same `test_pocket_tts_live_acceptance.py` now includes a separately
+opt-in **real target-process benchmark**. It is not run by normal CI. Set the
+following variables in the operator's private, secured environment:
+
+- `KAREN_POCKET_ACCEPTANCE_URL` and `KAREN_POCKET_ACCEPTANCE_TOKEN` as
+  specified above, for the same authenticated local Karen host and tenant.
+- `KAREN_POCKET_ACCEPTANCE_BENCHMARK=1` to explicitly request measurement.
+- `KAREN_POCKET_ACCEPTANCE_SERVER_PID` to the **actual local Karen API/server
+  process ID**. Do not supply a browser, model-download worker, unrelated
+  process or container-host proxy PID. If Karen is containerized, run the
+  benchmark within the target process's PID namespace with access to its
+  actual runtime process (including PID 1 for an exec-launched server), or
+  record hardware measurements separately.
+
+Use the **existing** operator-licensed, enabled Pocket runtime. The benchmark
+does not download assets, change permissions, start the server or persist raw
+audio. From the repo root, with the environment already configured:
+
+```bash
+PYTHONPATH=src pytest -q -ra \
+  -k test_live_pocket_native_benchmark_with_real_cpu_and_memory \
+  --junitxml=pocket-native-device-acceptance.xml \
+  tests/core/voice/test_pocket_tts_live_acceptance.py
+```
+
+The operator owns and must secure the local JUnit XML artifact. It contains
+only model revision and numeric aggregates; do not upload it publicly without
+reviewing its contents and the target environment. The benchmark probes the
+authorized catalog, then makes **five real synthesis requests per fixed input
+length**: short greeting, paragraph and the 2,000-character synthesis limit.
+Each response is independently checked for a complete, non-silent mono PCM16
+WAV and a no-store, engine-identified HTTP result. JUnit properties include
+observed latency p50/p95, real-time-factor p50/p95, catalog probe duration,
+process-tree peak RSS, approximate CPU percent and sampler count.
+
+CPU and RSS come from `psutil` readings of the operator-designated process
+and its children at 100 ms intervals. RSS sums may count shared pages more
+than once, very short peaks may be missed, and short-lived child CPU time
+may be undercounted. The benchmark must therefore be paired with host-level
+telemetry when setting release budgets. It does not prove cold startup unless
+a separately attested fresh process is used; it cannot observe first audible
+browser sound or subjective speech quality.
+
+An unset benchmark flag produces a skip, not a pass. A set flag without a
+valid live server PID or required local credentials fails closed. No automatic
+release-ready state is granted by running this test. The operator must
+record exact commit, approved licenses, process identity, target OS and CPU,
+resource observations, and audible browser acceptance in this ledger.
+
+
 
 Use an authenticated test identity with explicit tenant membership. Retrieve
 `GET /api/voice/engines` and record the real returned `engine_id`,
