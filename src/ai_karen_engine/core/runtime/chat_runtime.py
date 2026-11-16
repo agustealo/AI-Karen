@@ -3542,6 +3542,7 @@ class ChatRuntime:
             correlation_id=request.context.correlation_id,
             request_id=request.context.request_id,
             metadata={"execution_mode": "surface_layout_plan"},
+            reserve_additional_model_call=meter.consume_model_call,
         )
         try:
             generated = await self._composition.expression_gateway.generate(task)
@@ -3743,6 +3744,7 @@ class ChatRuntime:
             correlation_id=request.context.correlation_id,
             request_id=request.context.request_id,
             metadata={"execution_mode": "grounded_search", "evidence_count": len(sources)},
+            reserve_additional_model_call=meter.consume_model_call,
         )
         try:
             result = (
@@ -3861,6 +3863,7 @@ class ChatRuntime:
                 "topology": plan.topology.value,
             },
             token_sink=token_sink,
+            reserve_additional_model_call=meter.consume_model_call,
         )
 
         self._emitter.emit(
