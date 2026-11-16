@@ -266,36 +266,36 @@ async def _gate() -> SimpleNamespace:
     return SimpleNamespace(mode="unavailable", message="Runtime unavailable")
 
 
-def test_reasoning_with_selected_model_uses_canonical_generation_on_both_transports() -> None:
-    """Reasoning topology must not swallow an explicit or saved model selection."""
+def test_reasoning_with_selected_model_preserves_authorized_topology() -> None:
+    """A model preference may choose an engine, never override RuntimePolicy.
+
+    Both chat transports must dispatch via the same authorized predicate.
+    A preference is forwarded by RuntimeReasoningBridge where the approved
+    reasoning strategy can actually use it, never a reason to skip cognition.
+    """
     import ast
     import inspect
     import textwrap
 
-    execute_tree = ast.parse(textwrap.dedent(inspect.getsource(ChatRuntime.execute)))
-    stream_tree = ast.parse(textwrap.dedent(inspect.getsource(ChatRuntime.execute_stream)))
-    for tree in (execute_tree, stream_tree):
-        guards = [
-            node.test for node in ast.walk(tree)
-            if isinstance(node, (ast.If, ast.IfExp))
-            and any(
-                isinstance(descendant, ast.Compare)
-                and any(isinstance(value, ast.Constant) and value.value == "reasoning"
-                        for value in descendant.comparators)
-                for descendant in ast.walk(node.test)
-            )
+    for method in (ChatRuntime.execute, ChatRuntime.execute_stream):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+        selection_calls = [
+            call for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "_should_execute_authorized_reasoning"
         ]
-        assert any(
-            isinstance(descendant, ast.Attribute)
-            and descendant.attr == "preferred_provider"
-            for guard in guards for descendant in ast.walk(guard)
-        ), "Reasoning dispatch must respect the selected generation provider"
-        assert any(
-            isinstance(descendant, ast.Attribute)
-            and descendant.attr == "preferred_model"
-            for guard in guards for descendant in ast.walk(guard)
-        ), "Reasoning dispatch must respect the selected generation model"
+        assert len(selection_calls) == 1, (
+            "Both transports must use RuntimePolicy-authorized reasoning selection"
+        )
+        source = inspect.getsource(method)
+        assert "not (request.preferred_provider and request.preferred_model)" not in source
 
+    predicate = inspect.getsource(ChatRuntime._should_execute_authorized_reasoning)
+    assert "decision.topology != plan.topology" in predicate
+    assert "requested.issubset(allowed)" in predicate
+    assert "request.preferred_model" not in predicate
+    assert "request.preferred_provider" not in predicate
 
 @pytest.mark.asyncio
 async def test_workflow_orchestrator_factory_is_synchronous_and_not_awaited(
