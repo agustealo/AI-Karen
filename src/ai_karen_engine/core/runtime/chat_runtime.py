@@ -3597,8 +3597,8 @@ class ChatRuntime:
         source_attempts = getattr(retrieved, "attempts", None)
         attempts = source_attempts if isinstance(source_attempts, list) else []
         eligible = {
-            "tool": set(plan.allowed_tools),
-            "plugin": set(plan.allowed_plugins),
+            "tool": set(getattr(plan, "allowed_tools", ()) or ()),
+            "plugin": set(getattr(plan, "allowed_plugins", ()) or ()),
         }
         authorized_source = (
             getattr(retrieved, "success", False) is True
