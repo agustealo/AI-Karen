@@ -115,6 +115,7 @@ async def test_receipt_persists_only_with_unexpired_matching_token(monkeypatch):
         RowResult(row={
             "connection_id": "conn", "destination_id": "15551234567",
             "connection_revision": 3,
+            "connection_enabled": True, "current_revision": 3,
         }),
         RowResult(scalar=None),
     )
@@ -137,6 +138,55 @@ async def test_receipt_persists_only_with_unexpired_matching_token(monkeypatch):
     assert "i.connection_revision" in session.calls[1][0]
     assert "channel_provider_status_events" in session.calls[2][0]
     assert session.calls[2][1]["revision"] == 3
+
+
+@pytest.mark.asyncio
+async def test_send_finalized_after_deactivation_reconciles_pending_signed_status(monkeypatch):
+    session = FakeSession(
+        RowResult(scalar=DELIVERY),
+        RowResult(row={
+            "connection_id": "conn", "destination_id": "15551234567",
+            "connection_revision": 3,
+            "connection_enabled": False, "current_revision": 4,
+        }),
+        RowResult(scalar=DELIVERY),
+    )
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().finalize_outbound_claim(
+        tenant_id=TENANT, claim_token=CLAIM,
+        receipt=ChannelDeliveryReceipt(
+            delivery_id=DELIVERY, state=ChannelDeliveryState.SENT,
+            provider_message_id="wamid.inflight-send",
+        ),
+    )
+    sql, args = session.calls[2]
+    assert "c.enabled = false" in sql
+    assert "i.connection_revision = :revision" in sql
+    assert args["revision"] == 3
+    assert args["current_revision"] == 4
+    assert args["historical"] is True
+
+
+@pytest.mark.asyncio
+async def test_unfenced_disabled_send_finalization_fails_closed(monkeypatch):
+    session = FakeSession(
+        RowResult(scalar=DELIVERY),
+        RowResult(row={
+            "connection_id": "conn", "destination_id": "15551234567",
+            "connection_revision": 3,
+            "connection_enabled": False, "current_revision": 3,
+        }),
+    )
+    install(monkeypatch, session)
+    with pytest.raises(module.ChannelAdmissionDenied, match="revision"):
+        await SqlChannelRepository().finalize_outbound_claim(
+            tenant_id=TENANT, claim_token=CLAIM,
+            receipt=ChannelDeliveryReceipt(
+                delivery_id=DELIVERY, state=ChannelDeliveryState.SENT,
+                provider_message_id="wamid.inflight-send",
+            ),
+        )
+    assert len(session.calls) == 2
 
 
 @pytest.mark.asyncio
