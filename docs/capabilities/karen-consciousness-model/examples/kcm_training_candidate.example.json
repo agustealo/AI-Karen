@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0.0",
+  "assessment_id": "a40a2b5f-1a4a-4d9a-8042-337fe0b81a11",
+  "tenant_id": "724c4f97-b14f-496c-ac04-e2f0c58f7b22",
+  "owner_user_id": "437ba405-c36e-433e-9419-d56c57e22333",
+  "source_artifact_id": "verified-task-run-2026-11-01-0042",
+  "source_revision": 1,
+  "source_kind": "verified_outcome",
+  "source_tier": "outcome",
+  "objective_id": "python-error-repair",
+  "objective_version": "1.0.0",
+  "target_type": "skill_procedure",
+  "admission_state": "approved",
+  "hard_gates": {
+    "tenant_authorized": true,
+    "training_consent": true,
+    "license_allowed": true,
+    "not_no_training": true,
+    "not_revoked": true,
+    "not_prohibited": true,
+    "provenance_untainted": true,
+    "verified_target": true,
+    "temporally_valid": true,
+    "lineage_complete": true
+  },
+  "quality_dimensions": {
+    "correctness": 1.0,
+    "outcome": 1.0,
+    "objective_relevance": 0.9,
+    "provenance": 0.9,
+    "clarity": 0.95,
+    "novelty_coverage": 0.8
+  },
+  "aggregate_score": 0.95,
+  "policy_version": "training-admission-v1",
+  "evaluator_version": "procedural-quality-v1",
+  "lineage_fingerprint": "1b4a5c9e3149e08f6059f5a2347120a6bf1c9f93a9e00b2f7fba01a536df1d33",
+  "privacy_flags": [
+    "internal"
+  ],
+  "trust_class": "verified_tool",
+  "source_valid_at": "2026-11-01T15:00:00Z",
+  "verified_at": "2026-11-01T16:00:00Z",
+  "consent_scope": "tenant_local_training",
+  "license_ref": "internally-authored-task-evidence-v1",
+  "ground_truth_refs": [
+    "test-receipt-2026-11-01-0042"
+  ],
+  "outcome_refs": [
+    "run-receipt-2026-11-01-0042"
+  ],
+  "decision_reason_codes": [
+    "verified_test_success",
+    "objective_matched",
+    "policy_allowed"
+  ],
+  "review_receipt_id": "review-receipt-2026-11-01-0042",
+  "created_at": "2026-11-01T17:00:00Z",
+  "evaluated_at": "2026-11-01T17:01:00Z"
+}
