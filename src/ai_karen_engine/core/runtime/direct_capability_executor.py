@@ -662,9 +662,14 @@ class DirectCapabilityExecutor:
             plugin = matches[0]
             name = str(plugin.get("display_name") or plugin.get("installation_id"))
             if plugin.get("execution_route") == "channel_host":
+                features = ", ".join(plugin.get("declared_features") or [])
                 text = (
                     f"{name} is present in Karen's registered channel catalog. "
-                    "Channel connection, credentials, bot activation, webhook, "
+                    + (
+                        f"Declared (not live-verified) features: {features}. "
+                        if parsed.operation == "features" and features else ""
+                    )
+                    + "Channel connection, credentials, bot activation, webhook, "
                     "identity link, and reply delivery have not been verified by "
                     "this catalog inspection. The next step is an authorized "
                     "channel-owner inspection. No setup action was performed."
