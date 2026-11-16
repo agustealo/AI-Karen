@@ -156,7 +156,9 @@ def _active_receipt(
         )
         or receipt.evidence_ref != ref
         or receipt.tenant_id != tenant_id
+        or not isinstance(receipt.receipt_id, str)
         or not receipt.receipt_id.strip()
+        or not isinstance(receipt.source_revision, str)
         or not receipt.source_revision.strip()
         or receipt.status is not SelfModelEvidenceStatus.ACTIVE
         or _utc(receipt.verified_at) > at
@@ -247,6 +249,8 @@ class SelfModelProjector:
             raise TypeError("canonical SelfModel required")
         if not tenant_id or model.tenant_id != tenant_id:
             raise PermissionError("self-model tenant scope mismatch")
+        if not isinstance(model.metadata, dict):
+            raise PermissionError("canonical self-model metadata is invalid")
         if model.metadata.get("user_id") is not None:
             raise PermissionError("user-scoped self-model requires governed user isolation")
 
@@ -311,10 +315,11 @@ class SelfModelProjector:
         # A revoked receipt poisons the entire projection, not merely the
         # corresponding capability: no stale cached claim may stay visible.
         if any(
-            receipt is not None
+            type(receipt) is SelfModelEvidenceReceipt
             and receipt.tenant_id == tenant_id
             and receipt.status is SelfModelEvidenceStatus.REVOKED
-            for receipt in resolved.values()
+            for ref, receipt in resolved.items()
+            if ref in refs
         ):
             codes.add("self_model_evidence_revoked")
             return OperationalSelfModelRead(
