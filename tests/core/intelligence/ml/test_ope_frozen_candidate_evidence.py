@@ -7,7 +7,6 @@ not the correctness of any model or authorization of a runtime policy.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
