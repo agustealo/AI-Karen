@@ -236,3 +236,46 @@ a later explicit, RuntimePolicy-authorized `setWebhook` workflow that
 constructs the exact tenant connection path, validates the effective HTTPS
 deployment configuration, and independently reconciles Telegram's response.
 Do not expose the configured origin as proof of a live connection.
+
+## Explicit Telegram webhook registration
+
+After an operator provisions and activates a Telegram connection, a separate,
+privileged registration operation is available in the existing authenticated
+Channels API:
+
+`POST /api/channels/personal/operator/telegram/connections/{connection_id}/webhook`
+
+The body contains only `{"expected_revision": 2}` for a newly activated
+connection. The endpoint obtains tenant, user and one-action session scope
+from Karen authentication, requests the dedicated
+`channel.webhook.register` RuntimePolicy capability, then delegates through
+ChannelHost to the installed Telegram adapter. No request may supply the URL,
+token, signing secret, provider ID, tenant or arbitrary adapter.
+
+Registration requires the previously validated
+`KAREN_TELEGRAM_WEBHOOK_PUBLIC_ORIGIN`. ChannelHost constructs the exact
+`/api/channels/webhooks/{tenant_id}/{connection_id}` path and validates the
+enabled connection and persisted revision before making the provider call.
+The adapter obtains the bot token and signing secret from host-governed
+Identity Vault. It sends Telegram `setWebhook` with the canonical URL,
+`secret_token`, `allowed_updates=["message"]` and
+`drop_pending_updates=false`. It then requires a successful
+`getWebhookInfo` read-back with the exact URL.
+
+A validated success response is limited to
+`{"provider_registration_verified": true, "live_connected": false}`.
+The latter is not a provider-disconnection claim; it means no end-to-end
+ChatRuntime delivery was proven. A failed POST or uncertain read-back is
+not treated as a successful registration. Because Telegram may accept a POST
+before a network timeout or connection revision change, an ambiguous result
+must be reconciled with read-only inspection; never blindly retry or claim
+a remote rollback. Registration is explicit, not automatic at startup.
+
+**Outstanding limitations:** A provider URL match does not prove the endpoint
+is reachable with valid TLS, that inbound secret verification succeeds, that
+the sender is linked and authorized, or that ChatRuntime produces a reply.
+The current mutation uses process-local and optimistic revision checks; it
+does not offer a durable distributed registration lease across independent
+host replicas. Operators must avoid concurrent registration with credential
+rotation and deactivation until a durable claim protocol is implemented.
+Live acceptance remains mandatory.
