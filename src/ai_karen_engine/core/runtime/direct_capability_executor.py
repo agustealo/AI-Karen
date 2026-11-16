@@ -613,12 +613,29 @@ class DirectCapabilityExecutor:
                 text="Plugin execution budget exhausted. No action was run.",
                 error="plugin_action_budget_exhausted",
             )
-        from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
+        try:
+            from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
 
-        granted = sorted(
-            permission.value
-            for permission in get_rbac_manager().get_user_permissions(principal)
-        )
+            granted = sorted(
+                permission.value
+                for permission in get_rbac_manager().get_user_permissions(principal)
+            )
+        except Exception as exc:
+            logger.warning(
+                "plugin.conversation.action_rbac_unavailable",
+                extra={
+                    "tenant_id": request.context.tenant_id,
+                    "user_id": request.context.user_id,
+                    "plugin_id": plugin_id,
+                    "correlation_id": request.context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return DirectCapabilityResult(
+                handled=True, degraded=True,
+                text="Plugin execution permissions could not be verified. No action was run.",
+                error="plugin_action_permission_unavailable",
+            )
         logger.info(
             "plugin.conversation.action_requested",
             extra={
