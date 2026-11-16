@@ -139,6 +139,7 @@ class Permission(str, Enum):
     CHANNEL_DEACTIVATE = "channel.deactivate"
     CHANNEL_RECOVER = "channel.recover"
     CHANNEL_SEND = "channel.send"
+    CHANNEL_INSPECT = "channel.inspect"
 
 
 class Role(str, Enum):

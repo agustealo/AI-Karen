@@ -174,6 +174,64 @@ class ChannelHostServices:
         )
         return verified is True
 
+    async def inspect_channel_webhook(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+    ) -> dict[str, object]:
+        """Authorized, redacted live provider observation for one connection.
+
+        The diagnostic is not proof of end-to-end message delivery and may
+        never be used as an activation, send, or account-linking shortcut.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel inspection host is unavailable")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+        ):
+            raise PermissionError("Channel inspection connection unavailable")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.inspect", plan=authorized_plan,
+        )
+        adapter = self._installed.get(connection.installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(
+                connection.installation_id
+            ) is None
+            or not self.kernel.is_canonical_channel_adapter(
+                connection.installation_id, adapter
+            )
+        ):
+            raise PermissionError("Channel inspection installation unavailable")
+        inspection = getattr(adapter, "inspect_webhook", None)
+        if not callable(inspection):
+            raise PermissionError("Channel inspection is not supported")
+        result = await inspection(connection=connection)
+        if (
+            not isinstance(result, dict)
+            or set(result) != {
+                "registered", "path_matches", "pending_update_count",
+                "provider_reported_error", "endpoint_origin_verified",
+            }
+            or any(
+                type(result[key]) is not bool for key in (
+                    "registered", "path_matches", "provider_reported_error",
+                    "endpoint_origin_verified",
+                )
+            )
+            or result["endpoint_origin_verified"] is not False
+            or type(result["pending_update_count"]) is not int
+            or not 0 <= result["pending_update_count"] <= 1_000_000
+        ):
+            raise PermissionError("Channel inspection returned invalid evidence")
+        return dict(result)
+
     async def authorize_reference(
         self, *, tenant_id: str, user_id: str, installation_id: str,
         credential_handle: str,
