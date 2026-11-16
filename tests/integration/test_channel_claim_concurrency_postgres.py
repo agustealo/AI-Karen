@@ -102,7 +102,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         await raw.execute(status_migration)
         customer_window_migration = (
             Path(__file__).resolve().parents[2]
-            / "supabase/migrations/20261116020000_55_whatsapp_customer_window_evidence.sql"
+            / "supabase/migrations/20261116030000_56_whatsapp_customer_window_evidence.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(customer_window_migration)
         await raw.execute(
