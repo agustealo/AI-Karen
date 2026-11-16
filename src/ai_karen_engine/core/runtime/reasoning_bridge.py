@@ -9,22 +9,21 @@ not discover providers, models, prompts, or policy on their own.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
-from ai_karen_engine.core.reasoning.defaults import get_default_strategies
-from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionTopology,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.policy import ResponseStrategyPolicyProbe
-from ai_karen_engine.core.runtime.soft_reasoning_composition import (
-    ComposedSoftReasoning,
-    SoftReasoningCompositionUnavailable,
-    get_runtime_soft_reasoning_composer,
-)
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
+    from ai_karen_engine.core.runtime.soft_reasoning_composition import (
+        ComposedSoftReasoning,
+    )
 
 
 SOFT_EXPLORATION_MODE = "soft_exploration"
@@ -144,14 +143,24 @@ class RuntimeReasoningBridge:
 
         # Use the same actual default-strategy factory as activate(). Merely
         # declaring a mode in a request is not evidence of a loaded executor.
-        # Multiple registered strategies may legitimately handle the same
-        # mode (for example, the verifier and metacognition). Identify the
-        # canonical verifier by its registered strategy ID, not by assuming
-        # that the mode maps to exactly one strategy.
-        verifiers = [
-            item for item in get_default_strategies()
-            if item.strategy_id == "verify" and item.can_handle(["verification"])
-        ]
+        # The default strategy factory is also used by activate(), but
+        # importing it can require optional ML packages. An unavailable
+        # dependency is a real blocker, never an empty/fabricated registry.
+        # The optional diagnostic must not crash Main Quality or chat.
+        try:
+            from ai_karen_engine.core.reasoning.defaults import (
+                get_default_strategies,
+            )
+
+            # Multiple strategies may legitimately handle verification.
+            verifiers = [
+                item for item in get_default_strategies()
+                if item.strategy_id == "verify" and item.can_handle(["verification"])
+            ]
+        except ImportError:
+            verifiers = []
+            blocked = True
+            reasons.append("verification_strategy_dependency_unavailable")
         verifier = verifiers[0] if len(verifiers) == 1 else None
         if verifier is None:
             blocked = True
@@ -282,6 +291,11 @@ class RuntimeReasoningBridge:
                 }
             )
 
+        from ai_karen_engine.core.reasoning.defaults import (
+            get_default_strategies,
+        )
+        from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
+
         strategies = get_default_strategies(optional_strategies=optional_strategies)
         return ReasoningActivation(
             executor=ReasoningExecutor(strategies=strategies),
@@ -298,6 +312,11 @@ class RuntimeReasoningBridge:
         preferred_provider: str | None,
         preferred_model: str | None,
     ) -> ComposedSoftReasoning:
+        from ai_karen_engine.core.runtime.soft_reasoning_composition import (
+            SoftReasoningCompositionUnavailable,
+            get_runtime_soft_reasoning_composer,
+        )
+
         try:
             return get_runtime_soft_reasoning_composer().compose_paper_2025(
                 objective=objective,
