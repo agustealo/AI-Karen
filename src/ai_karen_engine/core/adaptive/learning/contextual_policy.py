@@ -7,7 +7,6 @@ BaselinePolicy (deterministic production control) and LinearContextualPolicy
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any
 
 import numpy as np
@@ -43,16 +42,24 @@ class BaselinePolicy:
             scores[action] = max(0.0, min(1.0, score))
 
         chosen = max(scores, key=lambda k: scores[k]) if scores else ""
-        chosen_prob = scores.get(chosen, 1.0) if chosen else 0.0
-
+        # This is deterministic argmax. Scores do NOT express the chance of
+        # selecting an action, and the chosen action always has propensity 1.
+        probabilities = {
+            action: 1.0 if action == chosen else 0.0
+            for action in eligible_actions
+        }
         decision = PolicyDecision(
             scores=dict(scores),
-            probabilities={chosen: 1.0} if chosen else {},
+            probabilities=probabilities,
             chosen_action=chosen,
-            chosen_probability=chosen_prob,
+            chosen_probability=1.0 if chosen else 0.0,
             policy_id=self.policy_id,
             policy_version=self.policy_version,
             exploration_used=False,
+            metadata={
+                "selection_rule": "deterministic_argmax",
+                "has_randomized_overlap": False,
+            },
         )
         self._observations.append(decision)
         return decision
@@ -98,24 +105,27 @@ class LinearContextualPolicy:
         if self._exploration_rate > 0.0 and context.risk_class != ActionRiskClass.HIGH:
             pass
 
-        total = sum(scores.values())
-        probabilities = {}
-        if total > 0.0:
-            probabilities = {a: s / total for a, s in scores.items()}
-        else:
-            probabilities = {a: 1.0 / len(scores) for a in scores}
-
+        # Shadow scoring also uses deterministic argmax. Previously the
+        # normalized scores were returned as sampling probabilities despite
+        # never sampling. That could falsely imply support for OPE.
         chosen = max(scores, key=lambda k: scores[k]) if scores else ""
-        chosen_prob = probabilities.get(chosen, 0.0)
+        probabilities = {
+            action: 1.0 if action == chosen else 0.0
+            for action in eligible_actions
+        }
 
         decision = PolicyDecision(
             scores=dict(scores),
-            probabilities=dict(probabilities),
+            probabilities=probabilities,
             chosen_action=chosen,
-            chosen_probability=chosen_prob,
+            chosen_probability=1.0 if chosen else 0.0,
             policy_id=self.policy_id,
             policy_version=self.policy_version,
             exploration_used=False,
+            metadata={
+                "selection_rule": "deterministic_argmax",
+                "has_randomized_overlap": False,
+            },
         )
         self._observations.append(decision)
         return decision

@@ -24,6 +24,8 @@ class DecisionType(str, Enum):
     PLUGIN_SELECTION = "plugin_selection"
     MEMORY_SELECTION = "memory_selection"
     PROACTIVE_CONTINUITY = "proactive_continuity"
+    # Authorized response-strategy selection, distinct from execution outcomes.
+    RESPOND_STRATEGY = "respond_strategy"
 
 
 class OpeEligibilityReason(str, Enum):
@@ -48,6 +50,7 @@ CORTEX_TOPOLOGY_POLICY_ID = "cortex_topology"
 CORTEX_TOPOLOGY_POLICY_VERSION = "v1"
 PROACTIVE_CONTINUITY_POLICY_ID = "proactive_continuity_ranker"
 PROACTIVE_CONTINUITY_POLICY_VERSION = "v1"
+RUNTIME_RESPONSE_STRATEGY_POLICY_ID = "runtime_authorized_response_strategy"
 
 
 # Keys that must never be persisted into a learning record. Mirrors the

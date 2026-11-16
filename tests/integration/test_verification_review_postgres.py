@@ -44,6 +44,10 @@ from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     FeatureSnapshot,
 )
 from ai_karen_engine.core.runtime.trajectory.store import PostgresTrajectoryStore
+from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
+from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.outcome.store import (
     OutcomeStoreError,
     PostgresOutcomeStore,
@@ -363,6 +367,58 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             "SELECT count(*) FROM public.outcome_records "
             "WHERE decision_observation_id='pg-review-decision-1'"
         ) == 2
+
+        # KCOG-01C0: exercise the actual ChatRuntime selection recorder
+        # against the same PostgreSQL lineage schema. This is not a
+        # synthetic randomized candidate or a reviewed OPE-eligible decision.
+        runtime = ChatRuntime.__new__(ChatRuntime)
+        runtime._trajectory_recorder = TrajectoryRecorder(store=PostgresTrajectoryStore())
+        runtime_trajectory = ExecutionTrajectory(
+            trajectory_id="pg-runtime-selection-1",
+            request_id="pg-runtime-request-1",
+            correlation_id="pg-runtime-corr-1",
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        )
+        policy_decision = ExecutionDecision(
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=["verification"],
+            policy_decision_id="pg-policy-authorized-1",
+            policy_version="pg-v1",
+        )
+        topology_id = await runtime._record_learning_decision(
+            runtime_trajectory, policy_decision,
+        )
+        assert topology_id
+        saved = await asyncio.to_thread(
+            PostgresTrajectoryStore().list_decision_observations,
+            runtime_trajectory.trajectory_id,
+            tenant_id=tenant_a,
+        )
+        assert len(saved) == 2
+        planned = next(item for item in saved if item.decision_type == "respond_strategy")
+        assert planned.chosen_action == "verify_then_respond"
+        assert planned.feature_snapshot_id == saved[0].feature_snapshot_id
+        assert planned.ope_eligible is False
+        assert planned.chosen_probability is None
+        assert planned.action_probabilities == {}
+        assert planned.ope_ineligible_reason == "missing_propensity"
+        assert "verification_policy_snapshot" not in planned.metadata
+        with pytest.raises(ValueError, match="not verification-OPE eligible"):
+            await authenticated_review.submit(
+                ReviewJudgement(
+                    decision_observation_id=planned.decision_observation_id,
+                    subject_user_id=subject_a,
+                    reward=0.9,
+                    verification_needed=True,
+                ),
+                reviewer=reviewer,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.outcome_records
+               WHERE decision_observation_id=$1""",
+            planned.decision_observation_id,
+        ) == 0
 
         # A second attempted decision with an original *label* ID causes
         # statement two to conflict. Statement one MUST roll back as well.

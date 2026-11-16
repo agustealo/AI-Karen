@@ -58,6 +58,7 @@ from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     PROACTIVE_CONTINUITY_FEATURES_V1,
     PROACTIVE_CONTINUITY_POLICY_ID,
     PROACTIVE_CONTINUITY_POLICY_VERSION,
+    RUNTIME_RESPONSE_STRATEGY_POLICY_ID,
     TOPOLOGY_FEATURES_V1,
 )
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
@@ -5069,6 +5070,36 @@ class ChatRuntime:
             return "degraded_runtime"
         return None
 
+    @staticmethod
+    def _authorized_response_strategy(decision: ExecutionDecision) -> str | None:
+        """Identify the policy-authorized *plan*, never infer executed results.
+
+        Other topologies, unsafe actions, human gates, missing policy provenance
+        and ambiguous reasoning combinations produce no strategy observation.
+        This is a descriptive choice only, not a randomized OPE observation.
+        """
+        if (
+            not decision.policy_decision_id
+            or not decision.policy_version
+            or decision.requires_human_gate
+            or decision.execution_mode.value == "degraded"
+            or decision.risk_level.value not in {"low", "medium"}
+            or decision.tool_requirements
+            or decision.plugin_candidates
+            or decision.requires_agent_delegation
+            or decision.requires_parallel_execution
+        ):
+            return None
+        if decision.topology == ExecutionTopology.DIRECT and not decision.reasoning_modes:
+            return "respond_direct"
+        if (
+            decision.topology == ExecutionTopology.REASONING
+            and "verification" in decision.reasoning_modes
+            and not set(decision.reasoning_modes) - {"verification", "metacognition"}
+        ):
+            return "verify_then_respond"
+        return None
+
     async def _record_learning_decision(
         self,
         trajectory: Any,
@@ -5180,6 +5211,41 @@ class ChatRuntime:
             )
             if persisted_observation is None:
                 return None
+
+            # Record a separate *authorized strategy selection* against this
+            # exact decision-time snapshot, when the runtime can establish the
+            # intended choice. A reasoning-mode authorization is not evidence
+            # that verification executed successfully. No genuine randomized
+            # behavior or pinned shadow-candidate probabilities are available:
+            # keep this row explicitly OPE-INELIGIBLE and not review-admissible.
+            selected_strategy = self._authorized_response_strategy(decision)
+            if selected_strategy is not None:
+                planned_strategy = self._trajectory_recorder.build_decision_observation(
+                    trajectory,
+                    feature_snapshot_id=persisted_snapshot.feature_snapshot_id,
+                    decision_type=DecisionType.RESPOND_STRATEGY.value,
+                    behavior_policy_id=RUNTIME_RESPONSE_STRATEGY_POLICY_ID,
+                    behavior_policy_version=decision.policy_version,
+                    candidate_actions=("respond_direct", "verify_then_respond"),
+                    eligible_actions=(selected_strategy,),
+                    chosen_action=selected_strategy,
+                    chosen_probability=None,
+                    action_probabilities={},
+                    decision_id=decision.policy_decision_id,
+                    ope_eligible=False,
+                    ope_ineligible_reason=OpeEligibilityReason.MISSING_PROPENSITY.value,
+                    metadata={
+                        "selection_source": "runtime_authorized_plan",
+                        "selection_rule": "authorized_topology_and_reasoning_mode",
+                        "alternative_authorization": "not_established",
+                        "execution_status": "not_observed_at_decision_time",
+                        "candidate_probability_status": "not_recorded",
+                    },
+                )
+                await self._trajectory_recorder.record_decision_observation_async(
+                    trajectory,
+                    decision_observation=planned_strategy,
+                )
             await self._trajectory_recorder.persist_async(trajectory)
             return observation.decision_observation_id
         except Exception as exc:
