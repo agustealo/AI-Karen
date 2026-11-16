@@ -1286,6 +1286,15 @@ class PluginService:
                         for kind in sorted(getattr(channel, "outbound", ()) or ())
                     ),
                 ][:20]
+            elif voice is not None:
+                # Voice plugins execute through the existing governed
+                # VoiceRuntime engine catalog, not a second chat voice runner.
+                # A manifest declaration alone is not a ready local engine.
+                host_eligible = False
+                execution_route = "voice_runtime"
+                readiness = "requires_authorized_voice_catalog"
+                next_action = "voice.inspect_engine_catalog"
+                features = declared_generic_features[:20]
             else:
                 host_eligible = False
                 execution_route = "plugin_executor"
