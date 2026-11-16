@@ -78,6 +78,31 @@ CREATE TABLE public.kcm_training_source_revocations (
     UNIQUE (tenant_id, user_id, deletion_epoch)
 );
 
+-- A valid user UUID and tenant UUID separately are insufficient. Require
+-- the pair to be owned by the canonical AuthService tenant membership row.
+CREATE FUNCTION kcm_internal.kcm_require_principal_tenant()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog AS $kcm_tenant$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM public.auth_users a
+        WHERE a.user_id = NEW.user_id AND a.tenant_id = NEW.tenant_id
+    ) THEN
+        RAISE EXCEPTION 'KCM scope must match canonical user-tenant membership'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$kcm_tenant$;
+
+CREATE TRIGGER kcm_scope_require_tenant_membership
+    BEFORE INSERT OR UPDATE ON public.kcm_training_scope_state
+    FOR EACH ROW
+    EXECUTE FUNCTION kcm_internal.kcm_require_principal_tenant();
+
+REVOKE ALL ON FUNCTION kcm_internal.kcm_require_principal_tenant()
+    FROM PUBLIC;
+
 -- Replaying previously revoked source evidence into a later dataset is
 -- forbidden, including for privileged but mistaken lineage writers.
 CREATE FUNCTION kcm_internal.kcm_reject_revoked_lineage()
