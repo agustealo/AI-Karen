@@ -247,3 +247,29 @@ Mixed inbound messages still use their own durable inbox admission path.
 Deactivated WhatsApp receipts retain their restricted historical pathway.
 This is **not** a 3 MB / 1,000-event capacity increase, does not measure
 provider-facing p95/p99 latency, and does not establish live Meta connectivity.
+
+
+## KWA-01C5C2: reproducible disposable PostgreSQL latency evidence
+
+The Plugin Backend workflow now runs
+`tests/integration/test_channel_status_batch_benchmark_postgres.py`
+**after** the canonical disposable `karen_channel_test` integration proof.
+It benchmarks the actual `SqlChannelRepository` per-receipt versus batch
+commit/replay paths for 1, 10, 25 and 100 authenticated normalized status
+events, using fresh IDs and a dedicated throwaway tenant. All operations
+enforce real PostgreSQL RLS-scoped transactions; no provider credentials,
+network callbacks or live tenant records are involved.
+
+An attached `channel-status-postgres-benchmark` CI artifact records
+individual sample durations, p50/p95/p99 descriptive sample quantiles,
+transaction counts per operation, PostgreSQL/Python versions and checked-out
+source SHA. The default CI probe uses six repetitions and explicitly marks
+percentiles as **exploratory**, not p99 service-level evidence. For a deeper
+local run, set `KAREN_CHANNEL_STATUS_BENCHMARK_REPETITIONS=100` in the
+dedicated disposable test database after applying the checked-in migrations.
+
+This **does not** increase the 64 KiB / 100-event admission contract, set
+arbitrary timing thresholds, prove real Meta callback timeouts, measure
+browser/API latency, or establish live WhatsApp connectivity. Latency
+comparison and concurrency/retention contention evidence must inform a
+separate governed release decision before the capacity ceiling can change.
