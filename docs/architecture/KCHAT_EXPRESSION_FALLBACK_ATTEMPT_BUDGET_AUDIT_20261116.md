@@ -70,3 +70,31 @@ remains with the Runtime's existing plan and meter.
 **Release gate:** exact-head compile, quality, chat burn, authenticated
 PostgreSQL, Medusa, Ollama and production first-boot workflows. No production
 readiness claim solely from isolated test doubles.
+
+## KCHAT-TRUST-01: Inline fetched-page synthesis admission
+
+During the new grounded-synthesis test burn, a separate response-integrity
+issue was found. The previous ChatRuntime synthesis path used plan-approved
+plugin identity to gate *stored article_id* retrieval, but an inline
+`fetched_page` excerpt could enter its model prompt without independently
+verifying the source was a completed tool/plugin execution eligible under
+`AuthorizedExecutionPlan`.
+
+ChatRuntime now verifies the identical evidence admission contract for every
+fetched-page source, inline or stored:
+
+- `success is True` and `degraded is False`.
+- Source is a registered `tool` or `plugin` with a source ID present in
+  that execution's `allowed_tools` or `allowed_plugins` respectively.
+- An actual attempt receipt must match source type and ID and report
+  `status == "success"`.
+- Invalid, missing, failed, degraded or foreign receipts return without
+  constructing a model prompt or reserving another model call.
+- Tenant-scoped stored-artifact lookup remains additionally mandatory for
+  `article_id` references.
+
+Tests in `test_chat_generation_budget.py` cover untrusted inline
+excerpts, malformed booleans, wrong source type, unapproved IDs, failed
+attempts and a valid separately admitted tool. RuntimePolicy and the
+DirectCapabilityExecutor still own authorization and execution; the
+synthesis gate only verifies their receipts before making content model-visible.
