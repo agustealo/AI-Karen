@@ -16,7 +16,10 @@ from collections.abc import Sequence
 from uuid import uuid4
 
 from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus, PredictionTask
-from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkResult, EvaluationCase, PredictionOutcome
+from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
+    BenchmarkResult, EvaluationCase, PredictionOutcome,
+    evaluation_case_sha256,
+)
 from ai_karen_engine.core.intelligence.ml.promotion import (
     PromotionDecision,
     evaluate_promotion,
@@ -95,6 +98,8 @@ def _canonical_curated_oracle_snapshot(
                 or case.expected_label != outcome.expected_label
                 or case.expected_value != outcome.expected_value
                 or case.task != outcome.task
+                or not outcome.evaluated_case_sha256
+                or outcome.evaluated_case_sha256 != evaluation_case_sha256(case)
             ):
                 return None
             try:
@@ -124,18 +129,12 @@ def _canonical_curated_oracle_snapshot(
                 declared_groups.add(group)
             # The oracle uses the *actual current corpus* including input
             # and expected truth. No external reviewer is inferred.
+            case_digest = evaluation_case_sha256(case)
+            if case_digest is None:
+                return None
             entries.append({
                 "case_hash": identity,
-                "input_sha256": hashlib.sha256(
-                    case.input_text.encode("utf-8")
-                ).hexdigest(),
-                "expected_label": case.expected_label,
-                "expected_value": case.expected_value,
-                "source": case.source,
-                "difficulty": case.difficulty,
-                "tags": case.tags,
-                "features": case.features,
-                "declared_group": group,
+                "evaluated_case_sha256": case_digest,
             })
         canonical = json.dumps(
             {"task": task.value, "dataset_version": dataset_version,
