@@ -131,6 +131,14 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       setPolicy(nextPolicy);
       setChannels(channelResponse.channels);
       setJobs(nextJobs.jobs);
+      setTrackedJob((current) => {
+        if (!current) return null;
+        const latest = nextJobs.jobs.find((job) => job.job_id === current.job_id);
+        return latest &&
+          latest.model_id === current.model_id &&
+          latest.revision === current.revision &&
+          latest.channel_id === current.channel_id ? latest : current;
+      });
       // License acceptance must be fresh for the backend-verified revision.
       setAccepted({});
       setState("ready");
@@ -167,6 +175,11 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           return;
         }
         setTrackedJob(updated);
+        // Keep the locally cached job list consistent with the verified owner
+        // receipt. Otherwise a stale "queued" row keeps retry blocked forever.
+        setJobs((current) => current.map((job) =>
+          job.job_id === updated.job_id ? updated : job,
+        ));
         if (updated.status === "completed") {
           setNotice("Model download completed. Refresh Voice Studio to verify that the runtime can load it.");
         } else if (updated.status === "failed" || updated.status === "cancelled") {
@@ -306,7 +319,9 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         const revision = item.resolved_revision;
         const channel = channels.find((candidate) => candidate.id === item.channel_id);
         const activeJob = trackedJob?.model_id === item.model_id &&
-          trackedJob.revision === revision && trackedJob.channel_id === item.channel_id
+          trackedJob.revision === revision &&
+          trackedJob.channel_id === item.channel_id &&
+          ACTIVE.has(trackedJob.status)
             ? trackedJob
             : jobs.find((job) => job.model_id === item.model_id &&
               job.revision === revision && job.channel_id === item.channel_id &&
