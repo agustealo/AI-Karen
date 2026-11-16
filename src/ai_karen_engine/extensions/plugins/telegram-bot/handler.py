@@ -115,7 +115,30 @@ class MainExtension(ExtensionBase):
     async def start(self, *, connection: ChannelConnection) -> None:
         if not connection.enabled or self._http_client is None:
             raise PermissionError("Host must provision an enabled connection and network client")
-        await self._secrets(connection)
+        _, token = await self._secrets(connection)
+        # Host authorization is not a claim that Telegram recognizes this bot.
+        # Probe read-only identity before the channel activation CAS may commit.
+        # The host-owned client enforces the configured network timeout and TLS.
+        probe = getattr(self._http_client, "get", None)
+        if not callable(probe):
+            raise PermissionError("Telegram provider identity check unavailable")
+        try:
+            response = await probe(f"{_TELEGRAM_API_BASE}/bot{token}/getMe")
+            if response.status_code != 200:
+                raise PermissionError("Telegram provider identity check failed")
+            data = response.json()
+            identity = data.get("result") if isinstance(data, dict) else None
+            if (
+                data.get("ok") is not True
+                or not isinstance(identity, dict)
+                or type(identity.get("id")) is not int
+                or identity["id"] <= 0
+                or identity.get("is_bot") is not True
+            ):
+                raise PermissionError("Telegram provider identity check failed")
+        except Exception:
+            # Never leak bot tokens, native request URLs or provider body text.
+            raise PermissionError("Telegram provider identity check failed") from None
         self._started.add(self._activation_key(connection))
 
     async def stop(self, *, connection: ChannelConnection) -> None:

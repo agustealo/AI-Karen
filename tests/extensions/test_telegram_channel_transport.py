@@ -81,12 +81,17 @@ def load_transport(*, response=None):
         "webhook_secret": SECRET,
         "bot_token": TOKEN,
     })
-    client = SimpleNamespace(post=AsyncMock(return_value=(
-        response if response is not None else httpx.Response(200, json={
-            "ok": True,
-            "result": {"message_id": 432, "chat": {"id": 901}},
-        })
-    )))
+    client = SimpleNamespace(
+        get=AsyncMock(return_value=httpx.Response(200, json={
+            "ok": True, "result": {"id": 123456, "is_bot": True},
+        })),
+        post=AsyncMock(return_value=(
+            response if response is not None else httpx.Response(200, json={
+                "ok": True,
+                "result": {"message_id": 432, "chat": {"id": 901}},
+            })
+        )),
+    )
     adapter.bind_host_services(secret_resolver=resolver, http_client=client)
     return kernel, adapter, resolver, client
 
@@ -424,3 +429,46 @@ async def test_boolean_chat_id_cannot_impersonate_integer_recipient():
     assert receipt.state is ChannelDeliveryState.UNKNOWN
     assert receipt.provider_message_id is None
     client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_activation_requires_verified_telegram_bot_identity():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.assert_awaited_once()
+    assert client.get.await_args.args[0].endswith("/getMe")
+    status = await adapter.health(connection=connection())
+    assert status["running"] is True
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe", [
+    httpx.Response(401, json={"ok": False}),
+    httpx.Response(429),
+    httpx.Response(200, json={"ok": False, "result": {"id": 10, "is_bot": True}}),
+    httpx.Response(200, json={"ok": True, "result": {"id": True, "is_bot": True}}),
+    httpx.Response(200, json={"ok": True, "result": {"id": 0, "is_bot": True}}),
+    httpx.Response(200, json={"ok": True, "result": {"id": 10, "is_bot": False}}),
+    httpx.Response(200, json={"ok": True, "result": []}),
+    httpx.Response(200, content=b"not-json"),
+])
+async def test_telegram_activation_fails_closed_on_unverified_bot(probe):
+    _, adapter, _, client = load_transport()
+    client.get.return_value = probe
+    with pytest.raises(PermissionError, match="identity check failed"):
+        await adapter.start(connection=connection())
+    assert (await adapter.health(connection=connection()))["running"] is False
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_probe_network_failure_does_not_expose_token_or_activate():
+    _, adapter, _, client = load_transport()
+    client.get.side_effect = httpx.TimeoutException("upstream secret in exception")
+    with pytest.raises(PermissionError) as caught:
+        await adapter.start(connection=connection())
+    assert TOKEN not in str(caught.value)
+    assert "upstream secret" not in str(caught.value)
+    assert (await adapter.health(connection=connection()))["running"] is False
+    client.post.assert_not_awaited()
