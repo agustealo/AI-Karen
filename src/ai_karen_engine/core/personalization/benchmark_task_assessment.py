@@ -266,7 +266,7 @@ class KcmBenchmarkTaskProjector:
             by_hash[case_hash] = row.correct
 
         if (
-            set(by_hash) != expected
+            by_hash != expected
             or len(by_hash) != receipt.sample_count
             or sum(by_hash.values()) != receipt.correct_count
         ):
