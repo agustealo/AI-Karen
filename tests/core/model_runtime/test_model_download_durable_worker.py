@@ -592,7 +592,7 @@ async def test_validation_fails_closed_when_access_metadata_is_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_start_download_pins_reviewed_sha_but_keeps_main_install_slot(
+async def test_start_download_pins_reviewed_sha_and_separates_install_slot(
     tmp_path: Path,
 ) -> None:
     repository = FakeModelDownloadRepository()
@@ -620,11 +620,47 @@ async def test_start_download_pins_reviewed_sha_but_keeps_main_install_slot(
     )
 
     assert job["revision"] == "resolved-sha-123"
-    assert Path(job["install_path"]).name == "main"
+    assert Path(job["install_path"]).name == "resolved-sha-123"
+    assert Path(job["install_path"]).name != "main"
     service._orchestrator.get_model_info.assert_awaited_once()
     call = service._orchestrator.get_model_info.await_args
     assert call.args[1] == "resolved-sha-123"
     assert call.kwargs["refresh_remote"] is True
+
+
+@pytest.mark.asyncio
+async def test_distinct_reviewed_revisions_never_share_publication_destination(
+    tmp_path: Path,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import ModelInfo
+
+    async def verified_revision(_model_id, revision, **_kwargs):
+        return ModelInfo(
+            model_id="test-owner/test-model",
+            owner="test-owner", repository="test-model",
+            storage_key="transformers", license=None,
+            gated=False, revision=revision,
+        )
+
+    service._orchestrator.get_model_info = AsyncMock(side_effect=verified_revision)
+    user = {"user_id": "test-user", "tenant_id": "test-tenant"}
+    requests = [
+        {"model_id": "test-owner/test-model", "validated_revision": revision,
+         "channel_id": "core_runtime_transformers"}
+        for revision in ("approved-sha-a", "approved-sha-b")
+    ]
+    jobs = [await service.start_download(request, user) for request in requests]
+
+    assert [job["revision"] for job in jobs] == [
+        "approved-sha-a", "approved-sha-b",
+    ]
+    assert [Path(job["install_path"]).name for job in jobs] == [
+        "approved-sha-a", "approved-sha-b",
+    ]
+    assert jobs[0]["install_path"] != jobs[1]["install_path"]
+    assert Path(jobs[0]["install_path"]).parent == Path(jobs[1]["install_path"]).parent
 
 
 @pytest.mark.asyncio
