@@ -242,6 +242,7 @@ describe('Governed plugin model setup', () => {
         const retry = screen.getByRole('button', { name: 'Download recommended model' });
         expect(retry.hasAttribute('disabled')).toBe(false);
         expect(screen.getByText(/Model download did not complete/)).toBeTruthy();
+        expect(screen.queryByText(/download job is queued/)).toBeNull();
 
         fireEvent.click(retry);
         await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(4));
