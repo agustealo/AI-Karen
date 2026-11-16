@@ -52,7 +52,7 @@ interface SettingsDialogProps {
   inSheet?: boolean;
   adminMode?: boolean;
   /** Optional consumer navigation target; the panel still owns its reads/writes. */
-  initialSection?: 'behavior' | 'model';
+  initialSection?: 'behavior' | 'model' | 'voice';
 }
 
 type SettingsSectionId =
