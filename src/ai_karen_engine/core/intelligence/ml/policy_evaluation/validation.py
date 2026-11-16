@@ -118,13 +118,17 @@ def validate_evaluated_policy_observations(
         if any(
             not isinstance(dist, dict)
             or set(dist) != set(actions)
-            or any(
-                isinstance(p, bool)
-                or not isinstance(p, (int, float))
-                or not math.isfinite(p)
-                for p in dist.values()
-            )
             for dist in distributions
+        ):
+            raise ValueError(
+                "Real behavior and candidate action distributions are required"
+            )
+        if any(
+            isinstance(p, bool)
+            or not isinstance(p, (int, float))
+            or not math.isfinite(p)
+            for dist in distributions
+            for p in dist.values()
         ):
             raise ValueError("Action probabilities must be finite numeric values")
         if any(
