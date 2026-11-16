@@ -39,6 +39,11 @@ can govern source content; a withdrawal therefore fences **all currently
 quarantined KCM lineage for that owner**, not solely records with a training
 prefix. This may generate extra revocation epochs but cannot grant training.
 
+The source-revocation helper only creates derivative source records for
+**enrolled KCM source revisions**. An unrelated memory update does not bloat
+KCM governance or change its deletion epoch. Scope-wide consent/privacy
+withdrawals still advance the epoch even if no lineage is enrolled.
+
 A source with an invalid or legacy payload digest cannot be registered in a
 KCM dataset; the source trigger does not misrepresent it as a valid SHA-256
 training revision.
