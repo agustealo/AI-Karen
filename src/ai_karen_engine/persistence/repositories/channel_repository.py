@@ -1261,6 +1261,48 @@ class SqlChannelRepository:
             })).scalar_one_or_none()
         return token if created is not None else None
 
+    async def inspect_telegram_webhook_claim(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int,
+    ) -> dict[str, str | bool]:
+        """Read redacted durable mutation state under tenant RLS.
+
+        This never returns a claim token, provider URL, or authorization to
+        clear a claim. A previous claim from another revision is a blocker,
+        not an invitation to retry.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if (
+            not connection_id or type(expected_revision) is not int
+            or expected_revision < 1
+        ):
+            raise ValueError("Invalid Telegram registration inspection scope")
+        async with async_transaction_scope(tenant_id) as session:
+            row = (await session.execute(text("""
+                SELECT w.state, w.connection_revision,
+                       w.claim_expires_at <= clock_timestamp() AS expired
+                FROM public.channel_telegram_webhook_claims w
+                WHERE w.tenant_id = CAST(:tenant AS uuid)
+                  AND w.connection_id = :connection
+            """), {"tenant": tenant_id, "connection": connection_id}
+            )).mappings().one_or_none()
+        if row is None:
+            return {
+                "claim_state": "absent",
+                "claim_revision_matches": False,
+                "claim_expired": False,
+            }
+        state = row["state"]
+        if state not in ("in_flight", "uncertain", "verified"):
+            raise ValueError("Invalid stored Telegram registration claim state")
+        return {
+            "claim_state": state,
+            "claim_revision_matches": (
+                int(row["connection_revision"]) == expected_revision
+            ),
+            "claim_expired": row["expired"] is True,
+        }
+
     async def complete_telegram_webhook_registration(
         self, *, tenant_id: str, connection_id: str,
         expected_revision: int, claim_token: str, verified: bool,
