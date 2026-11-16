@@ -95,6 +95,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261114040000_52_channel_personal_retirement_hold.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(hold_migration)
+        status_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261116010000_54_channel_provider_status_ledger.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(status_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -766,6 +771,160 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert await SqlChannelRepository().list_unattempted_outbound(
             tenant_id=str(tenant_a), connection_id=connection_id,
         ) == []
+
+        # KWA-01B: status can beat the HTTP send receipt. Its signed evidence
+        # must remain pending, never mark an unattempted outbox as delivered.
+        from ai_karen_engine.extensions.channels.contracts import (
+            ChannelConnection, ChannelProviderStatusEvent,
+        )
+
+        account = ChannelConnection(
+            tenant_id=str(tenant_a), connection_id=connection_id,
+            installation_id="whatsapp-cloud", provider_account_id="10987654321",
+            credential_handle="vault://whatsapp-one", revision=1, enabled=True,
+        )
+        provider_id = "wamid.delayed-send-42"
+        recipient_id = "15551234567"
+
+        def signed_status(
+            state: ChannelDeliveryState, *, recipient=recipient_id,
+            message_id=provider_id, timestamp=1770000000,
+        ) -> ChannelProviderStatusEvent:
+            return ChannelProviderStatusEvent(
+                connection_id=connection_id, provider_message_id=message_id,
+                recipient_id=recipient, state=state,
+                provider_timestamp=timestamp,
+                provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                    provider_message_id=message_id,
+                    recipient_id=recipient, state=state,
+                    provider_timestamp=timestamp,
+                ),
+                error_code=(
+                    "whatsapp_provider_failed"
+                    if state is ChannelDeliveryState.FAILED else None
+                ),
+            )
+
+        next_delivery = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.channel_outbox
+               (delivery_id,tenant_id,connection_id,inbox_id,destination_id,
+                idempotency_key,message_kind,message_text)
+               VALUES ($1,$2,$3,$4,'15551234567','status-receipt-test','text','answer')""",
+            next_delivery, tenant_a, connection_id, inbox,
+        )
+        delivered_early = signed_status(ChannelDeliveryState.DELIVERED)
+        assert await SqlChannelRepository().record_provider_status(
+            connection=account, status=delivered_early,
+        )
+        assert await raw.fetchval(
+            "SELECT status FROM public.channel_outbox WHERE delivery_id=$1",
+            next_delivery,
+        ) == "accepted"
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == 1
+
+        new_claim = await SqlChannelRepository().claim_outbound(
+            tenant_id=str(tenant_a), delivery_id=str(next_delivery),
+            lease_seconds=90,
+        )
+        assert new_claim is not None
+        assert await SqlChannelRepository().finalize_outbound_claim(
+            tenant_id=str(tenant_a), claim_token=new_claim.claim_token,
+            receipt=ChannelDeliveryReceipt(
+                delivery_id=str(next_delivery),
+                state=ChannelDeliveryState.SENT,
+                provider_message_id=provider_id,
+            ),
+        )
+        status_row = await raw.fetchrow(
+            """SELECT status,provider_receipt_id,provider_message_id,attempt_count
+               FROM public.channel_outbox WHERE delivery_id=$1""",
+            next_delivery,
+        )
+        assert status_row["status"] == "delivered"
+        assert status_row["provider_receipt_id"] == delivered_early.provider_receipt_id
+        assert status_row["provider_message_id"] == provider_id
+        assert status_row["attempt_count"] == 1
+
+        # Replay is deduplicated, and out-of-order SENT and FAILED cannot
+        # downgrade a delivered/read receipt or create another send.
+        assert await SqlChannelRepository().record_provider_status(
+            connection=account, status=delivered_early,
+        )
+        await SqlChannelRepository().record_provider_status(
+            connection=account,
+            status=signed_status(ChannelDeliveryState.SENT, timestamp=1770000010),
+        )
+        early_read = signed_status(ChannelDeliveryState.READ, timestamp=1769999999)
+        assert await SqlChannelRepository().record_provider_status(
+            connection=account, status=early_read,
+        )
+        assert await raw.fetchval(
+            "SELECT status FROM public.channel_outbox WHERE delivery_id=$1",
+            next_delivery,
+        ) == "read"
+        await SqlChannelRepository().record_provider_status(
+            connection=account,
+            status=signed_status(ChannelDeliveryState.FAILED, timestamp=1770000080),
+        )
+        await SqlChannelRepository().record_provider_status(
+            connection=account, status=signed_status(
+                ChannelDeliveryState.READ, recipient="19999999999",
+            ),
+        )
+        await SqlChannelRepository().record_provider_status(
+            connection=account, status=signed_status(
+                ChannelDeliveryState.READ, message_id="wamid.other",
+            ),
+        )
+        assert await raw.fetchval(
+            "SELECT status FROM public.channel_outbox WHERE delivery_id=$1",
+            next_delivery,
+        ) == "read"
+        assert await raw.fetchval(
+            "SELECT attempt_count FROM public.channel_outbox WHERE delivery_id=$1",
+            next_delivery,
+        ) == 1
+
+        # Connection revision and tenant cannot be selected by native sender.
+        with pytest.raises(module.ChannelAdmissionDenied):
+            await SqlChannelRepository().record_provider_status(
+                connection=account.model_copy(update={"tenant_id": str(tenant_b)}),
+                status=early_read,
+            )
+        with pytest.raises(module.ChannelAdmissionDenied):
+            await SqlChannelRepository().record_provider_status(
+                connection=account.model_copy(update={"revision": 2}),
+                status=early_read,
+            )
+
+        # Duplicate provider IDs for two outbox deliveries are forbidden:
+        # receipt evidence must not ambiguously update multiple records.
+        extra_inbox = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id,tenant_id,connection_id,connection_revision,
+                external_event_id,external_sender_id,external_conversation_id,
+                message_kind,message_text,event_digest,status,binding_id,user_id)
+               VALUES ($1,$2,$3,1,'status-extra','sender','room','text','hello',
+                       $4,'completed',$5,$6)""",
+            extra_inbox, tenant_a, connection_id, "b" * 64, binding, user,
+        )
+        extra_delivery = uuid.uuid4()
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await raw.execute(
+                """INSERT INTO public.channel_outbox
+                   (delivery_id,tenant_id,connection_id,inbox_id,destination_id,
+                    idempotency_key,message_kind,message_text,
+                    status,provider_message_id,attempt_count)
+                   VALUES ($1,$2,$3,$4,'15551234567','duplicate-provider-id','text',
+                           'answer','sent',$5,1)""",
+                extra_delivery, tenant_a, connection_id, extra_inbox, provider_id,
+            )
 
         # Explicit tenant-account erasure must still cascade through personal
         # evidence, even though direct connection deletion is now restricted.

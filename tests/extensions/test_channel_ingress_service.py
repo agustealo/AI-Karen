@@ -7,6 +7,7 @@ import pytest
 
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelConnection,
+    ChannelDeliveryState, ChannelProviderStatusEvent, ChannelWebhookBatch,
     InboundChannelEvent,
 )
 from ai_karen_engine.extensions.contracts import ExtensionLifecycleState
@@ -259,3 +260,117 @@ async def test_worker_saturation_is_logged_as_deferred_not_processed(caplog):
     assert result is repo.admit_verified_inbound.return_value
     callback.assert_awaited_once_with(result)
     assert "channel.ingress.worker_deferred" in caplog.text
+
+
+
+def batch_status():
+    return ChannelProviderStatusEvent(
+        connection_id="connection-a",
+        provider_message_id="wamid.status-1",
+        recipient_id="15551234567",
+        state=ChannelDeliveryState.DELIVERED,
+        provider_timestamp=1770000000,
+        provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+            provider_message_id="wamid.status-1",
+            recipient_id="15551234567",
+            state=ChannelDeliveryState.DELIVERED,
+            provider_timestamp=1770000000,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_host_batch_verifies_once_routes_status_without_chat():
+    service, adapter, repo, _ = components()
+    adapter.normalize_events = AsyncMock(return_value=ChannelWebhookBatch(
+        statuses=(batch_status(),),
+    ))
+    service._kernel.loader = SimpleNamespace(load_extension=lambda name: adapter)
+    repo.record_provider_status = AsyncMock(return_value=True)
+    result = await service.verify_and_route_installed(
+        tenant_id=TENANT, connection_id="connection-a",
+        headers={"X-Signature": "signed"}, body=b"native-status",
+    )
+    assert result == "status_recorded"
+    adapter.verify_event.assert_awaited_once()
+    adapter.normalize_events.assert_awaited_once()
+    adapter.normalize_event.assert_not_awaited()
+    repo.record_provider_status.assert_awaited_once()
+    assert repo.record_provider_status.await_args.kwargs["status"].state is ChannelDeliveryState.DELIVERED
+    repo.admit_verified_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_batch_admits_each_text_once_and_preserves_signed_status_evidence():
+    service, adapter, repo, _ = components()
+    msg = adapter.normalize_event.return_value
+    adapter.normalize_events = AsyncMock(return_value=ChannelWebhookBatch(
+        messages=(msg, msg.model_copy(update={"external_event_id": "event-2"})),
+        statuses=(batch_status(),),
+        ignored_count=1,
+    ))
+    service._kernel.loader = SimpleNamespace(load_extension=lambda name: adapter)
+    repo.record_provider_status = AsyncMock(return_value=True)
+    result = await service.verify_and_route_installed(
+        tenant_id=TENANT, connection_id="connection-a",
+        headers={"X-Signature": "signed"}, body=b"native-batch",
+    )
+    assert result == "admitted"
+    assert adapter.verify_event.await_count == 1
+    assert repo.admit_verified_inbound.await_count == 2
+    repo.record_provider_status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mixed_link_proof_in_batch_denied_before_sql():
+    service, adapter, repo, _ = components()
+    link = adapter.normalize_event.return_value.model_copy(
+        update={"text": "/link " + "a" * 43},
+    )
+    adapter.normalize_events = AsyncMock(return_value=ChannelWebhookBatch(
+        messages=(link,), statuses=(batch_status(),),
+    ))
+    service._kernel.loader = SimpleNamespace(load_extension=lambda name: adapter)
+    repo.record_provider_status = AsyncMock(return_value=True)
+    with pytest.raises(ChannelAdmissionDenied, match="cannot share"):
+        await service.verify_and_route_installed(
+            tenant_id=TENANT, connection_id="connection-a",
+            headers={"X-Signature": "signed"}, body=b"mixed-link",
+        )
+    repo.admit_verified_inbound.assert_not_awaited()
+    repo.record_provider_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_status_cross_connection_denied_before_db_mutation():
+    service, adapter, repo, _ = components()
+    adapter.normalize_events = AsyncMock(return_value=ChannelWebhookBatch(
+        statuses=(batch_status().model_copy(update={"connection_id": "foreign"}),),
+    ))
+    service._kernel.loader = SimpleNamespace(load_extension=lambda name: adapter)
+    repo.record_provider_status = AsyncMock(return_value=True)
+    with pytest.raises(ChannelAdmissionDenied, match="status connection mismatch"):
+        await service.verify_and_route_installed(
+            tenant_id=TENANT, connection_id="connection-a",
+            headers={}, body=b"native-status",
+        )
+    repo.record_provider_status.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_signature_rejects_native_batch_before_normalization():
+    service, adapter, repo, _ = components(verified=False)
+    adapter.normalize_events = AsyncMock(return_value=ChannelWebhookBatch(
+        statuses=(batch_status(),),
+    ))
+    service._kernel.loader = SimpleNamespace(load_extension=lambda name: adapter)
+    repo.record_provider_status = AsyncMock(return_value=True)
+    with pytest.raises(ChannelAdmissionDenied, match="verification"):
+        await service.verify_and_route_installed(
+            tenant_id=TENANT, connection_id="connection-a",
+            headers={}, body=b"unsigned",
+        )
+    adapter.normalize_events.assert_not_awaited()
+    repo.record_provider_status.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()

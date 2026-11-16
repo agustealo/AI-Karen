@@ -8,6 +8,9 @@ grant runtime activation or authorize plugin execution.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Protocol
@@ -93,6 +96,73 @@ class ChannelDeliveryReceipt(_ChannelRecord):
     provider_message_id: str | None = None
     provider_receipt_id: str | None = None
     error_code: str | None = None
+
+
+
+class ChannelProviderStatusEvent(_ChannelRecord):
+    """Authenticated transport observation, not a ChatRuntime or user action.
+
+    Receipt IDs are derived from signed native event fields. They are
+    idempotency evidence, not proof of a provider-side unique event identifier.
+    """
+
+    connection_id: str = Field(min_length=1)
+    provider_message_id: str = Field(min_length=7, max_length=256, pattern=r"^wamid\.")
+    recipient_id: str = Field(min_length=1, max_length=32, pattern=r"^[0-9]+$")
+    state: ChannelDeliveryState
+    provider_timestamp: int = Field(ge=1, le=4102444800)
+    provider_receipt_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    error_code: str | None = Field(default=None, max_length=80)
+
+    @staticmethod
+    def receipt_for(
+        *, provider_message_id: str, recipient_id: str,
+        state: ChannelDeliveryState, provider_timestamp: int,
+    ) -> str:
+        """Stable ID for Meta's unsigned-unique-id status observation fields."""
+        evidence = {
+            "message_id": provider_message_id,
+            "recipient": recipient_id,
+            "state": state.value,
+            "timestamp": provider_timestamp,
+        }
+        return hashlib.sha256(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+
+    @model_validator(mode="after")
+    def supported_status(self) -> "ChannelProviderStatusEvent":
+        if self.state not in {
+            ChannelDeliveryState.SENT, ChannelDeliveryState.DELIVERED,
+            ChannelDeliveryState.READ, ChannelDeliveryState.FAILED,
+        }:
+            raise ValueError("Unsupported signed provider status")
+        if self.provider_receipt_id != self.receipt_for(
+            provider_message_id=self.provider_message_id,
+            recipient_id=self.recipient_id, state=self.state,
+            provider_timestamp=self.provider_timestamp,
+        ):
+            raise ValueError("Provider status receipt does not match signed fields")
+        if self.state is ChannelDeliveryState.FAILED:
+            if self.error_code != "whatsapp_provider_failed":
+                raise ValueError("Provider failure must use a redacted symbolic code")
+        elif self.error_code is not None:
+            raise ValueError("Only provider failure may carry an error code")
+        return self
+
+
+class ChannelWebhookBatch(_ChannelRecord):
+    """Bounded, already signature-verified observations from one adapter."""
+
+    messages: tuple[InboundChannelEvent, ...] = ()
+    statuses: tuple[ChannelProviderStatusEvent, ...] = ()
+    ignored_count: int = Field(default=0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def limit(self) -> "ChannelWebhookBatch":
+        if len(self.messages) + len(self.statuses) + self.ignored_count > 100:
+            raise ValueError("Native event batch exceeds bounded admission")
+        return self
 
 
 
@@ -259,6 +329,8 @@ class ChannelAdapter(Protocol):
 
 __all__ = [
     "ChannelAdapter",
+    "ChannelWebhookBatch",
+    "ChannelProviderStatusEvent",
     "ChannelCapabilitySet",
     "ChannelConnection",
     "ChannelDeliveryReceipt",
