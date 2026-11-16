@@ -453,3 +453,49 @@ async def test_historical_status_refuses_non_whatsapp_and_reenabled_connection()
             )
     adapter.normalize_deactivated_statuses.assert_not_awaited()
     repo.record_deactivated_provider_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_status_batch_partial_failure_requires_retry_of_all_signed_receipts():
+    """Never acknowledge incomplete admission; exact replay reuses SQL idempotency."""
+    service, adapter, repo, _ = components()
+    first = batch_status()
+    second_message_id = "wamid.status-2"
+    second = first.model_copy(update={
+        "provider_message_id": second_message_id,
+        "provider_receipt_id": ChannelProviderStatusEvent.receipt_for(
+            provider_message_id=second_message_id,
+            recipient_id=first.recipient_id,
+            state=first.state,
+            provider_timestamp=first.provider_timestamp,
+        ),
+    })
+    adapter.normalize_events = AsyncMock(return_value=ChannelWebhookBatch(
+        statuses=(first, second),
+    ))
+    service._kernel.loader = SimpleNamespace(load_extension=lambda name: adapter)
+    repo.record_provider_status = AsyncMock(side_effect=[
+        True, OSError("database transient failure"), True, True,
+    ])
+    service._on_admitted = AsyncMock(return_value=True)
+
+    with pytest.raises(OSError, match="database transient failure"):
+        await service.verify_and_route_installed(
+            tenant_id=TENANT, connection_id="connection-a",
+            headers={"X-Signature": "signed"}, body=b"valid-signed-batch",
+        )
+    assert repo.record_provider_status.await_count == 2
+    assert repo.record_provider_status.await_args_list[0].kwargs["status"] == first
+    assert repo.record_provider_status.await_args_list[1].kwargs["status"] == second
+
+    result = await service.verify_and_route_installed(
+        tenant_id=TENANT, connection_id="connection-a",
+        headers={"X-Signature": "signed"}, body=b"valid-signed-batch",
+    )
+    assert result == "status_recorded"
+    assert adapter.verify_event.await_count == 2
+    assert repo.record_provider_status.await_count == 4
+    assert repo.record_provider_status.await_args_list[2].kwargs["status"] == first
+    assert repo.record_provider_status.await_args_list[3].kwargs["status"] == second
+    repo.admit_verified_inbound.assert_not_awaited()
+    service._on_admitted.assert_not_awaited()
