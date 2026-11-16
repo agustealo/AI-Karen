@@ -19,6 +19,17 @@
 - GitHub Issues are disabled (HTTP 410); this wiki and PR descriptions retain sprint continuity. Verify live CI before acting.
 - **No claims yet** of validated causal-effect estimation, calibrated metacognition, specialist competence gain, or cross-task transfer.
 
+## KCOG-01B1: Verification-effort policy evaluation (draft, not accepted)
+
+- **Baseline:** live `main` `eb16d2481a288fa3e2911e2974939fd5d7ecd41b` after KCOG-01A2 #884. This slice is independent and must earn exact-head acceptance.
+- **Owner:** canonical `Intelligence ML policy_evaluation` contracts and evidence guard; `OfflinePolicyEvaluator` retains all IPS/SNIPS/DR, overlap and promotion calculations.
+- **Input:** a tenant-scoped, independently judged `RESPOND_STRATEGY` observation with versioned baseline and candidate probabilities, independently recorded reward and verification-need labels, separate opaque receipts, a decision-time feature snapshot and versioned utility policy.
+- **Denial rules:** reject cross-tenant, duplicate label receipts, missing/made-up propensities, unlabelled results, high-risk or forbidden exploration, incompatible action sets and nonfinite rewards. Never treat response completion as a correct answer.
+- **Output:** `shadow` evaluation with observed verification, unnecessary-verification and missed-verification rates, plus canonical overlap/estimator diagnostics if a sufficient verified corpus exists. The observed rates are descriptive, not a counterfactual performance claim.
+- **Authority:** `policy_activated=False`, and RuntimePolicy must separately authorize any production change. This branch does not grant permission to turn verification off for high-risk requests or change the model router.
+- **Proof:** existing model-routing OPE tests plus new verification-policy adversarial cases under Cognitive Proof CI; Main Quality and first-boot must pass for merge.
+- **Remaining evidence:** deployment-independent, prospectively sampled baseline/candidate cases, logged real action propensities, held-out independent correctness and safety reviews, latency/cost and segment-level regression analysis; no verified intelligence improvement is claimed yet.
+
 ## Scope, product acceptance and exit
 
 Demonstrate a real runtime path in which (a) a false or unidentifiable causal claim is never promoted as fact, (b) confidence is not misrepresented as calibration, (c) an authenticated task receives a structured cognitive assessment via existing CORTEX/RuntimePolicy, (d) extra deliberation is requested only when risk/uncertainty justifies it, and (e) a real, stable benchmark compares correctness, latency, tools and abstention against baseline.

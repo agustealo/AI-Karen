@@ -7,7 +7,6 @@ deterministic routes with unknown propensities as improvement evidence.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -18,7 +17,10 @@ from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
     DecisionType,
     PolicyObservation,
     PromotionDecision,
-    validate_probability_distribution,
+)
+
+from ai_karen_engine.core.intelligence.ml.policy_evaluation.validation import (
+    validate_evaluated_policy_observations,
 )
 
 _MODEL_POLICY_VERSION = "model_operational_outcome_v1"
@@ -50,76 +52,12 @@ def evaluate_model_routing_candidate(
             "reason_codes": ["empty_verified_model_decisions"],
             "eligible_count": 0,
         }
-    seen: set[str] = set()
-    for item in observations:
-        if not isinstance(item, PolicyObservation):
-            raise TypeError("Only canonical typed policy observations may be evaluated")
-        if item.context.decision_type != DecisionType.MODEL_SELECTION:
-            raise ValueError("Non-model decisions cannot prove model-routing improvement")
-        if item.context.tenant_scope != tenant_id:
-            raise PermissionError("Cross-tenant model evidence is forbidden")
-        if not isinstance(item.observation_id, str) or not item.observation_id:
-            raise ValueError("Model decision identity is required")
-        if item.observation_id in seen:
-            raise ValueError("Duplicate model decision is not independent evidence")
-        seen.add(item.observation_id)
-        if not item.context.feature_snapshot_id:
-            raise ValueError("Decision-time feature snapshot is required")
-        if (
-            not isinstance(item.metadata, dict)
-            or item.metadata.get("reward_evidence_type") not in {
-                "independent_test", "human_review",
-            }
-            or not isinstance(item.metadata.get("reward_evidence_ref"), str)
-            or not item.metadata["reward_evidence_ref"]
-        ):
-            raise ValueError("Independent evaluation or human review is required")
-        if (
-            isinstance(item.reward, bool)
-            or not isinstance(item.reward, (int, float))
-            or not math.isfinite(item.reward)
-            or not 0 <= item.reward <= 1
-        ):
-            raise ValueError("Model policy reward must be finite and verified")
-        if not item.eligible_actions or item.chosen_action not in item.eligible_actions:
-            raise ValueError("Actual chosen model is not in the eligible set")
-        if (
-            not item.behavior_policy_id or not item.behavior_policy_version
-            or not item.candidate_policy_id or not item.candidate_policy_version
-        ):
-            raise ValueError("Versioned behavior and candidate policy provenance is required")
-        if (
-            any(
-                isinstance(p, bool)
-                or not isinstance(p, (int, float))
-                or not math.isfinite(p)
-                for distribution in (
-                    item.behavior_probabilities,
-                    item.candidate_probabilities,
-                )
-                for p in distribution.values()
-            )
-        ):
-            raise ValueError("Action probabilities must be finite numeric values")
-        if (
-            validate_probability_distribution(
-                item.behavior_probabilities, item.eligible_actions
-            ) is not None
-            or validate_probability_distribution(
-                item.candidate_probabilities, item.eligible_actions
-            ) is not None
-        ):
-            raise ValueError("Real behavior and candidate action distributions are required")
-        if (
-            not isinstance(item.chosen_probability, (int, float))
-            or not math.isfinite(item.chosen_probability)
-            or not 0 < item.chosen_probability <= 1
-            or abs(
-                item.behavior_probabilities[item.chosen_action]
-                - item.chosen_probability
-            ) > 1e-6
-        ):
-            raise ValueError("Chosen-model propensity must match the logged behavior policy")
+    validate_evaluated_policy_observations(
+        observations,
+        tenant_id=tenant_id,
+        decision_type=DecisionType.MODEL_SELECTION,
+        domain="model",
+    )
     if len(observations) < min_samples:
         return {
             "policy_version": _MODEL_POLICY_VERSION,

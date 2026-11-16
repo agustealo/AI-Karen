@@ -148,6 +148,14 @@ jobs:
           pytest tests/core/intelligence/ml/test_governed_confidence_evaluation.py \
             -q --timeout=300 --tb=short
 
+      - name: Prove KCOG-01B1 verification effort OPE and model-policy regression
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/intelligence/ml/test_verification_policy_evaluation.py \
+            tests/core/intelligence/ml/test_model_policy_evaluation.py \
+            -q --timeout=300 --tb=short
+
       - name: Compile KCOG cognitive-state and policy boundary
         if: ${{ always() }}
         run: |
