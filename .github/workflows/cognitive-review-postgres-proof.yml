@@ -9,6 +9,11 @@ on:
       - "src/ai_karen_engine/core/intelligence/ml/verification_review_workflow.py"
       - "src/ai_karen_engine/core/runtime/trajectory/**"
       - "src/ai_karen_engine/core/runtime/chat_runtime.py"
+      - "src/ai_karen_engine/core/runtime/policy/**"
+      - "src/ai_karen_engine/core/runtime/decision_pipeline.py"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "tests/core/test_runtime_reasoning_policy.py"
+      - "tests/core/test_runtime_decision_pipeline.py"
       - "src/ai_karen_engine/core/adaptive/learning/contextual_policy.py"
       - "tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py"
       - "tests/core/intelligence/ml/test_policy_decision_time_provenance.py"
@@ -102,6 +107,8 @@ jobs:
           pytest tests/core/intelligence/ml/test_verification_review_workflow.py -q --timeout=300 --tb=short
           pytest tests/api_routes/test_verification_review_api.py -q --timeout=300 --tb=short
           pytest tests/core/runtime/trajectory/test_learning_contracts.py -q --timeout=300 --tb=short
+          pytest tests/core/test_runtime_reasoning_policy.py -q --timeout=300 --tb=short
+          pytest tests/core/test_runtime_decision_pipeline.py -q --timeout=300 --tb=short
           pytest tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_policy_decision_time_provenance.py -q --timeout=300 --tb=short
 
