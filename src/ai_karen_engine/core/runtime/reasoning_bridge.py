@@ -16,6 +16,8 @@ from ai_karen_engine.core.reasoning.defaults import get_default_strategies
 from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+from ai_karen_engine.core.runtime.policy import ResponseStrategyPolicyProbe
 from ai_karen_engine.core.runtime.soft_reasoning_composition import (
     ComposedSoftReasoning,
     SoftReasoningCompositionUnavailable,
@@ -42,8 +44,166 @@ class ReasoningActivation:
     runtime_metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class VerificationAlternativeReadiness:
+    """Diagnostic only: policy permission is not a runnable alternative."""
+
+    source_decision_id: str
+    source_policy_version: str
+    alternative_policy_decision_id: str | None
+    status: str
+    reason_codes: tuple[str, ...]
+    verifier_strategy_id: str | None = None
+    verifier_strategy_version: str | None = None
+    provider_health: str = "unknown"
+    model_in_registered_inventory: bool | None = None
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "schema_version": "verification_alternative_readiness_v1",
+            "source_decision_id": self.source_decision_id,
+            "source_policy_version": self.source_policy_version,
+            "alternative_policy_decision_id": self.alternative_policy_decision_id,
+            "status": self.status,
+            "reason_codes": list(self.reason_codes),
+            "verifier_strategy_id": self.verifier_strategy_id,
+            "verifier_strategy_version": self.verifier_strategy_version,
+            "provider_health": self.provider_health,
+            "model_in_registered_inventory": self.model_in_registered_inventory,
+            "execution_eligibility_established": False,
+            "randomized_selection": False,
+            "ope_eligible": False,
+        }
+
+
 class RuntimeReasoningBridge:
     """Compose runtime-specific strategies for an authorized reasoning plan."""
+
+    def inspect_optional_verification_readiness(
+        self,
+        *,
+        permission: ResponseStrategyPolicyProbe,
+        decision: ExecutionDecision,
+        preferred_provider: str | None,
+        preferred_model: str | None,
+        provider_registry: Any | None = None,
+    ) -> VerificationAlternativeReadiness:
+        """Read canonical capability and health evidence without executing.
+
+        The chosen plan is NEVER replaced. Even a healthy provider and a
+        registered verifier cannot prove that a complete verification answer
+        ran or that both actions are interchangeable. This function therefore
+        deliberately has no "ready" outcome and cannot unlock OPE.
+        """
+        source_id = permission.source_decision_id
+        source_version = permission.source_policy_version
+        alternate_id = permission.alternative_policy_decision_id
+
+        permitted = (
+            permission.status == "alternative_reasoning_mode_policy_permitted"
+            and permission.policy_permitted_actions
+            == ("respond_direct", "verify_then_respond")
+            and permission.selected_action == "respond_direct"
+            and bool(alternate_id)
+            and permission.alternative_policy_version == source_version
+            and source_id == decision.policy_decision_id
+            and source_version == decision.policy_version
+            and decision.topology == ExecutionTopology.DIRECT
+            and not decision.reasoning_modes
+            and not decision.requires_human_gate
+            and not decision.tool_requirements
+            and not decision.plugin_candidates
+            and not decision.requires_agent_delegation
+            and not decision.requires_parallel_execution
+            and not decision.requires_resumability
+            and not decision.workflow_id
+            and getattr(decision.risk_level, "value", decision.risk_level)
+            in {"low", "medium"}
+        )
+        if not permitted:
+            return VerificationAlternativeReadiness(
+                source_decision_id=source_id,
+                source_policy_version=source_version,
+                alternative_policy_decision_id=alternate_id,
+                status="not_permitted",
+                reason_codes=("alternative_policy_or_plan_not_authorized",),
+            )
+
+        reasons: list[str] = []
+        blocked = False
+        if (
+            decision.max_model_calls < 2
+            or decision.max_steps < 1
+            or decision.time_budget_ms <= 0
+            or decision.token_budget <= 0
+        ):
+            blocked = True
+            reasons.append("insufficient_authorized_execution_budget")
+
+        # Use the same actual default-strategy factory as activate(). Merely
+        # declaring a mode in a request is not evidence of a loaded executor.
+        strategies = [
+            item for item in get_default_strategies()
+            if item.can_handle(["verification"])
+        ]
+        verifier = strategies[0] if len(strategies) == 1 else None
+        if verifier is None:
+            blocked = True
+            reasons.append("verification_strategy_not_uniquely_registered")
+        elif not verifier.supports_model_calls:
+            # A deterministic verifier alone cannot generate the final reply.
+            reasons.append("verification_strategy_nongenerative")
+
+        provider_health = "unknown"
+        model_registered: bool | None = None
+        provider = (preferred_provider or "").strip()
+        model = (preferred_model or "").strip()
+        if (
+            not provider or not model
+            or provider.lower() == "auto" or model.lower() == "auto"
+        ):
+            reasons.append("model_selection_not_runtime_resolved")
+        else:
+            if provider_registry is None:
+                from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                    get_provider_registry_service,
+                )
+
+                provider_registry = get_provider_registry_service()
+
+            provider_id = provider_registry.canonicalize_provider_id(provider)
+            if not provider_id or provider_id not in provider_registry.get_all_provider_names():
+                blocked = True
+                reasons.append("provider_not_registered")
+            else:
+                health = provider_registry.health_monitor.get_provider_health(provider_id)
+                observed = getattr(health, "health_status", None)
+                provider_health = str(getattr(observed, "value", observed or "unknown"))
+                if provider_health in {"unavailable", "unhealthy"}:
+                    blocked = True
+                    reasons.append("provider_observed_unavailable")
+                elif provider_health != "healthy" or health.last_checked_at is None:
+                    reasons.append("provider_health_unverified")
+                model_registered = provider_registry.is_model_available(
+                    provider_id, model, healthy_only=False,
+                )
+                if not model_registered:
+                    # Endpoint inventory may be dynamic. Missing registration
+                    # is not proof that a requested model does not exist.
+                    reasons.append("model_inventory_unverified")
+
+        reasons.append("complete_alternative_execution_not_observed")
+        return VerificationAlternativeReadiness(
+            source_decision_id=source_id,
+            source_policy_version=source_version,
+            alternative_policy_decision_id=alternate_id,
+            status="blocked" if blocked else "unverified",
+            reason_codes=tuple(dict.fromkeys(reasons)),
+            verifier_strategy_id=verifier.strategy_id if verifier else None,
+            verifier_strategy_version=verifier.version if verifier else None,
+            provider_health=provider_health,
+            model_in_registered_inventory=model_registered,
+        )
 
     def activate(
         self,
@@ -167,6 +327,7 @@ def get_runtime_reasoning_bridge() -> RuntimeReasoningBridge:
 __all__ = [
     "ReasoningActivation",
     "ReasoningActivationError",
+    "VerificationAlternativeReadiness",
     "RuntimeReasoningBridge",
     "SOFT_EXPLORATION_MODE",
     "get_runtime_reasoning_bridge",
