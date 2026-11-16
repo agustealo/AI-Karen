@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 import json
 import re
+from urllib.parse import urlsplit
 from typing import Any, Mapping, Protocol
 
 import httpx
@@ -153,6 +154,71 @@ class MainExtension(ExtensionBase):
             "running": connection.enabled and self._activation_key(connection) in self._started,
             "host_services_bound": self._secret_resolver is not None and self._http_client is not None,
         }
+
+    async def inspect_webhook(
+        self, *, connection: ChannelConnection,
+    ) -> Mapping[str, Any]:
+        """Read limited Telegram webhook evidence, never a connection claim.
+
+        This is a privileged host-only diagnostic: native provider data cannot
+        establish a trusted Karen endpoint or prove delivery. The actual URL,
+        provider error text, token and native IP are deliberately not returned.
+        """
+        self._require_active(connection)
+        _, token = await self._secrets(connection)
+        try:
+            response = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getWebhookInfo"
+            )
+            if response.status_code != 200:
+                raise ValueError("Provider webhook inspection failed")
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("ok") is not True:
+                raise ValueError("Provider webhook inspection failed")
+            info = payload.get("result")
+            if not isinstance(info, dict):
+                raise ValueError("Provider webhook inspection failed")
+            url = info.get("url")
+            count = info.get("pending_update_count")
+            if (
+                not isinstance(url, str)
+                or len(url) > 2048
+                or type(count) is not int
+                or not 0 <= count <= 1_000_000
+            ):
+                raise ValueError("Provider webhook inspection failed")
+            registered = bool(url)
+            matches_path = False
+            if registered:
+                parts = urlsplit(url)
+                if (
+                    parts.scheme != "https"
+                    or not parts.hostname
+                    or parts.username is not None
+                    or parts.password is not None
+                    or parts.query
+                    or parts.fragment
+                ):
+                    raise ValueError("Provider webhook inspection failed")
+                matches_path = parts.path == (
+                    f"/api/channels/webhooks/{connection.tenant_id}/"
+                    f"{connection.connection_id}"
+                )
+            error_date = info.get("last_error_date")
+            if error_date is not None and (
+                type(error_date) is not int or error_date < 0
+            ):
+                raise ValueError("Provider webhook inspection failed")
+            return {
+                "registered": registered,
+                "path_matches": matches_path,
+                "pending_update_count": count,
+                "provider_reported_error": bool(error_date),
+                "endpoint_origin_verified": False,
+            }
+        except Exception:
+            # Provider errors and httpx request URLs can include bot secrets.
+            raise PermissionError("Telegram webhook inspection unavailable") from None
 
     async def verify_event(
         self, *, connection: ChannelConnection,

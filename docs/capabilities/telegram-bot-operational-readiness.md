@@ -131,3 +131,25 @@ The existence of a public HTTPS URL is not itself proof of a valid webhook:
 native authentication, the correct tenant connection, a linked actor, a
 durably accepted inbox event, a governed ChatRuntime invocation, and a
 matching Telegram send receipt are separate acceptance observations.
+
+## Read-only native webhook inspection
+
+The installed Telegram adapter now has a host-internal `inspect_webhook`
+operation. It asks Telegram's official `getWebhookInfo` endpoint only after
+the exact tenant connection has been locally activated. The method does not
+register, delete, modify or replay a webhook. The result deliberately includes
+only `registered`, `path_matches`, `pending_update_count`,
+`provider_reported_error`, and `endpoint_origin_verified=false`.
+
+The path comparison is scoped to Karen's existing
+`/api/channels/webhooks/{tenant_id}/{connection_id}` route. It is **not**
+a full configured-origin check. Provider evidence may be historical and is not
+proof of a successful signed incoming webhook. Never translate these fields to
+"connected" or "healthy" without host-side configured-origin matching,
+RBAC-authorized presentation and an observed end-to-end message round-trip.
+
+Telegram's returned URL, IP and diagnostic text remain private; they are not
+placed in plugin health reports or ordinary logs. A failed or malformed
+inspection denies with a generic error. The canonical Channels host will need
+a separately authorized, read-only projection before these results can appear
+in consumer UI. This slice intentionally adds no public endpoint.
