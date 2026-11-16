@@ -46,6 +46,7 @@ from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
 from ai_karen_engine.core.runtime.trajectory.store import PostgresTrajectoryStore
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+from ai_karen_engine.core.runtime.policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ai_karen_engine.core.runtime.contracts import ExecutionTopology
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.outcome.store import (
@@ -418,6 +419,82 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             """SELECT count(*) FROM public.outcome_records
                WHERE decision_observation_id=$1""",
             planned.decision_observation_id,
+        ) == 0
+
+        # KCOG-01C1B1: persist an actual independently checked *permission*
+        # probe to PostgreSQL. The second strategy is policy-permitted, NOT
+        # proven executable, randomized, OPE-eligible or reviewed.
+        policy_owner = RuntimePolicyEnforcer()
+        scoped_request = PolicyEvaluationRequest(
+            user_id=subject_a,
+            tenant_id=tenant_a,
+            session_id="pg-permission-session-1",
+            requested_reasoning_modes=[],
+            max_model_calls=10,
+        )
+        selected_policy = await policy_owner.evaluate(scoped_request)
+        permission = await policy_owner.probe_optional_verification(
+            scoped_request,
+            selected_policy,
+            direct_plan_authorized=True,
+        )
+        assert permission.policy_permitted_actions == (
+            "respond_direct", "verify_then_respond",
+        )
+        permission_traj = ExecutionTrajectory(
+            trajectory_id="pg-policy-permission-selection-1",
+            request_id="pg-policy-permission-request-1",
+            correlation_id="pg-policy-permission-corr-1",
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        )
+        direct_plan = ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id=selected_policy.decision_id,
+            policy_version=selected_policy.policy_version,
+            policy_constraints={
+                "response_strategy_policy_probe": permission.to_metadata(),
+            },
+        )
+        assert await runtime._record_learning_decision(permission_traj, direct_plan)
+        records = await asyncio.to_thread(
+            PostgresTrajectoryStore().list_decision_observations,
+            permission_traj.trajectory_id,
+            tenant_id=tenant_a,
+        )
+        permission_strategy = next(
+            item for item in records if item.decision_type == "respond_strategy"
+        )
+        frozen = await asyncio.to_thread(
+            PostgresTrajectoryStore().get_feature_snapshot,
+            permission_strategy.feature_snapshot_id,
+            tenant_id=tenant_a,
+        )
+        assert frozen is not None
+        assert frozen.metadata["response_strategy_policy_probe"] == (
+            permission.to_metadata()
+        )
+        assert permission_strategy.metadata["response_strategy_policy_probe"] == (
+            permission.to_metadata()
+        )
+        assert permission_strategy.eligible_actions == ("respond_direct",)
+        assert permission_strategy.chosen_probability is None
+        assert permission_strategy.action_probabilities == {}
+        assert permission_strategy.ope_eligible is False
+        with pytest.raises(ValueError, match="not verification-OPE eligible"):
+            await authenticated_review.submit(
+                ReviewJudgement(
+                    decision_observation_id=permission_strategy.decision_observation_id,
+                    subject_user_id=subject_a,
+                    reward=0.9,
+                    verification_needed=True,
+                ),
+                reviewer=reviewer,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.outcome_records
+               WHERE decision_observation_id=$1""",
+            permission_strategy.decision_observation_id,
         ) == 0
 
         # A second attempted decision with an original *label* ID causes
