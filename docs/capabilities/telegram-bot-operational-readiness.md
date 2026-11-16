@@ -94,3 +94,25 @@ recipient chat ID; it does not provide delivered/read proof.
 CI/static tests cannot substitute for a real bot account and real network
 acceptance. Until that evidence exists, report **source candidate**, not
 consumer-ready or live connected.
+
+## Source verification commands
+
+Run the targeted native transport and channel contract tests before relying on
+integration CI:
+
+```bash
+pytest -q tests/extensions/test_telegram_channel_transport.py tests/extensions/test_channel_catalog_ui_contract.py
+pytest -q tests/extensions/test_channel_host_lifecycle.py tests/extensions/test_channel_secret_resolution.py
+pytest -q tests/architecture/test_plugin_store_api_shape_guards.py
+python -m compileall src
+ruff check src tests
+```
+
+For live SQL/RLS contention acceptance, use the existing disposable, dedicated
+channel test database and follow the configuration documented in
+`tests/integration/test_channel_claim_concurrency_postgres.py`. Never aim this
+test at a production tenant database.
+
+Treat missing GitHub Actions results for a rewritten branch as missing
+verification, even when the old PR head was green. Only exact-head results
+authorize merging.
