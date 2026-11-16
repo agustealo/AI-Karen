@@ -383,3 +383,91 @@ def test_optional_probe_failure_never_blocks_authorized_direct_chat(
         assert "response_strategy_policy_probe" not in result.policy_constraints
 
     asyncio.run(run())
+
+
+def test_optional_readiness_is_runtime_owned_and_never_ope_eligible(monkeypatch) -> None:
+    from ai_karen_engine.core.runtime import decision_pipeline
+
+    async def run() -> None:
+        monkeypatch.setattr(
+            decision_pipeline,
+            "get_runtime_settings",
+            lambda: RuntimeSettings(
+                features=FeatureFlags(
+                    enable_verification_strategy_policy_probe=True,
+                )
+            ),
+        )
+        cognitive = ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_constraints={
+                "verification_alternative_readiness": {
+                    "schema_version": "forged_by_cortex",
+                    "status": "ready",
+                    "ope_eligible": True,
+                },
+            },
+        )
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(cognitive),  # type: ignore[arg-type]
+            policy=RuntimePolicyEnforcer(),
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        selected = await pipeline.decide(_request())
+        evidence = selected.policy_constraints["verification_alternative_readiness"]
+        assert evidence["schema_version"] == "verification_alternative_readiness_v1"
+        assert evidence["source_decision_id"] == selected.policy_decision_id
+        assert evidence["source_policy_version"] == selected.policy_version
+        assert evidence["status"] in {"unverified", "blocked"}
+        if evidence["status"] == "blocked":
+            assert "verification_strategy_dependency_unavailable" in evidence["reason_codes"]
+        assert "model_selection_not_runtime_resolved" in evidence["reason_codes"]
+        assert evidence["execution_eligibility_established"] is False
+        assert evidence["randomized_selection"] is False
+        assert evidence["ope_eligible"] is False
+        assert selected.topology == ExecutionTopology.DIRECT
+        assert selected.reasoning_modes == []
+
+    asyncio.run(run())
+
+
+def test_alternative_readiness_failure_never_changes_chosen_plan(
+    monkeypatch,
+) -> None:
+    from ai_karen_engine.core.runtime import decision_pipeline
+    from ai_karen_engine.core.runtime import reasoning_bridge
+
+    class FailedReadinessBridge:
+        def inspect_optional_verification_readiness(self, **kwargs):
+            raise RuntimeError("readiness monitor unavailable")
+
+    async def run() -> None:
+        monkeypatch.setattr(
+            decision_pipeline,
+            "get_runtime_settings",
+            lambda: RuntimeSettings(
+                features=FeatureFlags(
+                    enable_verification_strategy_policy_probe=True,
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            reasoning_bridge,
+            "get_runtime_reasoning_bridge",
+            lambda: FailedReadinessBridge(),
+        )
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(ExecutionDecision(
+                topology=ExecutionTopology.DIRECT,
+            )),  # type: ignore[arg-type]
+            policy=RuntimePolicyEnforcer(),
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        selected = await pipeline.decide(_request())
+        assert selected.policy_decision_id is not None
+        assert selected.topology == ExecutionTopology.DIRECT
+        assert selected.reasoning_modes == []
+        assert "response_strategy_policy_probe" in selected.policy_constraints
+        assert "verification_alternative_readiness" not in selected.policy_constraints
+
+    asyncio.run(run())

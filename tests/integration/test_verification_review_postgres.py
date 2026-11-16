@@ -456,6 +456,23 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
                 "response_strategy_policy_probe": permission.to_metadata(),
             },
         )
+        from ai_karen_engine.core.runtime.reasoning_bridge import (
+            get_runtime_reasoning_bridge,
+        )
+
+        readiness = (
+            get_runtime_reasoning_bridge().inspect_optional_verification_readiness(
+                permission=permission,
+                decision=direct_plan,
+                preferred_provider=None,
+                preferred_model=None,
+            )
+        )
+        assert readiness.status == "unverified"
+        assert "model_selection_not_runtime_resolved" in readiness.reason_codes
+        direct_plan.policy_constraints["verification_alternative_readiness"] = (
+            readiness.to_metadata()
+        )
         assert await runtime._record_learning_decision(permission_traj, direct_plan)
         records = await asyncio.to_thread(
             PostgresTrajectoryStore().list_decision_observations,
@@ -476,6 +493,12 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
         )
         assert permission_strategy.metadata["response_strategy_policy_probe"] == (
             permission.to_metadata()
+        )
+        assert frozen.metadata["verification_alternative_readiness"] == (
+            readiness.to_metadata()
+        )
+        assert permission_strategy.metadata["verification_alternative_readiness"] == (
+            readiness.to_metadata()
         )
         assert permission_strategy.eligible_actions == ("respond_direct",)
         assert permission_strategy.chosen_probability is None
