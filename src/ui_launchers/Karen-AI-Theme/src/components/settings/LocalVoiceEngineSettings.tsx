@@ -365,6 +365,7 @@ export default function LocalVoiceEngineSettings() {
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" role="group" aria-label="Available local voices">
                     {selectedEngine.voices.map((voice) => (
                       <button type="button" key={voice.id} disabled={saving}
+                        aria-label={`Choose ${voice.name} local voice`}
                         aria-pressed={selectedVoice?.id === voice.id}
                         onClick={() => { stop(); setVoiceId(voice.id); }}
                         className={`flex min-h-14 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50 ${
@@ -411,7 +412,7 @@ export default function LocalVoiceEngineSettings() {
             )}
           </>
         )}
-        <Button type="button" variant="outline" disabled={saving}
+        <Button type="button" variant="outline"
           onClick={() => { stop(); void refresh(++revisionRef.current); }}>
           <RefreshCw className="mr-2 h-4 w-4" aria-hidden="true" />
           Refresh local engines
