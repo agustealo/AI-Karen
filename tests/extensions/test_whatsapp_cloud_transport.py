@@ -32,13 +32,21 @@ def adapter_components(*, status=200, reply=None):
         "phone_number_id": PHONE,
         "graph_api_version": "v23.0",
     })
-    client = SimpleNamespace(post=AsyncMock(return_value=httpx.Response(
-        status, json=reply if reply is not None else {
-            "messaging_product": "whatsapp",
-            "messages": [{"id": "wamid.provider-receipt-42"}],
-            "contacts": [{"wa_id": "15551234567"}],
-        },
-    )))
+    client = SimpleNamespace(
+        get=AsyncMock(return_value=httpx.Response(
+            200, json={
+                "id": PHONE,
+                "display_phone_number": "+1 555-123-4567",
+            },
+        )),
+        post=AsyncMock(return_value=httpx.Response(
+            status, json=reply if reply is not None else {
+                "messaging_product": "whatsapp",
+                "messages": [{"id": "wamid.provider-receipt-42"}],
+                "contacts": [{"wa_id": "15551234567"}],
+            },
+        )),
+    )
     adapter.bind_host_services(secret_resolver=resolver, http_client=client)
     account = ChannelConnection(
         connection_id="wa-1", installation_id="whatsapp-cloud",
@@ -81,6 +89,68 @@ async def test_disabled_whatsapp_plugin_cannot_run_without_host_activation():
     assert manifest.capabilities.communication_channel.inbound == ["text"]
     with pytest.raises(PermissionError):
         await adapter.send(connection=account, delivery=delivery())
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_activation_proves_exact_meta_phone_id_before_running():
+    _, adapter, account, _, client = adapter_components()
+    assert (await adapter.health(connection=account))["running"] is False
+    await adapter.start(connection=account)
+    client.get.assert_awaited_once_with(
+        f"https://graph.facebook.com/v23.0/{PHONE}",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        params={"fields": "id,display_phone_number"},
+    )
+    assert (await adapter.health(connection=account))["running"] is True
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe", [
+    httpx.Response(401, json={"error": {"message": "expired provider token"}}),
+    httpx.Response(403, json={"error": {"message": "unavailable account"}}),
+    httpx.Response(429),
+    httpx.Response(500),
+    httpx.Response(200, json={"id": "999999999", "display_phone_number": "+1 555"}),
+    httpx.Response(200, json={"id": PHONE}),
+    httpx.Response(200, json={"id": PHONE, "display_phone_number": ""}),
+    httpx.Response(200, json={"id": PHONE, "display_phone_number": 123}),
+    httpx.Response(200, json={"id": True, "display_phone_number": "+1 555"}),
+    httpx.Response(200, json=[]),
+    httpx.Response(200, content=b"not-json"),
+])
+async def test_whatsapp_activation_fails_closed_without_phone_identity(probe):
+    _, adapter, account, _, client = adapter_components()
+    client.get.return_value = probe
+    with pytest.raises(PermissionError, match="identity check failed"):
+        await adapter.start(connection=account)
+    assert (await adapter.health(connection=account))["running"] is False
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_phone_probe_network_error_is_redacted_and_not_activated():
+    _, adapter, account, _, client = adapter_components()
+    client.get.side_effect = httpx.TimeoutException(
+        f"upstream bearer {TOKEN} or app secret {APP_SECRET}"
+    )
+    with pytest.raises(PermissionError) as error:
+        await adapter.start(connection=account)
+    assert TOKEN not in str(error.value)
+    assert APP_SECRET not in str(error.value)
+    assert "upstream bearer" not in str(error.value)
+    assert (await adapter.health(connection=account))["running"] is False
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_activation_without_host_read_only_client_fails_closed():
+    _, adapter, account, _, client = adapter_components()
+    client.get = None
+    with pytest.raises(PermissionError, match="unavailable"):
+        await adapter.start(connection=account)
+    assert (await adapter.health(connection=account))["running"] is False
     client.post.assert_not_awaited()
 
 

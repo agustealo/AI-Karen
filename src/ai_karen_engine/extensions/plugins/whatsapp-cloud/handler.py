@@ -97,7 +97,36 @@ class MainExtension(ExtensionBase):
     async def start(self, *, connection: ChannelConnection) -> None:
         if not connection.enabled or self._http_client is None:
             raise PermissionError("Host must enable the connection first")
-        await self._credentials(connection)
+        credentials = await self._credentials(connection)
+        # A matching Vault phone ID does not establish that Meta recognizes
+        # the scoped token. Read-only Graph identity is required before the
+        # host's revision-fenced activation transaction may commit.
+        probe = getattr(self._http_client, "get", None)
+        if not callable(probe):
+            raise PermissionError("WhatsApp provider phone identity check unavailable")
+        try:
+            response = await probe(
+                f"https://graph.facebook.com/{credentials['graph_api_version']}/"
+                f"{credentials['phone_number_id']}",
+                headers={"Authorization": f"Bearer {credentials['access_token']}"},
+                params={"fields": "id,display_phone_number"},
+            )
+            if response.status_code != 200:
+                raise ValueError("Unverified WhatsApp phone")
+            payload = response.json()
+            if (
+                not isinstance(payload, dict)
+                or type(payload.get("id")) is not str
+                or payload["id"] != credentials["phone_number_id"]
+                or not isinstance(payload.get("display_phone_number"), str)
+                or not 1 <= len(payload["display_phone_number"]) <= 64
+                or not payload["display_phone_number"].strip()
+            ):
+                raise ValueError("Unverified WhatsApp phone")
+        except Exception:
+            # httpx errors may contain the provider URL; never expose provider
+            # bodies, request metadata, bearer credentials or upstream errors.
+            raise PermissionError("WhatsApp provider phone identity check failed") from None
         self._started.add(self._key(connection))
 
     async def stop(self, *, connection: ChannelConnection) -> None:
