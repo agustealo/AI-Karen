@@ -472,3 +472,98 @@ async def test_telegram_probe_network_failure_does_not_expose_token_or_activate(
     assert "upstream secret" not in str(caught.value)
     assert (await adapter.health(connection=connection()))["running"] is False
     client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_inspection_projects_only_redacted_provider_evidence():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True,
+        "result": {
+            "url": (
+                "https://karen.example/api/channels/webhooks/"
+                f"{TENANT}/telegram-conn-1"
+            ),
+            "pending_update_count": 3,
+            "last_error_date": 1730000000,
+            "last_error_message": "private provider diagnostic",
+            "ip_address": "203.0.113.10",
+        },
+    })
+    evidence = await adapter.inspect_webhook(connection=connection())
+    assert evidence == {
+        "registered": True,
+        "path_matches": True,
+        "pending_update_count": 3,
+        "provider_reported_error": True,
+        "endpoint_origin_verified": False,
+    }
+    assert TOKEN not in str(evidence)
+    assert "karen.example" not in str(evidence)
+    assert "private provider diagnostic" not in str(evidence)
+    assert "203.0.113.10" not in str(evidence)
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_not_registered_is_not_reported_ready():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True, "result": {"url": "", "pending_update_count": 0},
+    })
+    evidence = await adapter.inspect_webhook(connection=connection())
+    assert evidence["registered"] is False
+    assert evidence["path_matches"] is False
+    assert evidence["endpoint_origin_verified"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_info", [
+    {"url": "http://karen.example/api/channels/webhooks/other", "pending_update_count": 0},
+    {"url": "https://guest:pass@karen.example/hook", "pending_update_count": 0},
+    {"url": "https://karen.example/hook?bot_token=abc", "pending_update_count": 0},
+    {"url": "https://karen.example/hook#fragment", "pending_update_count": 0},
+    {"url": "https://karen.example/hook", "pending_update_count": True},
+    {"url": "https://karen.example/hook", "pending_update_count": -1},
+    {"url": "https://karen.example/hook", "pending_update_count": 1000001},
+    {"url": "https://karen.example/hook", "pending_update_count": 0, "last_error_date": "yesterday"},
+])
+async def test_invalid_telegram_webhook_info_fails_closed(provider_info):
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True, "result": provider_info,
+    })
+    with pytest.raises(PermissionError, match="inspection unavailable"):
+        await adapter.inspect_webhook(connection=connection())
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_mismatched_route_is_not_connection_proof():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True,
+        "result": {"url": "https://karen.example/foreign-hook", "pending_update_count": 0},
+    })
+    evidence = await adapter.inspect_webhook(connection=connection())
+    assert evidence["registered"] is True
+    assert evidence["path_matches"] is False
+    assert evidence["endpoint_origin_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_webhook_probe_requires_host_activation_and_masks_network_errors():
+    _, adapter, _, client = load_transport()
+    with pytest.raises(PermissionError, match="not active"):
+        await adapter.inspect_webhook(connection=connection())
+    client.get.assert_not_awaited()
+    await adapter.start(connection=connection())
+    client.get.side_effect = httpx.TimeoutException(f"secret {TOKEN}")
+    with pytest.raises(PermissionError) as error:
+        await adapter.inspect_webhook(connection=connection())
+    assert TOKEN not in str(error.value)
+    client.post.assert_not_awaited()
