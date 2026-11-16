@@ -200,3 +200,23 @@ def test_channel_manifest_defaults_to_strict_64k_native_budget():
         values,
     ).capabilities.communication_channel
     assert channel.max_native_body_bytes == 65_536
+
+
+def test_channel_native_budget_schema_matches_catalog_validation():
+    jsonschema = pytest.importorskip("jsonschema")
+    from ai_karen_engine import extensions
+
+    root = Path(extensions.__file__).resolve().parents[1]
+    schema = json.loads((root / "config" / "plugin_schema.json").read_text())
+    declared = schema["$defs"]["communication_channel"]["properties"]["max_native_body_bytes"]
+    assert declared == {
+        "type": "integer", "minimum": 1,
+        "maximum": 10_485_760, "default": 65_536,
+    }
+    catalog = _channel_catalog()
+    catalog["capabilities"]["communication_channel"]["max_native_body_bytes"] = 65_536
+    jsonschema.validate(catalog, schema)
+    catalog["capabilities"]["communication_channel"]["max_native_body_bytes"] = 0
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(catalog, schema)
+
