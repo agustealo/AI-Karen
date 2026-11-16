@@ -21,6 +21,7 @@ from typing import Awaitable, Callable, Protocol, TypeVar
 from ai_karen_engine.core.voice.contracts import (
     AudioInput,
     MAX_AUDIO_BYTES,
+    MAX_AUDIO_SECONDS,
     SynthesisInput,
     SynthesizedSpeech,
     TranscriptionResult,
@@ -31,6 +32,46 @@ from ai_karen_engine.core.voice.contracts import (
 
 logger = logging.getLogger(__name__)
 _Result = TypeVar("_Result")
+
+
+def _validate_complete_pcm16_wav(audio: bytes) -> None:
+    """Verify actual PCM frame bytes, not merely a WAV header's claims.
+
+    Python's WAV reader can report a positive frame count for a truncated
+    file with no audio data. Both native and plugin synthesis use this owner.
+    """
+    if not isinstance(audio, bytes) or not 44 <= len(audio) <= MAX_AUDIO_BYTES:
+        raise VoiceContractError("invalid_synthesized_audio")
+    try:
+        with wave.open(io.BytesIO(audio), "rb") as source:
+            channels = source.getnchannels()
+            sample_width = source.getsampwidth()
+            sample_rate = source.getframerate()
+            frame_count = source.getnframes()
+            if (
+                source.getcomptype() != "NONE"
+                or channels != 1
+                or sample_width != 2
+                or not 8_000 <= sample_rate <= 96_000
+                or frame_count <= 0
+                or frame_count * channels * sample_width + 44 > MAX_AUDIO_BYTES
+                or frame_count > sample_rate * MAX_AUDIO_SECONDS
+            ):
+                raise ValueError("invalid_pcm16_wav_format")
+
+            # Avoid allocating a second full-length copy of the WAV payload.
+            required_bytes = frame_count * channels * sample_width
+            received_bytes = 0
+            while received_bytes < required_bytes:
+                remaining_frames = (required_bytes - received_bytes) // 2
+                chunk = source.readframes(min(32_768, remaining_frames))
+                if not chunk or len(chunk) % 2:
+                    raise ValueError("truncated_pcm16_wav_frames")
+                received_bytes += len(chunk)
+            if received_bytes != required_bytes:
+                raise ValueError("pcm16_wav_frame_mismatch")
+    except (EOFError, OSError, OverflowError, ValueError, wave.Error):
+        raise VoiceContractError("invalid_synthesized_audio") from None
 
 
 class LocalSpeechEngine(Protocol):
@@ -176,6 +217,12 @@ class VoiceRuntime:
             result = await engine.synthesize(request)
             if result.engine != engine.engine_id or result.voice_id != engine.voice_id:
                 raise VoiceContractError("synthesis_engine_result_mismatch")
+            try:
+                _validate_complete_pcm16_wav(result.audio)
+            except VoiceContractError:
+                # A malformed engine result is a server-side synthesis failure,
+                # not a client request validation error.
+                raise RuntimeError("local_synthesis_failed") from None
             return result
 
         return await _execute_exclusively(
@@ -365,18 +412,8 @@ class VoiceRuntime:
                 raise RuntimeError("local_synthesis_failed")
             try:
                 decoded = base64.b64decode(data["audio_base64"], validate=True)
-                if not 44 <= len(decoded) <= MAX_AUDIO_BYTES:
-                    raise ValueError("invalid_wav_bounds")
-                with wave.open(io.BytesIO(decoded), "rb") as stream:
-                    if (
-                        stream.getnchannels() != 1
-                        or stream.getsampwidth() != 2
-                        or not 8_000 <= stream.getframerate() <= 96_000
-                        or stream.getnframes() <= 0
-                        or stream.getnframes() * 2 + 44 > MAX_AUDIO_BYTES
-                    ):
-                        raise ValueError("invalid_audio_format")
-            except (binascii.Error, ValueError, wave.Error, EOFError):
+                _validate_complete_pcm16_wav(decoded)
+            except (binascii.Error, VoiceContractError):
                 raise RuntimeError("local_synthesis_failed") from None
             return SynthesizedSpeech(audio=decoded, engine=engine_id, voice_id=voice_id)
 
