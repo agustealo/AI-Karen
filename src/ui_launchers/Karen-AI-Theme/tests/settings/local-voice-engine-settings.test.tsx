@@ -119,6 +119,46 @@ describe("governed local engine voice settings", () => {
     expect(screen.getByText(/could not verify the saved voice preference/)).toBeTruthy();
   });
 
+  it("reconciles backend truth and unlocks Save after refresh races with a pending write", async () => {
+    const browser = { voice: { engine_id: null, voice_id: null }, available: false };
+    const local = { voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true };
+    api.getVoiceSelection
+      .mockResolvedValueOnce(browser)
+      .mockResolvedValueOnce(browser)
+      .mockResolvedValueOnce(local);
+    let completeSave!: (receipt: { status: string; voice: typeof local.voice; available: boolean }) => void;
+    api.setVoiceSelection.mockImplementationOnce(() => new Promise((resolve) => {
+      completeSave = resolve;
+    }));
+
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Browser speech \\(device-dependent\\)/);
+    fireEvent.click(screen.getByRole("combobox", { name: "Speech output source" }));
+    fireEvent.click(screen.getByText("Pocket TTS · TTS · Local"));
+    fireEvent.click(screen.getByRole("button", { name: "Save speech engine" }));
+    await waitFor(() => expect(api.setVoiceSelection).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh local engines" }));
+    await waitFor(() => expect(api.getVoiceSelection).toHaveBeenCalledTimes(2));
+    // The first refresh finishes before the pending backend write.
+    await screen.findByText(/Browser speech \\(device-dependent\\)/);
+    expect((screen.getByRole("button", { name: "Save speech engine" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => completeSave({
+      status: "success", voice: local.voice, available: true,
+    }));
+    await waitFor(() => expect(api.getVoiceSelection).toHaveBeenCalledTimes(3));
+    await waitFor(() => {
+      expect((screen.getByRole("button", { name: "Save speech engine" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+    // A superseded save never emits a false success toast, and the panel
+    // re-reads the final durable choice instead of displaying old state.
+    expect(api.toast).not.toHaveBeenCalledWith(expect.objectContaining({
+      title: "Speech engine preference saved",
+    }));
+    expect(screen.getByRole("combobox", { name: "Speech output source" }).textContent).toMatch(/Pocket TTS/);
+  });
+
   it("late events from a stopped preview cannot terminate a later preview", async () => {
     api.getVoiceSelection.mockResolvedValue({
       voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
