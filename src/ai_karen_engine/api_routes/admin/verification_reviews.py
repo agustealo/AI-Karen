@@ -54,9 +54,19 @@ def get_verification_review_workflow() -> Any:
     # Keep API registration/import independent of optional OPE/SciPy packages.
     # The authenticated reviewer request resolves its Intelligence owner only
     # when a review is actually executed.
-    from ai_karen_engine.core.intelligence.ml.verification_review_workflow import (
-        VerificationReviewWorkflow,
-    )
+    try:
+        from ai_karen_engine.core.intelligence.ml.verification_review_workflow import (
+            VerificationReviewWorkflow,
+        )
+    except ImportError as exc:
+        logger.error(
+            "verification_review.engine_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Independent review engine unavailable",
+        ) from exc
 
     return VerificationReviewWorkflow()
 
