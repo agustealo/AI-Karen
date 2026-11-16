@@ -1356,7 +1356,7 @@ class SqlChannelRepository:
             existing = (await session.execute(
                 text("""
                     SELECT i.inbox_id, i.correlation_id, i.tenant_id, i.user_id,
-                           i.binding_id, i.event_digest
+                           i.binding_id, i.event_digest, i.provider_event_at
                     FROM public.channel_inbox i
                     JOIN public.channel_connections c
                       ON c.tenant_id = i.tenant_id AND c.connection_id = i.connection_id
@@ -1379,7 +1379,18 @@ class SqlChannelRepository:
             if existing is None:
                 raise ChannelAdmissionDenied("No active verified binding for channel event")
             if existing["event_digest"] != digest:
-                raise ChannelAdmissionConflict("External event identifier content mismatch")
+                # A signed retry of an already-admitted, pre-migration
+                # WhatsApp event must not create new work or extend the window.
+                # Only a NULL-timestamp historical row may use its original
+                # digest; modern rows remain timestamp-bound on replay.
+                legacy = event.model_copy(update={"provider_timestamp": None})
+                legacy_replay = (
+                    connection.installation_id == "whatsapp-cloud"
+                    and existing.get("provider_event_at") is None
+                    and existing["event_digest"] == _event_digest(legacy)
+                )
+                if not legacy_replay:
+                    raise ChannelAdmissionConflict("External event identifier content mismatch")
             return self._admission_from_row(existing, inserted=False)
 
     @staticmethod
