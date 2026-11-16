@@ -81,11 +81,20 @@ async def test_recovery_response_requires_durable_transcript(persisted):
         ):
             stack.enter_context(patch.object(runtime, name))
         for name in (
-            "_resolve_gate", "_prepare_conversation_continuation",
-            "_record_user_behavior_observation", "_resolve_human_approval_gate",
+            "_prepare_conversation_continuation",
+            "_record_user_behavior_observation",
             "_record_trajectory_completion", "_record_execution_outcome",
         ):
             stack.enter_context(patch.object(runtime, name, new_callable=AsyncMock))
+        # A default AsyncMock is truthy and represents an actual runtime gate.
+        # The scenario must explicitly authorize admission and avoid approval.
+        stack.enter_context(patch.object(
+            runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None,
+        ))
+        stack.enter_context(patch.object(
+            runtime, "_resolve_human_approval_gate",
+            new_callable=AsyncMock, return_value=None,
+        ))
         stack.enter_context(patch.object(
             runtime, "_freeze_persona_snapshot",
             new_callable=AsyncMock, return_value=snapshot,
