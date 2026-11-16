@@ -149,6 +149,7 @@ async def test_direct_chat_gateway_receives_authorized_completion_budget(monkeyp
     assert metadata["actual_model"] == "local-model"
     gateway.generate.assert_awaited_once()
     assert gateway.generate.await_args.args[0].max_tokens == 384
+    assert gateway.generate.await_args.args[0].reserve_additional_model_call is meter.consume_model_call
 
 
 @pytest.mark.asyncio
@@ -209,3 +210,4 @@ async def test_grounded_search_synthesis_receives_authorized_plan(monkeypatch):
 
     gateway.generate.assert_awaited_once()
     assert gateway.generate.await_args.args[0].max_tokens == 256
+    assert gateway.generate.await_args.args[0].reserve_additional_model_call is meter.consume_model_call
