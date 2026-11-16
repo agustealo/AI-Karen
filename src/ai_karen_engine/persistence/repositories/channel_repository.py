@@ -2032,13 +2032,15 @@ class SqlChannelRepository:
         revision must prove historical attribution in the SAME SQL transaction.
         Revisions and disabled state are freshly rechecked in SQL.
         """
+        if not isinstance(status, ChannelProviderStatusEvent):
+            raise ChannelAdmissionDenied("Invalid historical provider status contract")
+        status = ChannelProviderStatusEvent.model_validate(status.model_dump())
         if (
             connection.enabled
             or connection.installation_id != "whatsapp-cloud"
             or status.connection_id != connection.connection_id
         ):
             raise ChannelAdmissionDenied("Historical WhatsApp status scope denied")
-        status = ChannelProviderStatusEvent.model_validate(status.model_dump())
         tenant_id = _tenant_uuid(connection.tenant_id)
         args = {
             "tenant": tenant_id,
