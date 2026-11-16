@@ -195,8 +195,25 @@ def test_webhook_ack_only_after_durable_admission():
             NATIVE, content=b"native-data",
             headers={"X-Telegram-Bot-Api-Secret-Token": "native-secret"},
         )
-    assert response.status_code == 202
+    assert response.status_code == 200
     assert response.json() == {"accepted": True}
+
+
+def test_native_webhook_idempotent_replay_receives_http_200():
+    """A previously admitted signed event is acknowledged without re-execution."""
+    ingress, repo, adapter = gateway()
+    repo.admit_verified_inbound.return_value = SimpleNamespace(
+        tenant_id=TENANT, user_id=USER, inbox_id="inbox-1",
+        correlation_id="correlation-1", inserted=False,
+    )
+    with TestClient(isolated_app(ingress)) as client:
+        first = client.post(NATIVE, content=b"native-data")
+        retry = client.post(NATIVE, content=b"native-data")
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert first.json() == retry.json() == {"accepted": True}
+    assert repo.admit_verified_inbound.await_count == 2
+    assert adapter.verify_event.await_count == 2
 
 
 def test_webhook_rejects_oversized_payload_before_adapter():
@@ -254,7 +271,7 @@ def test_global_auth_allows_only_exact_native_post_without_session(monkeypatch, 
             NATIVE, content=b"native-data",
             headers={"X-Telegram-Bot-Api-Secret-Token": "native-secret"},
         )
-        assert signed.status_code == 202
+        assert signed.status_code == 200
         authentication.assert_not_awaited()
         unsigned_admin = client.get("/api/channel-admin/private-test")
         assert unsigned_admin.status_code == 401
