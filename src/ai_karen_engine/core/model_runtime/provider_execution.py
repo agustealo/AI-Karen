@@ -466,40 +466,66 @@ def _sync_openai_compatible_request(
 
     body = _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
 
-    choices = body.get("choices") or []
-    if not choices:
-        raise ProviderExecutionError(
-            f"provider_empty_choices:{endpoint.provider_id}"
-        )
+    # Non-streaming chat must prove the same model and assistant-content
+    # identity as the native SSE terminal contract. Never manufacture an
+    # observed model from the requested/default model or stringify structured
+    # payloads into apparent assistant speech.
+    reported_model = body.get("model")
+    if not isinstance(reported_model, str) or not reported_model.strip():
+        raise ProviderExecutionError("provider_response_unverified_model")
+    if request_model is not None and reported_model != request_model:
+        raise ProviderExecutionError("provider_response_requested_model_mismatch")
 
-    first = choices[0] or {}
-    message = first.get("message") or {}
-    text = str(message.get("content") or first.get("text") or "").strip()
+    choices = body.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        raise ProviderExecutionError("provider_response_unsupported_choices")
+    first = choices[0]
+    if not isinstance(first, dict) or first.get("index", 0) != 0:
+        raise ProviderExecutionError("provider_response_invalid_choice")
+    message = first.get("message")
+    if message is None:
+        message = {}
+    if not isinstance(message, dict):
+        raise ProviderExecutionError("provider_response_invalid_message")
+    if message.get("role") not in (None, "assistant"):
+        raise ProviderExecutionError("provider_response_non_assistant_role")
+    if message.get("tool_calls") or message.get("function_call"):
+        raise ProviderExecutionError("provider_response_tool_call_not_authorized")
+
+    content = message.get("content")
+    if content is None:
+        content = first.get("text")
+    if not isinstance(content, str):
+        raise ProviderExecutionError("provider_response_invalid_content")
+    text = content.strip()
     if not text:
         raise ProviderExecutionError(
             f"provider_empty_response:{endpoint.provider_id}"
         )
+    finish_reason = first.get("finish_reason")
+    if finish_reason is not None and (
+        not isinstance(finish_reason, str) or not finish_reason
+    ):
+        raise ProviderExecutionError("provider_response_invalid_finish_reason")
 
-    actual_model = body.get("model") or request_model
     raw_usage = body.get("usage")
     usage = None
     if isinstance(raw_usage, dict):
         usage = {}
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             value = raw_usage.get(key)
-            if isinstance(value, int) and value >= 0:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 usage[key] = value
         if not usage:
             usage = None
 
     return ProviderExecutionResult(
         text=text,
-        model=str(actual_model) if actual_model else None,
+        model=reported_model,
         provider_id=endpoint.provider_id,
         runtime_engine=endpoint.runtime_engine.value,
         usage=usage,
-        finish_reason=(str(first.get("finish_reason")).strip() or None)
-        if first.get("finish_reason") is not None else None,
+        finish_reason=finish_reason,
     )
 
 
