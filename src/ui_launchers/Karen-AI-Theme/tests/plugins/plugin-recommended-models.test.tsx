@@ -221,9 +221,9 @@ describe('Governed plugin model setup', () => {
         (handler, delay, ...args) => {
           if (delay === 4000 && typeof handler === 'function') {
             pollRef.current = () => handler(...args);
-            return 123 as ReturnType<typeof window.setTimeout>;
+            return 123 as unknown as ReturnType<typeof setTimeout>;
           }
-          return nativeTimeout(handler, delay, ...args);
+          return nativeTimeout(handler, delay, ...args) as unknown as ReturnType<typeof setTimeout>;
         },
       );
       try {
