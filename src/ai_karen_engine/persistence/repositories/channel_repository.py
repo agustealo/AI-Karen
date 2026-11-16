@@ -1921,7 +1921,7 @@ class SqlChannelRepository:
                     "conversation": claimed.external_conversation_id,
                     "budget": send_budget_seconds,
                 },
-            )).scalar_one()
+            )).scalar_one_or_none()
         return allowed is True
 
     async def renew_outbound_claim(
