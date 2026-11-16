@@ -213,6 +213,15 @@ jobs:
             tests/core/runtime/test_outcome_store_contract.py \
             -q --timeout=300 --tb=short
 
+      - name: Prove KCOG-01B9 reviewer admission over frozen runtime lineage
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/intelligence/ml/test_verification_review_workflow.py \
+            tests/core/intelligence/ml/test_verification_review_receipts.py \
+            tests/core/intelligence/ml/test_ope_frozen_candidate_evidence.py \
+            -q --timeout=300 --tb=short
+
       - name: Compile KCOG cognitive-state and policy boundary
         if: ${{ always() }}
         run: |

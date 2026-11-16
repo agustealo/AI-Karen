@@ -6,6 +6,13 @@ on:
       - main
     paths:
       - "src/ai_karen_engine/core/intelligence/ml/verification_review_evidence.py"
+      - "src/ai_karen_engine/core/intelligence/ml/verification_review_workflow.py"
+      - "src/ai_karen_engine/core/runtime/trajectory/**"
+      - "src/ai_karen_engine/api_routes/admin/verification_reviews.py"
+      - "src/ai_karen_engine/api_routes/admin/training.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
+      - "tests/core/intelligence/ml/test_verification_review_workflow.py"
+      - "tests/api_routes/test_verification_review_api.py"
       - "src/ai_karen_engine/core/intelligence/ml/verification_policy_evaluation.py"
       - "src/ai_karen_engine/core/intelligence/ml/policy_evaluation/**"
       - "src/ai_karen_engine/core/runtime/outcome/**"
@@ -88,6 +95,8 @@ jobs:
             tests/integration/test_verification_review_postgres.py
           pytest tests/integration/test_verification_review_postgres.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_verification_review_receipts.py -q --timeout=300 --tb=short
+          pytest tests/core/intelligence/ml/test_verification_review_workflow.py -q --timeout=300 --tb=short
+          pytest tests/api_routes/test_verification_review_api.py -q --timeout=300 --tb=short
 
       - name: Record independent database acceptance scope
         if: always()
