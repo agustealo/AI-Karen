@@ -19,9 +19,9 @@
 - GitHub Issues are disabled (HTTP 410); this wiki and PR descriptions retain sprint continuity. Verify live CI before acting.
 - **No claims yet** of validated causal-effect estimation, calibrated metacognition, specialist competence gain, or cross-task transfer.
 
-## KCOG-01B1: Verification-effort policy evaluation (draft, not accepted)
+## KCOG-01B1: Verification-effort policy evaluation (merged #891)
 
-- **Baseline:** live `main` `eb16d2481a288fa3e2911e2974939fd5d7ecd41b` after KCOG-01A2 #884. This slice is independent and must earn exact-head acceptance.
+- **Acceptance:** #891 merged as `29f7f1b0fefb56b53bce46402c9d9f77b663e6ee`, seven exact-head workflows successful. The result is shadow-only, with no measured cognitive improvement.
 - **Owner:** canonical `Intelligence ML policy_evaluation` contracts and evidence guard; `OfflinePolicyEvaluator` retains all IPS/SNIPS/DR, overlap and promotion calculations.
 - **Input:** a tenant-scoped, independently judged `RESPOND_STRATEGY` observation with versioned baseline and candidate probabilities, independently recorded reward and verification-need labels, separate opaque receipts, a decision-time feature snapshot and versioned utility policy.
 - **Denial rules:** reject cross-tenant, duplicate label receipts, missing/made-up propensities, unlabelled results, high-risk or forbidden exploration, incompatible action sets and nonfinite rewards. Never treat response completion as a correct answer.
@@ -29,6 +29,15 @@
 - **Authority:** `policy_activated=False`, and RuntimePolicy must separately authorize any production change. This branch does not grant permission to turn verification off for high-risk requests or change the model router.
 - **Proof:** existing model-routing OPE tests plus new verification-policy adversarial cases under Cognitive Proof CI; Main Quality and first-boot must pass for merge.
 - **Remaining evidence:** deployment-independent, prospectively sampled baseline/candidate cases, logged real action propensities, held-out independent correctness and safety reviews, latency/cost and segment-level regression analysis; no verified intelligence improvement is claimed yet.
+
+## KCOG-01B2: Canonical OPE estimator integrity (implementation pending CI)
+
+- **Owner:** `core/intelligence/ml/policy_evaluation/estimators.py`. Do not add a duplicate estimator to KCOG or model/provider routing.
+- **Audit finding:** the previous effective sample size computed mean squared divided by variance, not Kish effective sample size; the overlap diagnostic counted eligible actions as though they had actually been observed; the default `DoublyRobustEstimator` used the observed outcome as a missing reward-model substitute. These defects can exaggerate causal support and evidence for promotion.
+- **Remediation:** implement Kish ESS `(sum weights)^2 / sum(weights^2)`, bounded by the sample count. Measure action support from observed chosen actions and flag target actions never observed. DR now requires an action-conditioned reward estimator; it calculates expected target-policy reward across actions plus the importance-weighted residual for the logged action. Missing, invalid or failed nuisance-model predictions must fail closed rather than copy the logged reward.
+- **Promotion safety:** `OfflinePolicyEvaluator` has no validated nuisance reward model wired by default. It will therefore omit DR evidence, and the existing promotion gate's `require_dr` protection blocks eligibility. Production policy changes still require separate authorization and a verified held-out study.
+- **Proof:** synthetic exact arithmetic and negative support tests, missing/invalid reward model, returned estimator evidence, and no false automatic promotion. Gate under Cognitive Proof CI and verify the exact head before merge.
+- **Remaining acceptance:** separately validated and registered action-conditioned nuisance model, held-out label provenance, effective overlap and non-inferiority on correctness/safety, latency and cost. No automatically activated verification change.
 
 ## Scope, product acceptance and exit
 
