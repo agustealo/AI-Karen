@@ -162,6 +162,11 @@ class ExecutionBudgetMeter:
         return await self.reserve_external_request()
 
     @property
+    def budget(self) -> ExecutionBudget:
+        """The exact immutable-by-contract budget shared with the runtime plan."""
+        return self._budget
+
+    @property
     def exhausted(self) -> bool:
         return self._exhausted
 

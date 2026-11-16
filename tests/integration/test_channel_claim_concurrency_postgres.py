@@ -1289,6 +1289,131 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_a, connection_id,
         ) == before_bulk + 100
 
+        # KWA-01C5C3: 100 signed statuses racing a destructive tenant-scoped
+        # retention prune must converge to digest-only tombstones without
+        # resurrecting the provider message IDs or recipient metadata.
+        race_connection_id = f"wa-batch-prune-{uuid.uuid4().hex}"
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id, provider_account_id,
+                credential_handle, enabled, revision)
+               VALUES ($1,$2,'whatsapp-cloud','30987654321',
+                       'vault://prune-race-disposable',true,1)""",
+            race_connection_id, tenant_a,
+        )
+        race_account = ChannelConnection(
+            tenant_id=str(tenant_a),
+            connection_id=race_connection_id,
+            installation_id="whatsapp-cloud",
+            provider_account_id="30987654321",
+            credential_handle="vault://prune-race-disposable",
+            revision=1,
+            enabled=True,
+        )
+        race_statuses = tuple(
+            ChannelProviderStatusEvent(
+                connection_id=race_connection_id,
+                provider_message_id=f"wamid.prune-race-{index}",
+                recipient_id="15551234567",
+                state=ChannelDeliveryState.DELIVERED,
+                provider_timestamp=1770000000,
+                provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                    provider_message_id=f"wamid.prune-race-{index}",
+                    recipient_id="15551234567",
+                    state=ChannelDeliveryState.DELIVERED,
+                    provider_timestamp=1770000000,
+                ),
+            )
+            for index in range(100)
+        )
+        assert await batch_repo.record_provider_status_batch(
+            connection=race_account, statuses=race_statuses,
+        ) == 100
+        # Only these explicitly disposable, unmatched receipts are aged.
+        # The test never modifies a shared tenant's real provider records.
+        assert await raw.execute(
+            """UPDATE public.channel_provider_status_events
+               SET created_at=clock_timestamp() - interval '120 days'
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, race_connection_id,
+        ) == "UPDATE 100"
+        replayed, pruned = await asyncio.gather(
+            batch_repo.record_provider_status_batch(
+                connection=race_account, statuses=race_statuses,
+            ),
+            batch_repo.prune_unmatched_provider_statuses(
+                tenant_id=str(tenant_a), connection_id=race_connection_id,
+                expected_revision=1, retention_days=90, limit=100,
+                dry_run=False,
+            ),
+        )
+        assert (replayed, pruned) == (100, 100)
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, race_connection_id,
+        ) == 0
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_tombstones
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, race_connection_id,
+        ) == 100
+
+        # Parallel exact replays of an already-archived 100-receipt batch must
+        # never rehydrate scrubbed PII or open an inbound/outbound chat path.
+        repeated = await asyncio.gather(*[
+            batch_repo.record_provider_status_batch(
+                connection=race_account, statuses=race_statuses,
+            )
+            for _ in range(3)
+        ])
+        assert repeated == [100, 100, 100]
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, race_connection_id,
+        ) == 0
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_tombstones
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, race_connection_id,
+        ) == 100
+        # Tombstones are immutable under the production trigger. To prove a
+        # digest collision, insert one EXTRA deliberately inconsistent
+        # disposable tombstone rather than modifying finalized evidence.
+        poison_message_id = "wamid.prune-race-conflicting-receipt"
+        poisoned_receipt = ChannelProviderStatusEvent(
+            connection_id=race_connection_id,
+            provider_message_id=poison_message_id,
+            recipient_id="15551234567",
+            state=ChannelDeliveryState.DELIVERED,
+            provider_timestamp=1770000000,
+            provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                provider_message_id=poison_message_id,
+                recipient_id="15551234567",
+                state=ChannelDeliveryState.DELIVERED,
+                provider_timestamp=1770000000,
+            ),
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_provider_status_tombstones
+               (tenant_id, connection_id, receipt_id,
+                event_digest, source_created_at)
+               VALUES ($1,$2,$3,$4, clock_timestamp() - interval '120 days')""",
+            tenant_a, race_connection_id,
+            poisoned_receipt.provider_receipt_id, "0" * 64,
+        )
+        with pytest.raises(module.ChannelAdmissionConflict, match="Archived"):
+            await batch_repo.record_provider_status_batch(
+                connection=race_account,
+                statuses=(*race_statuses[:99], poisoned_receipt),
+            )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, race_connection_id,
+        ) == 0
+
         # KWA-01C3: a disabled WhatsApp connection can receive verified
         # status-only evidence for a *known previously finalized* send.
         # No new inbox admission, send, or connection reactivation follows.
@@ -1577,8 +1702,13 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_a),
             )
+            # Other disposable connections in this tenant may have their
+            # own archived receipt evidence; assert the historical connection
+            # only while retaining the real tenant-scoped RLS principal.
             assert await raw.fetchval(
-                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones "
+                "WHERE connection_id=$1",
+                historical_id,
             ) == 1
             assert await raw.execute(
                 "DELETE FROM public.channel_provider_status_tombstones "
@@ -1590,7 +1720,9 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 str(tenant_b),
             )
             assert await raw.fetchval(
-                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones "
+                "WHERE connection_id=$1",
+                historical_id,
             ) == 0
         await raw.execute(
             "REVOKE SELECT, DELETE ON public.channel_provider_status_tombstones "

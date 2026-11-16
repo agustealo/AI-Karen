@@ -226,6 +226,7 @@ jobs:
             tests/extensions/ \
             tests/api_routes/chat/test_conversation_structured_content_response.py \
             tests/core/runtime/test_conversation_runtime_gateway.py \
+            tests/core/runtime/test_conversational_plugin_inspection.py \
             tests/core/runtime/test_grounded_article_reference_execution.py \
             tests/core/runtime/test_search_answer_composition_status.py \
             tests/services/test_search_article_chat_reference.py \

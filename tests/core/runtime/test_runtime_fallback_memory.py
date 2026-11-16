@@ -5,7 +5,25 @@ from types import SimpleNamespace
 import pytest
 
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    ExecutionBudget,
+    ExecutionBudgetMeter,
+)
 from ai_karen_engine.core.runtime.runtime_fallback import build_runtime_fallback
+
+
+def _authorized_recovery(request):
+    plan = AuthorizedExecutionPlan(
+        execution_id=f"exec-{request.context.request_id}",
+        policy_decision_id="policy-fallback-test",
+        authorized_user_id=request.context.user_id,
+        authorized_tenant_id=request.context.tenant_id,
+        budget=ExecutionBudget(max_model_calls=2, max_duration_ms=30000),
+    )
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    return plan, meter
 
 
 @pytest.mark.asyncio
@@ -36,6 +54,7 @@ async def test_emergency_fallback_passes_scoped_memory_to_prompt_path():
         preferred_provider="ollama",
         preferred_model="deepseek-r1:1.5b",
     )
+    plan, meter = _authorized_recovery(request)
     result = await build_runtime_fallback(
         runtime=runtime,
         request=request,
@@ -46,6 +65,8 @@ async def test_emergency_fallback_passes_scoped_memory_to_prompt_path():
             memory_recall_required=True,
             memory_top_k=10,
         ),
+        authorized_plan=plan,
+        meter=meter,
     )
     assert result is not None
     assert result.answer == "Your name is Alex."
@@ -70,6 +91,7 @@ def test_recovered_ollama_provider_is_not_claimed_distinct_without_registry_proo
     # Metadata keeps the requested and actual identifiers separate; display
     # name differences alone do not prove a backend or engine change.
     meta = ChatRuntimeMetadata(
+        correlation_id="test-ollama-attribution",
         requested_provider="ollama",
         actual_provider="ollama-local",
         requested_model="deepseek-r1:1.5b",
@@ -114,6 +136,7 @@ async def test_emergency_model_fallback_preserves_authorized_prior_user_fact():
         preferred_provider="builtin_transformers",
         preferred_model="local-primary",
     )
+    plan, meter = _authorized_recovery(request)
     result = await build_runtime_fallback(
         runtime=Runtime(),
         request=request,
@@ -121,6 +144,8 @@ async def test_emergency_model_fallback_preserves_authorized_prior_user_fact():
         correlation_id="corr-self-description",
         conversation_id="conversation-1",
         decision=ExecutionDecision(memory_recall_required=False),
+        authorized_plan=plan,
+        meter=meter,
     )
     assert result is not None
     assert result.answer == "You said you're Jamaican."

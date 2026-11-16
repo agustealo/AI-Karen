@@ -5,6 +5,7 @@ import pytest
 
 from ai_karen_engine.core.expression.contracts import ExpressionResult, ExpressionTask
 from ai_karen_engine.core.expression.gateway import ExpressionGateway
+from ai_karen_engine.core.expression.errors import EngineUnavailableError
 from ai_karen_engine.core.expression.settings import EngineConfig, ExpressionSettings
 
 
@@ -149,6 +150,10 @@ async def test_verified_model_generation_reports_actual_executor_health(monkeypa
         (None, "provider_runtime"),
         ("claimed-model", "emergency_static"),
         ("claimed-model", "persisted_history"),
+        ("claimed-model", "engine_disabled"),
+        ("claimed-model", "deterministic_fallback"),
+        ("claimed-model", "unrecognized_response_source"),
+        ("", "provider_runtime"),
     ],
 )
 async def test_unverified_or_non_model_results_do_not_advance_health(
@@ -189,7 +194,8 @@ async def test_unverified_or_non_model_results_do_not_advance_health(
         forbidden_capabilities=[],
     )
     with patch("ai_karen_engine.core.expression.gateway.get_engine", return_value=Engine()):
-        await ExpressionGateway(settings).generate(task)
+        with pytest.raises(EngineUnavailableError, match="No model engine produced"):
+            await ExpressionGateway(settings).generate(task)
     assert observed == []
 
 
