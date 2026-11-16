@@ -11,6 +11,9 @@ on:
       - "src/ai_karen_engine/core/memory/**"
       - "src/ai_karen_engine/core/intelligence/**"
       - "src/ai_karen_engine/core/model_runtime/**"
+      - "tests/core/model_runtime/test_provider_completion_integrity.py"
+      - "src/ai_karen_engine/core/expression/**"
+      - "tests/core/expression/**"
       - "src/ai_karen_engine/core/langgraph_orchestrator/**"
       - "src/ai_karen_engine/platform/memory/**"
       - "src/ai_karen_engine/persistence/**"
@@ -80,6 +83,16 @@ jobs:
             src/ai_karen_engine/core/expression \
             src/ai_karen_engine/api_routes/chat
 
+      - name: Prove real model response attribution and fail-closed generation
+        run: |
+          pytest -q \
+            tests/core/expression/test_gateway_generation_integrity.py \
+            tests/core/expression/test_gateway_selected_provider_precedence.py \
+            tests/core/expression/test_expression_stream_fallback_integrity.py \
+            tests/core/expression/test_gateway_fallbacks.py \
+            tests/core/expression/test_gateway.py
+          pytest -q tests/core/model_runtime/test_provider_completion_integrity.py tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py
+
       - name: Verify conversational name and output hygiene contracts
         run: pytest tests/core/runtime/test_name_response_prompt_contract.py tests/core/runtime/test_conversational_output_hygiene.py -q
 
@@ -130,6 +143,13 @@ jobs:
 
       - name: Verify canonical chat ingress and grounded response parity
         run: pytest tests/architecture/test_chat_stream_route_contract.py -q
+
+      - name: Prove fallback keeps RuntimePolicy scope and shared execution budget
+        run: |
+          pytest -q \
+            tests/core/runtime/test_runtime_fallback_authority.py \
+            tests/core/runtime/test_runtime_fallback_memory.py
+          pytest -q tests/core/runtime/test_chat_http_recovery_persistence.py
 
       - name: Burn empty and prematurely terminated chat SSE failures
         run: |
