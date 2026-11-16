@@ -32,8 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class ChannelNativeBodyTooLarge(ValueError):
-    """Verified installation envelope exceeds its declared transport budget."""
-
+    """Tenant-bound native body exceeds the canonical transport budget."""
 
 
 class ChannelIngressService:
@@ -286,14 +285,16 @@ class ChannelIngressService:
                 or disabled.installation_id != "whatsapp-cloud"
                 or not isinstance(body, bytes)
                 or not body
-                or self._kernel.get_channel_activation_manifest(
-                    disabled.installation_id
-                ) is None
             ):
                 raise ChannelAdmissionDenied("Channel connection is unavailable")
             historical_catalog = self._kernel.get_channel_activation_manifest(
                 disabled.installation_id
             )
+            if (
+                historical_catalog is None
+                or historical_catalog.capabilities.communication_channel is None
+            ):
+                raise ChannelAdmissionDenied("Historical channel capability unavailable")
             declared_budget = getattr(
                 historical_catalog.capabilities.communication_channel,
                 "max_native_body_bytes", self._max_native_body_bytes,
