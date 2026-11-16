@@ -31,6 +31,7 @@ import { PluginSettingsForm, PluginSettingsProvider } from '@/plugin_host/plugin
 import { cn } from '@/lib/utils';
 
 import { PluginStatusBadge } from './PluginStatusBadge';
+import { PluginRecommendedModels } from './PluginRecommendedModels';
 
 interface PluginDetailsModalProps {
   details: PluginDetails | null;
@@ -197,6 +198,7 @@ export function PluginDetailsModal({
 }: PluginDetailsModalProps) {
   // All React hooks must be called unconditionally at the top level
   const [showSettings, setShowSettings] = useState(false);
+  const [showModelSetup, setShowModelSetup] = useState(false);
   const dependencies = useMemo(
     () => getUniqueStrings(details?.plugin?.dependencies),
     [details?.plugin?.dependencies],
@@ -245,7 +247,7 @@ export function PluginDetailsModal({
   // request must never turn Manage into a silent no-op.
   if (!details?.plugin) {
     return (
-      <Dialog open={open} onOpenChange={(next) => { if (!next) setShowSettings(false); onOpenChange(next); }}>
+      <Dialog open={open} onOpenChange={(next) => { if (!next) { setShowSettings(false); setShowModelSetup(false); } onOpenChange(next); }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Plugin details</DialogTitle>
@@ -284,7 +286,7 @@ export function PluginDetailsModal({
    * the resolved data it has been given.
    */
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) setShowSettings(false); onOpenChange(next); }}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) { setShowSettings(false); setShowModelSetup(false); } onOpenChange(next); }}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <div className="flex items-start gap-4">
@@ -336,6 +338,10 @@ export function PluginDetailsModal({
               />
             </PluginSettingsProvider>
           </section>
+        )}
+
+        {showModelSetup && installed && onOpenVoiceStudio && (
+          <PluginRecommendedModels key={plugin.id} pluginId={plugin.id} />
         )}
 
         <div className="space-y-6 py-4">
@@ -506,6 +512,13 @@ export function PluginDetailsModal({
         <DialogFooter>
           {installed ? (
             <div className="flex w-full justify-end gap-2">
+              {onOpenVoiceStudio && !loading && (
+                <Button type="button" variant="outline"
+                  aria-expanded={showModelSetup}
+                  onClick={() => setShowModelSetup((visible) => !visible)}>
+                  {showModelSetup ? 'Hide model setup' : 'Download recommended model'}
+                </Button>
+              )}
               {onOpenVoiceStudio && !loading && (
                 <Button type="button" variant="outline"
                   aria-label={`Open Voice Studio for ${title}`}
