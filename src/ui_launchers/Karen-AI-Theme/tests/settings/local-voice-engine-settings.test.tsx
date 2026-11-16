@@ -132,7 +132,7 @@ describe("governed local engine voice settings", () => {
     }));
 
     render(<LocalVoiceEngineSettings />);
-    await screen.findByText(/Browser speech \\(device-dependent\\)/);
+    await screen.findByText(/Browser speech \(device-dependent\)/);
     fireEvent.click(screen.getByRole("combobox", { name: "Speech output source" }));
     fireEvent.click(screen.getByText("Pocket TTS · TTS · Local"));
     fireEvent.click(screen.getByRole("button", { name: "Save speech engine" }));
@@ -141,7 +141,7 @@ describe("governed local engine voice settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh local engines" }));
     await waitFor(() => expect(api.getVoiceSelection).toHaveBeenCalledTimes(2));
     // The first refresh finishes before the pending backend write.
-    await screen.findByText(/Browser speech \\(device-dependent\\)/);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Speech output source" }).textContent).toMatch(/Browser speech/));
     expect((screen.getByRole("button", { name: "Save speech engine" }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => completeSave({
