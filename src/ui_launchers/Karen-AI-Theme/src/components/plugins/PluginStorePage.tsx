@@ -45,6 +45,7 @@ import {
 import pluginStoreService from '@/lib/PluginStoreService';
 import { usePluginStore } from '@/stores/PluginStore';
 import { usePluginRegistry } from '@/plugin_host/registry';
+import { VOICE_STUDIO_DASHBOARD_HREF } from '@/lib/voice-studio-navigation';
 import type { PluginCategory } from '@/types/plugin';
 
 import { CategoryFilter } from './CategoryFilter';
@@ -663,7 +664,7 @@ export default function PluginStorePage() {
           // The dashboard settings panel owns the actual voice workflow.
           setDetailsOpen(false);
           clearSelectedPlugin();
-          router.push('/dashboard?view=settings&section=voice');
+          router.push(VOICE_STUDIO_DASHBOARD_HREF);
         } : undefined}
       />
     </div>
