@@ -47,6 +47,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             DROP TABLE IF EXISTS public.channel_personal_pairing_state CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_pairing_consents CASCADE;
             DROP TABLE IF EXISTS public.channel_connection_owners CASCADE;
+            DROP TABLE IF EXISTS public.channel_provider_status_tombstones CASCADE;
             DROP TABLE IF EXISTS public.channel_outbox CASCADE;
             DROP TABLE IF EXISTS public.channel_inbox CASCADE;
             DROP TABLE IF EXISTS public.channel_link_challenges CASCADE;
@@ -105,6 +106,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261116030000_56_whatsapp_customer_window_evidence.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(customer_window_migration)
+        status_retention_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261116040000_57_channel_provider_status_retention_tombstones.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(status_retention_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)", tenant_a, tenant_b,
         )
@@ -1231,6 +1237,100 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert not await history_repo.record_deactivated_provider_status(
             connection=history, status=historical_status,
         )
+        # KWA-01C4: tombstone only *unmatched* old Meta status evidence.
+        # Both known historical sends and their delivery/read proofs survive.
+        retention_account = history.model_copy(update={
+            "enabled": True, "revision": 3,
+        })
+        orphan_message = "wamid.unmatched-retention"
+        orphan = ChannelProviderStatusEvent(
+            connection_id=historical_id,
+            provider_message_id=orphan_message,
+            recipient_id=historical_recipient,
+            state=ChannelDeliveryState.DELIVERED,
+            provider_timestamp=1770000020,
+            provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                provider_message_id=orphan_message,
+                recipient_id=historical_recipient,
+                state=ChannelDeliveryState.DELIVERED,
+                provider_timestamp=1770000020,
+            ),
+        )
+        assert await history_repo.record_provider_status(
+            connection=retention_account, status=orphan,
+        )
+        await raw.execute(
+            """UPDATE public.channel_provider_status_events
+               SET created_at = clock_timestamp() - interval '100 days'
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        )
+        candidates = await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            expected_revision=3, retention_days=90, limit=10,
+            dry_run=True,
+        )
+        assert candidates == 1
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        ) == 3
+        assert await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_b), connection_id=historical_id,
+            expected_revision=3, retention_days=90, limit=10,
+            dry_run=False,
+        ) == 0
+        assert await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            expected_revision=4, retention_days=90, limit=10,
+            dry_run=False,
+        ) == 0
+        assert await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            expected_revision=3, retention_days=90, limit=10,
+            dry_run=False,
+        ) == 1
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        ) == 2
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.channel_provider_status_tombstones
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND receipt_id=$3""",
+            tenant_a, historical_id, orphan.provider_receipt_id,
+        ) == 1
+        assert await raw.fetchval(
+            """SELECT event_digest FROM public.channel_provider_status_tombstones
+               WHERE tenant_id=$1 AND connection_id=$2
+                 AND receipt_id=$3""",
+            tenant_a, historical_id, orphan.provider_receipt_id,
+        ) == history_repo._status_event_digest(orphan)
+        # A replay of the same signed orphan is acknowledged but cannot
+        # restore either the provider ID or recipient phone number to storage.
+        assert await history_repo.record_provider_status(
+            connection=retention_account, status=orphan,
+        )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, historical_id,
+        ) == 2
+        with pytest.raises(asyncpg.PostgresError):
+            await raw.execute(
+                """UPDATE public.channel_provider_status_tombstones
+                   SET event_digest=$1 WHERE tenant_id=$2
+                     AND connection_id=$3 AND receipt_id=$4""",
+                "0" * 64, tenant_a, historical_id, orphan.provider_receipt_id,
+            )
+        assert await history_repo.prune_unmatched_provider_statuses(
+            tenant_id=str(tenant_a), connection_id=historical_id,
+            expected_revision=3, retention_days=90, limit=10,
+            dry_run=False,
+        ) == 0
+
         # Remove isolated historical fixture so the test's pre-existing RLS
         # census remains exact, rather than weakening its assertions.
         await raw.execute(
