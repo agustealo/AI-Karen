@@ -228,6 +228,18 @@ async def test_tampered_case_label_does_not_match_canonical_receipt(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_swapping_per_case_labels_with_same_total_is_rejected(tmp_path):
+    manifest, receipt, store, _ = await fixture(tmp_path)
+    # Reversing a correct and incorrect label leaves 2/3 accuracy unchanged,
+    # but changes which task case passed the independent benchmark.
+    store._records[0]["metadata"]["correct"] = False
+    store._records[2]["metadata"]["correct"] = True
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert result.observed_fraction_correct is None
+
+
+@pytest.mark.asyncio
 async def test_relabeling_and_fallback_cannot_enter_heldout_cohort(tmp_path):
     manifest, receipt, store, _ = await fixture(tmp_path)
     store._records[0]["metadata"]["label_source"] = "human_review"
