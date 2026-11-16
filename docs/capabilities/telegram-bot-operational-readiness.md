@@ -389,7 +389,9 @@ bot ID is accepted only as an idempotent ownership check, not as permission to
 reuse an existing webhook claim. Changing the credential to a different bot,
 switching tenants, or using an older revision fails closed. Owner rows are not
 automatically released when a claim expires, when a provider call is uncertain,
-or when the process restarts.
+or when the process restarts. Foreign keys also restrict deleting a tenant or
+connection while a bot ownership record exists, preventing implicit cascade
+release without provider unlink evidence.
 
 **Recovery is still separate:** bot ownership release or reassignment needs
 durable evidence of provider unlink, credential revocation and a separately
