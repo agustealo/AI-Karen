@@ -302,3 +302,33 @@ voice that might transmit content to the OS vendor.
 
 **Release gate:** no user-facing "Pocket TTS ready" or "streaming available"
 until real local audio generation and end-to-end browser tests have passed.
+
+### Consumer failure and cancellation reconciliation (2026-11-16)
+
+The browser/Copilot voice audit fixes three edge cases without creating
+another speech service:
+
+- `LocalVoiceEngineSettings` ties preview-ended/error callbacks to the
+  **specific audio element and abort controller** that created them.
+  A late callback from a stopped or replaced preview can no longer stop
+  newer audio or overwrite its status.
+- Voice Settings uses the same authorized preference write-and-readback
+  contract as the Copilot voice dock. A successful write response without
+  matching durable `GET /api/settings/voice` is a **not verified** result,
+  never a saved-success notification. Old responses after a settings
+  refresh/unmount cannot claim a successful save.
+- `KarenBrowserSpeechPlayback` bounds all synthesis chunks, including very
+  long unspaced text/URLs, without truncation or breaking UTF-16 surrogate
+  pairs. Both the browser speaker and the local plugin path use this one
+  chunk generator.
+- Optional browser-vendor dictation merges a final transcript against the
+  **live current draft** rather than a snapshot taken when recording started.
+  Each recording can commit at most once, and old recognition callbacks are
+  fenced from later sessions. The vendor still requires explicit user consent
+  and the feature remains disabled by default.
+
+Proof: `tests/settings/local-voice-engine-settings.test.tsx`,
+`tests/chat/browser-speech-playback.test.tsx`, and
+`tests/chat/browser-dictation-capture.test.tsx`. These test UI behavior and
+synthetic audio callbacks, **not** real Pocket model quality, browser vendor
+processing, or device-level audio acceptance.

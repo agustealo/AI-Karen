@@ -33,7 +33,6 @@ export function KarenBrowserDictationCapture({ port }: {
   port: KarenVoiceDraftPort;
 }) {
   const recognition = useRef<BrowserRecognition | null>(null);
-  const draft = useRef("");
   const mounted = useRef(true);
   const [recording, setRecording] = useState(false);
   const [consented, setConsented] = useState(false);
@@ -70,19 +69,26 @@ export function KarenBrowserDictationCapture({ port }: {
     }
     const instance = new Recognition();
     recognition.current = instance;
-    draft.current = port.readText();
     instance.lang = navigator.language || "en-US";
     instance.interimResults = false;
     instance.continuous = false;
+    let committed = false;
     instance.onresult = (event) => {
+      if (!mounted.current || recognition.current !== instance || committed) return;
       const words = Array.from(event.results).map((result) => result[0]?.transcript || "").join(" ").trim();
-      if (!words || !mounted.current) return;
-      port.writeText(mergeDictatedText(draft.current, words));
+      if (!words) return;
+      // Dictation may finish after the user has edited the same draft.
+      // Read the current canonical port rather than restoring a stale copy.
+      committed = true;
+      port.writeText(mergeDictatedText(port.readText(), words));
     };
     instance.onerror = () => {
-      if (mounted.current) setError("Speech recognition failed. Your draft was not sent.");
+      if (mounted.current && recognition.current === instance) {
+        setError("Speech recognition failed. Your draft was not sent.");
+      }
     };
     instance.onend = () => {
+      if (recognition.current !== instance) return;
       recognition.current = null;
       if (mounted.current) setRecording(false);
     };

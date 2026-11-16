@@ -66,6 +66,11 @@ describe("governed local engine voice settings", () => {
   });
 
   it("persists only a verified engine and voice with an acknowledged result", async () => {
+    api.getVoiceSelection.mockResolvedValueOnce({
+      voice: { engine_id: null, voice_id: null }, available: false,
+    }).mockResolvedValueOnce({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
     render(<LocalVoiceEngineSettings />);
     await screen.findByText(/Browser speech \(device-dependent\)/);
     fireEvent.click(screen.getByRole("combobox", { name: "Speech output source" }));
@@ -73,6 +78,7 @@ describe("governed local engine voice settings", () => {
     await screen.findByText(/Model: kyutai\/pocket-tts/);
     fireEvent.click(screen.getByText("Save speech engine"));
     await waitFor(() => expect(api.setVoiceSelection).toHaveBeenCalledWith("pocket-tts", "alba"));
+    await waitFor(() => expect(api.getVoiceSelection).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(api.toast).toHaveBeenCalledWith(expect.objectContaining({
       title: "Speech engine preference saved",
     })));
@@ -90,6 +96,78 @@ describe("governed local engine voice settings", () => {
       title: "Speech engine preference not saved",
       variant: "destructive",
     })));
+  });
+
+  it("rejects a successful write receipt when the persisted voice differs", async () => {
+    // The settings panel must not claim success on a response alone.
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: null, voice_id: null }, available: false,
+    });
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Browser speech \(device-dependent\)/);
+    fireEvent.click(screen.getByRole("combobox", { name: "Speech output source" }));
+    fireEvent.click(screen.getByText("Pocket TTS · TTS · Local"));
+    fireEvent.click(screen.getByText("Save speech engine"));
+    await waitFor(() => expect(api.getVoiceSelection).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Speech engine preference not saved",
+      variant: "destructive",
+    })));
+    expect(api.toast).not.toHaveBeenCalledWith(expect.objectContaining({
+      title: "Speech engine preference saved",
+    }));
+    expect(screen.getByText(/could not verify the saved voice preference/)).toBeTruthy();
+  });
+
+  it("late events from a stopped preview cannot terminate a later preview", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    const audio: Array<{
+      src: string;
+      onended: (() => void) | null;
+      onerror: (() => void) | null;
+      pause: ReturnType<typeof vi.fn>;
+      play: ReturnType<typeof vi.fn>;
+    }> = [];
+    const create = vi.fn()
+      .mockReturnValueOnce("blob:voice-one")
+      .mockReturnValueOnce("blob:voice-two");
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: create });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    vi.stubGlobal("Audio", class {
+      src: string;
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      pause = vi.fn();
+      play = vi.fn().mockResolvedValue(undefined);
+      constructor(url: string) {
+        this.src = url;
+        audio.push(this);
+      }
+    });
+    api.synthesizeLocalVoice.mockResolvedValue(new Blob([new Uint8Array(48)], { type: "audio/wav" }));
+    render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    fireEvent.click(screen.getByRole("button", { name: "Preview local voice" }));
+    await waitFor(() => expect(audio).toHaveLength(1));
+    const staleEnd = audio[0].onended;
+    const staleError = audio[0].onerror;
+    fireEvent.click(screen.getByRole("button", { name: "Stop local preview" }));
+    expect(revoke).toHaveBeenCalledWith("blob:voice-one");
+    fireEvent.click(screen.getByRole("button", { name: "Preview local voice" }));
+    await waitFor(() => expect(audio).toHaveLength(2));
+    await act(async () => {
+      staleEnd?.();
+      staleError?.();
+    });
+    expect(audio[1].pause).not.toHaveBeenCalled();
+    expect(revoke).not.toHaveBeenCalledWith("blob:voice-two");
+    expect(screen.getByRole("button", { name: "Stop local preview" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop local preview" }));
+    expect(revoke).toHaveBeenCalledWith("blob:voice-two");
+    vi.unstubAllGlobals();
   });
 
   it("shows stored engine revocation instead of substituting another voice", async () => {

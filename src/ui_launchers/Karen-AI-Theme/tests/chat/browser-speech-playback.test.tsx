@@ -121,6 +121,31 @@ describe("canonical assistant speech playback", () => {
     expect(spoken.length).toBe(2);
   });
 
+  it("reads a long unspaced response without dropping text or splitting emoji pairs", async () => {
+    // Long URLs, hashes and generated identifiers have no word boundary.
+    // All speech chunks must stay within the same bounded synthesis envelope.
+    const text = "🙂".repeat(401) + "x".repeat(5000);
+    render(<KarenBrowserSpeechPlayback message={{ content: text }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    let consumed = 0;
+    let chunkIndex = 0;
+    while (consumed < text.length) {
+      const expectedCount = chunkIndex + 1;
+      await waitFor(() => expect(spoken.length).toBe(expectedCount));
+      const utterance = spoken[chunkIndex];
+      expect(utterance.text.length).toBeLessThanOrEqual(700);
+      // Every surrogate pair in the original text must remain intact.
+      expect(utterance.text).not.toMatch(/[\uD800-\uDBFF]$/);
+      expect(utterance.text).not.toMatch(/^[\uDC00-\uDFFF]/);
+      consumed += utterance.text.length;
+      act(() => utterance.onend?.());
+      chunkIndex++;
+      if (chunkIndex > 16) throw new Error("Speech chunking did not terminate");
+    }
+    expect(spoken.map((part) => part.text).join("")).toBe(text);
+    expect(spoken.length).toBeGreaterThan(1);
+  });
+
   it("has no autoplay on saved history and revokes speech on unmount", async () => {
     const view = render(<KarenBrowserSpeechPlayback message={{ content: "Saved assistant reply" }} />);
     expect(speak).not.toHaveBeenCalled();

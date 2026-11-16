@@ -34,6 +34,7 @@ export default function LocalVoiceEngineSettings() {
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const revisionRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -135,8 +136,13 @@ export default function LocalVoiceEngineSettings() {
       objectUrlRef.current = url;
       const audio = new Audio(url);
       audioRef.current = audio;
-      audio.onended = () => stop();
+      // Old audio events can arrive after Stop, source change, or refresh.
+      // A retired session must never stop a later preview or show its error.
+      audio.onended = () => {
+        if (audioRef.current === audio && abortRef.current === controller) stop();
+      };
       audio.onerror = () => {
+        if (audioRef.current !== audio || abortRef.current !== controller) return;
         setError("Karen's verified audio could not be played by this browser.");
         stop();
       };
@@ -150,32 +156,51 @@ export default function LocalVoiceEngineSettings() {
   };
 
   const save = async () => {
-    if (saving || status !== "ready") return;
+    if (savingRef.current || status !== "ready") return;
     if (engineId !== BROWSER && (!selectedEngine || !selectedVoice)) {
       setError("Choose a currently available local voice before saving.");
       return;
     }
+    const requestedEngine = selectedEngine?.engine_id ?? null;
+    const requestedVoice = selectedVoice?.id ?? null;
+    const generation = revisionRef.current;
+    savingRef.current = true;
     setSaving(true);
     setError(null);
     try {
-      const verified = await apiClient.setVoiceSelection(
-        selectedEngine?.engine_id ?? null,
-        selectedVoice?.id ?? null,
-      );
-      setSaved(verified);
+      const receipt = await apiClient.setVoiceSelection(requestedEngine, requestedVoice);
+      if (revisionRef.current !== generation) return;
+      if (receipt.voice.engine_id !== requestedEngine ||
+          receipt.voice.voice_id !== requestedVoice ||
+          (requestedEngine !== null && !receipt.available)) {
+        throw new Error("voice_preference_receipt_mismatch");
+      }
+      // The Settings panel must follow the same durability truth contract as
+      // the Copilot voice dock: a write receipt alone is not a verified save.
+      const persisted = await apiClient.getVoiceSelection();
+      if (revisionRef.current !== generation) return;
+      if (persisted.voice.engine_id !== requestedEngine ||
+          persisted.voice.voice_id !== requestedVoice ||
+          (requestedEngine !== null && !persisted.available)) {
+        throw new Error("voice_preference_readback_mismatch");
+      }
+      setSaved(persisted);
       toast({
         title: "Speech engine preference saved",
         description: "Karen confirmed this choice on your authenticated user record.",
       });
-    } catch (cause) {
-      setError(errorMessage(cause));
-      toast({
-        title: "Speech engine preference not saved",
-        description: "Karen did not confirm a durable preference update.",
-        variant: "destructive",
-      });
+    } catch {
+      if (revisionRef.current === generation) {
+        setError("Karen could not verify the saved voice preference. Refresh before retrying.");
+        toast({
+          title: "Speech engine preference not saved",
+          description: "Karen did not verify the durable preference update.",
+          variant: "destructive",
+        });
+      }
     } finally {
-      setSaving(false);
+      savingRef.current = false;
+      if (revisionRef.current === generation) setSaving(false);
     }
   };
 
