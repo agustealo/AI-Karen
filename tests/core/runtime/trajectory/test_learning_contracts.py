@@ -197,6 +197,7 @@ class TestDecisionObservationValidatesActions:
         [
             ({"REASONING": float("nan")}, 1.0),
             ({"REASONING": float("inf")}, 1.0),
+            ({"REASONING": 10 ** 1000}, 1.0),
             ({"REASONING": True}, 1.0),
             ({"REASONING": 0.7}, 0.7),
             ({"REASONING": 1.0}, float("nan")),
@@ -234,6 +235,13 @@ class TestDecisionObservationValidatesActions:
                 ope_eligible=True,
                 ope_ineligible_reason=OpeEligibilityReason.MISSING_PROPENSITY.value,
             )
+
+    @pytest.mark.parametrize("override", [1, 0, "true", "false"])
+    def test_nonboolean_ope_eligibility_overrides_are_rejected(
+        self, override: object,
+    ) -> None:
+        with pytest.raises(ValueError, match="must be boolean"):
+            self._obs(ope_eligible=override)
 
     def test_unauthorized_record_can_never_be_promoted_by_probability(self) -> None:
         obs = self._obs(
