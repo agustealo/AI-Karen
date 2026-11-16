@@ -216,11 +216,11 @@ describe('Governed plugin model setup', () => {
       // Capture only the component's 4-second polling callback without
       // changing the timers used by Testing Library's async assertions.
       const nativeTimeout = window.setTimeout.bind(window);
-      let poll: (() => void) | null = null;
+      const pollRef: { current: (() => void) | null } = { current: null };
       const timeoutSpy = vi.spyOn(window, 'setTimeout').mockImplementation(
         (handler, delay, ...args) => {
           if (delay === 4000 && typeof handler === 'function') {
-            poll = () => handler(...args);
+            pollRef.current = () => handler(...args);
             return 123 as ReturnType<typeof window.setTimeout>;
           }
           return nativeTimeout(handler, delay, ...args);
@@ -233,9 +233,9 @@ describe('Governed plugin model setup', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
         await screen.findByText(/download job is queued/);
         expect(screen.getByText(/Download job: queued/)).toBeTruthy();
-        await waitFor(() => expect(poll).not.toBeNull());
+        await waitFor(() => expect(pollRef.current).not.toBeNull());
 
-        await act(async () => { poll?.(); await Promise.resolve(); });
+        await act(async () => { pollRef.current?.(); await Promise.resolve(); });
         expect(mocks.get).toHaveBeenCalledWith(
           `/api/runtime/model-library/my-downloads/${jobId}`,
         );
