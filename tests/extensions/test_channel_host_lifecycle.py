@@ -1415,3 +1415,57 @@ async def test_telegram_host_activation_never_uses_nontelegram_or_cross_tenant_c
     host.activation.activate.assert_not_awaited()
     adapter.start.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.parametrize("origin", [
+    "https://chat.example.com",
+    "https://hooks.example.org",
+])
+def test_telegram_public_webhook_origin_accepts_canonical_https_dns(origin):
+    assert settings().validate().telegram_webhook_public_origin is None
+    from dataclasses import replace
+    configured = replace(settings(), telegram_webhook_public_origin=origin).validate()
+    assert configured.telegram_webhook_public_origin == origin
+
+
+@pytest.mark.parametrize("origin", [
+    "http://hooks.example.com",
+    "https://localhost",
+    "https://127.0.0.1",
+    "https://10.0.0.1",
+    "https://hooks.example.com:8443",
+    "https://hooks.example.com/",
+    "https://hooks.example.com/path",
+    "https://hooks.example.com?token=secret",
+    "https://hooks.example.com#fragment",
+    "https://user:secret@hooks.example.com",
+    "https://hooks.example.com@evil.example",
+    "https://hooks.local",
+    "https://HOOKS.example.com",
+    "https://hooks.example.com\nInjected: true",
+    "https://hooks.example.com.",
+    "",
+])
+def test_telegram_public_webhook_origin_rejects_ambiguous_or_nonpublic_endpoints(origin):
+    from dataclasses import replace
+    with pytest.raises(ValueError, match="Invalid public channel webhook origin"):
+        replace(settings(), telegram_webhook_public_origin=origin).validate()
+
+
+def test_telegram_origin_config_is_opt_in_and_disabled_by_default(monkeypatch):
+    monkeypatch.setenv("KAREN_TELEGRAM_WEBHOOK_PUBLIC_ORIGIN", "https://hooks.example.com")
+    monkeypatch.delenv("KAREN_CHANNEL_HOST_ENABLED", raising=False)
+    assert load_channel_host_settings().telegram_webhook_public_origin is None
+    monkeypatch.setenv("KAREN_CHANNEL_HOST_ENABLED", "true")
+    monkeypatch.setenv("KAREN_CHANNEL_SERVICE_PRINCIPAL_ID", "channel-host-runtime")
+    monkeypatch.setenv(
+        "KAREN_CHANNEL_HOST_INSTALLATIONS_JSON",
+        '{"telegram-bot":["bot_token","webhook_secret"]}',
+    )
+    assert (
+        load_channel_host_settings().telegram_webhook_public_origin
+        == "https://hooks.example.com"
+    )
+    monkeypatch.setenv("KAREN_TELEGRAM_WEBHOOK_PUBLIC_ORIGIN", "http://localhost:8000")
+    with pytest.raises(ValueError, match="Invalid public channel webhook origin"):
+        load_channel_host_settings()
