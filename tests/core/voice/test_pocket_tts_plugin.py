@@ -115,7 +115,7 @@ async def test_missing_model_is_not_healthy_tts(module, monkeypatch):
         control, "get_model_download_control_service",
         lambda: SimpleNamespace(
             models_root=Path("/nonexistent"),
-            list_jobs=AsyncMock(return_value=[]),
+            list_completed_model_installations=AsyncMock(return_value=[]),
         ),
     )
     engine = _engine(module)
@@ -136,7 +136,7 @@ async def test_installed_licensed_model_can_generate_real_wav_contract(module, m
     snapshot, spec = _snapshot(module, tmp_path)
     service = SimpleNamespace(
         models_root=tmp_path,
-        list_jobs=AsyncMock(return_value=[_job(spec, snapshot)]),
+        list_completed_model_installations=AsyncMock(return_value=[_job(spec, snapshot)]),
     )
     monkeypatch.setattr(control, "get_model_download_control_service", lambda: service)
     loaded = []
@@ -160,25 +160,39 @@ async def test_installed_licensed_model_can_generate_real_wav_contract(module, m
     assert output["engine"] == "pocket-tts"
     assert base64.b64decode(output["audio_base64"]) == _wav()
     assert loaded == [(snapshot.resolve(), "4.0.1")]
+    assert service.list_completed_model_installations.await_count == 2
+    assert service.list_completed_model_installations.await_args.kwargs == {
+        "tenant_id": TENANT,
+        "model_id": spec["model_id"],
+        "revision": spec["revision"],
+        "channel_id": spec["channel_id"],
+    }
     await engine.shutdown()
     assert engine.get_status()["model_loaded"] is False
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("variant", ["other_tenant", "license_missing", "wrong_revision"])
+@pytest.mark.parametrize("variant", [
+    "other_tenant", "legacy_unowned", "legacy_blank",
+    "license_missing", "wrong_revision",
+])
 async def test_unapproved_model_job_never_loads(module, monkeypatch, tmp_path, variant):
     from ai_karen_engine.core.model_runtime import model_download_control_service as control
     snapshot, spec = _snapshot(module, tmp_path)
     job = _job(spec, snapshot)
     if variant == "other_tenant":
         job["tenant_id"] = OTHER
+    elif variant == "legacy_unowned":
+        job["tenant_id"] = None
+    elif variant == "legacy_blank":
+        job["tenant_id"] = ""
     elif variant == "license_missing":
         job["license_accepted"] = False
     else:
         job["revision"] = "deadbeef" * 5
     monkeypatch.setattr(control, "get_model_download_control_service", lambda: SimpleNamespace(
         models_root=tmp_path,
-        list_jobs=AsyncMock(return_value=[job]),
+        list_completed_model_installations=AsyncMock(return_value=[job]),
     ))
     monkeypatch.setattr(module, "_load_offline_model", lambda *a: pytest.fail("unapproved model was loaded"))
     engine = _engine(module)
@@ -198,7 +212,7 @@ async def test_symlinked_model_voice_is_not_admitted(module, monkeypatch, tmp_pa
     voice.symlink_to(target)
     monkeypatch.setattr(control, "get_model_download_control_service", lambda: SimpleNamespace(
         models_root=tmp_path,
-        list_jobs=AsyncMock(return_value=[_job(spec, snapshot)]),
+        list_completed_model_installations=AsyncMock(return_value=[_job(spec, snapshot)]),
     ))
     engine = _engine(module)
     await engine.initialize()
