@@ -340,6 +340,74 @@ async def list_personal_channel_connections(
     )
 
 
+class TelegramWebhookInspectionResponse(BaseModel):
+    """Provider-reported observations only, never a connected status."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    registered: StrictBool
+    path_matches: StrictBool
+    pending_update_count: StrictInt = Field(ge=0, le=1_000_000)
+    provider_reported_error: StrictBool
+    endpoint_origin_verified: Literal[False]
+
+    @model_validator(mode="after")
+    def require_consistent_provider_observations(self) -> "TelegramWebhookInspectionResponse":
+        if not self.registered and self.path_matches:
+            raise ValueError("Unregistered webhook cannot match tenant route")
+        return self
+
+
+@router.get(
+    "/connections/{connection_id}/telegram-webhook",
+    response_model=TelegramWebhookInspectionResponse,
+)
+async def inspect_telegram_webhook(
+    connection_id: UUID,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> TelegramWebhookInspectionResponse:
+    """Operator-only, session-scoped inspection; no caller-supplied authority.
+
+    The host and RuntimePolicy retain sole authority for the read-only
+    provider request. Missing, foreign, disabled or non-Telegram connections
+    share the same denied response to avoid resource enumeration.
+    """
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        connection = await host.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != str(connection_id)
+            or connection.installation_id != "telegram-bot"
+        ):
+            raise PermissionError("Telegram connection inspection denied")
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.inspect",
+        )
+        observation = await host.inspect_channel_webhook(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            user_id=user_id, session_id=session_id, authorized_plan=plan,
+        )
+    except PermissionError:
+        raise HTTPException(403, "Telegram webhook inspection denied") from None
+    except Exception as exc:
+        logger.error(
+            "channel.telegram_webhook.inspection_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "Telegram webhook inspection unavailable") from None
+    return _validate_personal_status_projection(
+        TelegramWebhookInspectionResponse, observation,
+    )
+
+
 class PersonalConsentRecoveryItem(BaseModel):
     connection_id: str
     provider_id: str

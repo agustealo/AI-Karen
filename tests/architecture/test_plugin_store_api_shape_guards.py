@@ -183,3 +183,27 @@ def test_quarantined_manual_uploads_are_non_actionable_in_plugin_store() -> None
     assert '"activation_blocked_reason": metadata.get("activation_blocked_reason")' in backend
     assert 'plugin.get("activation_blocked_reason") == "isolated_runtime_required"' in backend
     assert "status.HTTP_409_CONFLICT" in backend
+
+
+def test_telegram_webhook_diagnostics_use_authenticated_channels_owner() -> None:
+    """Source guard: no direct browser-to-provider call or fake connection badge."""
+    backend = (
+        Path(__file__).resolve().parents[2]
+        / "src/ai_karen_engine/api_routes/channels/personal_consent.py"
+    ).read_text(encoding="utf-8")
+    ui = (ROOT / "components/settings/ChannelsSettings.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert 'action="channel.inspect"' in backend
+    assert "await host.inspect_channel_webhook(" in backend
+    assert "user: UserData = Depends(get_current_user)" in backend
+    assert "await host.repository.get_enabled_connection(" in backend
+    assert 'connection.installation_id != "telegram-bot"' in backend
+    assert '"/connections/{connection_id}/telegram-webhook"' in backend
+    assert "endpoint_origin_verified: Literal[False]" in backend
+    assert "TelegramWebhookInspection" in ui
+    assert "parseTelegramWebhookObservation" in ui
+    assert "channel.installation_id === 'telegram-bot'" in ui
+    assert "role === 'admin' || role === 'super_admin'" in ui
+    assert "End-to-end Telegram connectivity: Not verified" in ui
+    assert "api.telegram.org" not in ui
