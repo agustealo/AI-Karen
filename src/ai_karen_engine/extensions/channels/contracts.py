@@ -104,7 +104,7 @@ class ChannelProviderStatusEvent(_ChannelRecord):
     """
 
     connection_id: str = Field(min_length=1)
-    provider_message_id: str = Field(min_length=7, max_length=256, pattern=r"^wamid\\.")
+    provider_message_id: str = Field(min_length=7, max_length=256, pattern=r"^wamid\.")
     recipient_id: str = Field(min_length=1, max_length=32, pattern=r"^[0-9]+$")
     state: ChannelDeliveryState
     provider_timestamp: int = Field(ge=1, le=4102444800)
