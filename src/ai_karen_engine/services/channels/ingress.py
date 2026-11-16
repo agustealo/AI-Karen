@@ -31,6 +31,10 @@ from ai_karen_engine.persistence.repositories.channel_repository import (
 logger = logging.getLogger(__name__)
 
 
+class ChannelNativeBodyTooLarge(ValueError):
+    """Tenant-bound native body exceeds the canonical transport budget."""
+
+
 class ChannelIngressService:
     """Resolve installed transport authority, verify native data, admit once."""
 
@@ -65,7 +69,7 @@ class ChannelIngressService:
         if not isinstance(body, bytes):
             raise ValueError("Native channel body must be bytes")
         if len(body) > self._max_native_body_bytes:
-            raise ValueError("Native channel body exceeds configured budget")
+            raise ChannelNativeBodyTooLarge("Native channel body exceeds configured budget")
 
         # Tenant scope is host-provided; do not trust tenant/user claims in body.
         connection = await self._repository.get_enabled_connection(
@@ -82,6 +86,13 @@ class ChannelIngressService:
         channel_capability = catalog.capabilities.communication_channel
         if channel_capability is None:
             raise ChannelAdmissionDenied("Installed extension is not a channel")
+        declared_budget = getattr(
+            channel_capability, "max_native_body_bytes", self._max_native_body_bytes,
+        )
+        if type(declared_budget) is not int or not 1 <= declared_budget <= 10_485_760:
+            raise ChannelAdmissionDenied("Invalid installed channel body budget")
+        if len(body) > declared_budget:
+            raise ChannelNativeBodyTooLarge("Native channel body exceeds transport budget")
         if not self._kernel.is_canonical_channel_adapter(
             connection.installation_id, adapter
         ):
@@ -273,12 +284,25 @@ class ChannelIngressService:
                 or disabled.connection_id != connection_id
                 or disabled.installation_id != "whatsapp-cloud"
                 or not isinstance(body, bytes)
-                or not 0 < len(body) <= self._max_native_body_bytes
-                or self._kernel.get_channel_activation_manifest(
-                    disabled.installation_id
-                ) is None
+                or not body
             ):
                 raise ChannelAdmissionDenied("Channel connection is unavailable")
+            historical_catalog = self._kernel.get_channel_activation_manifest(
+                disabled.installation_id
+            )
+            if (
+                historical_catalog is None
+                or historical_catalog.capabilities.communication_channel is None
+            ):
+                raise ChannelAdmissionDenied("Historical channel capability unavailable")
+            declared_budget = getattr(
+                historical_catalog.capabilities.communication_channel,
+                "max_native_body_bytes", self._max_native_body_bytes,
+            )
+            if type(declared_budget) is not int or not 1 <= declared_budget <= 10_485_760:
+                raise ChannelAdmissionDenied("Invalid historical channel body budget")
+            if len(body) > min(self._max_native_body_bytes, declared_budget):
+                raise ChannelNativeBodyTooLarge("Historical channel body exceeds transport budget")
             try:
                 adapter = self._kernel.loader.load_extension(disabled.installation_id)
             except Exception:
@@ -369,10 +393,16 @@ class ChannelIngressService:
             # durable receipt path, never ChatRuntime, memory, or tool routing.
             for message in event.messages:
                 await self._admit_event(connection=connection, event=message)
-            for status in event.statuses:
-                await self._repository.record_provider_status(
-                    connection=connection, status=status,
+            # SQL owns a single transaction and replay/prune lock for the whole
+            # signed status batch. Mixed inbound events retain their inbox owner.
+            if event.statuses:
+                persisted = await self._repository.record_provider_status_batch(
+                    connection=connection, statuses=event.statuses,
                 )
+                # True/None or a partial count cannot authorize HTTP 200.
+                # The canonical repository counts exact replays as accepted.
+                if type(persisted) is not int or persisted != len(event.statuses):
+                    raise RuntimeError("Native status batch persistence incomplete")
             logger.info(
                 "channel.ingress.batch_processed",
                 extra={
@@ -391,4 +421,4 @@ class ChannelIngressService:
         return "admitted"
 
 
-__all__ = ["ChannelIngressService"]
+__all__ = ["ChannelIngressService", "ChannelNativeBodyTooLarge"]

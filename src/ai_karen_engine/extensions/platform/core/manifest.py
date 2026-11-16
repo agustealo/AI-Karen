@@ -26,7 +26,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,8 @@ class CommunicationChannelDeclaration(BaseModel):
     supports_streaming: bool = False
     supports_media: bool = False
     supports_delivery_receipts: bool = False
+    # Per-provider raw callback budget, validated by the canonical manifest.
+    max_native_body_bytes: StrictInt = Field(default=65_536, ge=1, le=10_485_760)
 
     @field_validator("ingress")
     @classmethod

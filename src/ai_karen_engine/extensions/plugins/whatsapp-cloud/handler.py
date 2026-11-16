@@ -21,7 +21,6 @@ _GRAPH_VERSION = re.compile(r"^v[0-9]{1,3}\.[0-9]{1,2}$")
 _PHONE_ID = re.compile(r"^[0-9]{1,32}$")
 _ACCESS_TOKEN = re.compile(r"^[A-Za-z0-9|._-]{20,1024}$")
 _SIGNATURE = re.compile(r"^sha256=[0-9a-f]{64}$")
-_MAX_BODY = 65_536
 _MAX_TEXT = 4096
 
 
@@ -36,6 +35,10 @@ class MainExtension(ExtensionBase):
 
     def __init__(self, manifest: Any, context: Any) -> None:
         super().__init__(manifest, context)
+        channel = getattr(manifest.capabilities, "communication_channel", None)
+        if channel is None or type(channel.max_native_body_bytes) is not int:
+            raise ValueError("Canonical channel manifest body budget required")
+        self._native_body_limit = channel.max_native_body_bytes
         self._secret_resolver: HostSecretResolver | None = None
         self._http_client: httpx.AsyncClient | None = None
         self._started: set[tuple[str, str, int]] = set()
@@ -181,7 +184,7 @@ class MainExtension(ExtensionBase):
         headers: Mapping[str, str], body: bytes,
     ) -> bool:
         """Verify original Meta bytes; no active transport is implied."""
-        if not body or len(body) > _MAX_BODY:
+        if not body or len(body) > self._native_body_limit:
             return False
         values = [v for k, v in headers.items() if k.lower() == "x-hub-signature-256"]
         if len(values) != 1 or not isinstance(values[0], str) or not _SIGNATURE.fullmatch(values[0]):
@@ -233,7 +236,7 @@ class MainExtension(ExtensionBase):
         self, *, connection: ChannelConnection, body: bytes,
     ) -> ChannelWebhookBatch:
         """Parse bounded Meta payload with the exact host-scoped phone identity."""
-        if not body or len(body) > _MAX_BODY:
+        if not body or len(body) > self._native_body_limit:
             raise ValueError("Invalid WhatsApp webhook size")
         try:
             payload = json.loads(body, object_pairs_hook=self._unique_json_object)

@@ -1129,6 +1129,90 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 status=early_read,
             )
 
+        # KWA-01C5C1: the original signed receipt SQL now admits a bounded
+        # batch in one tenant-RLS transaction and one replay/prune lock.
+        # This is a functional/transaction proof, not a latency claim.
+        batch_repo = SqlChannelRepository()
+        bulk_statuses = tuple(
+            signed_status(
+                ChannelDeliveryState.DELIVERED,
+                message_id=f"wamid.bulk-proof-{index}",
+            )
+            for index in range(100)
+        )
+        before_bulk = await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        )
+        assert await batch_repo.record_provider_status_batch(
+            connection=account, statuses=bulk_statuses,
+        ) == 100
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+        assert await batch_repo.record_provider_status_batch(
+            connection=account, statuses=bulk_statuses,
+        ) == 100
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+        new_event = signed_status(
+            ChannelDeliveryState.READ,
+            message_id="wamid.bulk-rollback-proof",
+        )
+        # A valid incoming receipt cannot change a digest derived from its
+        # signed fields. The disposable DB owner seeds one deliberately corrupt
+        # digest to prove the SQL collision and *transactional rollback*, not
+        # merely Pydantic rejection before starting the transaction.
+        conflicting_old = signed_status(
+            ChannelDeliveryState.DELIVERED,
+            message_id="wamid.bulk-existing-corrupt-digest",
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_provider_status_events (
+                   tenant_id, connection_id, connection_revision,
+                   provider_message_id, recipient_id, state,
+                   provider_timestamp, receipt_id, event_digest, error_code
+               ) VALUES ($1,$2,1,$3,$4,'delivered',$5,$6,$7,NULL)""",
+            tenant_a, connection_id, conflicting_old.provider_message_id,
+            conflicting_old.recipient_id, conflicting_old.provider_timestamp,
+            conflicting_old.provider_receipt_id, "0" * 64,
+        )
+        with pytest.raises(module.ChannelAdmissionConflict, match="changed evidence"):
+            await batch_repo.record_provider_status_batch(
+                connection=account, statuses=(new_event, conflicting_old),
+            )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 101
+        await raw.execute(
+            """DELETE FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2 AND receipt_id=$3""",
+            tenant_a, connection_id, conflicting_old.provider_receipt_id,
+        )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+        with pytest.raises(module.ChannelAdmissionDenied):
+            await batch_repo.record_provider_status_batch(
+                connection=account.model_copy(update={"revision": 2}),
+                statuses=(new_event,),
+            )
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_provider_status_events
+               WHERE tenant_id=$1 AND connection_id=$2""",
+            tenant_a, connection_id,
+        ) == before_bulk + 100
+
         # KWA-01C3: a disabled WhatsApp connection can receive verified
         # status-only evidence for a *known previously finalized* send.
         # No new inbox admission, send, or connection reactivation follows.

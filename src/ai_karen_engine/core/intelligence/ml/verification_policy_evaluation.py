@@ -11,6 +11,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
+from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
+from ai_karen_engine.core.intelligence.ml.verification_review_evidence import (
+    GovernedVerificationReviewEvidence,
+)
+
 from ai_karen_engine.core.adaptive.learning.offline_evaluation import (
     OfflinePolicyEvaluator,
 )
@@ -67,6 +73,7 @@ def evaluate_verification_effort_candidate(
             "reason_codes": ["empty_verified_verification_decisions"],
             "eligible_count": 0,
             "policy_activated": False,
+            "durable_review_receipts_verified": False,
         }
 
     verified_labels: set[str] = set()
@@ -123,6 +130,7 @@ def evaluate_verification_effort_candidate(
             "eligible_count": count,
             "observed_descriptive_rates": observed,
             "policy_activated": False,
+            "durable_review_receipts_verified": False,
         }
 
     # This analysis still requires logged policy propensities, overlap and
@@ -132,16 +140,28 @@ def evaluate_verification_effort_candidate(
         baseline_policy=baseline_policy,
         ope_min_samples=min_samples,
     ).evaluate(list(observations), candidate_policy=candidate_policy)
+    # The original shadow entrypoint validates only caller-supplied labels.
+    # It may compute descriptive OPE diagnostics, but a missing durable
+    # independent review MUST NOT become policy-promotion evidence.
+    unverified_decision = report.get(
+        "promotion_decision", PromotionDecision.INSUFFICIENT_EVIDENCE.value,
+    )
+    authentic_decision = (
+        PromotionDecision.INSUFFICIENT_EVIDENCE.value
+        if unverified_decision == PromotionDecision.PROMOTION_ELIGIBLE.value
+        else unverified_decision
+    )
+    reasons = list(report.get("reason_codes") or [])
+    if unverified_decision == PromotionDecision.PROMOTION_ELIGIBLE.value:
+        reasons.append("durable_review_receipts_missing")
     return {
         "policy_version": _POLICY_VERSION,
         "evaluation_mode": "shadow",
         "evaluation_id": report.get("evaluation_id"),
-        "promotion_decision": report.get(
-            "promotion_decision",
-            PromotionDecision.INSUFFICIENT_EVIDENCE.value,
-        ),
-        "reason_codes": list(report.get("reason_codes") or []),
+        "promotion_decision": authentic_decision,
+        "reason_codes": reasons,
         "eligible_count": count,
+        "durable_review_receipts_verified": False,
         "observed_descriptive_rates": observed,
         "estimates": report.get("estimates") or {},
         "overlap_diagnostics": report.get("overlap_diagnostics"),
@@ -150,3 +170,44 @@ def evaluate_verification_effort_candidate(
         "policy_activated": False,
         "runtime_policy_approval_required": True,
     }
+
+
+async def evaluate_verification_effort_with_durable_reviews(
+    observations: Sequence[PolicyObservation],
+    *,
+    subject: AuthenticatedPrincipal,
+    baseline_policy: Any,
+    candidate_policy: Any,
+    min_samples: int = _MIN_VERIFIED_SAMPLES,
+    store: OutcomeStore | None = None,
+) -> dict[str, Any]:
+    """Shadow comparison only after both exact, durable review receipts match.
+
+    Authenticated subject scope comes from the existing authorization
+    boundary. A separate reviewer needs an independent permission to issue
+    the receipts. No proxy identity, cache fallback or runtime activation.
+    """
+    if not isinstance(subject, AuthenticatedPrincipal) or subject.is_expired():
+        raise PermissionError("Trusted, current subject principal is required")
+    reviewed = GovernedVerificationReviewEvidence(
+        tenant_id=subject.tenant_id,
+        subject_user_id=subject.user_id,
+        store=store,
+    )
+    evidence = await reviewed.require_persisted_reviews(
+        observations, subject=subject,
+    )
+    result = evaluate_verification_effort_candidate(
+        observations,
+        tenant_id=subject.tenant_id,
+        baseline_policy=baseline_policy,
+        candidate_policy=candidate_policy,
+        min_samples=min_samples,
+    )
+    result["durable_review_receipts_verified"] = True
+    result["durable_review_provenance"] = evidence
+    # An authenticated receipt pair alone is not an independently established
+    # causal gain or an authorization to switch response strategies.
+    result["policy_activated"] = False
+    result["runtime_policy_approval_required"] = True
+    return result
