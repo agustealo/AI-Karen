@@ -42,6 +42,8 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
     try:
         # Disposable dedicated DB, with only prerequisites of the migration.
         await raw.execute("""
+            DROP TABLE IF EXISTS public.channel_telegram_bot_owners CASCADE;
+            DROP TABLE IF EXISTS public.channel_telegram_webhook_claims CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_retirement_holds CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_credential_deletions CASCADE;
             DROP TABLE IF EXISTS public.channel_personal_pairing_state CASCADE;
@@ -111,6 +113,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261116150000_55_telegram_webhook_registration_claim.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(registration_claim_migration)
+        bot_ownership_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261116160000_58_telegram_global_bot_ownership.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(bot_ownership_migration)
         status_retention_migration = (
             Path(__file__).resolve().parents[2]
             / "supabase/migrations/20261116040000_57_channel_provider_status_retention_tombstones.sql"
@@ -187,15 +194,34 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         concurrent_tokens = await asyncio.gather(*(
             webhook_store.claim_telegram_webhook_registration(
                 tenant_id=str(tenant_a), connection_id=webhook_connection,
-                expected_revision=1,
+                expected_revision=1, provider_bot_id=123456,
             )
             for _ in range(4)
         ))
         accepted = [token for token in concurrent_tokens if token is not None]
         assert len(accepted) == 1
+        competitor = f"telegram-competing-{uuid.uuid4().hex}"
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id, provider_account_id,
+                credential_handle, enabled, revision)
+               VALUES ($1, $2, 'telegram-bot', 'competing',
+                       'vault://competing', true, 1)""",
+            competitor, tenant_b,
+        )
+        with pytest.raises(PermissionError, match="ownership verification denied"):
+            await webhook_store.claim_telegram_webhook_registration(
+                tenant_id=str(tenant_b), connection_id=competitor,
+                expected_revision=1, provider_bot_id=123456,
+            )
+        # A collision cannot leave a partial claim for the competing tenant.
+        assert await raw.fetchval(
+            """SELECT COUNT(*) FROM public.channel_telegram_webhook_claims
+               WHERE connection_id = $1""", competitor,
+        ) == 0
         assert await webhook_store.claim_telegram_webhook_registration(
             tenant_id=str(tenant_b), connection_id=webhook_connection,
-            expected_revision=1,
+            expected_revision=1, provider_bot_id=123456,
         ) is None
         # Transition attempts through the repository must be denied while the
         # remote effect is in flight. A lease expiry cannot grant retry.
@@ -212,7 +238,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         ) is False
         assert await webhook_store.claim_telegram_webhook_registration(
             tenant_id=str(tenant_a), connection_id=webhook_connection,
-            expected_revision=1,
+            expected_revision=1, provider_bot_id=123456,
         ) is None
         with pytest.raises(IntegrityError):
             await webhook_store.set_connection_enabled(
