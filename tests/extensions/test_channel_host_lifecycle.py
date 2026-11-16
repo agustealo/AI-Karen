@@ -1255,3 +1255,92 @@ async def test_retirement_hold_denied_before_sql_when_policy_denies():
     host.repository.place_personal_retirement_hold.assert_not_awaited()
     adapter.stop.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_governed_webhook_inspection_requires_exact_connection_and_policy():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, kernel, _, _, adapter = fake_components()
+    connection = ChannelConnection(
+        connection_id="telegram-connect", installation_id="telegram-bot",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        provider_account_id="provider-account",
+        credential_handle="vault://provider-account",
+        revision=3, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=connection)
+    adapter.inspect_webhook = AsyncMock(return_value={
+        "registered": True, "path_matches": True,
+        "pending_update_count": 2, "provider_reported_error": False,
+        "endpoint_origin_verified": False,
+    })
+    await host.initialize()
+    host.activation._authorize = AsyncMock()
+    inputs = {
+        "tenant_id": connection.tenant_id, "connection_id": connection.connection_id,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "session_id": "session",
+        "authorized_plan": object(),
+    }
+
+    result = await host.inspect_channel_webhook(**inputs)
+    assert result["registered"] is True
+    assert result["endpoint_origin_verified"] is False
+    host.activation._authorize.assert_awaited_once()
+    assert host.activation._authorize.await_args.kwargs["action"] == "channel.inspect"
+    adapter.inspect_webhook.assert_awaited_once_with(connection=connection)
+
+    adapter.inspect_webhook.reset_mock()
+    host.activation._authorize.side_effect = PermissionError("Denied")
+    with pytest.raises(PermissionError):
+        await host.inspect_channel_webhook(**inputs)
+    adapter.inspect_webhook.assert_not_awaited()
+    host.activation._authorize.side_effect = None
+
+    host.repository.get_enabled_connection.return_value = None
+    with pytest.raises(PermissionError, match="connection unavailable"):
+        await host.inspect_channel_webhook(**inputs)
+    adapter.inspect_webhook.assert_not_awaited()
+
+    host.repository.get_enabled_connection.return_value = connection
+    with pytest.raises(PermissionError, match="connection unavailable"):
+        await host.inspect_channel_webhook(**{**inputs, "tenant_id": "foreign-tenant"})
+    adapter.inspect_webhook.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_governed_webhook_inspection_rejects_substituted_adapter_and_fake_readiness():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, kernel, _, _, adapter = fake_components()
+    connection = ChannelConnection(
+        connection_id="telegram-connect", installation_id="telegram-bot",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        provider_account_id="provider-account",
+        credential_handle="vault://provider-account",
+        revision=3, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=connection)
+    adapter.inspect_webhook = AsyncMock(return_value={
+        "registered": True, "path_matches": True,
+        "pending_update_count": 0, "provider_reported_error": False,
+        "endpoint_origin_verified": True,
+    })
+    await host.initialize()
+    host.activation._authorize = AsyncMock()
+    inputs = {
+        "tenant_id": connection.tenant_id, "connection_id": connection.connection_id,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "session_id": "session", "authorized_plan": object(),
+    }
+    with pytest.raises(PermissionError, match="invalid evidence"):
+        await host.inspect_channel_webhook(**inputs)
+
+    kernel.is_canonical_channel_adapter = lambda *_: False
+    adapter.inspect_webhook.reset_mock()
+    with pytest.raises(PermissionError, match="installation unavailable"):
+        await host.inspect_channel_webhook(**inputs)
+    adapter.inspect_webhook.assert_not_awaited()
+    await host.shutdown()
