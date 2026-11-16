@@ -78,6 +78,36 @@ CREATE TABLE public.kcm_training_source_revocations (
     UNIQUE (tenant_id, user_id, deletion_epoch)
 );
 
+-- Replaying previously revoked source evidence into a later dataset is
+-- forbidden, including for privileged but mistaken lineage writers.
+CREATE FUNCTION kcm_internal.kcm_reject_revoked_lineage()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog AS $kcm_replay$
+BEGIN
+    IF NEW.lineage_status = 'quarantined'
+       AND EXISTS (
+           SELECT 1 FROM public.kcm_training_source_revocations r
+           WHERE r.tenant_id = NEW.tenant_id
+             AND r.user_id = NEW.user_id
+             AND r.source_event_id = NEW.source_event_id
+             AND r.source_revision = NEW.source_revision
+       )
+    THEN
+        RAISE EXCEPTION 'Revoked KCM source revision cannot be reintroduced'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$kcm_replay$;
+
+CREATE TRIGGER kcm_block_revoked_source_replay
+    BEFORE INSERT OR UPDATE ON public.kcm_dataset_source_lineage
+    FOR EACH ROW
+    EXECUTE FUNCTION kcm_internal.kcm_reject_revoked_lineage();
+
+REVOKE ALL ON FUNCTION kcm_internal.kcm_reject_revoked_lineage()
+    FROM PUBLIC;
+
 -- Neither clients nor ordinary role grants can mint approval, delete a
 -- revocation receipt, or mutate the epoch directly.
 REVOKE ALL ON public.kcm_training_scope_state FROM PUBLIC;
