@@ -38,6 +38,7 @@ def test_mismatched_manifest_id_fails_closed():
     with pytest.raises(ValueError, match="id must match canonical name"):
         ExtensionManifest.from_dict(data)
 
+
 def test_first_party_voice_capability_survives_extension_catalog_without_implying_ui():
     plugin = (
         Path(__file__).resolve().parents[2]
