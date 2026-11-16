@@ -33,6 +33,7 @@ const mockPlugins = [
     version: '1.0.0',
     enabled: true,
     has_gui: false,
+    supportsVoiceOutput: true,
     promptFirstValid: true,
     menuContributions: [],
     rawStatus: 'enabled',
@@ -111,6 +112,22 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
     // UI-only management buttons must not appear for headless plugins
     expect(screen.queryByRole('button', { name: 'Install UI' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove UI only' })).toBeNull();
+  });
+
+  it('opens the existing host-owned Voice Studio for backend-only synthesis plugins', () => {
+    const openVoiceStudio = vi.fn();
+    render(<PluginOverviewPage onOpenVoiceStudio={openVoiceStudio} />);
+    expect(screen.getByText('not required (backend-only)')).toBeTruthy();
+    expect(screen.getByText(/Speech controls belong to Karen/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Install UI' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Voice Studio for Pocket TTS' }));
+    expect(openVoiceStudio).toHaveBeenCalledOnce();
+  });
+
+  it('does not invent a Voice Studio action when the backend declares no synthesis modality', () => {
+    currentPlugins = [{ ...mockPlugins[0], supportsVoiceOutput: false }];
+    render(<PluginOverviewPage onOpenVoiceStudio={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Open Voice Studio/ })).toBeNull();
   });
 
   it('invokes unload endpoint when Disable is clicked on an enabled plugin', async () => {
