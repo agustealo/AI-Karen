@@ -20,6 +20,7 @@ import json
 import os
 import time
 import wave
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -37,6 +38,18 @@ _URL_ENV = "KAREN_POCKET_ACCEPTANCE_URL"
 _TOKEN_ENV = "KAREN_POCKET_ACCEPTANCE_TOKEN"
 _ENGINE = "pocket-tts"
 _SAMPLE = "Karen is speaking through her local Pocket TTS engine."
+
+
+@dataclass(frozen=True, slots=True)
+class LivePocketHost:
+    """Protect bearer tokens from normal pytest failure/fixture rendering."""
+
+    origin: str
+    _credential: str = field(repr=False, compare=False)
+
+    def headers(self, accept: str) -> dict[str, str]:
+        """Create ephemeral request headers without exposing a token variable."""
+        return {"Authorization": "Bearer " + self._credential, "Accept": accept}
 
 
 def _local_origin(url: str) -> str:
@@ -62,19 +75,20 @@ def _local_origin(url: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def live_host() -> tuple[str, str]:
+def live_host() -> LivePocketHost:
     """Opt in explicitly, and never transmit a credential outside loopback."""
     url = os.getenv(_URL_ENV, "").strip()
-    token = os.getenv(_TOKEN_ENV, "").strip()
-    if not url and not token:
+    has_credential = bool(os.getenv(_TOKEN_ENV, "").strip())
+    if not url and not has_credential:
         pytest.skip("No authorized local Pocket TTS acceptance host configured")
-    if not url or not token:
+    if not url or not has_credential:
         pytest.fail("Pocket acceptance requires both a local URL and a bearer credential")
     try:
         safe_url = _local_origin(url)
     except ValueError:
         pytest.fail("Pocket acceptance only permits a bare loopback HTTP(S) origin")
-    return safe_url, token
+    # Never bind the raw token to a pytest-visible local/fixture tuple.
+    return LivePocketHost(safe_url, os.environ[_TOKEN_ENV].strip())
 
 
 @pytest.mark.parametrize("invalid", [
@@ -101,14 +115,21 @@ def test_acceptance_accepts_only_literal_loopback_origins(valid: str) -> None:
     assert _local_origin(valid).startswith(("http://", "https://"))
 
 
+def test_live_host_representation_never_discloses_bearer_secret() -> None:
+    host = LivePocketHost("http://127.0.0.1:8000", "private-fixture-canary")
+    assert "private-fixture-canary" not in repr(host)
+    assert "private-fixture-canary" not in str(host)
+    assert "127.0.0.1" in repr(host)
+
+
 def _approved_spec() -> dict[str, str]:
     return json.loads(_PLUGIN.read_text(encoding="utf-8"))
 
 
-def _get_catalog(client: httpx.Client, credential: str) -> dict[str, object]:
+def _get_catalog(client: httpx.Client, host: LivePocketHost) -> dict[str, object]:
     response = client.get(
         "/api/voice/engines",
-        headers={"Authorization": "Bearer " + credential, "Accept": "application/json"},
+        headers=host.headers("application/json"),
     )
     assert response.status_code == 200, (
         f"Authorized voice catalog returned HTTP {response.status_code}"
@@ -141,12 +162,11 @@ def _get_catalog(client: httpx.Client, credential: str) -> dict[str, object]:
 
 
 def test_unauthenticated_catalog_cannot_expose_tenant_voices(
-    live_host: tuple[str, str],
+    live_host: LivePocketHost,
 ) -> None:
     """Use a separate client with no Authorization header or session cookies."""
-    url, _credential = live_host
     with httpx.Client(
-        base_url=url, timeout=30, follow_redirects=False, trust_env=False
+        base_url=live_host.origin, timeout=30, follow_redirects=False, trust_env=False
     ) as client:
         result = client.get("/api/voice/engines")
     assert result.status_code in (401, 403), (
@@ -155,24 +175,20 @@ def test_unauthenticated_catalog_cannot_expose_tenant_voices(
 
 
 def test_live_pocket_generates_complete_non_silent_audio_via_voice_runtime(
-    live_host: tuple[str, str],
+    live_host: LivePocketHost,
     record_property: object,
 ) -> None:
     """No mocks: authenticated real plugin admission, model load and WAV output."""
-    url, credential = live_host
     with httpx.Client(
-        base_url=url, timeout=httpx.Timeout(180), follow_redirects=False,
+        base_url=live_host.origin, timeout=httpx.Timeout(180), follow_redirects=False,
         trust_env=False,
     ) as client:
-        engine = _get_catalog(client, credential)
+        engine = _get_catalog(client, live_host)
         voice_id = engine["voices"][0]["id"]
         started = time.perf_counter()
         response = client.post(
             f"/api/voice/engines/{_ENGINE}/synthesis",
-            headers={
-                "Authorization": "Bearer " + credential,
-                "Accept": "audio/wav",
-            },
+            headers=live_host.headers("audio/wav"),
             json={"text": _SAMPLE, "voice_id": voice_id},
         )
         latency_seconds = time.perf_counter() - started
