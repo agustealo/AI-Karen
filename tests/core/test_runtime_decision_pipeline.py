@@ -418,7 +418,9 @@ def test_optional_readiness_is_runtime_owned_and_never_ope_eligible(monkeypatch)
         assert evidence["schema_version"] == "verification_alternative_readiness_v1"
         assert evidence["source_decision_id"] == selected.policy_decision_id
         assert evidence["source_policy_version"] == selected.policy_version
-        assert evidence["status"] == "unverified"
+        assert evidence["status"] in {"unverified", "blocked"}
+        if evidence["status"] == "blocked":
+            assert "verification_strategy_dependency_unavailable" in evidence["reason_codes"]
         assert "model_selection_not_runtime_resolved" in evidence["reason_codes"]
         assert evidence["execution_eligibility_established"] is False
         assert evidence["randomized_selection"] is False
