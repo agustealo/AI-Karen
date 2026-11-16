@@ -149,6 +149,7 @@ jobs:
           pytest -q \
             tests/core/runtime/test_runtime_fallback_authority.py \
             tests/core/runtime/test_runtime_fallback_memory.py
+          pytest -q tests/core/runtime/test_chat_http_recovery_persistence.py
 
       - name: Burn empty and prematurely terminated chat SSE failures
         run: |
