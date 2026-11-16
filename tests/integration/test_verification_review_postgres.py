@@ -1,0 +1,302 @@
+"""KCOG-01B8: REAL PostgreSQL review receipt acceptance on a disposable DB only.
+
+No monkeypatched transaction scopes, in-memory outcome stores, or synthetic
+successful persistence. This exercises the canonical PostgreSQL OutcomeStore
+against its production outcome-ledger migrations with isolated FK prerequisites.
+
+To run:
+    KAREN_TEST_REVIEW_DATABASE_URL=postgresql://.../karen_review_test \
+    DATABASE_URL=postgresql://.../karen_review_test \
+    pytest tests/integration/test_verification_review_postgres.py -q
+
+Never run against a non-disposable database.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+from copy import deepcopy
+from pathlib import Path
+from urllib.parse import urlparse
+
+import asyncpg
+import pytest
+
+from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
+    ActionRiskClass,
+    DecisionType,
+    PolicyContext,
+    PolicyObservation,
+)
+from ai_karen_engine.core.intelligence.ml.verification_review_evidence import (
+    GovernedVerificationReviewEvidence,
+)
+from ai_karen_engine.core.runtime.outcome.store import (
+    OutcomeStoreError,
+    PostgresOutcomeStore,
+)
+from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
+
+
+_ACTIONS = ["respond_direct", "verify_then_respond"]
+_PERMISSION = "intelligence.ml.verification_review"
+_ROOT = Path(__file__).resolve().parents[2]
+_MIGRATIONS = (
+    "20261003010000_20_runtime_outcome_evidence.sql",
+    "20261019020000_37_intelligence_ml_outcome_evidence.sql",
+)
+
+
+def _disposable_dsn() -> str:
+    dsn = os.environ.get("KAREN_TEST_REVIEW_DATABASE_URL", "")
+    if not dsn:
+        pytest.skip("No disposable PostgreSQL review database configured")
+    normalized = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    parsed = urlparse(normalized)
+    if (
+        parsed.scheme != "postgresql"
+        or parsed.hostname not in {"localhost", "127.0.0.1"}
+        or parsed.path != "/karen_review_test"
+        or not parsed.username
+        or os.environ.get("DATABASE_URL") != dsn
+    ):
+        pytest.fail(
+            "Refusing real review-receipt proof outside the designated "
+            "local disposable karen_review_test database"
+        )
+    return normalized
+
+
+def _principal(user: str, tenant: str, *, reviewer: bool = False) -> AuthenticatedPrincipal:
+    return AuthenticatedPrincipal(
+        user_id=user,
+        tenant_id=tenant,
+        permissions=[_PERMISSION] if reviewer else [],
+    )
+
+
+def _observation(index: int, tenant: str) -> PolicyObservation:
+    chosen = _ACTIONS[index % 2]
+    return PolicyObservation(
+        observation_id=f"pg-reviewed-decision-{index}",
+        context=PolicyContext(
+            feature_snapshot_id=f"pg-snapshot-{index}",
+            decision_type=DecisionType.RESPOND_STRATEGY,
+            tenant_scope=tenant,
+            eligible_actions=list(_ACTIONS),
+            risk_class=ActionRiskClass.LOW,
+            normalized_features={"secret": "NEVER_PERSIST_REVIEW_PROMPT"},
+        ),
+        eligible_actions=list(_ACTIONS),
+        chosen_action=chosen,
+        behavior_policy_id="pg-baseline",
+        behavior_policy_version="v1",
+        behavior_probabilities={_ACTIONS[0]: 0.5, _ACTIONS[1]: 0.5},
+        chosen_probability=0.5,
+        candidate_policy_id="pg-shadow",
+        candidate_policy_version="v1",
+        candidate_probabilities={_ACTIONS[0]: 0.25, _ACTIONS[1]: 0.75},
+        reward=0.75,
+        utility_policy_version="pg-independent-review-v1",
+        metadata={
+            "reward_evidence_type": "human_review",
+            "reward_evidence_ref": f"pg:reward:{index}",
+            "verification_label_source": "human_review",
+            "verification_label_ref": f"pg:needed:{index}",
+            "verification_needed": bool(index % 2),
+            "raw_prompt": "NEVER_PERSIST_REVIEW_PROMPT",
+        },
+    )
+
+
+async def _prepare_disposable_database(raw: asyncpg.Connection) -> None:
+    """Use actual ledger migrations; only FK prerequisite tables are scoped fixtures."""
+    assert await raw.fetchval("SELECT current_database()") == "karen_review_test"
+    await raw.execute(
+        """
+        CREATE TABLE public.tenants (id uuid PRIMARY KEY);
+        CREATE TABLE public.auth_users (
+            user_id uuid PRIMARY KEY,
+            tenant_id uuid NOT NULL REFERENCES public.tenants(id)
+        );
+        """
+    )
+    for name in _MIGRATIONS:
+        sql = (_ROOT / "supabase" / "migrations" / name).read_text()
+        await raw.execute(sql)
+    state = await raw.fetchrow(
+        """SELECT relrowsecurity, relforcerowsecurity
+           FROM pg_class WHERE oid='public.outcome_records'::regclass"""
+    )
+    assert state is not None
+    assert state["relrowsecurity"] and state["relforcerowsecurity"]
+    policy = await raw.fetchval(
+        """SELECT count(*) FROM pg_policies
+           WHERE schemaname='public' AND tablename='outcome_records'
+             AND policyname='outcome_records_tenant_scope'"""
+    )
+    assert policy == 1
+    await raw.execute(
+        """
+        CREATE ROLE karen_review_ci_reader NOLOGIN;
+        GRANT USAGE ON SCHEMA public TO karen_review_ci_reader;
+        GRANT SELECT, INSERT ON public.outcome_records TO karen_review_ci_reader;
+        """
+    )
+
+
+async def _assert_rls_is_real(
+    raw: asyncpg.Connection,
+    *,
+    tenant_a: str,
+    tenant_b: str,
+    receipt_id: str,
+    subject_id: str,
+) -> None:
+    """Prove tenant isolation with a non-superuser without BYPASSRLS privilege."""
+    async with raw.transaction():
+        await raw.execute("SET LOCAL ROLE karen_review_ci_reader")
+        await raw.execute(
+            "SELECT set_config('app.current_tenant_id', $1, true)", tenant_b
+        )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records WHERE outcome_id=$1",
+            receipt_id,
+        ) == 0
+        # WITH CHECK must prohibit an attempted insert of the other tenant.
+        # A savepoint allows the outer audit transaction to continue.
+        async with raw.transaction():
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await raw.execute(
+                    """
+                    INSERT INTO public.outcome_records
+                      (outcome_id, tenant_id, user_id, source, payload)
+                    VALUES ($1, $2, $3, 'intelligence.ml', '{}'::jsonb)
+                    """,
+                    "rls-forbidden-cross-tenant", uuid.UUID(tenant_a),
+                    uuid.UUID(subject_id),
+                )
+        await raw.execute(
+            "SELECT set_config('app.current_tenant_id', $1, true)", tenant_a
+        )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records WHERE outcome_id=$1",
+            receipt_id,
+        ) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -> None:
+    dsn = _disposable_dsn()
+    # This test may only initialize a *new* disposable database.
+    raw = await asyncpg.connect(dsn)
+    tenant_a, tenant_b = (str(uuid.uuid4()) for _ in range(2))
+    subject_a, other_user, reviewer_id = (str(uuid.uuid4()) for _ in range(3))
+    try:
+        await _prepare_disposable_database(raw)
+        for tenant_id in (tenant_a, tenant_b):
+            await raw.execute(
+                "INSERT INTO public.tenants(id) VALUES ($1)",
+                uuid.UUID(tenant_id),
+            )
+        for user_id, tenant_id in (
+            (subject_a, tenant_a),
+            (other_user, tenant_a),
+            (reviewer_id, tenant_a),
+        ):
+            await raw.execute(
+                "INSERT INTO public.auth_users(user_id, tenant_id) VALUES ($1,$2)",
+                uuid.UUID(user_id), uuid.UUID(tenant_id),
+            )
+        store = PostgresOutcomeStore()
+        governed = GovernedVerificationReviewEvidence(
+            tenant_id=tenant_a, subject_user_id=subject_a, store=store,
+        )
+        original = _observation(1, tenant_a)
+        before = deepcopy(original)
+        result = await governed.record_review(
+            original, reviewer=_principal(reviewer_id, tenant_a, reviewer=True),
+        )
+        assert result["stored"] is True
+        assert result["receipt_count"] == 2
+        assert original == before
+
+        # Reinitialize a separate adapter, and read from two different
+        # production PostgreSQL connection pools/transactions, not a cache.
+        reconstructed = GovernedVerificationReviewEvidence(
+            tenant_id=tenant_a, subject_user_id=subject_a,
+            store=PostgresOutcomeStore(),
+        )
+        evidence = await reconstructed.require_persisted_reviews(
+            [original], subject=_principal(subject_a, tenant_a),
+        )
+        assert evidence["persisted_decision_count"] == 1
+        assert evidence["persisted_receipt_count"] == 2
+        assert evidence["receipt_scope_verified"] is True
+        assert evidence["policy_activated"] is False
+
+        refs = ["pg:reward:1", "pg:needed:1"]
+        same_scope = await asyncio.to_thread(
+            store.list_scoped_outcomes_by_ids,
+            tenant_a, user_id=subject_a,
+            source="intelligence.ml", outcome_ids=refs,
+        )
+        assert len(same_scope) == 2
+        assert all(row["user_id"] == subject_a for row in same_scope)
+        assert "NEVER_PERSIST_REVIEW_PROMPT" not in str(same_scope)
+
+        # Both SQL predicates apply. Neither the same-tenant other user nor
+        # another tenant may see the caller's receipt by knowing its ID.
+        for wrong_tenant, wrong_user in (
+            (tenant_b, subject_a), (tenant_a, other_user),
+        ):
+            assert await asyncio.to_thread(
+                store.list_scoped_outcomes_by_ids,
+                wrong_tenant, user_id=wrong_user,
+                source="intelligence.ml", outcome_ids=refs,
+            ) == []
+        assert await asyncio.to_thread(
+            store.list_scoped_outcomes_by_ids,
+            tenant_a, user_id=subject_a,
+            source="runtime.execution", outcome_ids=refs,
+        ) == []
+
+        # A second attempted decision with an original *label* ID causes
+        # statement two to conflict. Statement one MUST roll back as well.
+        conflict = _observation(2, tenant_a)
+        conflict.metadata["verification_label_ref"] = "pg:needed:1"
+        with pytest.raises(OutcomeStoreError):
+            await governed.record_review(
+                conflict,
+                reviewer=_principal(reviewer_id, tenant_a, reviewer=True),
+            )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE outcome_id='pg:reward:2'"
+        ) == 0
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE outcome_id='pg:needed:1'"
+        ) == 1
+
+        # Tampering with a committed payload is detectable even when the
+        # database user holding the direct test connection is a superuser.
+        await raw.execute(
+            """
+            UPDATE public.outcome_records
+            SET payload=jsonb_set(payload, '{metadata,value}', '0.10'::jsonb)
+            WHERE outcome_id='pg:reward:1'
+            """
+        )
+        with pytest.raises(OutcomeStoreError, match="does not match"):
+            await reconstructed.require_persisted_reviews(
+                [original], subject=_principal(subject_a, tenant_a),
+            )
+        await _assert_rls_is_real(
+            raw, tenant_a=tenant_a, tenant_b=tenant_b,
+            receipt_id="pg:needed:1", subject_id=subject_a,
+        )
+    finally:
+        await raw.close()
