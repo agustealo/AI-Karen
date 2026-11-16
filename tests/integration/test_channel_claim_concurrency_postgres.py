@@ -1302,18 +1302,35 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                WHERE tenant_id=$1 AND connection_id=$2""",
             tenant_a, race_connection_id,
         ) == 100
-        # A digest mismatch in the archived evidence must still fail closed
-        # under the same tenant/revision lock, never reinsert metadata.
+        # Tombstones are immutable under the production trigger. To prove a
+        # digest collision, insert one EXTRA deliberately inconsistent
+        # disposable tombstone rather than modifying finalized evidence.
+        poison_message_id = "wamid.prune-race-conflicting-receipt"
+        poisoned_receipt = ChannelProviderStatusEvent(
+            connection_id=race_connection_id,
+            provider_message_id=poison_message_id,
+            recipient_id="15551234567",
+            state=ChannelDeliveryState.DELIVERED,
+            provider_timestamp=1770000000,
+            provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+                provider_message_id=poison_message_id,
+                recipient_id="15551234567",
+                state=ChannelDeliveryState.DELIVERED,
+                provider_timestamp=1770000000,
+            ),
+        )
         await raw.execute(
-            """UPDATE public.channel_provider_status_tombstones
-               SET event_digest=$1
-               WHERE tenant_id=$2 AND connection_id=$3 AND receipt_id=$4""",
-            "0" * 64, tenant_a, race_connection_id,
-            race_statuses[-1].provider_receipt_id,
+            """INSERT INTO public.channel_provider_status_tombstones
+               (tenant_id, connection_id, receipt_id,
+                event_digest, source_created_at)
+               VALUES ($1,$2,$3,$4, clock_timestamp() - interval '120 days')""",
+            tenant_a, race_connection_id,
+            poisoned_receipt.provider_receipt_id, "0" * 64,
         )
         with pytest.raises(module.ChannelAdmissionConflict, match="Archived"):
             await batch_repo.record_provider_status_batch(
-                connection=race_account, statuses=race_statuses,
+                connection=race_account,
+                statuses=(*race_statuses[:99], poisoned_receipt),
             )
         assert await raw.fetchval(
             """SELECT COUNT(*) FROM public.channel_provider_status_events
