@@ -54,6 +54,47 @@ independent acceptance. Existing queued replies tied to pre-migration inbox
 records intentionally fail closed. Do not bypass this guard by calling an
 adapter directly or enabling generic plugin execution.
 
+## KWA-01C4: governed unmatched-status evidence retention (source only)
+
+The host does **not** run automatic status cleanup on startup or webhook
+admission. Database migration 57 adds `channel_provider_status_tombstones`, a
+tenant-FORCE-RLS, digest-only anti-replay ledger. Tombstones retain no phone
+numbers, original Meta message IDs, raw webhook payloads, user IDs or Vault
+credentials. A database trigger prevents later mutation of their evidence.
+
+An authenticated operator must explicitly enable
+`KAREN_CHANNEL_STATUS_RETENTION_ENABLED=true` and possess the independent
+`channel.status_prune` RBAC/RuntimePolicy capability for the installed
+`whatsapp-cloud` connection. Default configuration disables deletion. The
+centrally validated `KAREN_CHANNEL_STATUS_RETENTION_DAYS` defaults to **90**
+(allowed 30..3650); the `KAREN_CHANNEL_STATUS_RETENTION_BATCH_LIMIT` defaults
+to **100** (allowed 1..1000). These values are host settings, never native
+callback or browser-controlled policy parameters.
+
+The authenticated `POST /api/channels/{connection_uuid}/status-retention`
+accepts only a strict `dry_run` boolean and an explicit `confirm_prune=true`
+when `dry_run=false`. Actor and tenant derive from session authentication;
+the route obtains a fresh authorized plan, and the canonical host verifies
+eligibility again before calling the existing SQL repository. A dry run reports
+the bounded number of eligible receipts without mutation.
+
+Pruning targets only statuses older than the database-clock retention cutoff,
+inside the exact tenant/connection/current revision, with no matching
+provider-message ID and recipient in a durable outbox. The SQL excludes live
+outbound claims, locks both candidate receipt and connection rows with
+`SKIP LOCKED`, creates SHA-256 digest-only tombstones in the same transaction
+and deletes only rows successfully tombstoned. **Matched delivery/read evidence
+is never a pruning candidate.** A signed callback replay matching a tombstone
+is acknowledged without recreating deleted personal data; a conflicting
+digest is rejected. The host logs counts, revision and policy decision ID,
+not the provider message, phone or credential.
+
+**Acceptance remains open:** Exact-head PostgreSQL/CI proof, deployed operator
+flow, real Meta provider acceptance, legally configured retention obligations
+and adversarial concurrent replay/cleanup tests are independent of source-level
+implementation. Do not enable destructive cleanup in production without those
+checks. Do not ship WhatsApp to `free_plugins/essential` prematurely.
+
 ## Operator setup (explicit opt-in)
 
 1. Install/validate the preinstalled `whatsapp-cloud` manifest using Karen's governed plugin catalog. Do **not** use generic plugin `/load` to enable messaging.
@@ -71,7 +112,8 @@ These are operator requirements, **not an assertion that the current deployment 
 - [ ] Authenticated operator provisioning and activation through a usable admin connection flow, with Vault credential rotation and refusal on missing RBAC, tenant, or consent
 - [ ] End-to-end Meta test-number handshake on a public HTTPS callback, signed inbound delivery, tenant identity linking, durable one-turn response, and provider-observed receipt
 - [x] **Source-only:** Signed status batches and durable, monotonic PostgreSQL reconciliation are implemented by KWA-01B. This does **not** establish live Meta delivery/read evidence.
-- [ ] **Provider acceptance:** Real Meta status batches, delayed/duplicate provider receipts, deactivation handling, and unmatched-status retention must pass end-to-end.
+- [x] **Source-only:** Explicit RBAC/RuntimePolicy-gated unmatched-status retention, tenant-locked bounded cleanup and digest tombstones (KWA-01C4).
+- [ ] **Provider acceptance:** Real Meta status batches, delayed/duplicate provider receipts, deactivation handling, and production retention obligations must pass end-to-end.
 - [x] **Source-only:** Host-gated 24-hour free-form reply window using immutable signed inbound time and a claim-bound PostgreSQL clock check (KWA-01C2).
 - [ ] **Provider acceptance:** Independently verify the 24-hour behavior against live Meta and establish explicit template/opt-in policy before any outbound initiation; no unrestricted templates or campaigns
 - [ ] Network timeouts, retries, rate limiting, unknown-send semantics, exact-account fencing, rotation and revocation, audit/telemetry, provider downtime and incident recovery acceptance
