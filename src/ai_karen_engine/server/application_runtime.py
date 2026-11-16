@@ -83,11 +83,15 @@ async def shutdown_application_redis(app: FastAPI) -> None:
 async def initialize_application_channel_host(app: FastAPI) -> None:
     """Attach explicitly opted-in channel transport dependencies, never activate tenants."""
     from ai_karen_engine.config.channels import load_channel_host_settings
+    from ai_karen_engine.core.runtime.direct_capability_executor import (
+        get_direct_capability_executor,
+    )
 
     settings = load_channel_host_settings()
     # Keep the public provider webhook entirely unavailable by default.
     app.state.channel_ingress_service = None
     app.state.channel_host_services = None
+    get_direct_capability_executor().bind_channel_host(None)
     if not settings.enabled:
         return
 
@@ -138,6 +142,7 @@ async def initialize_application_channel_host(app: FastAPI) -> None:
     app.state._channel_host_owns_vault = existing_vault is None
     app.state.channel_host_services = host
     app.state.channel_ingress_service = host.ingress
+    get_direct_capability_executor().bind_channel_host(host)
     logger.info(
         "Canonical channel host attached",
         extra={"installed_transports": len(settings.installations),
@@ -226,6 +231,10 @@ async def shutdown_application_runtime(app: FastAPI) -> None:
     # Revoke ingress synchronously before any transport or database teardown.
     # Old public routes then return 503 even during shutdown/draining.
     app.state.channel_ingress_service = None
+    from ai_karen_engine.core.runtime.direct_capability_executor import (
+        get_direct_capability_executor,
+    )
+    get_direct_capability_executor().bind_channel_host(None)
     host = getattr(app.state, "channel_host_services", None)
     app.state.channel_host_services = None
     if host is not None:

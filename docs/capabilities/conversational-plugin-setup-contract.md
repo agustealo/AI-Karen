@@ -269,21 +269,21 @@ execute using the **same PluginService and ExtensionExecutionService as the
 existing API**, not a Telegram, clock or application-UI special case.
 
 For generic plugins, the authoritative field is
-\`governance.conversational_actions\` in the loader-selected
-\`plugin_manifest.json\` (not a similarly named UI manifest). Version 1
+`governance.conversational_actions` in the loader-selected
+`plugin_manifest.json` (not a similarly named UI manifest). Version 1
 contains 1–16 distinct actions. Each action must declare exactly:
 
-- \`id\`: a stable, scoped action identifier
-- \`utterances\`: bounded, exact user-goal phrases normalized for whitespace,
+- `id`: a stable, scoped action identifier
+- `utterances`: bounded, exact user-goal phrases normalized for whitespace,
   case and trailing punctuation
-- \`parameters\`: bounded, literal scalar invocation inputs, never interpolated
+- `parameters`: bounded, literal scalar invocation inputs, never interpolated
   user text or credentials
-- \`side_effect_level\`: exactly \`none\`
-- \`requires_confirmation\`: exactly \`false\`
+- `side_effect_level`: exactly `none`
+- `requires_confirmation`: exactly `false`
 
 Example from the installed Time Query capability:
 
-\`\`\`json
+```json
 {
   "conversational_actions": {
     "version": 1,
@@ -298,9 +298,9 @@ Example from the installed Time Query capability:
     ]
   }
 }
-\`\`\`
+```
 
-The above is nested inside the existing manifest \`governance\` object.
+The above is nested inside the existing manifest `governance` object.
 Only the canonical manifest version is authoritative. Plugins that have not
 opted in continue through the read-only inspection route, with a truthful
 "not performed" answer. No arbitrary natural-language argument is passed
@@ -327,11 +327,40 @@ remain blocked until independently approved action contracts are implemented.
 A plugin-returned error, missing receipt, mismatched identity or unverifiable
 status never produces a success response.
 
-Proof is in \`tests/core/runtime/test_conversational_plugin_action.py\`,
+Proof is in `tests/core/runtime/test_conversational_plugin_action.py`,
 executed explicitly by Main Quality and Plugin Backend. Its sample receipt
 fixtures are test-only; they are not evidence of a production plugin execution
 or real provider delivery.
 
+
+## Canonical owner-scoped channel inspection (KPLUG-CONV-01B)
+
+The universal plugin.inspect route remains read-only. For an explicitly named,
+validated communication-channel installation, ChatRuntime may consult the
+existing ChannelHostServices to inspect that **authenticated user's** personal
+connection records, using the existing tenant-RLS repository.
+
+ChannelHost issues exactly one fresh channel.consent action plan tied to the
+current chat session **before** querying SQL, including when the user has no
+connections. It never trusts model-supplied tenant, user, session, plugin or
+permission claims, and it does not forward provider account identifiers, bot
+credentials, Vault handles, webhook URLs, or connection IDs to chat.
+
+The response projects only owned count, persisted enabled count, revision,
+the owner evidence source and a next-action hint. "Enabled" refers to a stored
+SQL connection flag and does not attest live provider registration, local
+adapter activation, sender binding, ChatRuntime execution or reply delivery.
+
+The application lifespan attaches the real initialized ChannelHost to the
+existing direct-capability executor, then revokes that reference **before**
+host shutdown. With a disabled host, the connection status remains
+not_inspected. Denied owner inspection and infrastructure unavailability
+remain separate. No channel is provisioned, paired, activated or messaged.
+
+Owner-state, missing-consent, cross-tenant, one-policy-check, runtime
+projection, and host-binding regressions are in the existing
+tests/core/runtime/test_conversational_plugin_inspection.py suite, explicitly
+executed by both Main Quality and Plugin Backend.
 
 ## Execution slices (do not duplicate owners)
 
