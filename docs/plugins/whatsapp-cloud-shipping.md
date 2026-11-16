@@ -32,7 +32,7 @@ a live Meta test-number trial passed. Those are independent release gates.
 
 WhatsApp free-form reply dispatch now requires a **signed native customer-message
 timestamp** stored in the existing tenant-FORCE-RLS `channel_inbox`. Migration
-`55_whatsapp_customer_window_evidence` adds immutable `provider_event_at`.
+`56_whatsapp_customer_window_evidence` adds immutable `provider_event_at`.
 Meta inbound text with a missing/malformed timestamp is rejected; legacy inbox
 rows with no evidence do not authorize an outgoing send. Event identity digests
 now include available native provider time, without changing legacy digests for
