@@ -257,6 +257,7 @@ class MainExtension(ExtensionBase):
                         ignored += 1
                         continue
                     sender, message_id, content = item.get("from"), item.get("id"), item.get("text")
+                    timestamp = item.get("timestamp")
                     if (
                         not isinstance(sender, str) or not _PHONE_ID.fullmatch(sender)
                         or not isinstance(message_id, str)
@@ -264,8 +265,14 @@ class MainExtension(ExtensionBase):
                         or not isinstance(content, dict)
                         or not isinstance(content.get("body"), str)
                         or not (0 < len(content["body"]) <= _MAX_TEXT)
+                        or not isinstance(timestamp, str)
+                        or not 1 <= len(timestamp) <= 12
+                        or not timestamp.isascii() or not timestamp.isdigit()
                     ):
                         raise ValueError("Malformed WhatsApp text message")
+                    observed_at = int(timestamp)
+                    if not 1 <= observed_at <= 4102444800:
+                        raise ValueError("Invalid WhatsApp inbound timestamp")
                     messages.append(InboundChannelEvent(
                         connection_id=connection.connection_id,
                         external_event_id=message_id,
@@ -273,6 +280,7 @@ class MainExtension(ExtensionBase):
                         external_conversation_id=sender,
                         message_kind="text",
                         text=content["body"],
+                        provider_timestamp=observed_at,
                     ))
                 for item in native_statuses:
                     if not isinstance(item, dict):
