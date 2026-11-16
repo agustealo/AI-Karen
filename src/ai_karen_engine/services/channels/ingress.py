@@ -16,6 +16,7 @@ from typing import Mapping
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelAdapter,
     ChannelConnection,
+    ChannelProviderStatusEvent,
     ChannelWebhookBatch,
     InboundChannelEvent,
     VerifiedIdentityBinding,
