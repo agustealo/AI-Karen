@@ -286,6 +286,42 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 ),
             )
 
+        # A pre-migration webhook replay reuses the original receipt and
+        # must never backfill an unaudited customer-window timestamp.
+        legacy_event = InboundChannelEvent(
+            connection_id=wa_connection,
+            external_event_id="wamid.before-migration",
+            external_sender_id=wa_recipient,
+            external_conversation_id=wa_recipient,
+            message_kind="text", text="Previously admitted",
+            provider_timestamp=int(
+                (datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp()
+            ),
+        )
+        legacy_id = uuid.uuid4()
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id, tenant_id, connection_id, connection_revision,
+                external_event_id, external_sender_id, external_conversation_id,
+                message_kind, message_text, event_digest, binding_id, user_id)
+               VALUES ($1, $2, $3, 1, $4, $5, $5, 'text', $6, $7, $8, $9)""",
+            legacy_id, tenant_a, wa_connection, legacy_event.external_event_id,
+            wa_recipient, legacy_event.text,
+            module._event_digest(legacy_event.model_copy(
+                update={"provider_timestamp": None},
+            )),
+            wa_binding, user,
+        )
+        replay = await wa_store.admit_verified_inbound(
+            connection=wa_account, event=legacy_event,
+        )
+        assert replay.inserted is False
+        assert replay.inbox_id == str(legacy_id)
+        assert await raw.fetchval(
+            "SELECT provider_event_at FROM public.channel_inbox WHERE inbox_id=$1",
+            legacy_id,
+        ) is None
+
         # Governed repository only assigns the first active verified owner.
         owner_repo = SqlChannelRepository()
         assert await owner_repo.assign_personal_connection_owner(
