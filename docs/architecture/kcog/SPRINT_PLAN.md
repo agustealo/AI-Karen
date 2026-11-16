@@ -68,7 +68,7 @@
 - **Proof:** deterministic 0/1 target distributions across IPS/SNIPS/DR, exact ESS, negative propensity and malformed-distribution cases, missing target-action support, per-context zero behavior support, and missing/zero-overlap promotion denial. Existing KCOG-01B1/B2/B4 cases run in Cognitive Proof CI.
 - **Still out of scope:** policy authorization, live verification switch, independent real outcome labels, reward-model training and causal proof. An observed zero weight does not mean an unsafe action may be skipped.
 
-## KCOG-01B6: Immutable versioned policy-evaluation evidence (draft; CI pending)
+## KCOG-01B6: Immutable versioned policy-evaluation evidence (merged #910)
 
 - **Base:** KCOG-01B5 #905 merged as `e570d950501915a9fce9e089ac91e583a71eb80e`. This is a source-integrity fix, not a runtime policy change.
 - **Owner:** the existing `core/adaptive/learning/offline_evaluation.py` evaluator. No new evaluator, registry, persistence service, or separate policy router.
@@ -77,6 +77,17 @@
 - **Compatibility:** legacy completion-only dictionaries remain descriptive and promotion-ineligible. Valid explicit candidate snapshots still use the canonical IPS/SNIPS, baseline, overlap, DR and promotion owners. No active runtime policy, provider choice, tenant controls, or memory state is changed.
 - **Proof:** missing candidate distribution (including within a large otherwise-valid cohort), stale candidate version, missing snapshot, malformed probabilities/reward, missing behavior provenance, no mutable policy scoring calls, no caller mutation, valid estimator behavior and legacy dict regression. Exact-head Cognitive Proof + Main Quality + First-Boot required.
 - **Remaining evidence:** caller-provided evidence references are **not independently authenticated** by this slice. A durable, tenant/RBAC-authorized, independently issued verification-outcome receipt and source-of-truth lookup remain required before any empirical improvement claim or activation.
+
+## KCOG-01B7: Governed durable verification-review receipts (draft; CI pending)
+
+- **Base:** KCOG-01B6 #910 merged as `0b52d399d9acea9a19107a5de391a159252ce8bf`. No live response-strategy policy change.
+- **Existing source of truth:** `core/runtime/outcome/store.py` is Karen's tenant-RLS, append-only PostgreSQL outcome ledger. Add the versioned `ml_verification_review_v1` **metadata schema** to its existing `intelligence.ml` source; no second evidence database, migration, mutable in-memory review registry or new orchestrator. Retain the original `ml_predictor_evidence_v1` contract unchanged.
+- **Admission authority:** `core/intelligence/ml/verification_review_evidence.py` is a bounded, offline ML-evaluation adapter. Only a trusted `AuthenticatedPrincipal` with the exact permission `intelligence.ml.verification_review`, matching tenant and **different from the subject**, may issue a review pair. The original authentication layer, not this adapter or a UI, must authenticate reviewer identity and permissions.
+- **Write contract:** 2 separately referenced receipts, `reward` (finite 0–1) and `verification_need` (bool), atomically appended through `OutcomeStore.save_unique_outcomes_async`. Each includes exact subject/tenant, decision ID, evaluator ID, review source, versioned utility and SHA-256 fingerprint of the frozen decision/action/probability/outcome fields. No raw prompt, user content or input features are stored.
+- **Read contract:** use exact receipt IDs in a user+tenant+source-filtered lookup (max 1,000 receipts / 500 reviewed decisions). Verify BOTH receipts and their persisted values, reviewer identity, observation fingerprint and versioned utility before any trusted study result. Missing, cross-tenant, duplicated, replayed or modified evidence fails the entire study. No process-cache fallback.
+- **Shadow study:** `evaluate_verification_effort_with_durable_reviews` first proves persisted receipt integrity and then delegates to the existing KCOG/IPS-SNIPS-DR owner. Direct metadata-only study calls explicitly report `durable_review_receipts_verified=False` and cannot turn optimistic OPE promotion output into authenticated eligibility. All paths keep `policy_activated=False`.
+- **Proof:** atomicity, replay rejection, unprivileged/same-subject/cross-tenant review, scoped reads, missing/tampered receipt, mutated decision/risk/reward/label, private-content redaction, malformed schema, 100-row reviewed shadow study and existing model/verification/OutcomeStore regressions, wired to Cognitive Proof CI.
+- **Remaining risk:** ledger integrity is a **trusted-host/authorization-boundary guarantee**, not a cryptographic signature or proof that the reviewer performed a correct human evaluation. The existing authenticated reviewer UI/API integration and independent held-out correctness, safety, latency and cost study must be proven separately before claiming measured learning, improvement or policy activation.
 
 ## Scope, product acceptance and exit
 
