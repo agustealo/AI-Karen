@@ -599,3 +599,87 @@ async def test_signed_batch_bound_and_duplicate_json_keys_rejected():
         connection=account, headers={"X-Hub-Signature-256": "sha256=" + "0" * 64},
         body=body,
     )
+
+
+@pytest.mark.asyncio
+async def test_signed_whatsapp_status_batch_admits_exactly_100_events_not_101():
+    """Enforce the current bounded, signed status-only admission contract."""
+    _, adapter, account, _, client = adapter_components()
+    await adapter.start(connection=account)
+    statuses = [
+        {
+            "id": f"wamid.capacity-{index}",
+            "recipient_id": "15551234567",
+            "status": "delivered",
+            "timestamp": "1770000000",
+        }
+        for index in range(101)
+    ]
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value":
+            webhook_value(statuses=statuses[:100])}]}],
+    }
+    body, headers = signed_batch(payload)
+    assert len(body) <= 65_536
+    assert await adapter.verify_event(connection=account, headers=headers, body=body)
+    result = await adapter.normalize_events(
+        connection=account, headers=headers, body=body,
+    )
+    assert result.messages == ()
+    assert result.ignored_count == 0
+    assert len(result.statuses) == 100
+    assert len({item.provider_receipt_id for item in result.statuses}) == 100
+    client.post.assert_not_awaited()
+
+    payload["entry"][0]["changes"][0]["value"]["statuses"] = statuses
+    over_body, over_headers = signed_batch(payload)
+    assert await adapter.verify_event(
+        connection=account, headers=over_headers, body=over_body,
+    )
+    with pytest.raises(ValueError, match="count exceeds limit"):
+        await adapter.normalize_events(
+            connection=account, headers=over_headers, body=over_body,
+        )
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_signed_native_body_exact_64k_boundary_is_consistent():
+    """Signature verification and parsing share the exact payload ceiling."""
+    _, adapter, account, _, client = adapter_components()
+    await adapter.start(connection=account)
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value":
+            webhook_value(statuses=[{
+                "id": "wamid.capacity-boundary",
+                "recipient_id": "15551234567",
+                "status": "read",
+                "timestamp": "1770000000",
+            }])}]}],
+        "padding": "",
+    }
+    empty_body, _ = signed_batch(payload)
+    assert len(empty_body) < 65_536
+    payload["padding"] = "x" * (65_536 - len(empty_body))
+    body, headers = signed_batch(payload)
+    assert len(body) == 65_536
+    assert await adapter.verify_event(connection=account, headers=headers, body=body)
+    accepted = await adapter.normalize_events(
+        connection=account, headers=headers, body=body,
+    )
+    assert len(accepted.statuses) == 1
+    assert accepted.messages == ()
+
+    payload["padding"] += "x"
+    over_body, over_headers = signed_batch(payload)
+    assert len(over_body) == 65_537
+    assert not await adapter.verify_event(
+        connection=account, headers=over_headers, body=over_body,
+    )
+    with pytest.raises(ValueError, match="size"):
+        await adapter.normalize_events(
+            connection=account, headers=over_headers, body=over_body,
+        )
+    client.post.assert_not_awaited()
