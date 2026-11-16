@@ -39,6 +39,28 @@ _ENGINE = "pocket-tts"
 _SAMPLE = "Karen is speaking through her local Pocket TTS engine."
 
 
+def _local_origin(url: str) -> str:
+    """Reject non-loopback/credential-bearing origins before making a request."""
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+        allowed = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname in {"127.0.0.1", "::1"}
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.path in {"", "/"}
+            and not parsed.query
+            and not parsed.fragment
+            and port != 0
+        )
+    except ValueError:
+        allowed = False
+    if not allowed:
+        raise ValueError("Only a bare, credential-free loopback origin is permitted")
+    return url.rstrip("/")
+
+
 @pytest.fixture(scope="module")
 def live_host() -> tuple[str, str]:
     """Opt in explicitly, and never transmit a credential outside loopback."""
@@ -48,24 +70,35 @@ def live_host() -> tuple[str, str]:
         pytest.skip("No authorized local Pocket TTS acceptance host configured")
     if not url or not token:
         pytest.fail("Pocket acceptance requires both a local URL and a bearer credential")
-
-    parsed = urlsplit(url)
     try:
-        port = parsed.port
+        safe_url = _local_origin(url)
     except ValueError:
-        pytest.fail("Pocket acceptance URL contains an invalid port")
-    if (
-        parsed.scheme not in {"http", "https"}
-        or parsed.hostname not in {"127.0.0.1", "::1"}
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in {"", "/"}
-        or parsed.query
-        or parsed.fragment
-        or port == 0
-    ):
         pytest.fail("Pocket acceptance only permits a bare loopback HTTP(S) origin")
-    return url.rstrip("/"), token
+    return safe_url, token
+
+
+@pytest.mark.parametrize("invalid", [
+    "https://example.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000/path",
+    "http://127.0.0.1:8000/?token=secret",
+    "http://user:pass@127.0.0.1:8000",
+    "http://127.0.0.1:0",
+    "http://[not-an-ipv6]:8000",
+    "ftp://127.0.0.1:8000",
+])
+def test_acceptance_rejects_unsafe_network_origins(invalid: str) -> None:
+    with pytest.raises(ValueError, match="loopback origin"):
+        _local_origin(invalid)
+
+
+@pytest.mark.parametrize("valid", [
+    "http://127.0.0.1:8000",
+    "https://127.0.0.1:8443/",
+    "http://[::1]:8000",
+])
+def test_acceptance_accepts_only_literal_loopback_origins(valid: str) -> None:
+    assert _local_origin(valid).startswith(("http://", "https://"))
 
 
 def _approved_spec() -> dict[str, str]:
