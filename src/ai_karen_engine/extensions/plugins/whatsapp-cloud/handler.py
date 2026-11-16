@@ -172,6 +172,15 @@ class MainExtension(ExtensionBase):
         headers: Mapping[str, str], body: bytes,
     ) -> bool:
         self._require_active(connection)
+        return await self._verify_native_signature(
+            connection=connection, headers=headers, body=body,
+        )
+
+    async def _verify_native_signature(
+        self, *, connection: ChannelConnection,
+        headers: Mapping[str, str], body: bytes,
+    ) -> bool:
+        """Verify original Meta bytes; no active transport is implied."""
         if not body or len(body) > _MAX_BODY:
             return False
         values = [v for k, v in headers.items() if k.lower() == "x-hub-signature-256"]
@@ -196,13 +205,34 @@ class MainExtension(ExtensionBase):
         self, *, connection: ChannelConnection,
         headers: Mapping[str, str], body: bytes,
     ) -> ChannelWebhookBatch:
-        """Parse a bounded signed Meta delivery with no authority over identity.
-
-        The host verifies the original byte signature *before* calling this
-        normalizer. Unsupported media/events become ignored observations, never
-        prompts; invalid phone/account scope rejects the entire callback.
-        """
+        """Parse one already-verified batch for an active host channel."""
         self._require_active(connection)
+        return await self._normalize_native_batch(connection=connection, body=body)
+
+    async def normalize_deactivated_statuses(
+        self, *, connection: ChannelConnection,
+        headers: Mapping[str, str], body: bytes,
+    ) -> tuple[ChannelProviderStatusEvent, ...]:
+        """Verify signed status-only notifications after host deactivation.
+
+        This cannot invoke an active adapter or mint messages. Historical
+        attribution and current revision fences remain SQL-owned.
+        """
+        if connection.enabled or self._http_client is None:
+            raise PermissionError("Historical WhatsApp receipt requires disabled host connection")
+        if not await self._verify_native_signature(
+            connection=connection, headers=headers, body=body,
+        ):
+            raise PermissionError("Historical WhatsApp provider signature invalid")
+        batch = await self._normalize_native_batch(connection=connection, body=body)
+        if batch.messages or batch.ignored_count or not batch.statuses:
+            raise ValueError("Historical WhatsApp callback must contain statuses only")
+        return batch.statuses
+
+    async def _normalize_native_batch(
+        self, *, connection: ChannelConnection, body: bytes,
+    ) -> ChannelWebhookBatch:
+        """Parse bounded Meta payload with the exact host-scoped phone identity."""
         if not body or len(body) > _MAX_BODY:
             raise ValueError("Invalid WhatsApp webhook size")
         try:
