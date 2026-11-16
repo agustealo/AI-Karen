@@ -137,7 +137,13 @@ function parseTelegramWebhookObservation(value: unknown): TelegramWebhookObserva
   ) {
     throw new Error('Karen returned invalid Telegram webhook evidence.');
   }
-  return result as TelegramWebhookObservation;
+  return {
+    registered: result.registered as boolean,
+    path_matches: result.path_matches as boolean,
+    pending_update_count: result.pending_update_count as number,
+    provider_reported_error: result.provider_reported_error as boolean,
+    endpoint_origin_verified: false,
+  };
 }
 
 function TelegramWebhookInspection({ connectionId }: { connectionId: string }) {
