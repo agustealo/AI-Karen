@@ -12,7 +12,6 @@ from typing import List, Optional
 from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
 from ai_karen_engine.core.reasoning.strategies.causal_strategy import CausalReasoner
 from ai_karen_engine.core.reasoning.strategies.metacognition_strategy import MetacognitionStrategy
-from ai_karen_engine.core.reasoning.strategies.refiner_strategy import Refiner
 from ai_karen_engine.core.reasoning.strategies.verifier_strategy import Verifier
 from ai_karen_engine.core.reasoning.strategy import ReasoningStrategyEngine
 
@@ -30,7 +29,6 @@ def get_default_strategies(
     strategies: List[ReasoningStrategyEngine] = [
         CausalReasoner(),
         Verifier(),
-        Refiner(),
         MetacognitionStrategy(),
     ]
     if optional_strategies:
