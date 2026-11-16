@@ -248,6 +248,12 @@ async def test_chat_executes_declared_read_action_via_fresh_plugin_policy_not_in
     {"correlation_id": "unrelated"},
     {"plugin_id": "another-plugin"},
     {"result": {"status": "error", "formatted": "fake"}},
+    {"result": {"error": "backend unavailable"}},
+    {"result": {}},
+    {"result": {"status": "pending"}},
+    {"result": {"status": "success", "error": "backend unavailable"}},
+    {"result": {"status": "success", "error": {"code": "internal"}}},
+    {"result": {"status": "SUCCESS", "formatted": "fake"}},
     {"result": None},
 ])
 async def test_unverified_plugin_result_never_claims_execution(mutation):
