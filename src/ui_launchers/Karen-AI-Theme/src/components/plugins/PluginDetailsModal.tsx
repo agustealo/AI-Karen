@@ -42,6 +42,8 @@ interface PluginDetailsModalProps {
   onInstall?: () => void;
   onEnable?: () => void;
   onDisable?: () => void;
+  /** Optional host-owned voice panel navigation for backend-declared TTS plugins. */
+  onOpenVoiceStudio?: () => void;
 }
 
 type ExternalLinkConfig = {
@@ -191,6 +193,7 @@ export function PluginDetailsModal({
   onInstall,
   onEnable,
   onDisable,
+  onOpenVoiceStudio,
 }: PluginDetailsModalProps) {
   // All React hooks must be called unconditionally at the top level
   const [showSettings, setShowSettings] = useState(false);
@@ -503,6 +506,13 @@ export function PluginDetailsModal({
         <DialogFooter>
           {installed ? (
             <div className="flex w-full justify-end gap-2">
+              {onOpenVoiceStudio && !loading && (
+                <Button type="button" variant="outline"
+                  aria-label={`Open Voice Studio for ${title}`}
+                  onClick={onOpenVoiceStudio}>
+                  Open Voice Studio
+                </Button>
+              )}
               {plugin.settings_available && (
                 <Button
                   type="button"
