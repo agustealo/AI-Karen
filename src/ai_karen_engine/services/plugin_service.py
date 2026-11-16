@@ -1232,6 +1232,7 @@ class PluginService:
             record = item["record"]
             manifest = item["manifest"]
             plugin_id = item["plugin_id"]
+            display_name = item["display_name"]
             channel = getattr(
                 getattr(manifest, "capabilities", None),
                 "communication_channel", None,
