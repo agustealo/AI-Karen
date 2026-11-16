@@ -22,6 +22,7 @@
 | Complete PCM16 WAV payload validation for local/plugin synthesis | [PR #922](https://github.com/agustealo/AI-Karen/pull/922) | **Merged**; transport-integrity tests, not actual model acceptance |
 | Enabled `plugin_audio` channel downloads from plugin management | [PR #925](https://github.com/agustealo/AI-Karen/pull/925) | **Merged**; frontend policy/contract wiring, not real licensed download |
 | Authenticated real Pocket server audio acceptance runner | `tests/core/voice/test_pocket_tts_live_acceptance.py` | **Operator opt-in only**; no target run or captured device artifact |
+| Pocket deactivation fences queued native calls | `test_queued_request_is_denied_after_plugin_shutdown` | **Source-only regression**; model/device evidence still open |
 | Target hardware runtime + licensed model install | No attested target artifact | **Not proven** |
 | Native Pocket audio and WAV integrity | No non-mocked target WAV | **Not proven** |
 | Browser preview/read-aloud on real target | No device/browser capture | **Not proven** |
@@ -207,7 +208,7 @@ a genuinely ready local plugin.
 | Cross-user playback and cache inspection | No private audio response shared or persisted |
 | Concurrent syntheses | Native capacity bounded; busy request rejected correctly |
 | Stop button / client disconnect | Browser playback stops; model capacity retained until worker terminates |
-| Shutdown during synthesis | In-flight work handled without capacity or state leak |
+| Shutdown during synthesis or queued admission | In-flight work is drained under the native lock; queued catalog/synthesis calls that observe shutdown fail without model lookup or capacity leak |
 | Offline inference | Successful non-mocked output without Hugging Face or cloud requests |
 | STT, cloning or streaming claims | Not advertised as enabled by this TTS-only slice |
 
