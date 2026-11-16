@@ -208,6 +208,29 @@ async def test_capability_requires_independent_review_and_confirmation() -> None
 
 
 @pytest.mark.asyncio
+async def test_skill_identity_facet_does_not_bypass_independent_evaluation() -> None:
+    skill = facet()
+    skill.domain = IdentityDomain.SKILL
+    skill.key = "codegen.python"
+    skill.value = "expert"
+    port = EvidenceReader({"config-1": receipt("config-1")})
+    result = await projector(port).project(
+        model=model(principles=[skill]), tenant_id=TENANT, at=NOW
+    )
+    assert result.health is SelfModelProjectionHealth.UNAVAILABLE
+    assert not result.model.principles
+
+    port.receipts["config-1"] = receipt(
+        "config-1",
+        authority=SelfModelEvidenceAuthority.INDEPENDENT_EVALUATION,
+    )
+    verified = await projector(port).project(
+        model=model(principles=[skill]), tenant_id=TENANT, at=NOW
+    )
+    assert verified.health is SelfModelProjectionHealth.READY
+
+
+@pytest.mark.asyncio
 async def test_capability_cannot_self_certify_from_persona_config() -> None:
     port = EvidenceReader({"review-1": receipt("review-1")})
     result = await projector(port).project(
