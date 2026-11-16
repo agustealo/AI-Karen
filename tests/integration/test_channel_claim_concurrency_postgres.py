@@ -200,6 +200,16 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         ))
         accepted = [token for token in concurrent_tokens if token is not None]
         assert len(accepted) == 1
+        # Ownership cannot evaporate through implicit tenant or connection
+        # deletion. A separate governed release must first prove unlink.
+        owner_foreign_keys = await raw.fetch("""
+            SELECT conname, confdeltype
+            FROM pg_constraint
+            WHERE conrelid = 'public.channel_telegram_bot_owners'::regclass
+              AND contype = 'f'
+        """)
+        assert len(owner_foreign_keys) == 2
+        assert all(row["confdeltype"] == "r" for row in owner_foreign_keys)
         competitor = f"telegram-competing-{uuid.uuid4().hex}"
         await raw.execute(
             """INSERT INTO public.channel_connections
