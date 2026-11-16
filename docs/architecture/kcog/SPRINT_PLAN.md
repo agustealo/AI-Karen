@@ -48,7 +48,7 @@
 - **Proof:** synthetic exact-cohort tests, no-candidate execution, wrong version, no-baseline, mixed-policy corpus, legacy completion, empty outcome, and existing adaptive learning regression. Added to Cognitive Proof CI.
 - **Limits:** descriptive logged reward thresholds do not measure causal benefit or independently judged correctness, and cannot authorize a policy change. An independently reviewed held-out prospective dataset remains necessary.
 
-## KCOG-01B4: Baseline-relative OPE promotion guard (draft, not accepted)
+## KCOG-01B4: Baseline-relative OPE promotion guard (merged #904)
 
 - **Base:** KCOG-01B3 #900 merged as `682d5a2972a16b98c03533e53cb07e5704843ed3`. Live main can advance independently; the branch must pass exact-head CI.
 - **Owners:** the canonical `core/intelligence/ml/policy_evaluation/promotion.py` for policy promotion evidence, and existing `core/adaptive/learning/offline_evaluation.py` for evaluating recorded decisions. No new estimator, routing policy, runtime path or store.
@@ -57,6 +57,16 @@
 - **Baseline evidence:** compute baseline IPS/SNIPS on a separate, copied observation list only when *every* row was logged under the exact versioned baseline behavior policy. Reuse actual recorded baseline behavior probabilities; never synthesize them. Mixed-policy or differently versioned logs cannot produce baseline OPE estimates by this method. No action-conditioned DR reward model is independently validated/registered, so baseline DR remains absent and the existing DR-required promotion gate stays closed.
 - **Proof:** direct promotion positive-negative fixtures, unpaired/missing baseline, tie, insufficient margin, nonfinite confidence bounds, different sample counts, missing baseline DR, logged baseline-only measurement, mixed/version mismatch, and no mutation of original observations. Gate alongside existing KCOG-01B2/01B3 regressions.
 - **Limits:** these are statistical eligibility checks only. Independent held-out correctness labels, verified propensity logging, appropriate reward-model provenance and RuntimePolicy authorization remain requirements before any live verification strategy can change.
+
+## KCOG-01B5: Deterministic-target OPE and full-support validation (draft)
+
+- **Baseline:** #904 merged to live `main` as `8107835e510e292a5362bcdc57c03f3f615b6b91`. This slice does not activate a learned policy.
+- **Ownership:** `core/intelligence/ml/policy_evaluation/estimators.py` for shared IPS/SNIPS/DR propensity validation and overlap; `core/intelligence/ml/policy_evaluation/promotion.py` for promotion eligibility. No duplicate estimators, controller decisions, or new persistence.
+- **Audit defect:** estimators rejected a zero **candidate** probability on an observed action. A deterministic candidate policy can validly assign zero weight to actions the baseline executed; these rows must contribute zero importance weight, rather than invalidate the evaluation. Behavior probability for the *actually chosen* action must remain strictly positive.
+- **Contract correction:** validate the entire candidate and behavior action distributions, exactly matching the eligible action set, with finite, nonnegative probabilities summing to one. Preserve the logged chosen-behavior propensity and finite 0–1 reward. A zero target probability is legitimate; missing/malformed/negative/nonfinite weights are not.
+- **Support proof:** target-demanded actions must have actual logged observations and positive behavior support in their decision-time contexts; an unseen target or all-zero effective weights fails overlap. Missing, unverified, or zero-ESS overlap diagnostics fail the existing promotion gate closed.
+- **Proof:** deterministic 0/1 target distributions across IPS/SNIPS/DR, exact ESS, negative propensity and malformed-distribution cases, missing target-action support, per-context zero behavior support, and missing/zero-overlap promotion denial. Existing KCOG-01B1/B2/B4 cases run in Cognitive Proof CI.
+- **Still out of scope:** policy authorization, live verification switch, independent real outcome labels, reward-model training and causal proof. An observed zero weight does not mean an unsafe action may be skipped.
 
 ## Scope, product acceptance and exit
 

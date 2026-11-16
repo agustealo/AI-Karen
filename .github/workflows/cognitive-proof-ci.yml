@@ -180,6 +180,16 @@ jobs:
             tests/core/intelligence/ml/test_ope_estimator_integrity.py \
             -q --timeout=300 --tb=short
 
+      - name: Prove KCOG-01B5 deterministic policy and overlap correctness
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/intelligence/ml/test_ope_zero_target_support.py \
+            tests/core/intelligence/ml/test_ope_baseline_relative_promotion.py \
+            tests/core/intelligence/ml/test_ope_estimator_integrity.py \
+            tests/core/intelligence/ml/test_verification_policy_evaluation.py \
+            -q --timeout=300 --tb=short
+
       - name: Compile KCOG cognitive-state and policy boundary
         if: ${{ always() }}
         run: |

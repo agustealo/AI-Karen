@@ -17,6 +17,7 @@ from .contracts import (
     OverlapDiagnostics,
     PolicyEstimate,
     PolicyObservation,
+    validate_probability_distribution,
 )
 
 
@@ -36,30 +37,58 @@ class OffPolicyEstimator:
 
 
 def _validate_observation(obs: PolicyObservation) -> str | None:
-    if not obs.context.eligible_actions:
-        return "empty_eligible_actions"
-    if not obs.behavior_probabilities:
-        return "missing_behavior_probabilities"
-    if not obs.candidate_probabilities:
-        return "missing_candidate_probabilities"
-    if obs.chosen_action not in obs.behavior_probabilities:
-        return "chosen_action_missing_from_behavior"
-    if obs.chosen_action not in obs.candidate_probabilities:
-        return "chosen_action_missing_from_candidate"
-    behavior_probability = obs.behavior_probabilities[obs.chosen_action]
-    candidate_probability = obs.candidate_probabilities[obs.chosen_action]
+    """Reject invalid logged distributions; allow zero *target* weights.
+
+    The chosen behavior action must have positive logged probability, but an
+    alternative candidate policy may legitimately assign it zero weight.
+    """
+    if obs.context is None:
+        return "missing_context"
+    actions = obs.context.eligible_actions
     if (
-        behavior_probability <= 0.0
-        or np.isnan(behavior_probability)
-        or np.isinf(behavior_probability)
+        not isinstance(actions, list)
+        or not actions
+        or any(not isinstance(action, str) or not action for action in actions)
+        or len(set(actions)) != len(actions)
+        or obs.eligible_actions != actions
     ):
+        return "invalid_eligible_actions"
+    if obs.chosen_action not in actions:
+        return "chosen_action_not_eligible"
+    for name, dist in (
+        ("behavior", obs.behavior_probabilities),
+        ("candidate", obs.candidate_probabilities),
+    ):
+        if not isinstance(dist, dict) or set(dist) != set(actions):
+            return f"invalid_{name}_action_distribution"
+        if any(
+            isinstance(p, (bool, np.bool_))
+            or not isinstance(p, (int, float, np.number))
+            or not np.isfinite(p)
+            for p in dist.values()
+        ):
+            return f"invalid_{name}_probability"
+        error = validate_probability_distribution(dist, actions)
+        if error is not None:
+            return f"invalid_{name}_distribution:{error}"
+
+    behavior_probability = obs.behavior_probabilities[obs.chosen_action]
+    if behavior_probability <= 0.0:
         return f"invalid_behavior_probability:{behavior_probability}"
     if (
-        candidate_probability <= 0.0
-        or np.isnan(candidate_probability)
-        or np.isinf(candidate_probability)
+        isinstance(obs.chosen_probability, (bool, np.bool_))
+        or not isinstance(obs.chosen_probability, (int, float, np.number))
+        or not np.isfinite(obs.chosen_probability)
+        or abs(float(obs.chosen_probability) - behavior_probability) > 1e-6
     ):
-        return f"invalid_candidate_probability:{candidate_probability}"
+        return "chosen_probability_mismatch"
+    if (
+        isinstance(obs.reward, (bool, np.bool_))
+        or not isinstance(obs.reward, (int, float, np.number))
+        or not np.isfinite(obs.reward)
+        or not 0.0 <= float(obs.reward) <= 1.0
+    ):
+        return "invalid_reward"
     return None
 
 
@@ -305,15 +334,17 @@ def compute_overlap_diagnostics(
     weights: list[float] = []
     propensities: list[float] = []
     action_support: dict[str, int] = {}
-    eligible_actions: set[str] = set()
     required_target_actions: set[str] = set()
     unsupported_actions: set[str] = set()
 
     for obs in observations:
-        eligible_actions.update(obs.context.eligible_actions)
         for action in obs.context.eligible_actions:
             if obs.candidate_probabilities.get(action, 0.0) > 0.0:
                 required_target_actions.add(action)
+                # The target cannot demand an action the behavior policy
+                # never could select in this decision-time context.
+                if obs.behavior_probabilities.get(action, 0.0) <= 0.0:
+                    unsupported_actions.add(action)
         action_support[obs.chosen_action] = action_support.get(obs.chosen_action, 0) + 1
         behavior_probability = obs.behavior_probabilities.get(obs.chosen_action, 0.0)
         candidate_probability = obs.candidate_probabilities.get(obs.chosen_action, 0.0)
@@ -340,6 +371,7 @@ def compute_overlap_diagnostics(
         and bool(required_target_actions)
         and not unsupported_actions
         and minimum_propensity > 0.0
+        and _effective_sample_size(weight_array) > 0.0
         and maximum_weight <= max_importance_weight
         and np.all(np.isfinite(weight_array))
     )

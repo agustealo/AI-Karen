@@ -67,7 +67,25 @@ def evaluate_promotion(
         reasons.append(PromotionBlockReason.INSUFFICIENT_SAMPLES)
         messages.append(f"sample_count={evidence.sample_count} < {config.min_samples}")
 
-    if evidence.overlap_diagnostics is not None and not evidence.overlap_diagnostics.is_supported:
+    # A missing overlap report is missing evidence, not positive support.
+    # An eligible policy must have actual target-action overlap and a
+    # nonzero effective sample, including for deterministic targets.
+    overlap = evidence.overlap_diagnostics
+    if overlap is None:
+        reasons.append(PromotionBlockReason.INSUFFICIENT_EVIDENCE)
+        messages.append("overlap diagnostics missing")
+    elif (
+        not overlap.is_supported
+        or not math.isfinite(overlap.effective_sample_size)
+        or overlap.effective_sample_size <= 0
+        or not math.isfinite(overlap.coverage)
+        or overlap.coverage < 1.0
+        or bool(overlap.unsupported_actions)
+        or not math.isfinite(overlap.minimum_propensity)
+        or overlap.minimum_propensity <= 0
+        or not math.isfinite(overlap.maximum_importance_weight)
+        or overlap.maximum_importance_weight > config.max_importance_weight
+    ):
         reasons.append(PromotionBlockReason.POOR_OVERLAP)
         messages.append("overlap diagnostics unsupported")
 
