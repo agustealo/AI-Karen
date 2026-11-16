@@ -268,3 +268,39 @@ async def test_concurrent_calls_are_serialized_through_native_worker(module, mon
     release.set()
     await asyncio.gather(first, second)
     assert peak == 1
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["catalog", "synthesize"])
+async def test_queued_request_is_denied_after_plugin_shutdown(module, monkeypatch, operation):
+    """Shutdown wins the lock: no older admission may revive inference afterward."""
+    engine = _engine(module)
+    await engine.initialize()
+
+    async def unexpected_model_lookup(_tenant):
+        pytest.fail("disabled Pocket plugin must not query or load a model")
+
+    monkeypatch.setattr(engine, "_ensure_ready", unexpected_model_lookup)
+    params = {"operation": operation}
+    if operation == "synthesize":
+        params.update({"text": "Must not synthesize", "voice_id": "alba"})
+
+    # Both requests enter while the engine is still active; shutdown is
+    # first in the lock queue. The subsequent request must recheck the active
+    # flag only once the shutdown has retired the model and released the lock.
+    async with engine._lock:
+        shutdown = asyncio.create_task(engine.shutdown())
+        await asyncio.sleep(0)
+        queued = asyncio.create_task(
+            engine.run(params, SimpleNamespace(tenant_id=TENANT))
+        )
+        await asyncio.sleep(0)
+        assert not shutdown.done()
+        assert not queued.done()
+
+    await asyncio.wait_for(shutdown, timeout=2)
+    with pytest.raises(RuntimeError, match="pocket_plugin_disabled"):
+        await asyncio.wait_for(queued, timeout=2)
+    assert engine.get_status()["status"] == "unavailable"
+    assert engine.get_status()["model_loaded"] is False

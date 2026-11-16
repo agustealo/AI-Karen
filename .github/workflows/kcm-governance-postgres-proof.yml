@@ -1,0 +1,105 @@
+name: KCM Governed PostgreSQL Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/migrations/*kcm*"
+      - "src/ai_karen_engine/learning/kcm_governance.py"
+      - "src/ai_karen_engine/echocore/postgres_training_evidence.py"
+      - "src/ai_karen_engine/core/personalization/self_model_projection.py"
+      - "src/ai_karen_engine/core/personalization/system_persona_evidence.py"
+      - "src/ai_karen_engine/core/persona/contracts.py"
+      - "src/ai_karen_engine/learning/kcm_dataset_preflight.py"
+      - "tests/core/learning/test_kcm_governance.py"
+      - "tests/core/learning/test_kcm_postgres_training_evidence.py"
+      - "tests/core/personalization/test_kcm_self_model_projection.py"
+      - "tests/core/personalization/test_kcm_system_persona_evidence.py"
+      - "tests/integration/test_kcm_governance_postgres.py"
+      - "tests/integration/test_kcm_lifecycle_revocation_postgres.py"
+      - "requirements/ci/**"
+      - "scripts/ci/start-postgres-container.sh"
+      - ".github/workflows/kcm-governance-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kcm-governance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kcm-governance-postgres:
+    name: Real KCM scope, RLS and revocation proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      PYTHONPATH: src:tests
+      KCM_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_kcm_test
+      KCM_LIFECYCLE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_kcm_lifecycle_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start canonical isolated PostgreSQL service
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install existing canonical PostgreSQL and runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/chat.txt
+
+      - name: Create dedicated disposable KCM proof database
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def main():
+              root = await asyncpg.connect(
+                  "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
+              )
+              try:
+                  assert not await root.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname='karen_kcm_test'"
+                  ), "Refuse to reuse an existing KCM-proof database"
+                  await root.execute("CREATE DATABASE karen_kcm_test")
+                  assert not await root.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname='karen_kcm_lifecycle_test'"
+                  ), "Refuse to reuse an existing KCM lifecycle-proof database"
+                  await root.execute("CREATE DATABASE karen_kcm_lifecycle_test")
+              finally:
+                  await root.close()
+
+          asyncio.run(main())
+          PY
+
+      - name: Verify live KCM SQL schema, FORCE RLS, concurrency and erasure
+        run: |
+          python -m compileall -q src/ai_karen_engine/learning/kcm_governance.py tests/core/learning/test_kcm_governance.py tests/integration/test_kcm_governance_postgres.py
+          pytest tests/core/learning/test_kcm_governance.py -q --tb=short
+          pytest tests/core/learning/test_kcm_postgres_training_evidence.py -q --tb=short
+          python -m compileall -q src/ai_karen_engine/core/personalization/self_model_projection.py tests/core/personalization/test_kcm_self_model_projection.py
+          pytest tests/core/personalization/test_kcm_self_model_projection.py -q --tb=short
+          python -m compileall -q src/ai_karen_engine/core/personalization/system_persona_evidence.py tests/core/personalization/test_kcm_system_persona_evidence.py
+          pytest tests/core/personalization/test_kcm_system_persona_evidence.py -q --tb=short
+          pytest tests/integration/test_kcm_governance_postgres.py -q --tb=short
+          python -m compileall -q tests/integration/test_kcm_lifecycle_revocation_postgres.py
+          pytest tests/integration/test_kcm_lifecycle_revocation_postgres.py -q --tb=short
+
+      - name: Record the bounded acceptance claim
+        if: always()
+        run: |
+          echo "### KCM real PostgreSQL proof" >> "$GITHUB_STEP_SUMMARY"
+          echo "Uses dedicated karen_kcm_test and karen_kcm_lifecycle_test databases, real FORCE RLS, source anti-replay, and atomic memory/consent/erasure revocations." >> "$GITHUB_STEP_SUMMARY"
+          echo "The canonical memory, consent, and privacy table hooks are covered. Rights/outcome attestation revocation, trainer leases and checkpoint promotion remain blocked." >> "$GITHUB_STEP_SUMMARY"

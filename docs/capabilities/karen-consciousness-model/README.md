@@ -1,6 +1,6 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Proposed architecture. P0 containment and a read-only admission evaluator are being implemented on a draft branch; no production feature, model training, or merge is claimed.  
+**Status:** Governed learning-admission, lifecycle fencing and evidence-gated SelfModel projection merged (PRs #915, #924, #930, #931, #938 and #940). Canonical built-in Persona evidence integration is in development. Neural training remains disabled.  
 **Research cutoff:** 2026-11-16  
 **Repository baseline audited:** `agustealo/AI-Karen` `main` at `e570d950501915a9fce9e089ac91e583a71eb80e`  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
@@ -40,7 +40,12 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [13 — Implementation phases and proof](13-delivery-plan.md) | Release slices, file touchpoints, CI and go/no-go |
 | [14 — Architecture decisions and trade-offs](14-decisions.md) | ADRs, rejected designs, outstanding choices |
 | [15 — Research and references](15-research.md) | Primary literature, standards and implementer sources |
-| [16 — Development progress and acceptance](16-development-status.md) | Initial P0/P1 code slice, verification status, remaining gates |
+| [16 — Development progress and acceptance](16-development-status.md) | Actual merged PRs, exact-head verification, outstanding gates |
+| [17 — Dataset evidence preflight](17-evidence-preflight.md) | Fresh rights/outcome/consent receipt checks and revocation constraints |
+| [18 — Durable revocation and source lineage](18-durable-revocation-lineage.md) | Owner-scoped epoch, source ancestry and incomplete integration gates |
+| [19 — Memory, consent and erasure lifecycle hooks](19-memory-consent-erasure-hooks.md) | Atomic revocation on canonical source changes; live PostgreSQL acceptance |
+| [20 — Operational self-model projection](20-operational-self-model-projection.md) | Canonical SelfModel, evidence verification, skill/identity separation and health |
+| [21 — Canonical system Persona evidence](21-canonical-persona-evidence.md) | Real built-in Persona configuration, exact claim binding, drift and limits |
 
 ### Machine-readable proposed contracts
 
@@ -65,4 +70,4 @@ Read 02 -> 03 -> 04 -> 05 -> 06 -> 10 -> 11 -> 13. Use 07/08 for training, 09 fo
 - Deleting a memory prevents future training and identifies all affected artifacts/checkpoints. Production model usage is fenced until remediation.
 - Dataset and model promotion use independent, frozen evaluation suites and explicit human/authorized policy approval.
 
-> **Non-production notice:** This wiki includes an initial development slice. Its admission evaluator is read-only; no dataset was approved for training, no model trained, and no production deployment or merge is claimed. The full CI and security gates remain mandatory.
+> **Non-production notice:** The code foundation is merged but only supplies read-only inspection and training admission gates. No model was trained or approved, and there is no deployed KCM consciousness runtime. Exact-head security and integration gates remain mandatory for each subsequent change.

@@ -260,8 +260,99 @@ class MainExtension(ExtensionBase):
         except Exception:
             raise PermissionError("Telegram registration observation unavailable") from None
 
+    async def identify_bot(
+        self, *, connection: ChannelConnection,
+    ) -> int:
+        """Resolve the numeric provider identity under the trusted host Vault.
+
+        The numeric ID is safe for database ownership; the secret token and
+        provider response must never enter a log or HTTP response.
+        """
+        self._require_active(connection)
+        _, token = await self._secrets(connection)
+        try:
+            response = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getMe"
+            )
+            if response.status_code != 200:
+                raise ValueError("Telegram bot identity unavailable")
+            body = response.json()
+            result = body.get("result") if isinstance(body, dict) else None
+            if (
+                body.get("ok") is not True
+                or not isinstance(result, dict)
+                or result.get("is_bot") is not True
+                or type(result.get("id")) is not int
+                or not 0 < result["id"] < 2**63
+            ):
+                raise ValueError("Telegram bot identity invalid")
+            return result["id"]
+        except Exception:
+            raise PermissionError("Telegram bot identity verification unavailable") from None
+
+    async def verify_registration_for_recovery(
+        self, *, connection: ChannelConnection, public_origin: str,
+    ) -> int:
+        """Read provider bot and exact webhook using one Vault-resolved token.
+
+        This is only a host-owned recovery observation. It cannot mutate the
+        provider, unlink the bot, or prove inbound ChatRuntime delivery.
+        """
+        self._require_active(connection)
+        if not isinstance(public_origin, str) or not public_origin.startswith(
+            "https://"
+        ):
+            raise PermissionError("Telegram recovery verification unavailable")
+        expected = (
+            f"{public_origin}/api/channels/webhooks/"
+            f"{connection.tenant_id}/{connection.connection_id}"
+        )
+        _, token = await self._secrets(connection)
+        try:
+            identity_response = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getMe"
+            )
+            if identity_response.status_code != 200:
+                raise ValueError("Bot identity unavailable")
+            identity_body = identity_response.json()
+            identity = (
+                identity_body.get("result")
+                if isinstance(identity_body, dict) else None
+            )
+            if (
+                not isinstance(identity_body, dict)
+                or identity_body.get("ok") is not True
+                or not isinstance(identity, dict)
+                or identity.get("is_bot") is not True
+                or type(identity.get("id")) is not int
+                or not 0 < identity["id"] < 2**63
+            ):
+                raise ValueError("Bot identity unavailable")
+            webhook_response = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getWebhookInfo"
+            )
+            if webhook_response.status_code != 200:
+                raise ValueError("Webhook status unavailable")
+            webhook_body = webhook_response.json()
+            webhook = (
+                webhook_body.get("result")
+                if isinstance(webhook_body, dict) else None
+            )
+            if (
+                not isinstance(webhook_body, dict)
+                or webhook_body.get("ok") is not True
+                or not isinstance(webhook, dict)
+                or webhook.get("url") != expected
+            ):
+                raise ValueError("Webhook registration unverified")
+            return identity["id"]
+        except Exception:
+            # Httpx errors may contain the bot token in their native URL.
+            raise PermissionError("Telegram recovery verification unavailable") from None
+
     async def register_webhook(
         self, *, connection: ChannelConnection, public_origin: str,
+        expected_bot_id: int,
     ) -> Mapping[str, bool]:
         """Explicit host-authorized setWebhook, followed by live read-back.
 
@@ -270,6 +361,8 @@ class MainExtension(ExtensionBase):
         Neither success nor an error proves inbound ChatRuntime delivery.
         """
         self._require_active(connection)
+        if type(expected_bot_id) is not int or not 0 < expected_bot_id < 2**63:
+            raise PermissionError("Telegram bot ownership verification unavailable")
         if (
             not isinstance(public_origin, str)
             or not public_origin.startswith("https://")
@@ -299,6 +392,28 @@ class MainExtension(ExtensionBase):
             f"{connection.tenant_id}/{connection.connection_id}"
         )
         try:
+            # Credential rotation between host identity reservation and this
+            # Vault resolution must not redirect a webhook to another bot.
+            # The SAME resolved token is used for the identity recheck and
+            # the mutation. No provider write occurs if IDs differ.
+            proof = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getMe"
+            )
+            if proof.status_code != 200:
+                raise ValueError("Telegram bot ownership changed")
+            identity_payload = proof.json()
+            identity = (
+                identity_payload.get("result")
+                if isinstance(identity_payload, dict) else None
+            )
+            if (
+                identity_payload.get("ok") is not True
+                or not isinstance(identity, dict)
+                or identity.get("is_bot") is not True
+                or type(identity.get("id")) is not int
+                or identity["id"] != expected_bot_id
+            ):
+                raise ValueError("Telegram bot ownership changed")
             response = await self._http_client.post(
                 f"{_TELEGRAM_API_BASE}/bot{token}/setWebhook",
                 json={

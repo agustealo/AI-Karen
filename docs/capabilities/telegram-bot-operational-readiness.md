@@ -358,3 +358,182 @@ These two read-only checks do **not** create an atomic transaction with the
 Telegram Bot API, prove unique ownership of the Telegram bot across tenants,
 or authorize recovery. Claim release remains unavailable until independently
 fenced provider ownership and durable recovery are implemented.
+
+## Provider-verified global Telegram bot ownership
+
+Telegram supports one configured webhook per bot token. A Karen connection
+label or tenant-specific uniqueness constraint cannot prevent two different
+tenants from configuring the same bot. The canonical registration workflow
+therefore now performs a fresh, read-only Telegram `getMe` probe using the
+trusted Vault credential and requires its positive numeric bot ID before
+acquiring a webhook mutation claim.
+
+A new globally unique `public.channel_telegram_bot_owners` registry stores
+that numeric provider bot ID, owning tenant, connection, and connection revision.
+No bot token, signing secret, provider URL, or user text is stored. Global
+uniqueness is enforced by PostgreSQL even across tenant-scoped RLS contexts;
+no conflicting owner's tenant identity is returned. Claim acquisition and
+bot-identity reservation occur in the same database transaction. A duplicate
+ID held by another connection aborts the transaction before `setWebhook`,
+without leaving a partially acquired webhook claim.
+
+The adapter re-resolves its Vault credential immediately before `setWebhook`
+and verifies the provider's `getMe` identity again using the **same bot
+token** it will use for the mutation. If a credential changed between the
+original ownership reservation and the actual outbound call, the provider
+mutation is refused and the durable claim remains unresolved. This rules out
+silently registering a different bot after a credential rotation.
+
+A repeat reservation for the *same* tenant, connection, revision, and numeric
+bot ID is accepted only as an idempotent ownership check, not as permission to
+reuse an existing webhook claim. Changing the credential to a different bot,
+switching tenants, or using an older revision fails closed. Owner rows are not
+automatically released when a claim expires, when a provider call is uncertain,
+or when the process restarts. Foreign keys also restrict deleting a tenant or
+connection while a bot ownership record exists, preventing implicit cascade
+release without provider unlink evidence.
+
+**Recovery is still separate:** bot ownership release or reassignment needs
+durable evidence of provider unlink, credential revocation and a separately
+authorized lifecycle transition. No admin UI action or external webhook
+inspection may silently clear these rows. The unique owner guard does not
+by itself prove a live signed inbound message or a successful AI reply.
+
+## Bot ownership preflight for read-only recovery evidence
+
+The authenticated Telegram reconciliation endpoint now requires the *current*
+Vault-resolved Telegram `getMe` numeric bot identity to match an ownership
+record in the globally unique `channel_telegram_bot_owners` ledger for the
+same tenant, connection, and enabled revision. This lookup runs within the
+canonical tenant-RLS repository. A foreign or absent owner is a denial,
+not a provider URL diagnostic.
+
+After the external `getWebhookInfo` read, the host rechecks both the
+connection/claim snapshot **and** the current provider bot identity and
+ownership. A credential rotation or owner transition during observation
+invalidates the response. Successful evidence includes
+`bot_identity_owner_verified=true`, but still always returns
+`claim_released=false`, `reconciliation_authorized=false`, and
+`live_connected=false`.
+
+This is only a prerequisite for future governed recovery. It does not grant
+a claim reset, authorization to revoke ownership, remote `deleteWebhook`,
+or a proof of signed inbound message processing.
+
+## Explicit, verified-only recovery of expired uncertain registration
+
+The canonical operator endpoint
+
+`POST /api/channels/personal/operator/telegram/connections/{connection_id}/reconciliation/verify`
+
+accepts only `{"expected_revision": 2}`. It requires an authenticated,
+active verified operator and a fresh `channel.recover` RBAC, RuntimePolicy
+and action-gate decision. The trusted host checks the enabled tenant-scoped
+Telegram connection, exact revision, and durable claim. Only an **expired
+`uncertain`** claim is eligible. A pending, unexpired, absent, or previously
+verified claim is not promoted.
+
+The canonical adapter resolves one bot token from the host-governed Vault,
+performs read-only `getMe` and `getWebhookInfo` using that **same token**,
+and requires Telegram to report the exact configured HTTPS origin,
+tenant ID and connection ID. The host verifies the connection and claim
+still match, then reads the globally unique bot-owner ledger for the
+provider-verified numeric identity. SQL independently checks the tenant,
+enabled connection and revision, bot-owner record, expired lease, and
+`uncertain` state as one conditional update to `verified`.
+
+On success, the response is strictly
+`{"claim_verified":true,"claim_released":false,"bot_ownership_released":false,"live_connected":false}`.
+This is **provider-registration reconciliation**, not proof of signed
+inbound messages, successful model execution or delivery of an outbound
+reply. It never issues `setWebhook`, `deleteWebhook`, retries an unknown
+POST, deletes a claim, changes the owner, or erases credentials.
+
+An interrupted `in_flight` claim remains blocked and requires a separate
+governed recovery design; a claim expiry alone never authorizes a retry.
+No cross-tenant bot ownership transfer is provided. An external operator
+could change Telegram's webhook after any observation, so real inbound
+and outbound acceptance remains mandatory before declaring the channel live.
+
+## Operator-recovered inbound backlog
+
+Telegram's signed native webhook ingress acknowledges a message only after
+durable admission. If the process-local worker is unavailable or at capacity,
+SQL retains the receipt; the HTTP response does **not** mean a model answer
+was executed or delivered.
+
+Karen already has a canonical tenant-RLS pending/expired inbox reader,
+atomic `claim_inbound` lease, authorized ChatRuntime execution service,
+and outbound delivery worker. Operators may now invoke this existing recovery
+path through the authenticated Channels API:
+
+`POST /api/channels/personal/operator/telegram/connections/{connection_id}/inbox/recover`
+
+The body contains only `{"expected_revision": 2, "limit": 100}`.
+`limit` must be between 1 and 100 inclusive. The endpoint derives tenant
+and operator identity from the authenticated session, verifies a currently
+enabled Telegram connection and exact revision, and obtains a fresh
+`channel.recover` RuntimePolicy authorization. ChannelHost independently
+rechecks authorization and revision before reading the SQL inbox. A second
+connection read after discovery rejects lifecycle changes before scheduling.
+
+Only the bounded, previously committed and eligible receipts enter Karen's
+existing `ChannelInboxWorker`. The worker must still acquire its own atomic
+SQL claim, revalidate linked sender/principal, invoke the canonical
+ChatRuntime, commit the delivery outbox under the active lease, obtain a fresh
+outbound authorization, and receive a provider result.
+
+The response contains `scheduled_count` plus
+`execution_verified=false`, `provider_delivery_verified=false`,
+and `live_connected=false`. Scheduling is not a model or transport success.
+No incoming body, sender, provider URL, token, alternate plugin, or model
+routing choice can be supplied to this endpoint.
+
+This is **not automatic startup replay**. It cannot rescue a disabled
+connection, revoked principal or identity binding, uncommitted message, or
+ambiguous outbound delivery. Idempotent SQL claims continue to prevent
+concurrent recovery workers from executing the same inbox receipt twice.
+An observed signed inbound-to-provider-confirmed outbound round trip remains
+a separate live acceptance gate.
+
+## Full-path acceptance evidence, not transport optimism
+
+The offline regression in
+`tests/extensions/test_telegram_channel_transport.py::test_signed_telegram_http_to_runtime_and_provider_outcome`
+bridges the real installed Telegram adapter, public FastAPI webhook,
+canonical ingress, supervised inbox worker, ChatRuntime execution service,
+delivery authorization, and adapter provider-response interpretation.
+Its SQL and HTTP provider boundaries are controlled test doubles. It proves
+application wiring and rejection semantics, **not** PostgreSQL durability,
+a reachable deployed webhook, or observed delivery to a real Telegram account.
+
+Live channel acceptance is a separately operated, consented round-trip on
+one enabled tenant-owned connection and one verified, linked private chat:
+
+1. Record the exact deployment revision, tenant and connection identifiers,
+   current connection revision, bot-owner verification and reconciled webhook
+   URL. Redact credentials, chat IDs, message text and webhook secrets.
+2. Submit a single unique test nonce from the linked Telegram account.
+   Observe a provider-authenticated webhook, durable inbox admission, one
+   atomic inbox claim, active principal/binding check, and ChatRuntime
+   execution with the same correlation and inbox identifiers.
+3. Observe a model/tool/plugin/agent/workflow response from the canonical
+   ChatRuntime, with no degraded or emergency response misrepresented as AI.
+   Verify its lease-fenced SQL outbox commit and fresh outbound authorization.
+4. Observe Telegram's HTTP success with an actual message ID and exact
+   destination chat from the host-bound adapter. Verify the finalized SQL
+   outbox state is `sent`, not merely `accepted` or `scheduled`.
+   A provider send acknowledgement is **not** a Telegram read receipt.
+5. Re-deliver the same webhook update and verify exactly one ChatRuntime
+   execution and no duplicate Telegram send. Separately submit an invalid
+   secret and verify HTTP denial with no DB admission or execution.
+6. Record outcome, timestamp, deployment SHA, redacted correlation/inbox/
+   delivery references, and precise observed provider message ID through
+   access-controlled evidence storage. A timeout, HTTP 429, missing message
+   ID, revision change, or revoked binding fails the acceptance gate and
+   must never trigger a blind retry of an ambiguous outbound send.
+
+No fixture, offline test or operator scheduling response may set
+`live_connected=true`. Keep the live-readiness claim
+unverified until the deployed provider round trip and durable SQL evidence
+are both independently observed.

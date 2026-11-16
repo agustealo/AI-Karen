@@ -271,16 +271,25 @@ class ChannelHostServices:
         )
         if current != connection:
             raise PermissionError("Telegram webhook connection changed")
+        identify_bot = getattr(adapter, "identify_bot", None)
+        if not callable(identify_bot):
+            raise PermissionError("Telegram bot identity verification unavailable")
+        provider_bot_id = await identify_bot(connection=connection)
+        if type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63:
+            raise PermissionError("Telegram bot identity verification unavailable")
         claim_token = await self.repository.claim_telegram_webhook_registration(
             tenant_id=tenant_id, connection_id=connection_id,
-            expected_revision=connection.revision,
+            expected_revision=connection.revision, provider_bot_id=provider_bot_id,
         )
         if claim_token is None:
             raise PermissionError(
                 "Telegram webhook registration pending reconciliation"
             )
         try:
-            result = await register(connection=connection, public_origin=origin)
+            result = await register(
+                connection=connection, public_origin=origin,
+                expected_bot_id=provider_bot_id,
+            )
             fresh = await self.repository.get_enabled_connection(
                 tenant_id=tenant_id, connection_id=connection_id,
             )
@@ -324,6 +333,100 @@ class ChannelHostServices:
         )
         return dict(result)
 
+    async def reconcile_uncertain_telegram_webhook(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ) -> dict[str, bool]:
+        """Verify an expired uncertain provider registration without retry.
+
+        This cannot delete a claim or ownership row, issue setWebhook, or
+        claim live inbound/outbound delivery. A verified SQL state permits
+        later separately authorized lifecycle actions.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Telegram recovery host unavailable")
+        origin = self.settings.telegram_webhook_public_origin
+        if not origin or type(expected_revision) is not int or expected_revision < 1:
+            raise PermissionError("Telegram recovery configuration unavailable")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "telegram-bot"
+            or connection.revision != expected_revision
+        ):
+            raise PermissionError("Telegram recovery connection unavailable")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="telegram-bot",
+            action="channel.recover", plan=authorized_plan,
+        )
+        claim = await self.repository.inspect_telegram_webhook_claim(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision,
+        )
+        if (
+            not isinstance(claim, dict)
+            or claim != {
+                "claim_state": "uncertain",
+                "claim_revision_matches": True,
+                "claim_expired": True,
+            }
+        ):
+            raise PermissionError("Telegram registration not eligible for recovery")
+        adapter = self._installed.get("telegram-bot")
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest("telegram-bot") is None
+            or not self.kernel.is_canonical_channel_adapter("telegram-bot", adapter)
+        ):
+            raise PermissionError("Canonical Telegram transport unavailable")
+        verify = getattr(adapter, "verify_registration_for_recovery", None)
+        if not callable(verify):
+            raise PermissionError("Telegram recovery proof unavailable")
+        provider_bot_id = await verify(
+            connection=connection, public_origin=origin,
+        )
+        if type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63:
+            raise PermissionError("Telegram recovery identity invalid")
+        fresh = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        current_claim = await self.repository.inspect_telegram_webhook_claim(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision,
+        )
+        if fresh != connection or current_claim != claim:
+            raise RuntimeError("Telegram recovery evidence changed")
+        if await self.repository.inspect_telegram_bot_ownership(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision, provider_bot_id=provider_bot_id,
+        ) is not True:
+            raise PermissionError("Telegram recovery bot ownership unverified")
+        committed = await self.repository.verify_uncertain_telegram_webhook_claim(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision, provider_bot_id=provider_bot_id,
+        )
+        if committed is not True:
+            raise RuntimeError("Telegram recovery claim transition unverified")
+        logger.info(
+            "channel.telegram.webhook.uncertain_verified",
+            extra={
+                "tenant_id": tenant_id,
+                "connection_id": connection_id,
+                "revision": expected_revision,
+                "user_id": user_id,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            },
+        )
+        return {
+            "claim_verified": True, "claim_released": False,
+            "bot_ownership_released": False, "live_connected": False,
+        }
+
     async def inspect_telegram_registration_evidence(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,
@@ -358,8 +461,18 @@ class ChannelHostServices:
         ):
             raise PermissionError("Telegram reconciliation adapter unavailable")
         observe = getattr(adapter, "observe_registration", None)
-        if not callable(observe):
+        identify_bot = getattr(adapter, "identify_bot", None)
+        if not callable(observe) or not callable(identify_bot):
             raise PermissionError("Telegram reconciliation observation unavailable")
+        provider_bot_id = await identify_bot(connection=connection)
+        if type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63:
+            raise PermissionError("Telegram bot ownership verification unavailable")
+        owned = await self.repository.inspect_telegram_bot_ownership(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision, provider_bot_id=provider_bot_id,
+        )
+        if owned is not True:
+            raise PermissionError("Telegram bot ownership unverified")
         claim = await self.repository.inspect_telegram_webhook_claim(
             tenant_id=tenant_id, connection_id=connection_id,
             expected_revision=expected_revision,
@@ -372,10 +485,19 @@ class ChannelHostServices:
             tenant_id=tenant_id, connection_id=connection_id,
             expected_revision=expected_revision,
         )
+        current_bot_id = await identify_bot(connection=connection)
+        current_owner = (
+            type(current_bot_id) is int
+            and current_bot_id == provider_bot_id
+            and await self.repository.inspect_telegram_bot_ownership(
+                tenant_id=tenant_id, connection_id=connection_id,
+                expected_revision=expected_revision, provider_bot_id=current_bot_id,
+            ) is True
+        )
         # The provider call is outside the SQL snapshot. Refuse to combine
         # evidence from different claim generations or lifecycle revisions.
         # A changed expiry is a real state transition, not a retry signal.
-        if fresh != connection or current_claim != claim:
+        if fresh != connection or current_claim != claim or not current_owner:
             raise RuntimeError("Telegram reconciliation evidence changed")
         if (
             not isinstance(claim, dict)
@@ -400,6 +522,7 @@ class ChannelHostServices:
             raise RuntimeError("Telegram reconciliation evidence invalid")
         return {
             **claim, **observation,
+            "bot_identity_owner_verified": True,
             "claim_released": False,
             "reconciliation_authorized": False,
         }
@@ -953,7 +1076,7 @@ class ChannelHostServices:
     async def recover_inbox(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,
-        limit: int = 100,
+        expected_revision: int, limit: int = 100,
     ) -> int:
         """Requeue durably admitted work after explicit current policy admission.
 
@@ -967,7 +1090,9 @@ class ChannelHostServices:
             or self.activation is None
         ):
             raise PermissionError("Channel recovery host is unavailable")
-        if not 1 <= limit <= 1000:
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Positive expected connection revision required")
+        if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("Channel recovery limit must be 1..1000")
         connection = await self.repository.get_enabled_connection(
             tenant_id=tenant_id, connection_id=connection_id,
@@ -976,6 +1101,7 @@ class ChannelHostServices:
             connection is None or connection.tenant_id != tenant_id
             or connection.connection_id != connection_id
             or connection.installation_id not in self._installed
+            or connection.revision != expected_revision
         ):
             raise PermissionError("Channel recovery connection is unavailable")
         await self.activation._authorize(
@@ -990,6 +1116,13 @@ class ChannelHostServices:
         receipts = await self.repository.list_recoverable_inbound(
             tenant_id=tenant_id, connection_id=connection_id, limit=limit,
         )
+        # A lifecycle revision may have changed while the SQL backlog was
+        # being enumerated. Reject stale scheduling, leaving SQL claims intact.
+        fresh = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if fresh != connection:
+            raise PermissionError("Channel recovery connection changed")
         scheduled = 0
         for receipt in receipts:
             if self._closed:

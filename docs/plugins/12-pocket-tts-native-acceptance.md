@@ -19,7 +19,13 @@
 | First-class Copilot voice dock and global Stop audio | [PR #872](https://github.com/agustealo/AI-Karen/pull/872) · [PR #880](https://github.com/agustealo/AI-Karen/pull/880) | **Merged**; browser UI source contracts, not real device acceptance |
 | Preview isolation, voice-settings readback, long speech and browser-dictation draft safety | [PR #888](https://github.com/agustealo/AI-Karen/pull/888) | **Merged**; 7/7 exact-head checks including frontend production build |
 | Governed built-in model download in Pocket plugin UX | [PR #911](https://github.com/agustealo/AI-Karen/pull/911) | **Merged**; licensed native load and audio still unverified |
+| Complete PCM16 WAV payload validation for local/plugin synthesis | [PR #922](https://github.com/agustealo/AI-Karen/pull/922) | **Merged**; transport-integrity tests, not actual model acceptance |
+| Enabled `plugin_audio` channel downloads from plugin management | [PR #925](https://github.com/agustealo/AI-Karen/pull/925) | **Merged**; frontend policy/contract wiring, not real licensed download |
+| Authenticated real Pocket server audio acceptance runner | `tests/core/voice/test_pocket_tts_live_acceptance.py` | **Operator opt-in only**; no target run or captured device artifact |
+| Pocket deactivation fences queued native calls | `test_queued_request_is_denied_after_plugin_shutdown` | **Source-only regression**; model/device evidence still open |
+| Curated Pocket download patterns and native loader parity | `tests/extensions/test_pocket_tts_recommendation_contract.py::test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec` | **Source-only contract**; licensed device download still unverified |
 | Target hardware runtime + licensed model install | No attested target artifact | **Not proven** |
+| Opt-in repeated native performance and local server-process sampling | `test_live_pocket_native_benchmark_with_real_cpu_and_memory` | **Operator-only harness**; no target samples recorded |
 | Native Pocket audio and WAV integrity | No non-mocked target WAV | **Not proven** |
 | Browser preview/read-aloud on real target | No device/browser capture | **Not proven** |
 | CPU/RAM/latency/cancellation measurements | No machine observations | **Not proven** |
@@ -30,6 +36,16 @@ CI is green. Streaming, cloning, uploaded engines and cloud fallback remain
 out of scope.
 
 ## Exact implementation and authority
+
+The curated `plugin_audio` download is deliberately restricted to the pinned
+English 18M REFL model weights, SentencePiece `tokenizer.model`, and
+`embeddings/*.safetensors` for that same language revision. Unrelated models,
+non-state embedding files and repository extras are not required for first-party
+Pocket inference. The native model specification remains the loader authority;
+`tests/extensions/test_pocket_tts_recommendation_contract.py::test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec` checks the
+separate curated download catalog against it. A matching source contract is
+not evidence that a gated download or native inference succeeded on a device.
+
 
 - Runtime/model version: `pocket-tts==4.0.1`, `kyutai/pocket-tts` at
   `db04f0e653473e5c7333c69686ac92b7460b0c1d`.
@@ -127,6 +143,102 @@ exact repository commit in the evidence report.
 
 ## Real API and UI acceptance
 
+### Operator-only authenticated server smoke test
+
+Karen now includes an opt-in **non-mocked** HTTP smoke test at
+`tests/core/voice/test_pocket_tts_live_acceptance.py`. It uses the running
+Karen server's real authentication, PluginService, VoiceRuntime and native
+Pocket engine. It does **not** inject a fake user principal, bypass admission,
+download a model, install dependencies, or infer readiness from job completion.
+
+The operator must provide both environment variables via a private, secured
+terminal or secret mechanism:
+
+- `KAREN_POCKET_ACCEPTANCE_URL`: the existing *loopback-only* Karen API origin,
+  such as `http://127.0.0.1:8000`. No remote hosts, URL userinfo, query,
+  redirects or proxy environment are permitted by the test.
+- `KAREN_POCKET_ACCEPTANCE_TOKEN`: an actual bearer access token issued by
+  the running, authorized Karen server for the intended tenant. Never commit,
+  paste into issues, or include in logs or CI artifacts.
+
+Once the operator has licensed, downloaded and enabled the model through the
+existing governed host UI, run from the repo root:
+
+```bash
+PYTHONPATH=src pytest -q -ra \
+  tests/core/voice/test_pocket_tts_live_acceptance.py
+```
+
+Normal source CI runs the loopback-origin safety tests and skips the two
+network-dependent tests if **both** opt-in variables are unset. A skip is
+**not** successful native acceptance. Providing only one variable is an
+error, never an invitation to fall back to mock speech.
+
+The live tests require both anonymous catalog and anonymous synthesis to
+be denied, an authenticated catalog to report Pocket ready at the exact
+reviewed model revision, an invented voice to be rejected without substitute,
+an approved real voice, a real
+`POST /api/voice/engines/pocket-tts/synthesis` with the selected voice and
+fixed harmless phrase, real non-silent PCM frames,
+correct mono PCM16 WAV properties, and a private no-store transport response.
+They report only model/voice IDs and duration/latency/real-time factor metadata;
+they do not save audio, text, paths or the bearer token. Human listening,
+browser playback, actual model/voice licensing and cold-start evidence still
+require independent evidence and sign-off.
+
+### Operator-only CPU/RAM and repeated synthesis benchmark
+
+The same `test_pocket_tts_live_acceptance.py` now includes a separately
+opt-in **real target-process benchmark**. It is not run by normal CI. Set the
+following variables in the operator's private, secured environment:
+
+- `KAREN_POCKET_ACCEPTANCE_URL` and `KAREN_POCKET_ACCEPTANCE_TOKEN` as
+  specified above, for the same authenticated local Karen host and tenant.
+- `KAREN_POCKET_ACCEPTANCE_BENCHMARK=1` to explicitly request measurement.
+- `KAREN_POCKET_ACCEPTANCE_SERVER_PID` to the **actual local Karen API/server
+  process ID**. Do not supply a browser, model-download worker, unrelated
+  process or container-host proxy PID. If Karen is containerized, run the
+  benchmark within the target process's PID namespace with access to its
+  actual runtime process (including PID 1 for an exec-launched server), or
+  record hardware measurements separately.
+
+Use the **existing** operator-licensed, enabled Pocket runtime. The benchmark
+does not download assets, change permissions, start the server or persist raw
+audio. From the repo root, with the environment already configured:
+
+```bash
+PYTHONPATH=src pytest -q -ra \
+  -k test_live_pocket_native_benchmark_with_real_cpu_and_memory \
+  --junitxml=pocket-native-device-acceptance.xml \
+  tests/core/voice/test_pocket_tts_live_acceptance.py
+```
+
+The operator owns and must secure the local JUnit XML artifact. It contains
+only model revision and numeric aggregates; do not upload it publicly without
+reviewing its contents and the target environment. The benchmark probes the
+authorized catalog, then makes **five real synthesis requests per fixed input
+length**: short greeting, paragraph and the 2,000-character synthesis limit.
+Each response is independently checked for a complete, non-silent mono PCM16
+WAV and a no-store, engine-identified HTTP result. JUnit properties include
+observed latency p50/p95, real-time-factor p50/p95, catalog probe duration,
+process-tree peak RSS, approximate CPU percent and sampler count.
+
+CPU and RSS come from `psutil` readings of the operator-designated process
+and its children at 100 ms intervals. RSS sums may count shared pages more
+than once, very short peaks may be missed, and short-lived child CPU time
+may be undercounted. The benchmark must therefore be paired with host-level
+telemetry when setting release budgets. It does not prove cold startup unless
+a separately attested fresh process is used; it cannot observe first audible
+browser sound or subjective speech quality.
+
+An unset benchmark flag produces a skip, not a pass. A set flag without a
+valid live server PID or required local credentials fails closed. No automatic
+release-ready state is granted by running this test. The operator must
+record exact commit, approved licenses, process identity, target OS and CPU,
+resource observations, and audible browser acceptance in this ledger.
+
+
+
 Use an authenticated test identity with explicit tenant membership. Retrieve
 `GET /api/voice/engines` and record the real returned `engine_id`,
 `model_revision`, voice IDs and capabilities. If Pocket is not reported ready,
@@ -161,7 +273,7 @@ a genuinely ready local plugin.
 | Cross-user playback and cache inspection | No private audio response shared or persisted |
 | Concurrent syntheses | Native capacity bounded; busy request rejected correctly |
 | Stop button / client disconnect | Browser playback stops; model capacity retained until worker terminates |
-| Shutdown during synthesis | In-flight work handled without capacity or state leak |
+| Shutdown during synthesis or queued admission | In-flight work is drained under the native lock; queued catalog/synthesis calls that observe shutdown fail without model lookup or capacity leak |
 | Offline inference | Successful non-mocked output without Hugging Face or cloud requests |
 | STT, cloning or streaming claims | Not advertised as enabled by this TTS-only slice |
 

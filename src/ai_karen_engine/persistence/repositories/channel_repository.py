@@ -1220,17 +1220,19 @@ class SqlChannelRepository:
 
     async def claim_telegram_webhook_registration(
         self, *, tenant_id: str, connection_id: str,
-        expected_revision: int, lease_seconds: int = 120,
+        expected_revision: int, provider_bot_id: int, lease_seconds: int = 120,
     ) -> str | None:
         """Claim once under the connection row lock, across all API replicas.
 
-        A stale, expired, verified, or uncertain prior claim is never implicitly
-        reclaimed. Future reconciliation must explicitly settle its evidence.
+        Provider-verified numeric bot identity is reserved globally within the
+        same SQL transaction as this claim. Cross-tenant duplicate ownership
+        rolls back the claim, before any remote provider mutation.
         """
         tenant_id = _tenant_uuid(tenant_id)
         if (
             not isinstance(connection_id, str) or not connection_id
             or type(expected_revision) is not int or expected_revision < 1
+            or type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63
             or type(lease_seconds) is not int or not 30 <= lease_seconds <= 300
         ):
             raise ValueError("Invalid Telegram webhook registration claim")
@@ -1259,7 +1261,77 @@ class SqlChannelRepository:
                 "revision": expected_revision, "seconds": lease_seconds,
                 "token": token,
             })).scalar_one_or_none()
-        return token if created is not None else None
+            if created is None:
+                return None
+            owner = (await session.execute(text("""
+                INSERT INTO public.channel_telegram_bot_owners (
+                    provider_bot_id, tenant_id, connection_id, connection_revision
+                ) VALUES (
+                    :bot_id, CAST(:tenant AS uuid), :connection, :revision
+                )
+                ON CONFLICT DO NOTHING
+                RETURNING provider_bot_id
+            """), {
+                "bot_id": provider_bot_id, "tenant": tenant_id,
+                "connection": connection_id, "revision": expected_revision,
+            })).scalar_one_or_none()
+            if owner is None:
+                # An existing matching reservation is safe, but an ownership
+                # conflict must abort the surrounding transaction. Never
+                # disclose which other tenant holds the numeric provider ID.
+                same_owner = (await session.execute(text("""
+                    SELECT provider_bot_id
+                    FROM public.channel_telegram_bot_owners
+                    WHERE provider_bot_id = :bot_id
+                      AND tenant_id = CAST(:tenant AS uuid)
+                      AND connection_id = :connection
+                      AND connection_revision = :revision
+                """), {
+                    "bot_id": provider_bot_id, "tenant": tenant_id,
+                    "connection": connection_id, "revision": expected_revision,
+                })).scalar_one_or_none()
+                if same_owner is None:
+                    raise PermissionError(
+                        "Telegram bot ownership verification denied"
+                    )
+        return token
+
+    async def inspect_telegram_bot_ownership(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int, provider_bot_id: int,
+    ) -> bool:
+        """Verify one provider bot belongs to this tenant and exact revision.
+
+        A global owner held by another tenant is deliberately indistinguishable
+        from missing ownership under RLS. No token, owner ID, or provider URL
+        enters the result. This is a SELECT, never release authority.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if (
+            not isinstance(connection_id, str) or not connection_id
+            or type(expected_revision) is not int or expected_revision < 1
+            or type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63
+        ):
+            raise ValueError("Invalid Telegram bot ownership inspection scope")
+        async with async_transaction_scope(tenant_id) as session:
+            owned = (await session.execute(text("""
+                SELECT true
+                FROM public.channel_telegram_bot_owners o
+                JOIN public.channel_connections c
+                  ON c.tenant_id = o.tenant_id
+                 AND c.connection_id = o.connection_id
+                WHERE o.provider_bot_id = :bot_id
+                  AND o.tenant_id = CAST(:tenant AS uuid)
+                  AND o.connection_id = :connection
+                  AND o.connection_revision = :revision
+                  AND c.revision = o.connection_revision
+                  AND c.enabled = true
+                  AND c.installation_id = 'telegram-bot'
+            """), {
+                "tenant": tenant_id, "connection": connection_id,
+                "revision": expected_revision, "bot_id": provider_bot_id,
+            })).scalar_one_or_none()
+        return owned is True
 
     async def inspect_telegram_webhook_claim(
         self, *, tenant_id: str, connection_id: str,
@@ -1347,6 +1419,52 @@ class SqlChannelRepository:
                 "verified": verified,
             })).scalar_one_or_none()
         return state == "verified"
+
+    async def verify_uncertain_telegram_webhook_claim(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int, provider_bot_id: int,
+    ) -> bool:
+        """Recover only expired uncertain evidence into verified SQL state.
+
+        Requires a host-authorized, same-token provider read-back. The SQL
+        transaction independently fences the exact claim, enabled revision,
+        and globally owned provider bot. Neither claim nor owner is deleted.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if (
+            not isinstance(connection_id, str) or not connection_id
+            or type(expected_revision) is not int or expected_revision < 1
+            or type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63
+        ):
+            raise ValueError("Invalid Telegram webhook recovery scope")
+        async with async_transaction_scope(tenant_id) as session:
+            recovered = (await session.execute(text("""
+                UPDATE public.channel_telegram_webhook_claims w
+                SET state = 'verified', updated_at = clock_timestamp()
+                WHERE w.tenant_id = CAST(:tenant AS uuid)
+                  AND w.connection_id = :connection
+                  AND w.connection_revision = :revision
+                  AND w.state = 'uncertain'
+                  AND w.claim_expires_at <= clock_timestamp()
+                  AND EXISTS (
+                    SELECT 1 FROM public.channel_telegram_bot_owners o
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = o.tenant_id
+                     AND c.connection_id = o.connection_id
+                    WHERE o.provider_bot_id = :bot_id
+                      AND o.tenant_id = w.tenant_id
+                      AND o.connection_id = w.connection_id
+                      AND o.connection_revision = w.connection_revision
+                      AND c.revision = o.connection_revision
+                      AND c.enabled = true
+                      AND c.installation_id = 'telegram-bot'
+                  )
+                RETURNING w.connection_id
+            """), {
+                "tenant": tenant_id, "connection": connection_id,
+                "revision": expected_revision, "bot_id": provider_bot_id,
+            })).scalar_one_or_none()
+        return recovered is not None
 
     async def set_connection_enabled(
         self, *, tenant_id: str, connection_id: str,

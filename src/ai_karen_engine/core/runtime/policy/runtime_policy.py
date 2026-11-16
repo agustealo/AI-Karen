@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -223,6 +223,38 @@ class PolicyDecision:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ResponseStrategyPolicyProbe:
+    """Read-only policy permission; never action eligibility or OPE evidence.
+
+    This does not authorize any change to the CORTEX-selected execution plan.
+    Provider availability, actual execution and reward remain unverified.
+    """
+
+    source_decision_id: str
+    source_policy_version: str
+    selected_action: str
+    policy_permitted_actions: tuple[str, ...]
+    status: str
+    alternative_policy_decision_id: Optional[str] = None
+    alternative_policy_version: Optional[str] = None
+
+    def to_metadata(self) -> Dict[str, Any]:
+        return {
+            "schema_version": "response_strategy_policy_probe_v1",
+            "source_decision_id": self.source_decision_id,
+            "source_policy_version": self.source_policy_version,
+            "selected_action": self.selected_action,
+            "policy_permitted_actions": list(self.policy_permitted_actions),
+            "status": self.status,
+            "alternative_policy_decision_id": self.alternative_policy_decision_id,
+            "alternative_policy_version": self.alternative_policy_version,
+            "execution_eligibility_established": False,
+            "randomized_selection": False,
+            "ope_eligible": False,
+        }
+
+
 class PolicyCheckResult:
     def __init__(self, allowed: bool, reason: str, severity: str = "info"):
         self.allowed = allowed
@@ -251,9 +283,114 @@ class RuntimePolicyEnforcer:
             RuntimeLevel.EMERGENCY: [RuntimeLevel.SAFE],
         }
 
+    async def probe_optional_verification(
+        self,
+        request: PolicyEvaluationRequest,
+        selected_policy: PolicyDecision,
+        *,
+        direct_plan_authorized: bool,
+    ) -> ResponseStrategyPolicyProbe:
+        """Independently check *policy permission* for optional verification.
+
+        Only the already authorized direct reply can be considered a chosen
+        strategy. A second, isolated RuntimePolicy evaluation checks whether a
+        verification reasoning mode would be permitted with the same trusted
+        principal, capability restrictions, risk signals and model budget.
+        Neither result proves that the alternative is executable; callers must
+        not use this probe for sampling, eligibility, or an OPE receipt.
+        """
+        # The selected policy must belong to the exact authenticated context.
+        # Matching only the shadow decision would allow cross-principal source
+        # lineage to be relabelled as a valid optional-verification probe.
+        selected_scope = selected_policy.runtime_constraints
+        if (
+            not direct_plan_authorized
+            or not selected_policy.allowed
+            or selected_scope.get("authorized_user_id") != request.user_id
+            or selected_scope.get("authorized_tenant_id") != request.tenant_id
+            or selected_scope.get("authorized_session_id") != request.session_id
+            or selected_scope.get("correlation_id") != request.correlation_id
+        ):
+            return ResponseStrategyPolicyProbe(
+                source_decision_id=selected_policy.decision_id,
+                source_policy_version=selected_policy.policy_version,
+                selected_action="",
+                policy_permitted_actions=(),
+                status="not_authorized",
+            )
+        selected_only = ResponseStrategyPolicyProbe(
+            source_decision_id=selected_policy.decision_id,
+            source_policy_version=selected_policy.policy_version,
+            selected_action="respond_direct",
+            policy_permitted_actions=("respond_direct",),
+            status="selected_only",
+        )
+        topology = request.execution_topology
+        if (
+            selected_policy.requires_human_gate
+            or selected_policy.risk_level not in {"low", "medium"}
+            or not selected_policy.decision_id
+            or not selected_policy.policy_version
+            or request.runtime_level not in {RuntimeLevel.FULL, RuntimeLevel.REDUCED}
+            or request.max_model_calls < 2
+            or request.requested_reasoning_modes
+            or selected_policy.allowed_reasoning_modes
+            or selected_policy.denied_reasoning_modes
+            or request.tool_id
+            or request.plugin_id
+            or request.extension_id
+            or request.resource
+            or topology.get("tool_requirements")
+            or topology.get("plugin_candidates")
+            or topology.get("requested_agents")
+            or topology.get("requires_human_gate")
+            or topology.get("agent_delegation")
+            or topology.get("workflow_id")
+            or any(
+                capability.startswith(
+                    ("channel.", "automation.", "model.personal_key.")
+                )
+                for capability in request.requested_capabilities
+            )
+        ):
+            return selected_only
+
+        # A separate permission evaluation does not touch the selected plan.
+        alt_request = replace(
+            request,
+            requested_reasoning_modes=["verification"],
+            execution_topology={
+                **topology,
+                "reasoning_modes": ["verification"],
+            },
+        )
+        alternative = await self.evaluate(alt_request)
+        if (
+            not alternative.allowed
+            or alternative.requires_human_gate
+            or alternative.risk_level != selected_policy.risk_level
+            or alternative.policy_version != selected_policy.policy_version
+            or alternative.allowed_reasoning_modes != ["verification"]
+            or alternative.denied_reasoning_modes
+            or alternative.runtime_constraints.get("authorized_user_id") != request.user_id
+            or alternative.runtime_constraints.get("authorized_tenant_id") != request.tenant_id
+            or alternative.runtime_constraints.get("authorized_session_id") != request.session_id
+        ):
+            return selected_only
+
+        return ResponseStrategyPolicyProbe(
+            source_decision_id=selected_policy.decision_id,
+            source_policy_version=selected_policy.policy_version,
+            selected_action="respond_direct",
+            policy_permitted_actions=("respond_direct", "verify_then_respond"),
+            status="alternative_reasoning_mode_policy_permitted",
+            alternative_policy_decision_id=alternative.decision_id,
+            alternative_policy_version=alternative.policy_version,
+        )
+
     async def evaluate(self, request: PolicyEvaluationRequest) -> PolicyDecision:
         """Evaluate capabilities and reasoning modes as distinct policy domains."""
-        decision_id = f"policy-{request.tenant_id}-{request.user_id}-{int(time.time() * 1000)}"
+        decision_id = f"policy-{request.tenant_id}-{request.user_id}-{time.time_ns()}"
         policy_version = "v2"
         evaluated_at = time.time()
 

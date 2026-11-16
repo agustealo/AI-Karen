@@ -9,6 +9,7 @@
     "dataset_id",
     "dataset_version",
     "tenant_id",
+    "owner_user_id",
     "objective_id",
     "objective_version",
     "status",
@@ -94,7 +95,10 @@
           "source_revision",
           "content_sha256",
           "leakage_group_id",
-          "split"
+          "split",
+          "consent_receipt_id",
+          "rights_receipt_id",
+          "verification_receipt_id"
         ],
         "properties": {
           "assessment_id": {
@@ -106,8 +110,8 @@
             "minLength": 1
           },
           "source_revision": {
-            "type": "integer",
-            "minimum": 1
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
           },
           "content_sha256": {
             "type": "string",
@@ -123,6 +127,18 @@
               "dev",
               "test"
             ]
+          },
+          "consent_receipt_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rights_receipt_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "verification_receipt_id": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
@@ -205,6 +221,10 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "owner_user_id": {
+      "type": "string",
+      "format": "uuid"
     }
   }
 }

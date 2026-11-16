@@ -130,3 +130,223 @@ def test_policy_never_invents_reasoning_mode() -> None:
         assert result.to_authorized_plan().reasoning_modes == []
 
     asyncio.run(run())
+
+
+def test_optional_verification_probe_is_policy_permission_not_execution() -> None:
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        request = PolicyEvaluationRequest(
+            user_id="subject",
+            tenant_id="tenant-a",
+            session_id="session-a",
+            requested_reasoning_modes=[],
+            max_model_calls=10,
+            runtime_level=RuntimeLevel.FULL,
+        )
+        selected = await policy.evaluate(request)
+        original_modes = list(request.requested_reasoning_modes)
+        probe = await policy.probe_optional_verification(
+            request, selected, direct_plan_authorized=True,
+        )
+
+        assert selected.allowed is True
+        assert selected.allowed_reasoning_modes == []
+        assert request.requested_reasoning_modes == original_modes
+        assert probe.policy_permitted_actions == (
+            "respond_direct", "verify_then_respond",
+        )
+        assert probe.source_decision_id == selected.decision_id
+        assert probe.source_policy_version == selected.policy_version
+        assert probe.alternative_policy_decision_id != selected.decision_id
+        assert probe.status == "alternative_reasoning_mode_policy_permitted"
+        assert probe.to_metadata()["execution_eligibility_established"] is False
+        assert probe.to_metadata()["randomized_selection"] is False
+        assert probe.to_metadata()["ope_eligible"] is False
+
+    asyncio.run(run())
+
+
+def test_optional_verification_probe_rejects_unsafe_alternatives() -> None:
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        requests = [
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=1,
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10, runtime_level=RuntimeLevel.SAFE,
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10, risk_signals={"score": 0.7},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10, tool_id="web",
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                execution_topology={"plugin_candidates": ["private-tool"]},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                execution_topology={"agent_delegation": True},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                execution_topology={"requires_human_gate": True},
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                requested_reasoning_modes=["verification"],
+            ),
+            PolicyEvaluationRequest(
+                user_id="subject", tenant_id="tenant-a",
+                max_model_calls=10,
+                requested_capabilities=["model.personal_key.execute"],
+            ),
+        ]
+        for request in requests:
+            selected = await policy.evaluate(request)
+            result = await policy.probe_optional_verification(
+                request, selected, direct_plan_authorized=True,
+            )
+            assert result.policy_permitted_actions == (
+                ("respond_direct",) if selected.allowed else ()
+            )
+            assert result.alternative_policy_decision_id is None
+            assert result.to_metadata()["ope_eligible"] is False
+
+        # The caller may never turn a denied CORTEX plan into proof.
+        direct = requests[0]
+        selected = await policy.evaluate(direct)
+        rejected = await policy.probe_optional_verification(
+            direct, selected, direct_plan_authorized=False,
+        )
+        assert rejected.status == "not_authorized"
+        assert rejected.policy_permitted_actions == ()
+
+    asyncio.run(run())
+
+
+def test_optional_verification_probe_requires_independent_policy_grant() -> None:
+    from dataclasses import replace
+
+    class DenyAlternativePolicy(RuntimePolicyEnforcer):
+        async def evaluate(self, request: PolicyEvaluationRequest):
+            decision = await super().evaluate(request)
+            if request.requested_reasoning_modes == ["verification"]:
+                return replace(decision, allowed=False)
+            return decision
+
+    async def run() -> None:
+        policy = DenyAlternativePolicy()
+        request = PolicyEvaluationRequest(
+            user_id="subject", tenant_id="tenant-a",
+            session_id="session-a", max_model_calls=10,
+        )
+        selected = await policy.evaluate(request)
+        result = await policy.probe_optional_verification(
+            request, selected, direct_plan_authorized=True,
+        )
+        assert result.policy_permitted_actions == ("respond_direct",)
+        assert result.alternative_policy_decision_id is None
+
+    asyncio.run(run())
+
+
+def test_policy_probe_feature_flag_is_default_off_and_strictly_configured(
+    monkeypatch,
+) -> None:
+    import pytest
+
+    from ai_karen_engine.config.runtime import RuntimeSettings
+
+    settings = RuntimeSettings()
+    assert settings.features.enable_verification_strategy_policy_probe is False
+    monkeypatch.setenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE", "true")
+    settings.apply_env_overrides()
+    assert settings.features.enable_verification_strategy_policy_probe is True
+    assert settings.validate() == []
+    monkeypatch.setenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE", "off")
+    settings.apply_env_overrides()
+    assert settings.features.enable_verification_strategy_policy_probe is False
+    monkeypatch.setenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE", "maybe")
+    with pytest.raises(ValueError, match="must be a boolean"):
+        settings.apply_env_overrides()
+    monkeypatch.delenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE")
+    settings.features.enable_verification_strategy_policy_probe = "true"
+    assert any("policy probe flag must be boolean" in issue for issue in settings.validate())
+
+
+def test_optional_policy_probe_cannot_accept_cross_principal_decision() -> None:
+    from dataclasses import replace
+
+    class SpoofedAlternativePolicy(RuntimePolicyEnforcer):
+        async def evaluate(self, request: PolicyEvaluationRequest):
+            decision = await super().evaluate(request)
+            if request.requested_reasoning_modes == ["verification"]:
+                return replace(
+                    decision,
+                    runtime_constraints={
+                        **decision.runtime_constraints,
+                        "authorized_tenant_id": "another-tenant",
+                    },
+                )
+            return decision
+
+    async def run() -> None:
+        policy = SpoofedAlternativePolicy()
+        request = PolicyEvaluationRequest(
+            user_id="subject", tenant_id="tenant-a",
+            session_id="session-a", max_model_calls=10,
+        )
+        selected = await policy.evaluate(request)
+        probe = await policy.probe_optional_verification(
+            request, selected, direct_plan_authorized=True,
+        )
+        assert probe.status == "selected_only"
+        assert probe.policy_permitted_actions == ("respond_direct",)
+        assert probe.alternative_policy_decision_id is None
+        assert probe.to_metadata()["execution_eligibility_established"] is False
+
+    asyncio.run(run())
+
+def test_optional_verification_probe_rejects_cross_principal_source_lineage() -> None:
+    from dataclasses import replace
+
+    async def run() -> None:
+        policy = RuntimePolicyEnforcer()
+        selected_request = PolicyEvaluationRequest(
+            user_id="subject",
+            tenant_id="tenant-a",
+            session_id="session-a",
+            correlation_id="correlation-a",
+            max_model_calls=10,
+        )
+        selected = await policy.evaluate(selected_request)
+        assert selected.allowed is True
+        mismatched_requests = (
+            replace(selected_request, user_id="other-user"),
+            replace(selected_request, tenant_id="another-tenant"),
+            replace(selected_request, session_id="another-session"),
+            replace(selected_request, correlation_id="another-correlation"),
+        )
+        for unrelated_request in mismatched_requests:
+            probe = await policy.probe_optional_verification(
+                unrelated_request,
+                selected,
+                direct_plan_authorized=True,
+            )
+            assert probe.status == "not_authorized"
+            assert probe.policy_permitted_actions == ()
+            assert probe.alternative_policy_decision_id is None
+            assert probe.to_metadata()["ope_eligible"] is False
+
+    asyncio.run(run())

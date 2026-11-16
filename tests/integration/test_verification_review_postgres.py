@@ -18,6 +18,7 @@ import asyncio
 import os
 import uuid
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,6 +34,21 @@ from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
 from ai_karen_engine.core.intelligence.ml.verification_review_evidence import (
     GovernedVerificationReviewEvidence,
 )
+from ai_karen_engine.core.intelligence.ml.verification_review_workflow import (
+    ReviewJudgement,
+    VerificationReviewWorkflow,
+)
+from ai_karen_engine.core.runtime.trajectory.contracts import ExecutionTrajectory
+from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
+    DecisionObservation,
+    FeatureSnapshot,
+)
+from ai_karen_engine.core.runtime.trajectory.store import PostgresTrajectoryStore
+from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
+from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+from ai_karen_engine.core.runtime.policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
+from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.outcome.store import (
     OutcomeStoreError,
     PostgresOutcomeStore,
@@ -46,6 +62,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _MIGRATIONS = (
     "20261003010000_20_runtime_outcome_evidence.sql",
     "20261019020000_37_intelligence_ml_outcome_evidence.sql",
+    "20261006010000_24_learning_decision_lineage.sql",
 )
 
 
@@ -262,6 +279,223 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             tenant_a, user_id=subject_a,
             source="runtime.execution", outcome_ids=refs,
         ) == []
+
+        # KCOG-01B9: the API submission owner must independently load the
+        # real persisted decision and feature snapshot from the canonical
+        # runtime learning lineage. Reviewers do not submit policy matrices.
+        lineage = PostgresTrajectoryStore()
+        trajectory = ExecutionTrajectory(
+            trajectory_id="pg-review-lineage-1",
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        )
+        await lineage.save_async(trajectory)
+        feature = FeatureSnapshot(
+            feature_snapshot_id="pg-review-snapshot-1",
+            trajectory_id=trajectory.trajectory_id,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+            request_id="pg-review-request-1",
+            correlation_id="pg-review-correlation-1",
+            feature_version="pg-verification-features-v1",
+            created_at=datetime.now(timezone.utc),
+            metadata={"snapshot_origin": "ci_decision_time"},
+        )
+        await lineage.save_feature_snapshot_async(feature)
+        decision = DecisionObservation(
+            decision_observation_id="pg-review-decision-1",
+            trajectory_id=trajectory.trajectory_id,
+            feature_snapshot_id=feature.feature_snapshot_id,
+            decision_type="respond_strategy",
+            behavior_policy_id="pg-verified-baseline",
+            behavior_policy_version="v1",
+            candidate_actions=tuple(_ACTIONS),
+            eligible_actions=tuple(_ACTIONS),
+            chosen_action=_ACTIONS[0],
+            chosen_probability=0.5,
+            action_probabilities={_ACTIONS[0]: 0.5, _ACTIONS[1]: 0.5},
+            created_at=datetime.now(timezone.utc),
+            ope_eligible=True,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+            metadata={
+                "verification_policy_snapshot": {
+                    "schema_version": "verification_policy_snapshot_v1",
+                    "candidate_policy_id": "pg-frozen-candidate",
+                    "candidate_policy_version": "v1",
+                    "candidate_probabilities": {
+                        _ACTIONS[0]: 0.25, _ACTIONS[1]: 0.75,
+                    },
+                    "risk_class": "low",
+                    "utility_policy_version": "pg-independent-review-v1",
+                },
+            },
+        )
+        await lineage.save_decision_observation_async(decision)
+        reviewer = _principal(reviewer_id, tenant_a, reviewer=True)
+        authenticated_review = VerificationReviewWorkflow(
+            lineage_store=PostgresTrajectoryStore(),
+            outcome_store=PostgresOutcomeStore(),
+        )
+        reviewed = ReviewJudgement(
+            decision_observation_id=decision.decision_observation_id,
+            subject_user_id=subject_a,
+            reward=0.9,
+            verification_needed=True,
+        )
+        submitted = await authenticated_review.submit(
+            reviewed, reviewer=reviewer,
+            correlation_id="pg-review-correlation-1",
+        )
+        assert submitted["stored"] is True
+        assert submitted["decision_provenance"] == "durable_runtime_lineage"
+        assert submitted["policy_activated"] is False
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE decision_observation_id='pg-review-decision-1'"
+            " AND source='intelligence.ml'"
+        ) == 2
+        with pytest.raises(OutcomeStoreError):
+            await authenticated_review.submit(
+                reviewed, reviewer=reviewer,
+            )
+        with pytest.raises(LookupError):
+            await authenticated_review.submit(
+                reviewed,
+                reviewer=_principal(reviewer_id, tenant_b, reviewer=True),
+            )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE decision_observation_id='pg-review-decision-1'"
+        ) == 2
+
+        # KCOG-01C0: exercise the actual ChatRuntime selection recorder
+        # against the same PostgreSQL lineage schema. This is not a
+        # synthetic randomized candidate or a reviewed OPE-eligible decision.
+        runtime = ChatRuntime.__new__(ChatRuntime)
+        runtime._trajectory_recorder = TrajectoryRecorder(store=PostgresTrajectoryStore())
+        runtime_trajectory = ExecutionTrajectory(
+            trajectory_id="pg-runtime-selection-1",
+            request_id="pg-runtime-request-1",
+            correlation_id="pg-runtime-corr-1",
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        )
+        policy_decision = ExecutionDecision(
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=["verification"],
+            policy_decision_id="pg-policy-authorized-1",
+            policy_version="pg-v1",
+        )
+        topology_id = await runtime._record_learning_decision(
+            runtime_trajectory, policy_decision,
+        )
+        assert topology_id
+        saved = await asyncio.to_thread(
+            PostgresTrajectoryStore().list_decision_observations,
+            runtime_trajectory.trajectory_id,
+            tenant_id=tenant_a,
+        )
+        assert len(saved) == 2
+        planned = next(item for item in saved if item.decision_type == "respond_strategy")
+        assert planned.chosen_action == "verify_then_respond"
+        assert planned.feature_snapshot_id == saved[0].feature_snapshot_id
+        assert planned.ope_eligible is False
+        assert planned.chosen_probability is None
+        assert planned.action_probabilities == {}
+        assert planned.ope_ineligible_reason == "missing_propensity"
+        assert "verification_policy_snapshot" not in planned.metadata
+        with pytest.raises(ValueError, match="not verification-OPE eligible"):
+            await authenticated_review.submit(
+                ReviewJudgement(
+                    decision_observation_id=planned.decision_observation_id,
+                    subject_user_id=subject_a,
+                    reward=0.9,
+                    verification_needed=True,
+                ),
+                reviewer=reviewer,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.outcome_records
+               WHERE decision_observation_id=$1""",
+            planned.decision_observation_id,
+        ) == 0
+
+        # KCOG-01C1B1: persist an actual independently checked *permission*
+        # probe to PostgreSQL. The second strategy is policy-permitted, NOT
+        # proven executable, randomized, OPE-eligible or reviewed.
+        policy_owner = RuntimePolicyEnforcer()
+        scoped_request = PolicyEvaluationRequest(
+            user_id=subject_a,
+            tenant_id=tenant_a,
+            session_id="pg-permission-session-1",
+            requested_reasoning_modes=[],
+            max_model_calls=10,
+        )
+        selected_policy = await policy_owner.evaluate(scoped_request)
+        permission = await policy_owner.probe_optional_verification(
+            scoped_request,
+            selected_policy,
+            direct_plan_authorized=True,
+        )
+        assert permission.policy_permitted_actions == (
+            "respond_direct", "verify_then_respond",
+        )
+        permission_traj = ExecutionTrajectory(
+            trajectory_id="pg-policy-permission-selection-1",
+            request_id="pg-policy-permission-request-1",
+            correlation_id="pg-policy-permission-corr-1",
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        )
+        direct_plan = ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id=selected_policy.decision_id,
+            policy_version=selected_policy.policy_version,
+            policy_constraints={
+                "response_strategy_policy_probe": permission.to_metadata(),
+            },
+        )
+        assert await runtime._record_learning_decision(permission_traj, direct_plan)
+        records = await asyncio.to_thread(
+            PostgresTrajectoryStore().list_decision_observations,
+            permission_traj.trajectory_id,
+            tenant_id=tenant_a,
+        )
+        permission_strategy = next(
+            item for item in records if item.decision_type == "respond_strategy"
+        )
+        frozen = await asyncio.to_thread(
+            PostgresTrajectoryStore().get_feature_snapshot,
+            permission_strategy.feature_snapshot_id,
+            tenant_id=tenant_a,
+        )
+        assert frozen is not None
+        assert frozen.metadata["response_strategy_policy_probe"] == (
+            permission.to_metadata()
+        )
+        assert permission_strategy.metadata["response_strategy_policy_probe"] == (
+            permission.to_metadata()
+        )
+        assert permission_strategy.eligible_actions == ("respond_direct",)
+        assert permission_strategy.chosen_probability is None
+        assert permission_strategy.action_probabilities == {}
+        assert permission_strategy.ope_eligible is False
+        with pytest.raises(ValueError, match="not verification-OPE eligible"):
+            await authenticated_review.submit(
+                ReviewJudgement(
+                    decision_observation_id=permission_strategy.decision_observation_id,
+                    subject_user_id=subject_a,
+                    reward=0.9,
+                    verification_needed=True,
+                ),
+                reviewer=reviewer,
+            )
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.outcome_records
+               WHERE decision_observation_id=$1""",
+            permission_strategy.decision_observation_id,
+        ) == 0
 
         # A second attempted decision with an original *label* ID causes
         # statement two to conflict. Statement one MUST roll back as well.

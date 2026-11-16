@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +25,8 @@ class DecisionType(str, Enum):
     PLUGIN_SELECTION = "plugin_selection"
     MEMORY_SELECTION = "memory_selection"
     PROACTIVE_CONTINUITY = "proactive_continuity"
+    # Authorized response-strategy selection, distinct from execution outcomes.
+    RESPOND_STRATEGY = "respond_strategy"
 
 
 class OpeEligibilityReason(str, Enum):
@@ -48,6 +51,7 @@ CORTEX_TOPOLOGY_POLICY_ID = "cortex_topology"
 CORTEX_TOPOLOGY_POLICY_VERSION = "v1"
 PROACTIVE_CONTINUITY_POLICY_ID = "proactive_continuity_ranker"
 PROACTIVE_CONTINUITY_POLICY_VERSION = "v1"
+RUNTIME_RESPONSE_STRATEGY_POLICY_ID = "runtime_authorized_response_strategy"
 
 
 # Keys that must never be persisted into a learning record. Mirrors the
@@ -297,12 +301,49 @@ def validate_probability_distribution(
     chosen_probability: float | None,
     action_probabilities: dict[str, float],
 ) -> tuple[bool, OpeEligibilityReason | None]:
-    """Validate raw propensity values are in [0, 1]."""
-    for value in action_probabilities.values():
-        if not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0:
-            return False, OpeEligibilityReason.INVALID_PROBABILITY_DISTRIBUTION
-    if chosen_probability is not None and not 0.0 <= float(chosen_probability) <= 1.0:
-        return False, OpeEligibilityReason.INVALID_PROBABILITY_DISTRIBUTION
+    """Validate a *logged* distribution, never normalize scores into propensities.
+
+    An empty distribution is allowed for an explicitly unobserved plan. A
+    non-empty distribution must be finite, normalized, and agree with the
+    chosen action's logged propensity. Sparse deterministic distributions are
+    retained for legacy non-verification observations (omitted actions are 0).
+    """
+    invalid = (False, OpeEligibilityReason.INVALID_PROBABILITY_DISTRIBUTION)
+    if not isinstance(action_probabilities, dict):
+        return invalid
+    for action, value in action_probabilities.items():
+        if (
+            not isinstance(action, str)
+            or not action
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not 0.0 <= value <= 1.0
+            or not math.isfinite(value)
+        ):
+            return invalid
+    if chosen_probability is not None and (
+        isinstance(chosen_probability, bool)
+        or not isinstance(chosen_probability, (int, float))
+        or not 0.0 <= chosen_probability <= 1.0
+        or not math.isfinite(chosen_probability)
+    ):
+        return invalid
+
+    if action_probabilities:
+        if not math.isclose(
+            math.fsum(action_probabilities.values()), 1.0,
+            rel_tol=0.0, abs_tol=1e-6,
+        ):
+            return invalid
+        if chosen_probability is not None and (
+            chosen_action not in action_probabilities
+            or chosen_probability <= 0.0
+            or not math.isclose(
+                action_probabilities[chosen_action], chosen_probability,
+                rel_tol=0.0, abs_tol=1e-6,
+            )
+        ):
+            return invalid
     return True, None
 
 
@@ -314,19 +355,27 @@ def compute_ope_eligibility(
     action_probabilities: dict[str, float],
 ) -> tuple[bool, OpeEligibilityReason | None]:
     """Decide whether an observation can be used by propensity estimators."""
-    if not candidate_actions:
+    if (
+        not candidate_actions
+        or chosen_action not in candidate_actions
+        or len(candidate_actions) != len(set(candidate_actions))
+    ):
         return False, OpeEligibilityReason.INCOMPLETE_CANDIDATE_SET
-    if not behavior_policy_id:
+    if not isinstance(behavior_policy_id, str) or not behavior_policy_id.strip():
         return False, OpeEligibilityReason.UNKNOWN_BEHAVIOR_POLICY
     if chosen_probability is None:
         return False, OpeEligibilityReason.MISSING_PROPENSITY
     if not action_probabilities or chosen_action not in action_probabilities:
         return False, OpeEligibilityReason.MISSING_PROPENSITY
+    if not set(action_probabilities).issubset(set(candidate_actions)):
+        return False, OpeEligibilityReason.INVALID_PROBABILITY_DISTRIBUTION
     valid, reason = validate_probability_distribution(
         chosen_action, chosen_probability, action_probabilities
     )
     if not valid:
         return False, reason
+    if chosen_probability <= 0.0:
+        return False, OpeEligibilityReason.INVALID_PROBABILITY_DISTRIBUTION
     return True, None
 
 
@@ -417,19 +466,29 @@ def create_decision_observation(
 ) -> DecisionObservation:
     """Build a validated decision observation.
 
-    Raises ValueError if the chosen action is not in the eligible set. The
-    OPE eligibility is computed from the supplied propensity; callers may
-    override ``ope_eligible``/``ope_ineligible_reason`` but validation still
-    runs.
+    The actual logged distribution is always validated; an explicit
+    ``ope_eligible=True`` cannot override missing or invalid evidence.
+    Callers may deliberately mark a mathematically valid record ineligible
+    while further runtime authorization or execution evidence is missing.
     """
     candidate_actions = tuple(candidate_actions)
     eligible_actions = tuple(eligible_actions)
     action_probabilities = dict(action_probabilities or {})
 
+    if (
+        len(candidate_actions) != len(set(candidate_actions))
+        or len(eligible_actions) != len(set(eligible_actions))
+        or (candidate_actions and not set(eligible_actions).issubset(set(candidate_actions)))
+        or any(not isinstance(action, str) or not action for action in candidate_actions)
+        or any(not isinstance(action, str) or not action for action in eligible_actions)
+    ):
+        raise ValueError("Candidate/eligible action sets must be unique and consistent")
     if chosen_action not in eligible_actions:
         raise ValueError(
             f"chosen_action {chosen_action!r} is not in eligible_actions {eligible_actions!r}"
         )
+    if not set(action_probabilities).issubset(set(eligible_actions)):
+        raise ValueError("Action probabilities must be limited to eligible actions")
 
     valid_dist, dist_reason = validate_probability_distribution(
         chosen_action, chosen_probability, action_probabilities
@@ -440,18 +499,24 @@ def create_decision_observation(
             f"{dist_reason.value if dist_reason is not None else 'invalid'}"
         )
 
-    if ope_eligible is None or ope_ineligible_reason is None:
-        eligible, reason = compute_ope_eligibility(
-            candidate_actions,
-            behavior_policy_id,
-            chosen_action,
-            chosen_probability,
-            action_probabilities,
-        )
-        if ope_eligible is None:
-            ope_eligible = eligible
-        if ope_ineligible_reason is None:
-            ope_ineligible_reason = reason.value if reason is not None else None
+    if ope_eligible is not None and not isinstance(ope_eligible, bool):
+        raise ValueError("OPE eligibility override must be boolean")
+
+    eligible, reason = compute_ope_eligibility(
+        candidate_actions,
+        behavior_policy_id,
+        chosen_action,
+        chosen_probability,
+        action_probabilities,
+    )
+    if ope_eligible is True and not eligible:
+        raise ValueError("OPE eligibility cannot override unproven propensity")
+    if ope_eligible is None:
+        ope_eligible = eligible
+    if ope_eligible and ope_ineligible_reason is not None:
+        raise ValueError("OPE-eligible decision cannot carry an ineligibility reason")
+    if not ope_eligible and ope_ineligible_reason is None:
+        ope_ineligible_reason = reason.value if reason is not None else None
 
     return DecisionObservation(
         decision_observation_id=decision_observation_id or f"obs_{uuid.uuid4().hex}",

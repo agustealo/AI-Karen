@@ -122,3 +122,10 @@ Avoid adding public routes until job/assessment storage and RLS exist. Suggested
 - `revoke_training_source(scope, source_ref, reason) -> RevocationReceipt`
 
 These are **proposed signatures**, not functions verified in the repository. Extend current API/service ownership and return actual durable receipts, never fake success.
+
+
+## KCM-01C implementation detail: source revision and integrity are separate from authority
+
+Memory-ledger source revisions are canonical lowercase SHA-256 digests, **not** integer counters. The dataset manifest schema now reflects this and requires an owner-user identifier and reference IDs for consent, rights, and target-verification receipts. Those references are not themselves authoritative.
+
+The integrity inspector in `src/ai_karen_engine/learning/kcm_dataset_integrity.py` checks the actual dataset byte hash, canonical membership ordering, group-split integrity, and a deletion epoch supplied from the authorized governance source. It never authorizes model training or establishes the validity of any supplied receipt. Dedicated tenant-RLS, rights, independent outcome, deletion and promotion gates remain future work.
