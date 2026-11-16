@@ -156,6 +156,13 @@ jobs:
             tests/core/intelligence/ml/test_model_policy_evaluation.py \
             -q --timeout=300 --tb=short
 
+      - name: Prove KCOG-01B2 estimator integrity and promotion safety
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/intelligence/ml/test_ope_estimator_integrity.py \
+            -q --timeout=300 --tb=short
+
       - name: Compile KCOG cognitive-state and policy boundary
         if: ${{ always() }}
         run: |
