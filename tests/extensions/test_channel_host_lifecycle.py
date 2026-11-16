@@ -378,6 +378,7 @@ async def test_explicit_recovery_requires_policy_before_reading_backlog():
         await host.recover_inbox(
             tenant_id=tenant, connection_id="c1", user_id=user,
             session_id="session", authorized_plan=plan,
+            expected_revision=3,
         )
     host.repository.list_recoverable_inbound.assert_not_awaited()
     host.worker.submit.assert_not_awaited()
@@ -385,6 +386,7 @@ async def test_explicit_recovery_requires_policy_before_reading_backlog():
     assert await host.recover_inbox(
         tenant_id=tenant, connection_id="c1", user_id=user,
         session_id="session", authorized_plan=plan,
+        expected_revision=3,
     ) == 1
     host.activation._authorize.assert_awaited_with(
         tenant_id=tenant, user_id=user, session_id="session",
@@ -416,6 +418,7 @@ async def test_recovery_refuses_disabled_or_cross_tenant_connection_before_polic
         await host.recover_inbox(
             tenant_id=tenant, connection_id="c1", user_id=other,
             session_id="session", authorized_plan=None,
+            expected_revision=3,
         )
     host.activation._authorize.assert_not_awaited()
     host.repository.list_recoverable_inbound.assert_not_awaited()
@@ -1959,4 +1962,74 @@ async def test_telegram_recovery_denies_foreign_bot_owner_without_sql_mutation()
             expected_revision=2,
         )
     host.repository.verify_uncertain_telegram_webhook_claim.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_inbox_recovery_denies_stale_revision_before_backlog_read():
+    host, _, _, _, _ = fake_components()
+    host._chat_runtime = SimpleNamespace(execute=AsyncMock())
+    await host.initialize()
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id="c1", tenant_id=tenant, installation_id="telegram-bot",
+        provider_account_id="account", credential_handle="vault://ref",
+        revision=4, enabled=True,
+    ))
+    host.repository.list_recoverable_inbound = AsyncMock()
+    host.worker.submit = AsyncMock()
+    host.activation._authorize = AsyncMock()
+    with pytest.raises(PermissionError):
+        await host.recover_inbox(
+            tenant_id=tenant, connection_id="c1", user_id=user,
+            session_id="governed", authorized_plan=object(),
+            expected_revision=3,
+        )
+    host.activation._authorize.assert_not_awaited()
+    host.repository.list_recoverable_inbound.assert_not_awaited()
+    host.worker.submit.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_inbox_recovery_rechecks_revision_after_backlog_discovery():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.persistence.repositories.channel_repository import InboundAdmission
+
+    host, _, _, _, _ = fake_components()
+    host._chat_runtime = SimpleNamespace(execute=AsyncMock())
+    await host.initialize()
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    conn = ChannelConnection(
+        connection_id="c1", tenant_id=tenant, installation_id="telegram-bot",
+        provider_account_id="account", credential_handle="vault://ref",
+        revision=3, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(side_effect=[
+        conn, conn.model_copy(update={"revision": 4}),
+    ])
+    host.repository.list_recoverable_inbound = AsyncMock(return_value=[
+        InboundAdmission(
+            inbox_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+            correlation_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+            tenant_id=tenant, user_id=user,
+            binding_id="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+            inserted=False,
+        ),
+    ])
+    host.activation._authorize = AsyncMock()
+    host.worker.submit = AsyncMock(return_value=True)
+    with pytest.raises(PermissionError, match="connection changed"):
+        await host.recover_inbox(
+            tenant_id=tenant, connection_id="c1", user_id=user,
+            session_id="governed", authorized_plan=object(),
+            expected_revision=3,
+        )
+    host.activation._authorize.assert_awaited_once()
+    host.repository.list_recoverable_inbound.assert_awaited_once()
+    host.worker.submit.assert_not_awaited()
     await host.shutdown()
