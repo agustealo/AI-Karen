@@ -753,12 +753,14 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                 "SELECT set_config('app.current_tenant_id', $1, true)",
                 str(tenant_a),
             )
+            # Original claim fixture plus KWA-01C2's three customer
+            # receipts and one WhatsApp outbox all belong to this tenant.
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_inbox"
-            ) == 1
+            ) == 4
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_outbox"
-            ) == 1
+            ) == 2
             assert await raw.fetchval(
                 "SELECT count(*) FROM public.channel_personal_pairing_consents"
             ) == 3
