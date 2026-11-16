@@ -72,6 +72,7 @@ import { Separator } from "@/components/ui/separator";
 
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
+import { isVoiceStudioDashboardRoute } from "@/lib/voice-studio-navigation";
 
 /**
  * Browser recovery keys are owned by the same authenticated identity as chat.
@@ -230,8 +231,7 @@ export default function DashboardPage() {
   // settings panel as Plugins & Tools. No execution or provider decisions
   // are inferred from URL parameters. Only this explicit route is accepted.
   useEffect(() => {
-    const search = new URLSearchParams(window.location.search);
-    if (search.get('view') === 'settings' && search.get('section') === 'voice') {
+    if (isVoiceStudioDashboardRoute(window.location.search)) {
       setSettingsInitialSection('voice');
       setActiveMainView('settings');
     }
