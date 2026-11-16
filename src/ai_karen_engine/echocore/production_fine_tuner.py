@@ -235,33 +235,11 @@ class ProductionFineTuner:
         )
 
         try:
-            # Check if transformers is available
-            try:
-                from transformers import (
-                    AutoModelForCausalLM,
-                    AutoTokenizer,
-                    Trainer,
-                    TrainingArguments,
-                    DataCollatorForLanguageModeling
-                )
-                from datasets import Dataset
-                import torch
-
-                has_transformers = True
-            except ImportError:
-                has_transformers = False
-                self.logger.warning("transformers library not available, using mock training")
-
-            if has_transformers:
-                # Real training with transformers
-                final_metrics = await self._train_with_transformers(
-                    model_path, config, train_texts, val_texts
-                )
-            else:
-                # Mock training for demonstration
-                final_metrics = await self._mock_training(
-                    model_path, config, len(train_texts)
-                )
+            # Only a real training backend can produce a successful run.
+            # Missing dependencies propagate as a failed training operation.
+            final_metrics = await self._train_with_transformers(
+                model_path, config, train_texts, val_texts
+            )
 
             # Update run status
             self.current_run.status = "completed"

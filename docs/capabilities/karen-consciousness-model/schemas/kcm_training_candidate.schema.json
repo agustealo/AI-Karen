@@ -1,0 +1,390 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ai-karen:kcm:training-candidate:v1",
+  "title": "KCM Training Candidate Assessment v1 (proposed)",
+  "description": "Derived downstream EchoCore assessment. No direct permission grant; hard gates must be verified server-side.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "assessment_id",
+    "tenant_id",
+    "owner_user_id",
+    "source_artifact_id",
+    "source_revision",
+    "source_kind",
+    "source_tier",
+    "objective_id",
+    "objective_version",
+    "target_type",
+    "admission_state",
+    "hard_gates",
+    "quality_dimensions",
+    "aggregate_score",
+    "policy_version",
+    "evaluator_version",
+    "lineage_fingerprint",
+    "created_at",
+    "evaluated_at",
+    "decision_reason_codes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "assessment_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "owner_user_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "source_artifact_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "source_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_kind": {
+      "enum": [
+        "memory",
+        "verified_outcome",
+        "reviewed_correction",
+        "approved_document",
+        "synthetic_verified"
+      ]
+    },
+    "source_tier": {
+      "enum": [
+        "stm",
+        "episodic",
+        "ltm",
+        "procedural",
+        "external_approved",
+        "outcome"
+      ]
+    },
+    "objective_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "objective_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "target_type": {
+      "enum": [
+        "sft_completion",
+        "preference_pair",
+        "skill_procedure",
+        "classification_label",
+        "evaluation_only"
+      ]
+    },
+    "admission_state": {
+      "enum": [
+        "discovered",
+        "policy_blocked",
+        "needs_verification",
+        "review",
+        "approved",
+        "selected",
+        "consumed",
+        "rejected",
+        "revoked"
+      ]
+    },
+    "hard_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant_authorized",
+        "training_consent",
+        "license_allowed",
+        "not_no_training",
+        "not_revoked",
+        "not_prohibited",
+        "provenance_untainted",
+        "verified_target",
+        "temporally_valid",
+        "lineage_complete"
+      ],
+      "properties": {
+        "tenant_authorized": {
+          "type": "boolean"
+        },
+        "training_consent": {
+          "type": "boolean"
+        },
+        "license_allowed": {
+          "type": "boolean"
+        },
+        "not_no_training": {
+          "type": "boolean"
+        },
+        "not_revoked": {
+          "type": "boolean"
+        },
+        "not_prohibited": {
+          "type": "boolean"
+        },
+        "provenance_untainted": {
+          "type": "boolean"
+        },
+        "verified_target": {
+          "type": "boolean"
+        },
+        "temporally_valid": {
+          "type": "boolean"
+        },
+        "lineage_complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    "quality_dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "correctness",
+        "outcome",
+        "objective_relevance",
+        "provenance",
+        "clarity",
+        "novelty_coverage"
+      ],
+      "properties": {
+        "correctness": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "outcome": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "objective_relevance": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "provenance": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "clarity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "novelty_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "aggregate_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "policy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evaluator_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lineage_fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "privacy_flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "public",
+          "internal",
+          "sensitive",
+          "restricted",
+          "no_training",
+          "no_export"
+        ]
+      }
+    },
+    "trust_class": {
+      "enum": [
+        "explicit_user",
+        "verified_tool",
+        "trusted_document",
+        "inferred",
+        "external_web",
+        "unverified",
+        "suspicious",
+        "poisoned"
+      ]
+    },
+    "source_valid_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "verified_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "consent_scope": {
+      "type": "string",
+      "minLength": 1
+    },
+    "license_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ground_truth_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "outcome_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "decision_reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "review_receipt_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "admission_state": {
+            "enum": [
+              "approved",
+              "selected",
+              "consumed"
+            ]
+          }
+        },
+        "required": [
+          "admission_state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "hard_gates": {
+            "properties": {
+              "tenant_authorized": {
+                "const": true
+              },
+              "training_consent": {
+                "const": true
+              },
+              "license_allowed": {
+                "const": true
+              },
+              "not_no_training": {
+                "const": true
+              },
+              "not_revoked": {
+                "const": true
+              },
+              "not_prohibited": {
+                "const": true
+              },
+              "provenance_untainted": {
+                "const": true
+              },
+              "verified_target": {
+                "const": true
+              },
+              "temporally_valid": {
+                "const": true
+              },
+              "lineage_complete": {
+                "const": true
+              }
+            }
+          },
+          "trust_class": {
+            "enum": [
+              "explicit_user",
+              "verified_tool",
+              "trusted_document"
+            ]
+          },
+          "privacy_flags": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "public",
+                "internal",
+                "sensitive",
+                "restricted"
+              ]
+            }
+          },
+          "ground_truth_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  ]
+}

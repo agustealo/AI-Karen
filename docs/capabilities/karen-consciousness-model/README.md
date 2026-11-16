@@ -1,0 +1,68 @@
+# Karen Consciousness-Model (KCM) | Developer Wiki
+
+**Status:** Proposed architecture. P0 containment and a read-only admission evaluator are being implemented on a draft branch; no production feature, model training, or merge is claimed.  
+**Research cutoff:** 2026-11-16  
+**Repository baseline audited:** `agustealo/AI-Karen` `main` at `e570d950501915a9fce9e089ac91e583a71eb80e`  
+**Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
+**Primary decision:** Memory retention **does not** confer training eligibility.
+
+## Executive decision
+
+KCM is Karen's **operational self-model**: a governed, evidence-backed projection of identity/persona configuration, demonstrated skills, lessons, capabilities, limitations and knowledge provenance. It is not a consciousness claim, a second memory store, a new reasoning router, or a replacement for LLMs. The existing CORTEX/RuntimePolicy/ChatRuntime/MemoryRuntime remain authoritative. EchoCore selects training evidence and may train optional small model adapters. The live KCM state is sourced from current authoritative systems, not reconstructed from neural weights.
+
+### Invariants
+
+1. **One owner per responsibility:** `core/memory` owns memory semantics and governed writes; EchoCore owns training admission and dataset assembly; model registry owns published model identity; CORTEX decides, RuntimePolicy authorizes, ChatRuntime executes.
+2. **Separate the three questions:** (a) Keep this memory? (b) Is this evidence sound? (c) Is it useful and authorized for a *specific* training objective?
+3. **Never train automatically from LTM, repeated recall, importance, or a model's own confident answer.**
+4. **Use current user state as retrieval, not baked-in user weights by default.** Personal memories can be revoked; parameter influence is much harder to remove.
+5. **No autonomous model promotion.** Training, assessment, approval, deployment and rollback have distinct receipts.
+6. **No cross-tenant aggregation without an explicit, separately authorized and technically enforced data-sharing policy.** Default is isolation.
+7. **No silent success:** Failed memory writes, dataset creation, training, evaluation, or checkpoint installation remain failed/unavailable, never mock success.
+8. **Operational self-model is not subjective consciousness.** Evaluate self-knowledge and metacognitive calibration empirically.
+
+## Navigation
+
+| Page | What it establishes |
+|---|---|
+| [01 — Mission, scope and terminology](01-mission-scope.md) | KCM semantics and non-goals |
+| [02 — Live repository audit](02-repository-audit.md) | What exists, duplicate hazards, specific defects |
+| [03 — Architecture and ownership](03-architecture.md) | Components, read/write/train flows, trust boundaries |
+| [04 — Memory eligibility vs. learning eligibility](04-admission-policy.md) | Hard gates and states |
+| [05 — Quality scoring and selection](05-quality-selection.md) | Objective-specific metrics, weights, coverage, outcomes |
+| [06 — Data contracts, provenance and schema](06-contracts-and-lineage.md) | Typed contracts, records, dataset manifests and lineage |
+| [07 — Data curation and dataset building](07-datasets-and-curation.md) | Splits, deduplication, positive/negative examples |
+| [08 — Training, adapters and model lifecycle](08-training-and-models.md) | SFT/LoRA, model selection, checkpoint promotion |
+| [09 — Operational self-model and capability mastery](09-self-model.md) | Persona, knowledge and skill assessments |
+| [10 — Security, privacy, revocation and unlearning](10-governance-security.md) | RBAC, poisoning defense and lineage-aware deletion |
+| [11 — Evaluation and regression prevention](11-evaluation.md) | Benchmarks, gates, calibration, adversarial tests |
+| [12 — Observability, operations and developer UX](12-operations-ui.md) | Metrics, audit events, Admin surfaces, failure modes |
+| [13 — Implementation phases and proof](13-delivery-plan.md) | Release slices, file touchpoints, CI and go/no-go |
+| [14 — Architecture decisions and trade-offs](14-decisions.md) | ADRs, rejected designs, outstanding choices |
+| [15 — Research and references](15-research.md) | Primary literature, standards and implementer sources |
+| [16 — Development progress and acceptance](16-development-status.md) | Initial P0/P1 code slice, verification status, remaining gates |
+
+### Machine-readable proposed contracts
+
+- [`schemas/kcm_training_candidate.schema.json`](schemas/kcm_training_candidate.schema.json)
+- [`schemas/kcm_dataset_manifest.schema.json`](schemas/kcm_dataset_manifest.schema.json)
+- [`examples/kcm_training_candidate.example.json`](examples/kcm_training_candidate.example.json)
+- [`examples/kcm_dataset_manifest.example.json`](examples/kcm_dataset_manifest.example.json)
+
+Schemas/examples are **design contracts**, not evidence that database tables or APIs exist.
+
+## Reading order for implementation
+
+Read 02 -> 03 -> 04 -> 05 -> 06 -> 10 -> 11 -> 13. Use 07/08 for training, 09 for runtime self-model projection, and 12 for operations/UI. Nothing in this package authorizes a code modification or deployment by itself.
+
+## Minimal build acceptance
+
+- A high-value `NO_TRAINING` LTM is never trainable.
+- An unknown, contested, expired or poisoned memory cannot become a positive supervision label.
+- A correctly verified but low-importance procedural correction can be considered for an appropriate skill objective.
+- A negative example never becomes an unqualified positive target.
+- Tenant-A data cannot be listed, exported, scored or trained under Tenant-B credentials.
+- Deleting a memory prevents future training and identifies all affected artifacts/checkpoints. Production model usage is fenced until remediation.
+- Dataset and model promotion use independent, frozen evaluation suites and explicit human/authorized policy approval.
+
+> **Non-production notice:** This wiki includes an initial development slice. Its admission evaluator is read-only; no dataset was approved for training, no model trained, and no production deployment or merge is claimed. The full CI and security gates remain mandatory.

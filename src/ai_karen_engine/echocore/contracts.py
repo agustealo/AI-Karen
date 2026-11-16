@@ -47,6 +47,9 @@ class RuntimeMemoryArtifact:
     retention_score: float = 0.0
     privacy_tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Carries the upstream source veto across the memory/EchoCore boundary.
+    # This is advisory for rejection only; "eligible" never authorizes training.
+    training_eligibility: str = "review"
 
 
 @dataclass(slots=True)
@@ -149,7 +152,7 @@ class EchoPolicyEngine:
                 action=EchoIngestAction.ARCHIVE,
                 should_archive=True,
                 should_collect_metadata=True,
-                should_queue_training=artifact.importance_score >= 0.75,
+                should_queue_training=False,
                 should_create_backup_copy=True,
                 reason="durable high-value memory",
             )
@@ -159,7 +162,7 @@ class EchoPolicyEngine:
                 action=EchoIngestAction.ENRICH_METADATA,
                 should_archive=artifact.retention_score >= 0.80,
                 should_collect_metadata=True,
-                should_queue_training=artifact.importance_score >= 0.85,
+                should_queue_training=False,
                 reason="episodic event evaluation",
             )
 
@@ -230,24 +233,12 @@ class DefaultEchoCoreManager:
                 logger.warning("Echo archive write failed for %s: %s", artifact.artifact_id, exc)
                 result.diagnostics["archive_error"] = str(exc)
 
+        # Training is a separate governed admission workflow. Memory worthiness,
+        # importance and legacy policy engines cannot authorize model updates.
         if decision.should_queue_training:
-            candidate = EchoTrainingCandidate(
-                artifact_id=artifact.artifact_id,
-                user_id=artifact.user_id,
-                tenant_id=artifact.tenant_id,
-                input_payload=artifact.content,
-                labels={
-                    "artifact_type": artifact.artifact_type.value,
-                    "source_tier": artifact.source_tier.value,
-                },
-                quality_score=max(artifact.importance_score, artifact.retention_score),
+            result.diagnostics["training_request_blocked"] = (
+                "independent_admission_required"
             )
-            try:
-                self._fine_tuner.queue_candidate(candidate)
-                result.training_queued = True
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Echo training queue failed for %s: %s", artifact.artifact_id, exc)
-                result.diagnostics["training_error"] = str(exc)
 
         if decision.should_store_shadow:
             shadow_record = EchoShadowRecord(

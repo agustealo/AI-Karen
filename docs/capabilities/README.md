@@ -22,6 +22,13 @@ Initial tracked capabilities:
 
 Other capabilities remain to be discovered. Not listed does not mean absent or retired.
 
+## Proposed capability developer wikis
+
+- [Karen Consciousness-Model (KCM)](karen-consciousness-model/README.md):
+  governed memory-to-training admission and evidence-based self-model design.
+  This documentation is not proof of a deployed or enabled runtime capability.
+
+
 ## Verification
 
 Run:

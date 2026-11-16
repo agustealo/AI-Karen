@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_id": "769d2fa6-fb82-4c3b-b0e6-9149c6b57b90",
+  "dataset_version": 1,
+  "tenant_id": "724c4f97-b14f-496c-ac04-e2f0c58f7b22",
+  "objective_id": "python-error-repair",
+  "objective_version": "1.0.0",
+  "status": "frozen",
+  "content_sha256": "c1d3abef00112233445566778899aabbccddeeff00112233445566778899aabb",
+  "selection_recipe": {"recipe_id": "stratified-coverage-first", "version": "1.0.0", "config_sha256": "e1d3abef00112233445566778899aabbccddeeff00112233445566778899aabb", "seed": 31},
+  "members": [
+    {"assessment_id": "a40a2b5f-1a4a-4d9a-8042-337fe0b81a11", "source_artifact_id": "verified-task-run-2026-11-01-0042", "source_revision": 1, "content_sha256": "a1d3abef00112233445566778899aabbccddeeff00112233445566778899aabb", "leakage_group_id": "task-family-0042", "split": "train"}
+  ],
+  "split_strategy": {"name": "grouped_task_family", "leakage_group_fields": ["task_family", "conversation_id", "canonical_task_hash", "synthetic_parent_id"], "test_locked": true},
+  "governance": {"consent_policy_version": "training-consent-v1", "license_policy_version": "dataset-license-v1", "deletion_epoch": 0, "revocation_check_at": "2026-11-01T18:00:00Z"},
+  "model_compatibility": {"base_model_id": "registered-local-model-id", "tokenizer_revision": "registered-tokenizer-revision", "chat_template_sha256": "d1d3abef00112233445566778899aabbccddeeff00112233445566778899aabb"},
+  "policy_version": "dataset-policy-v1",
+  "created_at": "2026-11-01T18:01:00Z"
+}
