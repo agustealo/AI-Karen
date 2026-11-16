@@ -7,6 +7,7 @@ installed, tenant-eligible, or actually loadable on an operator's CPU.
 from __future__ import annotations
 
 import json
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,6 +32,9 @@ def test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec() -> None:
     assert curated["revision"] == spec["revision"]
     assert curated["expected_runtime"] == spec["runtime_package"]
     assert curated["license"] == spec["model_license"]
+    assert curated["license_url"] == (
+        f"https://huggingface.co/{spec['model_id']}"
+    )
     assert curated["revision"] and len(curated["revision"]) == 40
     assert all(char in "0123456789abcdef" for char in curated["revision"])
     assert curated.get("recommended") is False
@@ -38,9 +42,34 @@ def test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec() -> None:
 
     base = spec["model_subdirectory"]
     included = curated["include_patterns"]
-    assert f"{base}/{spec['weights']}" in included
-    assert f"{base}/{spec['tokenizer']}" in included
-    assert f"{base}/{spec['voice_dir']}/**" in included
+    # The curated model choices belong to acquisition; the native spec owns
+    # the loader. Assert their precise contract without creating another
+    # manifest, download registry, or alternate plugin executor.
+    assert included == [
+        f"{base}/{spec['weights']}",
+        f"{base}/{spec['tokenizer']}",
+        f"{base}/{spec['voice_dir']}/*.safetensors",
+    ]
+    assert all(
+        not pattern.startswith("/") and
+        all(part not in {"", ".", ".."} for part in pattern.split("/"))
+        for pattern in included
+    )
+    required = (
+        f"{base}/{spec['weights']}",
+        f"{base}/{spec['tokenizer']}",
+        f"{base}/{spec['voice_dir']}/alba.safetensors",
+    )
+    unrelated = (
+        f"{base}/{spec['voice_dir']}/README.txt",
+        "languages/english_7m_refl_2026-10/model.safetensors",
+        "languages/english_2m_refl_2026-10/tokenizer.model",
+    )
+    assert all(any(fnmatchcase(path, pattern) for pattern in included) for path in required)
+    assert all(
+        not any(fnmatchcase(path, pattern) for pattern in included)
+        for path in unrelated
+    )
 
 
 def test_pocket_model_download_remains_in_canonical_admin_governed_service() -> None:
