@@ -1,0 +1,76 @@
+"""Keep the governed Pocket TTS model pin aligned with the curated downloader.
+
+These are packaging invariants, not proof that the model was fetched, licensed,
+installed, tenant-eligible, or actually loadable on an operator's CPU.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+PLUGIN = ROOT / "src/ai_karen_engine/extensions/plugins/pocket-tts"
+CURATED = ROOT / "config_assets/model_download_recommendations.json"
+
+
+def test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec() -> None:
+    spec = json.loads((PLUGIN / "model_spec.json").read_text(encoding="utf-8"))
+    recommendations = json.loads(CURATED.read_text(encoding="utf-8"))[
+        "recommendations"
+    ]
+    matches = [
+        row for row in recommendations
+        if spec["plugin_id"] in row.get("app_consumers", [])
+    ]
+    assert len(matches) == 1, "Every Pocket model must have one curated authority"
+    curated = matches[0]
+
+    assert curated["model_id"] == spec["model_id"]
+    assert curated["channel_id"] == spec["channel_id"]
+    assert curated["revision"] == spec["revision"]
+    assert curated["expected_runtime"] == spec["runtime_package"]
+    assert curated["license"] == spec["model_license"]
+    assert curated["revision"] and len(curated["revision"]) == 40
+    assert all(char in "0123456789abcdef" for char in curated["revision"])
+    assert curated.get("recommended") is False
+    assert curated["tier"] == "optional"
+
+    base = spec["model_subdirectory"]
+    included = curated["include_patterns"]
+    assert f"{base}/{spec['weights']}" in included
+    assert f"{base}/{spec['tokenizer']}" in included
+    assert f"{base}/{spec['voice_dir']}/**" in included
+
+
+def test_pocket_model_download_remains_in_canonical_admin_governed_service() -> None:
+    route = (
+        ROOT / "src/ai_karen_engine/api_routes/models/model_orchestrator.py"
+    ).read_text(encoding="utf-8")
+    service = (
+        ROOT / "src/ai_karen_engine/core/model_runtime/model_download_control_service.py"
+    ).read_text(encoding="utf-8")
+    plugin = (PLUGIN / "handler.py").read_text(encoding="utf-8")
+    ui = (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/src/components/plugins/"
+        "PluginRecommendedModels.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert 'admin-scopes this router' in route
+    assert '@router.post("/download/validate"' in route
+    assert '@router.post("/download", response_model=Dict[str, str])' in route
+    assert "async def start_download(" in service
+    assert "async def list_completed_model_installations(" in service
+    assert "list_completed_model_installations(" in plugin
+    assert 'job.get("license_accepted") is not True' in plugin
+    assert 'job.get("trust_remote_code") is True' in plugin
+    assert 'job.get("tenant_id") or ""' in plugin
+    assert "apiClient.post<DownloadValidation>" in ui
+    assert "apiClient.post<DownloadReceipt>" in ui
+    assert "validated_revision: revision" in ui
+    assert "trust_remote_code: false" in ui
+    assert "accept_license: true" in ui
+    assert "pin: true" in ui
+    assert "isAdmin()" in ui
+    assert "metadata_verified" in ui
+    assert "No installation was started." in ui
