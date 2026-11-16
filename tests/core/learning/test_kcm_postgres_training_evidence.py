@@ -110,6 +110,13 @@ async def test_source_requires_real_owner_scope_and_payload_digest() -> None:
     assert scopes == [{"tenant_id": TENANT, "user_id": USER}]
     assert session.calls == 3
     assert "memory_event" in session.statements[0]
+    # The revocation-admission source query must resolve NeuroVault's real
+    # parent memory ID via MemoryAssertion, never only through event IDs.
+    assert "memory_assertion" in session.statements[1]
+    assert "memory_assertion.event_id" in session.statements[1]
+    assert "memory_assertion.tenant_id" in session.statements[1]
+    assert "memory_assertion.user_id" in session.statements[1]
+    assert "supersedes" in session.statements[1]
     assert "consent_scope" in session.statements[2]
     assert "kcm.training" not in session.statements[0]
 
