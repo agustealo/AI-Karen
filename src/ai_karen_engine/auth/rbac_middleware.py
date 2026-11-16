@@ -141,6 +141,7 @@ class Permission(str, Enum):
     CHANNEL_SEND = "channel.send"
     CHANNEL_INSPECT = "channel.inspect"
     CHANNEL_WEBHOOK_REGISTER = "channel.webhook.register"
+    CHANNEL_STATUS_PRUNE = "channel.status_prune"
 
 
 class Role(str, Enum):
