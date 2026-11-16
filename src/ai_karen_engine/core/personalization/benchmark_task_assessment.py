@@ -180,11 +180,15 @@ class KcmBenchmarkTaskProjector:
             model_id=model_id, receipt_id=receipt_id, reason=reason,
         )
         try:
+            if not self._directory.is_dir():
+                return reject("canonical_benchmark_registry_unavailable")
             registry = MLModelRegistry(registry_dir=str(self._directory))
             manifest = registry.get(model_id)
             if manifest is None or manifest.purpose != task.value:
                 return reject("benchmark_model_not_registered_for_task")
-            evidence = EvaluationEvidenceStore(self._directory)
+            evidence = EvaluationEvidenceStore(
+                self._directory, create_if_missing=False,
+            )
             receipt = evidence.read_case_receipt(
                 manifest=manifest, tenant_id=tenant_id,
                 receipt_id=receipt_id,
