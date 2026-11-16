@@ -78,6 +78,7 @@ export default function PluginStorePage() {
   const router = useRouter();
   const {
     getPlugin,
+    refresh: refreshExtensionCatalog,
     loading: extensionCatalogLoading,
     error: extensionCatalogError,
   } = usePluginRegistry();
@@ -192,11 +193,12 @@ export default function PluginStorePage() {
         await installPlugin(pluginId, version);
         setDetailsOpen(false);
         clearSelectedPlugin();
+        void refreshExtensionCatalog();
       } catch (installError) {
         setOperationError(getErrorMessage(installError));
       }
     },
-    [installPlugin, clearSelectedPlugin],
+    [installPlugin, clearSelectedPlugin, refreshExtensionCatalog],
   );
 
   const handleEnable = useCallback(
@@ -208,11 +210,12 @@ export default function PluginStorePage() {
         setDetailsOpen(false);
         clearSelectedPlugin();
         setOperationSuccess(`Plugin '${pluginId}' enabled successfully.`);
+        void refreshExtensionCatalog();
       } catch (cause) {
         setOperationError(getErrorMessage(cause));
       }
     },
-    [enablePlugin, clearSelectedPlugin],
+    [enablePlugin, clearSelectedPlugin, refreshExtensionCatalog],
   );
 
   const handleDisable = useCallback(
@@ -224,11 +227,12 @@ export default function PluginStorePage() {
         setDetailsOpen(false);
         clearSelectedPlugin();
         setOperationSuccess(`Plugin '${pluginId}' disabled successfully.`);
+        void refreshExtensionCatalog();
       } catch (cause) {
         setOperationError(getErrorMessage(cause));
       }
     },
-    [disablePlugin, clearSelectedPlugin],
+    [disablePlugin, clearSelectedPlugin, refreshExtensionCatalog],
   );
 
   const handleDetails = useCallback(
@@ -504,6 +508,7 @@ export default function PluginStorePage() {
                 hasPrev={(searchParams.page ?? 1) > 1}
                 onPageChange={handlePageChange}
                 onInstall={handleInstall}
+                onEnable={handleEnable}
                 onDisable={handleDisable}
                 onDetails={handleDetails}
                 onDiscover={handleDiscover}
@@ -559,6 +564,7 @@ export default function PluginStorePage() {
                   plugins={trendingPlugins}
                   loading={loading}
                   onInstall={handleInstall}
+                  onEnable={handleEnable}
                   onDisable={handleDisable}
                   onDetails={handleDetails}
                   onDiscover={handleDiscover}
@@ -630,6 +636,7 @@ export default function PluginStorePage() {
                   hasPrev={installedPage > 1}
                   onPageChange={(page) => { void loadInstalled(page); }}
                   onInstall={handleInstall}
+                  onEnable={handleEnable}
                   onDisable={handleDisable}
                   onDetails={handleDetails}
                   installingPlugins={installingPlugins}

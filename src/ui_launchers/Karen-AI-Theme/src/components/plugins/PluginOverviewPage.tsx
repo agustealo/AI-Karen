@@ -128,6 +128,7 @@ type PluginHealthCardProps = {
   declaresUi: boolean;
   isCommunicationChannel: boolean;
   supportsVoiceOutput: boolean;
+  rawStatus?: string;
   onOpenVoiceStudio?: () => void;
 };
 
@@ -540,6 +541,7 @@ function PluginHealthCard({
   declaresUi,
   isCommunicationChannel,
   supportsVoiceOutput,
+  rawStatus,
   onOpenVoiceStudio,
 }: PluginHealthCardProps) {
   const { refresh } = usePluginRegistry();
@@ -565,19 +567,23 @@ function PluginHealthCard({
     return isPluginUiRegistered(normalizedPluginId);
   }, [normalizedPluginId]);
 
+  const baseBackendState = health.backendState || rawStatus || 'uninstalled';
+  const effectiveBackendState =
+    operationOverride.backendStatusDetail || baseBackendState;
+
   const derivedBackendStatusDetail = useMemo(
-    () => deriveBackendStatusDetail(health.backendState),
-    [health.backendState],
+    () => deriveBackendStatusDetail(effectiveBackendState),
+    [effectiveBackendState],
   );
 
   const derivedUiInstallStatus = useMemo(
-    () => deriveUiInstallStatus(health.backendState),
-    [health.backendState],
+    () => deriveUiInstallStatus(effectiveBackendState),
+    [effectiveBackendState],
   );
 
   const isBackendActiveState = useMemo(
-    () => isBackendActive(health.backendState),
-    [health.backendState],
+    () => isBackendActive(effectiveBackendState),
+    [effectiveBackendState],
   );
 
   // Only the backend manifest can declare a UI contribution. An installed
@@ -819,7 +825,7 @@ function PluginHealthCard({
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">Backend:</span>
           <BackendStateBadge
-            state={health.backendState}
+            state={effectiveBackendState}
             detail={backendStatusDetail}
           />
         </div>
@@ -1107,6 +1113,7 @@ export default function PluginOverviewPage({
                   declaresUi={plugin.has_gui}
                   isCommunicationChannel={plugin.isCommunicationChannel === true}
                   supportsVoiceOutput={plugin.supportsVoiceOutput === true}
+                  rawStatus={plugin.rawStatus}
                   onOpenVoiceStudio={onOpenVoiceStudio}
                 />
               ))}

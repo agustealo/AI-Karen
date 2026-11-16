@@ -176,5 +176,13 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
         '/api/extensions/pocket-tts/load',
       );
     });
+
+    // Proves the button transitions to Disable and is not stuck on Enable
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Disable' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull();
+      expect(screen.getByText('enabled')).toBeTruthy();
+      expect(screen.queryByText('enabled (discovered)')).toBeNull();
+    });
   });
 });

@@ -21,6 +21,7 @@ import React, {
 } from 'react';
 import { apiClient, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
+import { normalizePluginId } from './loader';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -360,7 +361,12 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
   }, [state.plugins, user?.permissions]);
 
   const getPlugin = useCallback(
-    (pluginId: string) => state.plugins.find((p) => p.id === pluginId),
+    (pluginId: string) =>
+      state.plugins.find(
+        (p) =>
+          p.id === pluginId ||
+          normalizePluginId(p.id) === normalizePluginId(pluginId),
+      ),
     [state.plugins]
   );
 
@@ -433,7 +439,7 @@ export function usePluginHealth(pluginId: string) {
   const { user } = useAuth();
   
   const entry = getPlugin(pluginId);
-  const mount = mountStateRegistry.get(pluginId);
+  const mount = mountStateRegistry.get(pluginId) || mountStateRegistry.get(normalizePluginId(pluginId));
   
   const backendState = entry?.rawStatus || 'uninstalled';
   const frontendMountState = mount?.state || 'idle';
