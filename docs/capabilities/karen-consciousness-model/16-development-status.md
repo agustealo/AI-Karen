@@ -29,6 +29,19 @@ Draft implementation: [PR #915](https://github.com/agustealo/AI-Karen/pull/915).
 | Security/RBAC, RLS, deletion, lineage | Not yet implemented or verified |
 | Live first boot / full GitHub checks | Not yet verified |
 
+## Canonical configuration (default fail-closed)
+
+The existing `src/ai_karen_engine/config/learning.py` owns KCM admission switches. Environment overrides are validated and startup fails on malformed values:
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `KCM_TRAINING_ADMISSION_ENABLED` | `false` | Activate **read-only assessment**, not model training |
+| `KCM_TRAINING_MIN_QUALITY` | `0.82` | Proposed overall quality minimum |
+| `KCM_TRAINING_MIN_CORRECTNESS` | `0.90` | Independent target correctness floor |
+| `KCM_TRAINING_MIN_PROVENANCE` | `0.80` | Independent provenance quality floor |
+
+Enabling admission does not enable training, dataset creation, or checkpoint promotion. No live training path is connected by this slice. Thresholds remain experimental until calibrated on held-out evidence.
+
 ## Follow-up development
 
 1. Wire the evaluator to trusted tenant-scoped consent/evidence/outcome stores and emit immutable decision audit receipts.
