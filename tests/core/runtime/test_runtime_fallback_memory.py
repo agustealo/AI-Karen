@@ -91,6 +91,7 @@ def test_recovered_ollama_provider_is_not_claimed_distinct_without_registry_proo
     # Metadata keeps the requested and actual identifiers separate; display
     # name differences alone do not prove a backend or engine change.
     meta = ChatRuntimeMetadata(
+        correlation_id="test-ollama-attribution",
         requested_provider="ollama",
         actual_provider="ollama-local",
         requested_model="deepseek-r1:1.5b",
