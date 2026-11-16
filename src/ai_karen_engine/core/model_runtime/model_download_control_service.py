@@ -1273,10 +1273,23 @@ class ModelDownloadControlService:
             # authority used by validation. Config provides the curated model
             # choice; remote/local model metadata provides license and gating truth.
             try:
+                # A curated plugin model may require an exact upstream commit.
+                # Never turn that pin into a moving branch-head recommendation.
+                pinned_revision = str(item.get("revision") or "").strip() or None
+                lookup_kwargs: dict[str, Any] = {
+                    "refresh_remote": self._policy.require_license_acceptance,
+                }
+                if pinned_revision:
+                    lookup_kwargs["revision"] = pinned_revision
                 info = await self._orchestrator.get_model_info(
-                    model_id,
-                    refresh_remote=self._policy.require_license_acceptance,
+                    model_id, **lookup_kwargs
                 )
+                if pinned_revision and info.revision != pinned_revision:
+                    raise ModelOrchestratorError(
+                        E_VERIFY,
+                        "Curated pinned model revision could not be verified",
+                        {"model_id": model_id},
+                    )
                 item["metadata_verified"] = True
                 item["verification_state"] = "verified"
                 item["verification_source"] = lookup_source

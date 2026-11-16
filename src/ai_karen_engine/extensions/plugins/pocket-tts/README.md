@@ -26,8 +26,9 @@ accept the gated Hugging Face model terms and verify approved speaker states.
    through Plugin Store. The plugin's default state is disabled.
 5. Call the authenticated \`GET /api/voice/engines\` catalog. It will
    report the plugin as selectable **only after real local load succeeds**.
-6. \`POST /api/voice/synthesis\` accepts \`engine_id: "pocket-tts"\`,
-   \`voice_id\` from the verified catalog, and a bounded \`text\`. The
+6. \`POST /api/voice/engines/pocket-tts/synthesis\` accepts a JSON body with
+   \`voice_id\` from the verified catalog and bounded \`text\`. The engine
+   is selected by the authenticated route path, not a JSON parameter. The
    request passes canonical PluginService, RuntimePolicy, Kernel, RBAC and
    tenant readiness before the plugin runs.
 
@@ -50,7 +51,7 @@ failed load must not present \`ready\`.
 ## Scope
 
 This first slice reuses the complete-WAV transport. **Incremental streaming,
-cloning, multilingual models, per-user saved engine defaults, native binary
+cloning, multilingual models, native binary
 distribution and local CPU browser acceptance are not yet implemented.**
 Do not advertise them as ready.
 
