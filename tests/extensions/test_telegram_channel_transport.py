@@ -875,3 +875,279 @@ async def test_telegram_recovery_provider_error_masks_vault_bot_token():
             connection=connection(), public_origin="https://hooks.example.org",
         )
     assert TOKEN not in str(error.value)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_status, expected_state",
+    [(200, ChannelDeliveryState.SENT), (429, ChannelDeliveryState.UNKNOWN)],
+)
+async def test_signed_telegram_http_to_runtime_and_provider_outcome(
+    monkeypatch, provider_status, expected_state,
+):
+    """Offline seam proof: real adapter and host services, test-bound SQL/network.
+
+    This is not a live Telegram delivery claim. The repository stand-in models
+    durable admission and one-shot claims; real PostgreSQL proofs remain separate.
+    """
+    import asyncio
+    from dataclasses import replace
+
+    from fastapi import FastAPI
+
+    from ai_karen_engine.api_routes.channels.webhooks import router
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionStatus
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.persistence.repositories.channel_repository import (
+        ChannelDeliveryPreflight,
+        ClaimedChannelDelivery,
+        ClaimedChannelMessage,
+        InboundAdmission,
+    )
+    from ai_karen_engine.services.auth.auth_service import UserStatus
+    from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
+    from ai_karen_engine.services.channels.execution import ChannelExecutionService
+    from ai_karen_engine.services.channels.ingress import ChannelIngressService
+    from ai_karen_engine.services.channels.worker import ChannelInboxWorker
+
+    user_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    connection_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    inbox_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    binding_id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    claim_token = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    outbox_token = "11111111-1111-1111-1111-111111111111"
+    conn = connection().model_copy(update={"connection_id": connection_id})
+    receipt = InboundAdmission(
+        inbox_id=inbox_id,
+        correlation_id="22222222-2222-2222-2222-222222222222",
+        tenant_id=TENANT,
+        user_id=user_id,
+        binding_id=binding_id,
+        inserted=True,
+    )
+    claimed_message = ClaimedChannelMessage(
+        inbox_id=inbox_id,
+        correlation_id=receipt.correlation_id,
+        tenant_id=TENANT,
+        user_id=user_id,
+        binding_id=binding_id,
+        connection_id=connection_id,
+        external_conversation_id="901",
+        external_sender_id="901",
+        message_kind="text",
+        text="Hello Karen",
+    )
+    state = {"admitted": False, "claimed": False, "outbox": None, "outbox_claimed": False}
+
+    async def admit_verified(*, connection, event):
+        assert connection == conn
+        assert event.external_event_id == "741"
+        assert event.external_sender_id == "901"
+        assert event.external_conversation_id == "901"
+        assert event.text == "Hello Karen"
+        first = not state["admitted"]
+        state["admitted"] = True
+        return replace(receipt, inserted=first)
+
+    async def claim_inbound(*, tenant_id, inbox_id, lease_seconds):
+        assert tenant_id == TENANT and inbox_id == receipt.inbox_id
+        assert lease_seconds >= 3
+        if state["claimed"]:
+            return None
+        state["claimed"] = True
+        return claim_token, replace(receipt, inserted=False)
+
+    async def complete_and_stage(*, tenant_id, inbox_id, claim_token, delivery):
+        assert tenant_id == TENANT and inbox_id == receipt.inbox_id
+        assert claim_token == "ffffffff-ffff-ffff-ffff-ffffffffffff"
+        assert state["outbox"] is None
+        state["outbox"] = delivery
+        return True
+
+    async def preflight(*, tenant_id, delivery_id):
+        assert tenant_id == TENANT
+        if state["outbox"] is None or state["outbox"].delivery_id != delivery_id:
+            return None
+        return ChannelDeliveryPreflight(
+            connection_id=connection_id,
+            user_id=user_id,
+            external_conversation_id="901",
+        )
+
+    async def claim_outbound(*, tenant_id, delivery_id, lease_seconds):
+        assert tenant_id == TENANT and lease_seconds >= 3
+        if state["outbox"] is None or state["outbox"].delivery_id != delivery_id:
+            return None
+        if state["outbox_claimed"]:
+            return None
+        state["outbox_claimed"] = True
+        return ClaimedChannelDelivery(
+            connection=conn,
+            delivery=state["outbox"],
+            user_id=user_id,
+            external_conversation_id="901",
+            claim_token=outbox_token,
+        )
+
+    repository = SimpleNamespace(
+        get_enabled_connection=AsyncMock(return_value=conn),
+        admit_verified_inbound=AsyncMock(side_effect=admit_verified),
+        claim_inbound=AsyncMock(side_effect=claim_inbound),
+        load_claimed_message=AsyncMock(return_value=claimed_message),
+        renew_inbound_claim=AsyncMock(return_value=True),
+        complete_and_stage_delivery=AsyncMock(side_effect=complete_and_stage),
+        fail_inbound_claim=AsyncMock(return_value=True),
+        get_delivery_preflight=AsyncMock(side_effect=preflight),
+        claim_outbound=AsyncMock(side_effect=claim_outbound),
+        renew_outbound_claim=AsyncMock(return_value=True),
+        finalize_outbound_claim=AsyncMock(return_value=True),
+    )
+    provider_response = (
+        httpx.Response(200, json={
+            "ok": True, "result": {"message_id": 432, "chat": {"id": 901}},
+        })
+        if provider_status == 200 else httpx.Response(429)
+    )
+    kernel, adapter, _, provider_client = load_transport(response=provider_response)
+    catalog = kernel.loader.load_manifest("telegram-bot")
+    monkeypatch.setattr(
+        kernel, "get_channel_activation_manifest",
+        lambda name: catalog if name == "telegram-bot" else None,
+    )
+    monkeypatch.setattr(
+        kernel, "is_canonical_channel_adapter",
+        lambda name, value: name == "telegram-bot" and value is adapter,
+    )
+    monkeypatch.setattr(
+        kernel.loader, "load_extension",
+        lambda name: adapter if name == "telegram-bot" else None,
+    )
+    await adapter.start(connection=conn)
+
+    async def heartbeat(operation, *, renew, **kwargs):
+        assert await renew()
+        return await operation
+
+    monkeypatch.setattr(
+        "ai_karen_engine.services.channels.execution.run_with_claim_heartbeat",
+        heartbeat,
+    )
+    monkeypatch.setattr(
+        "ai_karen_engine.services.channels.delivery.run_with_claim_heartbeat",
+        heartbeat,
+    )
+    runtime = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(
+        answer="Hello from Karen",
+        status=ChatExecutionStatus.OK,
+        metadata=SimpleNamespace(to_dict=lambda: {
+            "response_source": "model", "degraded_mode": False,
+        }),
+    )))
+    principal = SimpleNamespace(
+        id=user_id, tenant_id=TENANT, status=UserStatus.ACTIVE, roles=["user"],
+    )
+    execution = ChannelExecutionService(
+        repository=repository,
+        chat_runtime=runtime,
+        principal_lookup=AsyncMock(return_value=principal),
+    )
+    delivery_service = ChannelDeliveryService(kernel=kernel, repository=repository)
+    session_id = delivery_service._session_id(
+        tenant_id=TENANT,
+        user_id=user_id,
+        connection_id=connection_id,
+        external_conversation_id="901",
+    )
+    plan = AuthorizedExecutionPlan(
+        execution_id="telegram-round-trip-contract",
+        policy_decision_id="signed-test-policy-decision",
+        authorized_user_id=user_id,
+        authorized_tenant_id=TENANT,
+        authorized_session_id=session_id,
+        allowed_plugins=["telegram-bot"],
+        allowed_capabilities=["channel.send"],
+    )
+
+    async def dispatch_outbox(*, tenant_id, delivery_id, user_id, session_id):
+        assert tenant_id == TENANT
+        assert user_id == principal.id
+        assert session_id == plan.authorized_session_id
+        return await delivery_service.dispatch(
+            tenant_id=tenant_id,
+            delivery_id=delivery_id,
+            adapter=adapter,
+            authorized_plan=plan,
+        )
+
+    worker = ChannelInboxWorker(
+        repository=repository,
+        execution=execution,
+        max_inflight=1,
+        lease_seconds=90,
+        dispatch_outbox=dispatch_outbox,
+    )
+    worker.start()
+    ingress = ChannelIngressService(
+        kernel=kernel,
+        repository=repository,
+        max_native_body_bytes=65_536,
+        on_admitted=worker.submit,
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.state.channel_ingress_service = ingress
+    path = f"/api/channels/webhooks/{TENANT}/{connection_id}"
+    body = native_message()
+    transport = httpx.ASGITransport(app=app)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://localhost",
+        ) as http_client:
+            unsigned = await http_client.post(
+                path, content=body,
+                headers={"X-Telegram-Bot-Api-Secret-Token": "incorrect"},
+            )
+            assert unsigned.status_code == 403
+            repository.admit_verified_inbound.assert_not_awaited()
+            runtime.execute.assert_not_awaited()
+
+            accepted = await http_client.post(
+                path, content=body,
+                headers={"X-Telegram-Bot-Api-Secret-Token": SECRET},
+            )
+            assert accepted.status_code == 200
+            assert accepted.json() == {"accepted": True}
+            assert "Hello from Karen" not in accepted.text
+            await asyncio.gather(*tuple(worker._tasks))
+
+            assert runtime.execute.await_count == 1
+            request = runtime.execute.await_args.args[0]
+            assert request.context.tenant_id == TENANT
+            assert request.context.user_id == user_id
+            assert request.context.correlation_id == receipt.correlation_id
+            assert request.messages == [{"role": "user", "content": "Hello Karen"}]
+            assert request.metadata["channel_inbox_id"] == receipt.inbox_id
+            staged = repository.complete_and_stage_delivery.await_args.kwargs["delivery"]
+            assert staged == state["outbox"]
+            assert staged.text == "Hello from Karen"
+            assert staged.destination_id == "901"
+            assert staged.idempotency_key == receipt.inbox_id
+            assert provider_client.post.await_count == 1
+            finalized = repository.finalize_outbound_claim.await_args.kwargs["receipt"]
+            assert finalized.state is expected_state
+            assert finalized.provider_message_id == (
+                "432" if provider_status == 200 else None
+            )
+
+            replay = await http_client.post(
+                path, content=body,
+                headers={"X-Telegram-Bot-Api-Secret-Token": SECRET},
+            )
+            assert replay.status_code == 200
+            assert replay.json() == {"accepted": True}
+            await asyncio.gather(*tuple(worker._tasks))
+            assert repository.admit_verified_inbound.await_count == 2
+            assert runtime.execute.await_count == 1
+            assert repository.complete_and_stage_delivery.await_count == 1
+            assert provider_client.post.await_count == 1
+    finally:
+        await worker.shutdown()
