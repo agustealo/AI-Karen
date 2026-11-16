@@ -3,7 +3,7 @@
 [Plugin wiki](README.md) · [Voice/modality contract](08-voice-and-modalities.md) ·
 [First-party Pocket plugin](../../src/ai_karen_engine/extensions/plugins/pocket-tts/README.md)
 
-> **Status (2026-11-15): source integration merged, native consumer acceptance
+> **Status (2026-11-16): voice source repairs merged, native consumer acceptance
 > unverified.** This ledger is the auditable release record because the GitHub
 > repository does not currently accept new Issues. Do not mark a test complete
 > without linking its exact code revision, real runtime log/artifact and observed
@@ -14,7 +14,10 @@
 | Gate | Evidence | State |
 | --- | --- | --- |
 | Governed plugin source, VoiceRuntime, settings, browser controller | [PR #861](https://github.com/agustealo/AI-Karen/pull/861) | **Merged**, source integration only |
-| Recommended model pin and durable worker test | [PR #865](https://github.com/agustealo/AI-Karen/pull/865) | **Under CI / merge review** when ledger opened |
+| Recommended model pin and durable worker test | [PR #865](https://github.com/agustealo/AI-Karen/pull/865) | **Merged** to main; 15/15 exact-head source checks |
+| Reviewed revision publication paths, single engine authorization, traversal fences | [PR #885](https://github.com/agustealo/AI-Karen/pull/885) | **Merged**; 11/11 exact-head checks incl. durable worker and first boot |
+| First-class Copilot voice dock and global Stop audio | [PR #872](https://github.com/agustealo/AI-Karen/pull/872) · [PR #880](https://github.com/agustealo/AI-Karen/pull/880) | **Merged**; browser UI source contracts, not real device acceptance |
+| Preview isolation, voice-settings readback, long speech and browser-dictation draft safety | [PR #888](https://github.com/agustealo/AI-Karen/pull/888) | **Merged**; 7/7 exact-head checks including frontend production build |
 | Target hardware runtime + licensed model install | No attested target artifact | **Not proven** |
 | Native Pocket audio and WAV integrity | No non-mocked target WAV | **Not proven** |
 | Browser preview/read-aloud on real target | No device/browser capture | **Not proven** |
@@ -41,6 +44,45 @@ out of scope.
 - Assistant > Voice persists the user's selected engine and voice through
   authenticated user settings. The browser controls opt-in playback only.
 - Voice cloning is disabled and uploaded reference voices are not accepted.
+
+## 2026-11-16 adversarial wiring audit
+
+The following bugs were confirmed in live source, repaired in existing owners
+and accepted through exact-head CI. None establishes audio quality or a real
+consumer-device pass:
+
+| ID | Defect | Canonical owner | Evidence / status |
+| --- | --- | --- | --- |
+| V-AUD-01 | Double TTS plugin catalog probe per synthesis request | `api_routes/voice.py` delegates once to `services/voice_runtime.py` | #885, 11/11, merged |
+| V-AUD-02 | Different reviewed revisions published to common `main` path | `ModelDownloadControlService` | #885, 11/11, merged |
+| V-AUD-03 | Unsafe model/revision path components or symlink escape | `ModelDownloadControlService._build_install_path` | #885, 11/11, merged |
+| V-AUD-04 | Old voice-preview events could stop a newer preview | `LocalVoiceEngineSettings` | #888, 7/7, merged |
+| V-AUD-05 | Settings could claim voice save without readback | `LocalVoiceEngineSettings` via authenticated settings owner | #888, 7/7, merged |
+| V-AUD-06 | Long unspaced replies could bypass synthesis chunk bound | `KarenBrowserSpeechPlayback` | #888, 7/7, merged |
+| V-AUD-07 | Browser dictation could overwrite newer typing, duplicate transcripts or accept stale-session events | `KarenBrowserDictationCapture` canonical draft port | #888, 7/7, merged |
+
+**Open acceptance (not bypassable):** prove the licensed Pocket model is
+actually installed and healthy on the target machine; generate non-mocked
+WAV, listen to real audio, confirm output format, time-to-first-audio and
+CPU/RAM bounds; verify microphone permission denial/withdrawal, active
+speech Stop, account switch, cancellation, draft restoration and responsive
+390/768/1024/1440px Copilot experience in a real signed-in browser.
+Keep denial and revocation scenarios in the evidence matrix.
+
+**Known scale watchpoints:** Pocket currently searches a bounded list of
+completed model-download jobs (up to 500) for an eligible tenant-scoped
+installation. On a host with more historical jobs, availability may need
+a governed tenant/model indexed query rather than list-and-filter. This is
+**not proven fixed** by #885 or #888. Also validate that local/native TTS
+model preparation does not exceed the user-facing request budget and that
+the worker correctly fences model revocation during ongoing requests.
+
+The opt-in non-mocked STT tests in
+`tests/core/voice/test_voice_real_model_acceptance.py` require actual WAV
+and model environment variables. Source CI tests with fake audio, mocked
+authorization or synthetic device callbacks cannot replace Pocket native
+acceptance. No acceptance check is marked complete without a real target
+artifact.
 
 ## Operator preflight (record all observations)
 
