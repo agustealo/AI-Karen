@@ -1382,3 +1382,101 @@ async def test_telegram_inspection_rejects_invented_live_origin_and_secrets():
         )
     assert error.value.status_code == 503
     assert "secret" not in str(error.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_telegram_operator_provision_calls_governed_service_and_never_leaks_vault_reference():
+    host, request = host_context()
+    host.activation.provision = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="telegram-account",
+        credential_handle="vault://sensitive-credential", revision=1, enabled=False,
+    ))
+    payload = api.TelegramProvisionRequest(
+        provider_account_id="telegram-account",
+        credential_handle="vault://sensitive-credential",
+    )
+    result = await api.provision_telegram_connection(
+        payload=payload, request=request, user=actor(roles=["admin"]),
+    )
+    assert str(result.connection_id) == CONNECTION
+    assert result.enabled is False
+    assert result.operational is False
+    assert "vault://" not in result.model_dump_json()
+    assert "telegram-account" not in result.model_dump_json()
+    auth = host.activation.issue_action_plan.await_args.kwargs
+    assert auth["action"] == "channel.provision"
+    assert auth["installation_id"] == "telegram-bot"
+    assert auth["tenant_id"] == TENANT and auth["user_id"] == USER
+    call = host.activation.provision.await_args.kwargs
+    assert call["authorized_plan"] == "trusted-plan"
+    assert call["session_id"] == auth["session_id"]
+    assert call["tenant_id"] == TENANT and call["user_id"] == USER
+
+
+@pytest.mark.parametrize("credential", [
+    "123456:raw_bot_token",
+    "bot-token",
+    "",
+    "vault://missing:rawsecret",
+    "vault://has whitespace",
+])
+def test_telegram_provision_request_rejects_raw_credentials(credential):
+    with pytest.raises(ValidationError):
+        api.TelegramProvisionRequest(
+            provider_account_id="account", credential_handle=credential,
+        )
+
+
+@pytest.mark.asyncio
+async def test_telegram_provision_denies_policy_before_persistence():
+    host, request = host_context()
+    host.activation.provision = AsyncMock()
+    host.activation.issue_action_plan.side_effect = PermissionError("not authorized")
+    with pytest.raises(HTTPException) as error:
+        await api.provision_telegram_connection(
+            payload=api.TelegramProvisionRequest(
+                provider_account_id="account",
+                credential_handle="vault://credential",
+            ),
+            request=request, user=actor(),
+        )
+    assert error.value.status_code == 403
+    host.activation.provision.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_provision_cannot_claim_activated_connection():
+    host, request = host_context()
+    host.activation.provision = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=2, enabled=True,
+    ))
+    with pytest.raises(HTTPException) as error:
+        await api.provision_telegram_connection(
+            payload=api.TelegramProvisionRequest(
+                provider_account_id="account",
+                credential_handle="vault://credential",
+            ),
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_telegram_provision_ignores_untrusted_actor_fields_and_refuses_foreign_result():
+    host, request = host_context()
+    host.activation.provision = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://ref", revision=1, enabled=False,
+    ))
+    with pytest.raises(HTTPException) as error:
+        await api.provision_telegram_connection(
+            payload=api.TelegramProvisionRequest(
+                provider_account_id="account", credential_handle="vault://credential",
+            ),
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 503
