@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -48,7 +49,13 @@ class ExecutionBudget:
 
 
 class ExecutionBudgetMeter:
-    """Track consumption against an ExecutionBudget for one request."""
+    """Thread-safe-in-event-loop accounting for one authorized execution budget.
+
+    A denied reservation never mutates an accepted usage counter. The first
+    start fixes one monotonic deadline; subsequent calls cannot renew it.
+    Every reservation also checks that deadline so callers cannot bypass it
+    by neglecting to call check_duration() between long-running operations.
+    """
 
     def __init__(self, budget: ExecutionBudget) -> None:
         self._budget = budget
@@ -59,92 +66,70 @@ class ExecutionBudgetMeter:
         self._external_requests = 0
         self._input_tokens = 0
         self._output_tokens = 0
-        self._start_ms: float = 0.0
+        self._start_ms: float | None = None
         self._exhausted = False
         self._lock = asyncio.Lock()
 
     def start(self) -> None:
-        self._start_ms = __import__("time").time() * 1000.0
+        """Start once; restarting cannot extend an authorized time budget."""
+        if self._start_ms is None:
+            self._start_ms = time.monotonic() * 1000.0
+
+    def _within_deadline(self) -> bool:
+        """Check one deadline while the caller holds the meter lock."""
+        if self._exhausted:
+            return False
+        self.start()
+        assert self._start_ms is not None
+        if time.monotonic() * 1000.0 - self._start_ms >= self._budget.max_duration_ms:
+            self._exhausted = True
+            return False
+        return True
 
     async def check_duration(self) -> bool:
         async with self._lock:
-            if self._exhausted:
+            return self._within_deadline()
+
+    async def _reserve(self, field: str, limit: int, amount: int = 1) -> bool:
+        """Commit an authorized nonnegative reservation exactly once.
+
+        A rejected or invalid operation must never alter usage, particularly
+        when a provider or tool retries after a denial.
+        """
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            raise ValueError("budget reservation must be a nonnegative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("execution budget limit must be a nonnegative integer")
+        async with self._lock:
+            if not self._within_deadline():
                 return False
-            elapsed = __import__("time").time() * 1000.0 - self._start_ms
-            if elapsed >= self._budget.max_duration_ms:
+            used = getattr(self, field)
+            if used + amount > limit:
                 self._exhausted = True
                 return False
+            setattr(self, field, used + amount)
             return True
 
     async def reserve_model_call(self) -> bool:
-        async with self._lock:
-            if self._exhausted:
-                return False
-            self._model_calls += 1
-            if self._model_calls > self._budget.max_model_calls:
-                self._exhausted = True
-                return False
-            return True
+        return await self._reserve("_model_calls", self._budget.max_model_calls)
 
     async def reserve_reasoning_step(self) -> bool:
-        async with self._lock:
-            if self._exhausted:
-                return False
-            self._reasoning_steps += 1
-            if self._reasoning_steps > self._budget.max_reasoning_steps:
-                self._exhausted = True
-                return False
-            return True
+        return await self._reserve("_reasoning_steps", self._budget.max_reasoning_steps)
 
     async def reserve_tool_call(self) -> bool:
-        async with self._lock:
-            if self._exhausted:
-                return False
-            self._tool_calls += 1
-            if self._tool_calls > self._budget.max_tool_calls:
-                self._exhausted = True
-                return False
-            return True
+        return await self._reserve("_tool_calls", self._budget.max_tool_calls)
 
     async def reserve_agent_turn(self) -> bool:
-        async with self._lock:
-            if self._exhausted:
-                return False
-            self._agent_turns += 1
-            if self._agent_turns > self._budget.max_agent_turns:
-                self._exhausted = True
-                return False
-            return True
+        return await self._reserve("_agent_turns", self._budget.max_agent_turns)
 
     async def reserve_external_request(self) -> bool:
-        async with self._lock:
-            if self._exhausted:
-                return False
-            self._external_requests += 1
-            if self._external_requests > self._budget.max_external_requests:
-                self._exhausted = True
-                return False
-            return True
+        return await self._reserve("_external_requests", self._budget.max_external_requests)
 
     async def add_input_tokens(self, count: int) -> bool:
-        async with self._lock:
-            if self._exhausted:
-                return False
-            self._input_tokens += count
-            if self._input_tokens > self._budget.max_input_tokens:
-                self._exhausted = True
-                return False
-            return True
+        return await self._reserve("_input_tokens", self._budget.max_input_tokens, count)
 
     async def add_output_tokens(self, count: int) -> bool:
-        async with self._lock:
-            if self._exhausted:
-                return False
-            self._output_tokens += count
-            if self._output_tokens > self._budget.max_output_tokens:
-                self._exhausted = True
-                return False
-            return True
+        return await self._reserve("_output_tokens", self._budget.max_output_tokens, count)
 
     async def consume_model_call(self) -> bool:
         return await self.reserve_model_call()
