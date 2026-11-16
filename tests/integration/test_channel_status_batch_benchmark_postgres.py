@@ -79,6 +79,36 @@ def make_statuses(connection_id: str, *, case: str, count: int) -> tuple[Channel
     return tuple(statuses)
 
 
+def disposable_postgres_dsn(url: str) -> str:
+    """Admit only a loopback disposable database, never remote production."""
+    parsed = urlparse(url)
+    if (
+        parsed.scheme not in {"postgresql", "postgresql+asyncpg"}
+        or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or parsed.path != "/karen_channel_test"
+        or not parsed.username
+        or not parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Refusing benchmark outside the local disposable channel database")
+    return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
+def test_benchmark_refuses_nonlocal_or_ambiguous_database_scope() -> None:
+    for url in (
+        "postgresql://postgres:secret@db.example.com/karen_channel_test",
+        "postgresql://postgres:secret@localhost/karen_production",
+        "postgresql://postgres:secret@localhost/karen_channel_test?sslmode=disable",
+        "postgresql://postgres@localhost/karen_channel_test",
+    ):
+        with pytest.raises(ValueError, match="local disposable"):
+            disposable_postgres_dsn(url)
+    assert disposable_postgres_dsn(
+        "postgresql://postgres:secret@localhost:5432/karen_channel_test",
+    ).endswith("/karen_channel_test")
+
+
 def test_status_benchmark_percentiles_are_explicit_sample_statistics() -> None:
     assert percentile([1.0, 2.0, 3.0], 50) == 2.0
     assert percentile([1.0, 2.0, 3.0], 95) == 2.9
@@ -92,8 +122,10 @@ async def test_live_postgres_status_batch_latency_and_replay(monkeypatch: pytest
     url = os.getenv("CHANNEL_TEST_DATABASE_URL")
     if not url:
         pytest.skip("Dedicated CHANNEL_TEST_DATABASE_URL not configured")
-    if urlparse(url).path != "/karen_channel_test":
-        pytest.fail("Benchmark requires only the disposable karen_channel_test database")
+    try:
+        dsn = disposable_postgres_dsn(url)
+    except ValueError as exc:
+        pytest.fail(str(exc))
     try:
         repetitions = int(os.getenv("KAREN_CHANNEL_STATUS_BENCHMARK_REPETITIONS", "6"))
     except (ValueError, TypeError):
@@ -101,7 +133,6 @@ async def test_live_postgres_status_batch_latency_and_replay(monkeypatch: pytest
     if not 3 <= repetitions <= 100:
         pytest.fail("Benchmark repetitions must be between 3 and 100")
 
-    dsn = url.replace("postgresql+asyncpg://", "postgresql://", 1)
     raw = await asyncpg.connect(dsn)
     engine = None
     tenant = uuid.uuid4()
@@ -109,6 +140,8 @@ async def test_live_postgres_status_batch_latency_and_replay(monkeypatch: pytest
     created_tenant = False
 
     try:
+        if await raw.fetchval("SELECT current_database()") != "karen_channel_test":
+            pytest.fail("Database identity does not match the disposable benchmark")
         if await raw.fetchval("SELECT to_regclass('public.channel_provider_status_events')") is None:
             pytest.fail("Run the canonical channel PostgreSQL integration proof before the benchmark")
         await raw.execute("INSERT INTO public.tenants (id) VALUES ($1)", tenant)
