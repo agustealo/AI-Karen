@@ -196,3 +196,80 @@ async def test_visible_partial_response_cannot_switch_after_static_terminal_rece
 
     assert deltas == ["Unfinished"]
     assert visited == ["local"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_preserves_intra_engine_provider_fallback_receipt() -> None:
+    class Engine:
+        async def generate(self, task):
+            receipt = _receipt(
+                task,
+                engine_id="local",
+                source="fallback_provider_runtime",
+                provider="alternate-local",
+                model="alternate-model",
+                text="Response from another registered provider.",
+            )
+            receipt.metadata["fallback_level"] = 1
+            return receipt
+
+    with patch("ai_karen_engine.core.expression.gateway.get_engine", return_value=Engine()):
+        result = await ExpressionGateway(_settings(fallback=False)).generate(_task())
+
+    assert result.degraded is True
+    assert result.degradation_reason == "provider_fallback"
+    assert result.metadata["fallback_level"] == 1
+    assert result.provider == "alternate-local"
+    assert result.model == "alternate-model"
+
+
+@pytest.mark.asyncio
+async def test_gateway_adds_engine_and_provider_fallback_hops_without_hiding_them() -> None:
+    class Engine:
+        def __init__(self, engine_id):
+            self.engine_id = engine_id
+
+        async def generate(self, task):
+            if self.engine_id == "local":
+                raise RuntimeError("Primary engine failed")
+            result = _receipt(task, engine_id="cloud", provider="actual-cloud")
+            result.metadata["fallback_level"] = 1
+            return result
+
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _type: Engine(engine_id),
+    ):
+        result = await ExpressionGateway(_settings(fallback=True)).generate(_task())
+
+    assert result.degraded is True
+    assert result.degradation_reason == "model_engine_fallback"
+    assert result.metadata["fallback_level"] == 2
+    assert result.metadata["engine_attempt_timings"][-1]["fallback_level"] == 1
+
+
+@pytest.mark.asyncio
+async def test_foreign_engine_receipt_is_not_a_model_completion() -> None:
+    class Engine:
+        async def generate(self, task):
+            return _receipt(task, engine_id="foreign-engine")
+
+    with patch("ai_karen_engine.core.expression.gateway.get_engine", return_value=Engine()):
+        with pytest.raises(EngineUnavailableError, match="No model engine produced"):
+            await ExpressionGateway(_settings(fallback=False)).generate(_task())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_level", [-1, True, "one", 1.5])
+async def test_malformed_internal_fallback_receipts_cannot_be_laundered(
+    bad_level,
+) -> None:
+    class Engine:
+        async def generate(self, task):
+            result = _receipt(task, engine_id="local")
+            result.metadata["fallback_level"] = bad_level
+            return result
+
+    with patch("ai_karen_engine.core.expression.gateway.get_engine", return_value=Engine()):
+        with pytest.raises(EngineUnavailableError, match="No model engine produced"):
+            await ExpressionGateway(_settings(fallback=False)).generate(_task())
