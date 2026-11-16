@@ -67,6 +67,27 @@ def _inputs(*, preferred: bool = True, risk: str = "low"):
     return request, decision, plan, meter
 
 
+def test_default_verification_has_no_unwired_model_strategies() -> None:
+    """Core defaults must not claim an external model call from refinement.
+
+    The former default Refiner() had no injected LLM, invoked SelfRefiner
+    with an unsupported keyword, and was still charged a model call by the
+    reasoning executor. That phantom charge blocked the genuine selected-model
+    response on the production Ollama Settings path.
+    """
+    from ai_karen_engine.core.reasoning.defaults import get_default_strategies
+
+    applicable = [
+        strategy for strategy in get_default_strategies()
+        if strategy.can_handle(["verification"])
+    ]
+    assert {strategy.strategy_id for strategy in applicable} == {
+        "verify", "metacognition",
+    }
+    assert all(not strategy.supports_model_calls for strategy in applicable)
+
+
+
 @pytest.mark.asyncio
 async def test_nonstream_selected_model_generates_after_reasoning() -> None:
     runtime = _runtime()
