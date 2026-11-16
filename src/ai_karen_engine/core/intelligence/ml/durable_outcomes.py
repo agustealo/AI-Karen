@@ -218,7 +218,13 @@ class GovernedMLLearningEvidence:
                 or not isinstance(metadata, dict)
                 or metadata.get("schema_version") != _ML_SCHEMA
                 or metadata.get("label_source") not in _ALLOWED_LABEL_SOURCES
-                or not metadata.get("label_evidence_ref")
+                or not isinstance(metadata.get("label_evidence_ref"), str)
+                or not 1 <= len(metadata["label_evidence_ref"]) <= 256
+                or not metadata["label_evidence_ref"].isascii()
+                or not all(
+                    ch.isalnum() or ch in "-._:/"
+                    for ch in metadata["label_evidence_ref"]
+                )
                 or not isinstance(metadata.get("correct"), bool)
             ):
                 continue
@@ -255,6 +261,10 @@ class GovernedMLLearningEvidence:
                     # OnlineLearning's historical profile-decay contract
                     # uses Unix seconds, even though OutcomeStore persists ISO.
                     timestamp=str(verified_at.timestamp()),
+                    metadata={
+                        "label_source": metadata["label_source"],
+                        "label_evidence_ref": metadata["label_evidence_ref"],
+                    },
                 )
                 self._validated_metrics(item)
             except (ValueError, KeyError, TypeError):
@@ -319,13 +329,25 @@ class GovernedMLLearningEvidence:
             raise ValueError("Confidence calibration bins must be 2-20")
 
         verified = await self.load_verified(limit=limit, task=task)
-        eligible = [
-            row for row in verified
-            if row.model_id == model_id
-            and row.model_version == model_version
-            and row.feature_version == feature_version
-            and row.fallback_used is False
-        ]
+        eligible: list[MLOutcomeRecord] = []
+        seen_label_refs: set[str] = set()
+        for row in verified:
+            if (
+                row.model_id != model_id
+                or row.model_version != model_version
+                or row.feature_version != feature_version
+                or row.fallback_used
+            ):
+                continue
+            # One independently attested label receipt can back at most one
+            # evaluation case. Distinct outcome IDs must not multiply a
+            # single truth label. This still does not certify sample
+            # independence or dataset provenance.
+            label_ref = row.metadata.get("label_evidence_ref")
+            if not isinstance(label_ref, str) or label_ref in seen_label_refs:
+                continue
+            seen_label_refs.add(label_ref)
+            eligible.append(row)
         sufficient = len(eligible) >= minimum_samples
         evaluation = {
             "task": task,
