@@ -377,6 +377,13 @@ bot-identity reservation occur in the same database transaction. A duplicate
 ID held by another connection aborts the transaction before `setWebhook`,
 without leaving a partially acquired webhook claim.
 
+The adapter re-resolves its Vault credential immediately before `setWebhook`
+and verifies the provider's `getMe` identity again using the **same bot
+token** it will use for the mutation. If a credential changed between the
+original ownership reservation and the actual outbound call, the provider
+mutation is refused and the durable claim remains unresolved. This rules out
+silently registering a different bot after a credential rotation.
+
 A repeat reservation for the *same* tenant, connection, revision, and numeric
 bot ID is accepted only as an idempotent ownership check, not as permission to
 reuse an existing webhook claim. Changing the credential to a different bot,
