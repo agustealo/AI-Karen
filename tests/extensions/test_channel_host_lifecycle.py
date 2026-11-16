@@ -1344,3 +1344,74 @@ async def test_governed_webhook_inspection_rejects_substituted_adapter_and_fake_
         await host.inspect_channel_webhook(**inputs)
     adapter.inspect_webhook.assert_not_awaited()
     await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_host_activation_uses_only_canonical_adapter_and_service():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, kernel, _, _, adapter = fake_components()
+    original = ChannelConnection(
+        connection_id="telegram-connect", tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=1, enabled=False,
+    )
+    host.repository.get_connection = AsyncMock(return_value=original)
+    await host.initialize()
+    activated = original.model_copy(update={"enabled": True, "revision": 2})
+    host.activation.activate = AsyncMock(return_value=activated)
+    params = {
+        "tenant_id": original.tenant_id, "connection_id": original.connection_id,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "session_id": "governed-session", "authorized_plan": object(),
+        "expected_revision": 1,
+    }
+    result = await host.activate_telegram_connection(**params)
+    assert result is activated
+    call = host.activation.activate.await_args.kwargs
+    assert call["adapter"] is adapter
+    assert call["settings"] == {"private_chats_only": True}
+    assert call["authorized_plan"] is params["authorized_plan"]
+    assert call["session_id"] == "governed-session"
+    adapter.start.assert_not_awaited()  # Only the activation service may start.
+    host.activation.activate.reset_mock()
+
+    with pytest.raises(PermissionError, match="unavailable"):
+        await host.activate_telegram_connection(**{**params, "expected_revision": 2})
+    host.activation.activate.assert_not_awaited()
+
+    kernel.is_canonical_channel_adapter = lambda *_: False
+    with pytest.raises(PermissionError, match="Canonical"):
+        await host.activate_telegram_connection(**params)
+    host.activation.activate.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_host_activation_never_uses_nontelegram_or_cross_tenant_connection():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    await host.initialize()
+    host.activation.activate = AsyncMock()
+    connection = ChannelConnection(
+        connection_id="telegram-connect", tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="whatsapp-cloud", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=1, enabled=False,
+    )
+    host.repository.get_connection = AsyncMock(return_value=connection)
+    params = {
+        "tenant_id": connection.tenant_id, "connection_id": connection.connection_id,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "session_id": "governed-session", "authorized_plan": object(),
+        "expected_revision": 1,
+    }
+    with pytest.raises(PermissionError):
+        await host.activate_telegram_connection(**params)
+    with pytest.raises(PermissionError):
+        await host.activate_telegram_connection(**{**params, "tenant_id": "foreign-tenant"})
+    host.activation.activate.assert_not_awaited()
+    adapter.start.assert_not_awaited()
+    await host.shutdown()
