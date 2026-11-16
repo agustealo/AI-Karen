@@ -84,7 +84,7 @@
       "include_patterns": [
         "languages/english_18m_refl_2026-10/model.safetensors",
         "languages/english_18m_refl_2026-10/tokenizer.model",
-        "languages/english_18m_refl_2026-10/embeddings/**"
+        "languages/english_18m_refl_2026-10/embeddings/*.safetensors"
       ],
       "capabilities": [
         "audio",
