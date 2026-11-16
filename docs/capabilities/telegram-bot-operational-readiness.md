@@ -344,3 +344,17 @@ inbound delivery or a provider-confirmed ChatRuntime reply. An uncertain
 claim remains blocked even if Telegram currently reports the expected URL.
 Durable recovery requires a separate guarded workflow with provider ownership
 and cross-replica fencing proofs.
+
+## Reconciliation consistency across remote reads
+
+The host reads the tenant-scoped claim before contacting Telegram and reads it
+again after the provider response, alongside a fresh enabled connection revision.
+If the claim state, revision-match flag, expiry state, or persisted connection
+changes, the inspection fails closed rather than combining stale SQL evidence
+with a newer provider response. This has no side effects and never releases
+an uncertain claim.
+
+These two read-only checks do **not** create an atomic transaction with the
+Telegram Bot API, prove unique ownership of the Telegram bot across tenants,
+or authorize recovery. Claim release remains unavailable until independently
+fenced provider ownership and durable recovery are implemented.
