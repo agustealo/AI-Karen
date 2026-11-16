@@ -267,17 +267,12 @@ class MainExtension(ExtensionBase):
                     timestamp_number = int(timestamp)
                     if not 1 <= timestamp_number <= 4102444800:
                         raise ValueError("Invalid WhatsApp provider timestamp")
-                    # Meta status webhooks have no guaranteed unique event ID.
-                    # Derive a repeatable digest from validated signed fields.
-                    identity = {
-                        "message_id": message_id,
-                        "recipient": recipient,
-                        "state": state,
-                        "timestamp": timestamp_number,
-                    }
-                    receipt_id = hashlib.sha256(
-                        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("ascii")
-                    ).hexdigest()
+                    receipt_id = ChannelProviderStatusEvent.receipt_for(
+                        provider_message_id=message_id,
+                        recipient_id=recipient,
+                        state=ChannelDeliveryState(state),
+                        provider_timestamp=timestamp_number,
+                    )
                     statuses.append(ChannelProviderStatusEvent(
                         connection_id=connection.connection_id,
                         provider_message_id=message_id,
