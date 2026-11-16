@@ -92,11 +92,9 @@ async def test_two_tenants_have_separate_bound_receipts() -> None:
         max_evidence_refs=100
     ).read(tenant_id=TENANT_B)
     assert first_read.model.tenant_id != other_read.model.tenant_id
-    assert first_read.evidence_sha256 != other_read.evidence_sha256 or (
-        # Projected evidence can share a source digest globally, but the
-        # resulting scopes must never be shared or cross-authorized.
-        first_read.model.tenant_id != other_read.model.tenant_id
-    )
+    # Identical global Persona configuration still produces distinct
+    # tenant-bound lineage digests. The digest is not an RBAC token.
+    assert first_read.evidence_sha256 != other_read.evidence_sha256
 
 
 @pytest.mark.asyncio
