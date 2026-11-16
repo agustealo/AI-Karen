@@ -59,6 +59,38 @@ When an adapter passes the ship gate, copy the **exact reviewed source files** a
 
 For existing shipped essentials, any divergence between a preinstalled source and a free copy is **release drift** to audit and reconcile, not a reason to choose the free directory as runtime authority.
 
+## KWA-01C3: signed status-only receipts after channel deactivation
+
+A Meta callback can arrive after an operator disables a tenant WhatsApp
+connection. The canonical host now has a **separate, receive-only** path for
+that case. When the persisted connection is disabled, the installed WhatsApp
+adapter verifies `X-Hub-Signature-256` against host-injected Vault credentials
+and parses the same bounded native batch contract. Only a *nonempty, pure
+status batch* is eligible. Mixed inbound texts, link commands, unknown native
+changes, missing/invalid signatures, and callbacks for other channel types
+are rejected before any persistence or ChatRuntime work.
+
+`SqlChannelRepository` accepts a delayed status **only** when the same
+tenant/connection already has a finalized, provider-identified outbox send
+with the exact recipient and original inbox revision. The SQL checks
+`enabled=false` and the observed connection revision again, derives the
+historical revision from the existing send, and refuses unknown statuses
+rather than inventing old deliveries. The shared monotonic reconciler
+permits `sent → delivered → read` without downgrades, while leaving the
+connection disabled. Signature replay stays digest-idempotent. No provider
+call, worker submission, new message or user identity binding is possible
+from the disabled path.
+
+**Limitations:** This is source proof, not live Meta callback acceptance.
+Unmatched historical IDs are ignored, not silently promoted; their
+retention/incident policy remains a separate release gate. Credential
+rotation may make old callbacks unverifiable and those are correctly
+denied. New connections are never activated by status-only callbacks.
+External provider subscription removal, personal unlink, and credential
+erasure are neither performed nor claimed. The canonical plugin stays
+unpublished in `free_plugins/essential` until live Meta, migration, browser
+and exact-head gates pass.
+
 ## KWA-01B source implementation: signed batches and durable status evidence
 
 The canonical WhatsApp adapter now normalizes multiple signed \`entry[].changes[]\`,
