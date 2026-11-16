@@ -2027,7 +2027,7 @@ class SqlChannelRepository:
         # The lock applies only to the original status rows. Concurrent
         # cleanup workers skip rather than competing for the same receipt.
         candidate_sql += (
-            " FOR UPDATE OF e SKIP LOCKED\n"
+            " FOR UPDATE OF e, c SKIP LOCKED\n"
             if not dry_run else "\n"
         )
         candidate_sql += ")\n"
