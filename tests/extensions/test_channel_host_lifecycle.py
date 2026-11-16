@@ -378,6 +378,7 @@ async def test_explicit_recovery_requires_policy_before_reading_backlog():
         await host.recover_inbox(
             tenant_id=tenant, connection_id="c1", user_id=user,
             session_id="session", authorized_plan=plan,
+            expected_revision=3,
         )
     host.repository.list_recoverable_inbound.assert_not_awaited()
     host.worker.submit.assert_not_awaited()
@@ -385,6 +386,7 @@ async def test_explicit_recovery_requires_policy_before_reading_backlog():
     assert await host.recover_inbox(
         tenant_id=tenant, connection_id="c1", user_id=user,
         session_id="session", authorized_plan=plan,
+        expected_revision=3,
     ) == 1
     host.activation._authorize.assert_awaited_with(
         tenant_id=tenant, user_id=user, session_id="session",
@@ -416,6 +418,7 @@ async def test_recovery_refuses_disabled_or_cross_tenant_connection_before_polic
         await host.recover_inbox(
             tenant_id=tenant, connection_id="c1", user_id=other,
             session_id="session", authorized_plan=None,
+            expected_revision=3,
         )
     host.activation._authorize.assert_not_awaited()
     host.repository.list_recoverable_inbound.assert_not_awaited()
