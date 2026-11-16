@@ -50,3 +50,16 @@ Enabling admission does not enable training, dataset creation, or checkpoint pro
 4. Benchmark compact adapters offline only after the dataset and governance gates pass.
 
 Approval is not proof of training. Only an independently authorized and lineage-backed training job may consume an approved dataset.
+
+
+## KCM-01B: Governed PostgreSQL source and consent verification (draft)
+
+- A read-only resolver verifies canonical memory-event UUID, payload SHA-256 revision, owner tenant/user scope, active retention and no superseding event.
+- Requires the newest current grant of the purpose-specific scope named kcm.training.<objective>. General memory-write consent is insufficient.
+- Performs source and consent reads under one transaction with both tenant and user RLS context and explicit query predicates.
+- Does NOT infer data rights or target correctness from LTM admission, execution success or consent. Their receipts are absent; this resolver cannot approve training.
+- Unit tests cover valid source reference, consent missing/denied/revoked, sensitive and superseded events, stale digest, malformed scope and no accidental approval.
+- Local isolated SQLAlchemy-compatible test doubles pass; real PostgreSQL RLS and full exact-head CI are separate acceptance requirements.
+- No user-facing API, database migration, model training, or provider/runtime changes. Admission remains default-disabled.
+
+**Follow-up:** independently verified rights and target receipts, dataset manifest lineage, retraining/revocation fencing, and live PostgreSQL RLS tests before any promotion.
