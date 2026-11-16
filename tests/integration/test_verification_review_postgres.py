@@ -167,8 +167,8 @@ async def _assert_rls_is_real(
         ) == 0
         # WITH CHECK must prohibit an attempted insert of the other tenant.
         # A savepoint allows the outer audit transaction to continue.
-        async with raw.transaction():
-            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            async with raw.transaction():
                 await raw.execute(
                     """
                     INSERT INTO public.outcome_records
