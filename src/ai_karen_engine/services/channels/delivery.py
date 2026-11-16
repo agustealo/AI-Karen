@@ -227,6 +227,20 @@ class ChannelDeliveryService:
                     delivery_id=delivery_id, state=ChannelDeliveryState.FAILED,
                     error_code="outbound_kind_unsupported",
                 )
+            elif (
+                connection.installation_id == "whatsapp-cloud"
+                and not await self._repository.whatsapp_customer_window_open(
+                    tenant_id=tenant_id, claimed=claimed,
+                    send_budget_seconds=65,
+                )
+            ):
+                # Deny after the one-shot claim, before any provider request.
+                # A delayed queue, missing signed time, wrong recipient or
+                # stale connection revision must never send free-form text.
+                receipt = ChannelDeliveryReceipt(
+                    delivery_id=delivery_id, state=ChannelDeliveryState.FAILED,
+                    error_code="whatsapp_customer_window_closed",
+                )
             else:
                 try:
                     value = await asyncio.wait_for(
