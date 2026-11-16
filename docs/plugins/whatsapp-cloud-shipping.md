@@ -77,9 +77,12 @@ with the exact recipient and original inbox revision. The SQL checks
 historical revision from the existing send, and refuses unknown statuses
 rather than inventing old deliveries. The shared monotonic reconciler
 permits `sent → delivered → read` without downgrades, while leaving the
-connection disabled. Signature replay stays digest-idempotent. No provider
-call, worker submission, new message or user identity binding is possible
-from the disabled path.
+connection disabled. Signature replay stays digest-idempotent. If a status was
+committed *before* a send finished but the channel was disabled before the
+send's provider receipt finalized, the existing outbox finalizer also
+reconciles that pending status against the original inbox revision and
+current disabled revision fence. No provider call, worker submission, new
+message or user identity binding is possible from the disabled path.
 
 **Limitations:** This is source proof, not live Meta callback acceptance.
 Unmatched historical IDs are ignored, not silently promoted; their
