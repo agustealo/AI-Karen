@@ -107,7 +107,7 @@ def test_both_chat_transports_use_canonical_reasoning_authorization() -> None:
         if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
-    for method in (methods["execute"], methods["stream"]):
+    for method in (methods["execute"], methods["execute_stream"]):
         authorized_calls = [
             node for node in ast.walk(method)
             if isinstance(node, ast.Call)
