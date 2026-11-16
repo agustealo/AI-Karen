@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
 from ai_karen_engine.core.intelligence.ml.contracts import Prediction, PredictionTask
@@ -79,3 +79,27 @@ class BenchmarkResult:
     fallback_count: int
     abstention_count: int
     outcomes: list[PredictionOutcome] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class GovernedConfidenceEvaluation:
+    """Shadow-only confidence calibration from principal-scoped evaluated labels.
+
+    Scores describe observed, independently labelled predictor correctness,
+    not global model accuracy, causal certainty or a RuntimePolicy grant.
+    A missing/undersized corpus has absent scores, never numeric zeros.
+    """
+
+    task: PredictionTask
+    model_id: str
+    model_version: str
+    feature_version: str
+    status: Literal["insufficient_evidence", "evaluated_shadow"]
+    sample_count: int
+    minimum_samples: int
+    window_limit: int
+    evidence_version: str
+    brier_score: MetricResult | None = None
+    expected_calibration_error: MetricResult | None = None
+    scope: str = field(default="principal_scoped_bounded_window", init=False)
+    runtime_authorized: bool = field(default=False, init=False)

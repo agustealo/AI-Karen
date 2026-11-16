@@ -1,7 +1,7 @@
 # KCOG Sprint Execution Plan
 
 > **Sprint:** KCOG-S1 ("Cognitive Integrity → Executive Control").
-> **Stage:** IMPLEMENTING, first KCOG-00A PR in exact-head CI; not yet accepted.
+> **Stage:** IMPLEMENTING. KCOG-01A1 and KCON-211 are merged; KCOG-01A2 is a separate, unaccepted shadow-evaluation slice.
 > **Start baseline:** `272e23c4b5879771294e46c2d205e3b6f3909050`. Rebase/compare against live main before each implementation branch.
 > **Order:** audit → contain invalid outputs → prove safety → integrate cognitive state → measure decisions.
 
@@ -13,7 +13,9 @@
 - KCOG-00A2 #868 (**MERGED**) `afa845187151715692ca15a75b93871c7403351f`, exact-head CI green including First-Boot; unsupported causal numerical APIs abstain.
 - KCOG-00B1 #869 (**MERGED**) `fd0d2e408e7c2c6cd82bdc1015ea4c030dbf3ea3`, exact-head CI green including First-Boot; unknown calibration and attribution cannot masquerade as zero.
 - KCOG-00A3 #871 (**MERGED**) `92ab8a45babc3b271447b3874a10feac99df3085`: verified exact-head gates incl first boot, advertised capability now abstains without pretending causal estimation.
-- KCOG-01A1 #875 (**OPEN**) governed conflict-to-verification + post-policy typed `CognitiveState` and audit-safe status; multiple CI findings repaired on branch, exact-head gates pending. This is source integration, **not measured cognitive improvement**. KCON-211 explicit model reasoning parity and independently calibrated metacognition remain next separate acceptance gates.
+- KCOG-01A1 #875 (**MERGED**) `97fec3ce77639222d439de4c810162a24bad58b0`: governed conflict-to-verification and typed post-policy `CognitiveState`. No measured cognitive improvement claimed.
+- KCON-211 #881 (**MERGED**) `5b75fd8576677f14fb5ba635dca05b531dfcd5cc`: all 10 exact-head workflows passed, including authenticated real Ollama Settings save/reload and unforced local model execution. Real-browser CopilotKit consumer acceptance remains separate.
+- KCOG-01A2 (**IN DEVELOPMENT, NOT ACCEPTED**): evaluate confidence only against canonical tenant/user-scoped, labelled `GovernedMLLearningEvidence` using the existing Intelligence Brier/ECE metrics. Filter by exact task, model, model version and feature version; exclude fallbacks and unverified labels; return absent scores for insufficient evidence. The first stage is read-only/shadow, never a RuntimePolicy authorization or promotion receipt. Separate, independently labelled evaluation of verification decision utility, calibration drift and consumer impact is still required.
 - GitHub Issues are disabled (HTTP 410); this wiki and PR descriptions retain sprint continuity. Verify live CI before acting.
 - **No claims yet** of validated causal-effect estimation, calibrated metacognition, specialist competence gain, or cross-task transfer.
 
