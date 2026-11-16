@@ -106,6 +106,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261116030000_56_whatsapp_customer_window_evidence.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(customer_window_migration)
+        registration_claim_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261116150000_55_telegram_webhook_registration_claim.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(registration_claim_migration)
         status_retention_migration = (
             Path(__file__).resolve().parents[2]
             / "supabase/migrations/20261116040000_57_channel_provider_status_retention_tombstones.sql"
@@ -167,6 +172,55 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                     yield session
 
         monkeypatch.setattr(module, "async_transaction_scope", real_scope)
+        # KWA-01D: actual PostgreSQL row locking and durable claim uniqueness.
+        # A separate connection avoids changing the existing outbox assertions.
+        webhook_connection = f"telegram-lease-{uuid.uuid4().hex}"
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id,
+                provider_account_id, credential_handle, enabled, revision)
+               VALUES ($1, $2, 'telegram-bot', 'lease-test',
+                       'vault://registration', true, 1)""",
+            webhook_connection, tenant_a,
+        )
+        webhook_store = SqlChannelRepository()
+        concurrent_tokens = await asyncio.gather(*(
+            webhook_store.claim_telegram_webhook_registration(
+                tenant_id=str(tenant_a), connection_id=webhook_connection,
+                expected_revision=1,
+            )
+            for _ in range(4)
+        ))
+        accepted = [token for token in concurrent_tokens if token is not None]
+        assert len(accepted) == 1
+        assert await webhook_store.claim_telegram_webhook_registration(
+            tenant_id=str(tenant_b), connection_id=webhook_connection,
+            expected_revision=1,
+        ) is None
+        # Transition attempts through the repository must be denied while the
+        # remote effect is in flight. A lease expiry cannot grant retry.
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            await webhook_store.set_connection_enabled(
+                tenant_id=str(tenant_a), connection_id=webhook_connection,
+                expected_revision=1, enabled=False,
+            )
+        assert await webhook_store.complete_telegram_webhook_registration(
+            tenant_id=str(tenant_a), connection_id=webhook_connection,
+            expected_revision=1, claim_token=accepted[0], verified=False,
+        ) is False
+        assert await webhook_store.claim_telegram_webhook_registration(
+            tenant_id=str(tenant_a), connection_id=webhook_connection,
+            expected_revision=1,
+        ) is None
+        with pytest.raises(IntegrityError):
+            await webhook_store.set_connection_enabled(
+                tenant_id=str(tenant_a), connection_id=webhook_connection,
+                expected_revision=1, enabled=False,
+            )
+
+
 
         # KWA-01C2: real SQL proves a signed Meta customer timestamp,
         # a closed 24h window, a later customer reset, immutable evidence,

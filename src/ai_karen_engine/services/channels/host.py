@@ -271,25 +271,49 @@ class ChannelHostServices:
         )
         if current != connection:
             raise PermissionError("Telegram webhook connection changed")
+        claim_token = await self.repository.claim_telegram_webhook_registration(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=connection.revision,
+        )
+        if claim_token is None:
+            raise PermissionError(
+                "Telegram webhook registration pending reconciliation"
+            )
         try:
             result = await register(connection=connection, public_origin=origin)
-        except PermissionError:
-            # Provider/network uncertainty is an unavailable diagnosis, not
-            # an operator authorization failure (HTTP 403).
-            raise RuntimeError("Telegram webhook registration unverified") from None
-        fresh = await self.repository.get_enabled_connection(
-            tenant_id=tenant_id, connection_id=connection_id,
-        )
-        if fresh != connection:
-            raise PermissionError("Telegram webhook registration revision changed")
-        if (
-            not isinstance(result, dict)
-            or result != {
+            fresh = await self.repository.get_enabled_connection(
+                tenant_id=tenant_id, connection_id=connection_id,
+            )
+            if fresh != connection or result != {
                 "provider_registration_verified": True,
                 "live_connected": False,
-            }
-        ):
-            raise PermissionError("Telegram webhook registration unverified")
+            }:
+                raise RuntimeError("Telegram webhook registration unverified")
+        except Exception:
+            # A network timeout, uncertain response, or changed revision
+            # can follow a successful remote POST. Never unlock for retry.
+            try:
+                await self.repository.complete_telegram_webhook_registration(
+                    tenant_id=tenant_id, connection_id=connection_id,
+                    expected_revision=connection.revision,
+                    claim_token=claim_token, verified=False,
+                )
+            except Exception as exc:
+                logger.error(
+                    "channel.telegram.webhook.claim_uncertain",
+                    extra={
+                        "tenant_id": tenant_id, "connection_id": connection_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            raise RuntimeError("Telegram webhook registration unverified") from None
+        committed = await self.repository.complete_telegram_webhook_registration(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=connection.revision,
+            claim_token=claim_token, verified=True,
+        )
+        if committed is not True:
+            raise RuntimeError("Telegram webhook registration unverified")
         logger.info(
             "channel.telegram.webhook.registration_verified",
             extra={

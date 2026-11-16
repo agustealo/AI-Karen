@@ -1218,6 +1218,94 @@ class SqlChannelRepository:
                 "created_new": True,
             }
 
+    async def claim_telegram_webhook_registration(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int, lease_seconds: int = 120,
+    ) -> str | None:
+        """Claim once under the connection row lock, across all API replicas.
+
+        A stale, expired, verified, or uncertain prior claim is never implicitly
+        reclaimed. Future reconciliation must explicitly settle its evidence.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if (
+            not isinstance(connection_id, str) or not connection_id
+            or type(expected_revision) is not int or expected_revision < 1
+            or type(lease_seconds) is not int or not 30 <= lease_seconds <= 300
+        ):
+            raise ValueError("Invalid Telegram webhook registration claim")
+        token = str(uuid.uuid4())
+        async with async_transaction_scope(tenant_id) as session:
+            created = (await session.execute(text("""
+                INSERT INTO public.channel_telegram_webhook_claims (
+                    tenant_id, connection_id, connection_revision, claim_token,
+                    claim_expires_at, state
+                )
+                SELECT c.tenant_id, c.connection_id, c.revision,
+                       CAST(:token AS uuid),
+                       clock_timestamp() + make_interval(secs => :seconds),
+                       'in_flight'
+                FROM public.channel_connections c
+                WHERE c.tenant_id = CAST(:tenant AS uuid)
+                  AND c.connection_id = :connection
+                  AND c.installation_id = 'telegram-bot'
+                  AND c.enabled = true
+                  AND c.revision = :revision
+                FOR UPDATE OF c
+                ON CONFLICT (tenant_id, connection_id) DO NOTHING
+                RETURNING claim_token
+            """), {
+                "tenant": tenant_id, "connection": connection_id,
+                "revision": expected_revision, "seconds": lease_seconds,
+                "token": token,
+            })).scalar_one_or_none()
+        return token if created is not None else None
+
+    async def complete_telegram_webhook_registration(
+        self, *, tenant_id: str, connection_id: str,
+        expected_revision: int, claim_token: str, verified: bool,
+    ) -> bool:
+        """Complete only the exact still-leased claim; otherwise UNKNOWN.
+
+        A late successful provider read-back cannot silently establish a
+        verified claim after lease expiry or connection revision drift.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        token = str(uuid.UUID(claim_token))
+        if (
+            not connection_id or type(expected_revision) is not int
+            or expected_revision < 1 or type(verified) is not bool
+        ):
+            raise ValueError("Invalid Telegram webhook claim completion")
+        async with async_transaction_scope(tenant_id) as session:
+            state = (await session.execute(text("""
+                UPDATE public.channel_telegram_webhook_claims w
+                SET state = CASE
+                        WHEN :verified
+                         AND w.claim_expires_at > clock_timestamp()
+                         AND EXISTS (
+                             SELECT 1 FROM public.channel_connections c
+                             WHERE c.tenant_id = w.tenant_id
+                               AND c.connection_id = w.connection_id
+                               AND c.revision = w.connection_revision
+                               AND c.enabled = true
+                         ) THEN 'verified'
+                        ELSE 'uncertain'
+                    END,
+                    updated_at = clock_timestamp()
+                WHERE w.tenant_id = CAST(:tenant AS uuid)
+                  AND w.connection_id = :connection
+                  AND w.connection_revision = :revision
+                  AND w.claim_token = CAST(:token AS uuid)
+                  AND w.state = 'in_flight'
+                RETURNING state
+            """), {
+                "tenant": tenant_id, "connection": connection_id,
+                "revision": expected_revision, "token": token,
+                "verified": verified,
+            })).scalar_one_or_none()
+        return state == "verified"
+
     async def set_connection_enabled(
         self, *, tenant_id: str, connection_id: str,
         expected_revision: int, enabled: bool,

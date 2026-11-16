@@ -1488,6 +1488,12 @@ async def test_telegram_webhook_registration_host_fences_revision_and_canonical_
         revision=2, enabled=True,
     )
     host.repository.get_enabled_connection = AsyncMock(return_value=connection)
+    host.repository.claim_telegram_webhook_registration = AsyncMock(
+        return_value="22222222-2222-2222-2222-222222222222",
+    )
+    host.repository.complete_telegram_webhook_registration = AsyncMock(
+        return_value=True,
+    )
     adapter.register_webhook = AsyncMock(return_value={
         "provider_registration_verified": True,
         "live_connected": False,
@@ -1508,6 +1514,15 @@ async def test_telegram_webhook_registration_host_fences_revision_and_canonical_
     assert host.activation._authorize.await_args.kwargs["action"] == "channel.webhook.register"
     adapter.register_webhook.assert_awaited_once_with(
         connection=connection, public_origin="https://hooks.example.org",
+    )
+    host.repository.claim_telegram_webhook_registration.assert_awaited_once_with(
+        tenant_id=connection.tenant_id, connection_id=connection.connection_id,
+        expected_revision=2,
+    )
+    host.repository.complete_telegram_webhook_registration.assert_awaited_once_with(
+        tenant_id=connection.tenant_id, connection_id=connection.connection_id,
+        expected_revision=2, claim_token="22222222-2222-2222-2222-222222222222",
+        verified=True,
     )
 
     adapter.register_webhook.reset_mock()
@@ -1552,4 +1567,85 @@ async def test_webhook_registration_disabled_without_configured_public_origin():
         )
     host.activation._authorize.assert_not_awaited()
     adapter.register_webhook.assert_not_awaited()
+    await host.shutdown()
+
+@pytest.mark.asyncio
+async def test_telegram_provider_registration_claim_denial_never_calls_provider():
+    from dataclasses import replace
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    host.settings = replace(
+        host.settings, telegram_webhook_public_origin="https://hooks.example.org",
+    )
+    connection = ChannelConnection(
+        connection_id="telegram-connect",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=connection)
+    host.repository.claim_telegram_webhook_registration = AsyncMock(return_value=None)
+    host.repository.complete_telegram_webhook_registration = AsyncMock()
+    adapter.register_webhook = AsyncMock()
+    await host.initialize()
+    host.activation._authorize = AsyncMock()
+    args = {
+        "tenant_id": connection.tenant_id, "connection_id": connection.connection_id,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "session_id": "governed-session",
+        "authorized_plan": SimpleNamespace(policy_decision_id="policy"),
+        "expected_revision": 2,
+    }
+    with pytest.raises(PermissionError, match="pending reconciliation"):
+        await host.register_telegram_webhook(**args)
+    adapter.register_webhook.assert_not_awaited()
+    host.repository.complete_telegram_webhook_registration.assert_not_awaited()
+    await host.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_telegram_provider_registration_unknown_persists_nonreclaimable_claim():
+    from dataclasses import replace
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    host, _, _, _, adapter = fake_components()
+    host.settings = replace(
+        host.settings, telegram_webhook_public_origin="https://hooks.example.org",
+    )
+    connection = ChannelConnection(
+        connection_id="telegram-connect",
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    )
+    host.repository.get_enabled_connection = AsyncMock(return_value=connection)
+    host.repository.claim_telegram_webhook_registration = AsyncMock(
+        return_value="22222222-2222-2222-2222-222222222222",
+    )
+    host.repository.complete_telegram_webhook_registration = AsyncMock(
+        return_value=False,
+    )
+    adapter.register_webhook = AsyncMock(
+        side_effect=PermissionError("Bot token must not escape"),
+    )
+    await host.initialize()
+    host.activation._authorize = AsyncMock()
+    args = {
+        "tenant_id": connection.tenant_id, "connection_id": connection.connection_id,
+        "user_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "session_id": "governed-session",
+        "authorized_plan": SimpleNamespace(policy_decision_id="policy"),
+        "expected_revision": 2,
+    }
+    with pytest.raises(RuntimeError, match="unverified") as error:
+        await host.register_telegram_webhook(**args)
+    assert "Bot token" not in str(error.value)
+    host.repository.complete_telegram_webhook_registration.assert_awaited_once_with(
+        tenant_id=connection.tenant_id, connection_id=connection.connection_id,
+        expected_revision=2, claim_token="22222222-2222-2222-2222-222222222222",
+        verified=False,
+    )
     await host.shutdown()

@@ -768,3 +768,73 @@ async def test_archived_provider_status_digest_conflict_is_denied(monkeypatch):
             connection=account, status=event,
         )
     assert len(session.calls) == 3
+
+@pytest.mark.asyncio
+async def test_telegram_registration_claim_is_single_insert_under_connection_row_lock(monkeypatch):
+    claim_token = "22222222-2222-2222-2222-222222222222"
+    session = FakeSession(RowResult(scalar=claim_token))
+    install(monkeypatch, session)
+    token = await SqlChannelRepository().claim_telegram_webhook_registration(
+        tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2,
+        lease_seconds=120,
+    )
+    assert token
+    assert len(session.calls) == 1
+    sql, params = session.calls[0]
+    assert "channel_telegram_webhook_claims" in sql
+    assert "FOR UPDATE OF c" in sql
+    assert "ON CONFLICT (tenant_id, connection_id) DO NOTHING" in sql
+    assert "c.enabled = true" in sql
+    assert "c.installation_id = 'telegram-bot'" in sql
+    assert params["tenant"] == TENANT
+    assert params["revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_telegram_registration_duplicate_or_uncertain_claim_refuses_reentry(monkeypatch):
+    session = FakeSession(RowResult(scalar=None))
+    install(monkeypatch, session)
+    result = await SqlChannelRepository().claim_telegram_webhook_registration(
+        tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2,
+    )
+    assert result is None
+    assert "DO NOTHING" in session.calls[0][0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state,verified,expected", [
+    ("verified", True, True),
+    ("uncertain", True, False),
+    ("uncertain", False, False),
+    (None, True, False),
+])
+async def test_telegram_registration_claim_completion_is_token_and_expiry_fenced(
+    monkeypatch, state, verified, expected,
+):
+    session = FakeSession(RowResult(scalar=state))
+    install(monkeypatch, session)
+    result = await SqlChannelRepository().complete_telegram_webhook_registration(
+        tenant_id=TENANT, connection_id="telegram-connect", expected_revision=2,
+        claim_token="22222222-2222-2222-2222-222222222222",
+        verified=verified,
+    )
+    assert result is expected
+    sql, params = session.calls[0]
+    assert "w.claim_token = CAST(:token AS uuid)" in sql
+    assert "w.state = 'in_flight'" in sql
+    assert "claim_expires_at > clock_timestamp()" in sql
+    assert "c.enabled = true" in sql
+    assert params["verified"] is verified
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision,lease", [(0, 120), (2, 0), (2, 301), (True, 120)])
+async def test_telegram_registration_rejects_invalid_claim_scope(monkeypatch, revision, lease):
+    session = FakeSession()
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().claim_telegram_webhook_registration(
+            tenant_id=TENANT, connection_id="telegram-connect",
+            expected_revision=revision, lease_seconds=lease,
+        )
+    assert not session.calls
