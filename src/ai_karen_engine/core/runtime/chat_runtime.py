@@ -571,6 +571,8 @@ class ChatRuntime:
                 conversation_id=conversation_id,
                 start_time=start,
                 decision=decision,
+                authorized_plan=plan,
+                meter=meter,
             )
             if fallback is not None and fallback.answer:
                 if decision.memory_write_allowed:
@@ -1167,6 +1169,8 @@ class ChatRuntime:
                         conversation_id=conversation_id,
                         start_time=stream_start,
                         decision=decision,
+                        authorized_plan=plan,
+                        meter=meter,
                     )
             except Exception as fallback_exc:
                 logger.error(
