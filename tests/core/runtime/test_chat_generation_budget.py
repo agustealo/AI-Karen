@@ -193,16 +193,25 @@ async def test_grounded_search_synthesis_receives_authorized_plan(monkeypatch):
         execution_id="execution-1",
         policy_decision_id="decision-1",
         budget=ExecutionBudget(max_output_tokens=256),
+        allowed_plugins=["search.plugin"],
     )
     meter = SimpleNamespace(
         consume_model_call=AsyncMock(return_value=True),
         check_duration=AsyncMock(return_value=True),
     )
-    retrieved = SimpleNamespace(sources=[{
+    retrieved = SimpleNamespace(
+        success=True,
+        degraded=False,
+        source="plugin",
+        source_id="search.plugin",
+        attempts=[{"id": "search.plugin", "type": "plugin", "status": "success"}],
+        payload={},
+        sources=[{
         "url": "https://example.org/detroit",
         "evidence_level": "fetched_page",
         "content": "Grounded source evidence",
-    }])
+    }],
+    )
 
     await runtime._synthesize_search_evidence(
         request, decision, plan, meter, retrieved
