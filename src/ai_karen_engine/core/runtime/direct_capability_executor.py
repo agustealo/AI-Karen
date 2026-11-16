@@ -702,8 +702,11 @@ class DirectCapabilityExecutor:
             == str(request.context.conversation_id or "")
             and execution.correlation_id == request.context.correlation_id
             and isinstance(output, dict)
-            and str(output.get("status", "")).casefold()
-            not in {"error", "failed", "failure", "unavailable"}
+            # A successful executor receipt only proves the Python handler
+            # returned normally. The plugin must also affirm its own success.
+            # Pending, blank, error-only and malformed payloads fail closed.
+            and output.get("status") == "success"
+            and not output.get("error")
         )
         logger.info(
             "plugin.conversation.action_completed",
