@@ -220,6 +220,84 @@ class MainExtension(ExtensionBase):
             # Provider errors and httpx request URLs can include bot secrets.
             raise PermissionError("Telegram webhook inspection unavailable") from None
 
+    async def register_webhook(
+        self, *, connection: ChannelConnection, public_origin: str,
+    ) -> Mapping[str, bool]:
+        """Explicit host-authorized setWebhook, followed by live read-back.
+
+        The host is responsible for validating the configured public origin,
+        fresh RuntimePolicy authorization, and connection revision fencing.
+        Neither success nor an error proves inbound ChatRuntime delivery.
+        """
+        self._require_active(connection)
+        if (
+            not isinstance(public_origin, str)
+            or not public_origin.startswith("https://")
+            or public_origin.endswith("/")
+            or len(public_origin) > 300
+        ):
+            raise PermissionError("Telegram webhook registration unavailable")
+        # Defense in depth: reject origin paths, credentials, and fragments
+        # even when a noncanonical caller bypassed the host's configuration.
+        try:
+            origin_parts = urlsplit(public_origin)
+            if (
+                origin_parts.scheme != "https"
+                or not origin_parts.hostname
+                or origin_parts.netloc != origin_parts.hostname
+                or origin_parts.path or origin_parts.query or origin_parts.fragment
+                or origin_parts.username is not None
+                or origin_parts.password is not None
+                or origin_parts.port is not None
+            ):
+                raise ValueError("Invalid registered origin")
+        except (ValueError, TypeError, AttributeError):
+            raise PermissionError("Telegram webhook registration unavailable") from None
+        signing_secret, token = await self._secrets(connection)
+        destination = (
+            f"{public_origin}/api/channels/webhooks/"
+            f"{connection.tenant_id}/{connection.connection_id}"
+        )
+        try:
+            response = await self._http_client.post(
+                f"{_TELEGRAM_API_BASE}/bot{token}/setWebhook",
+                json={
+                    "url": destination,
+                    "secret_token": signing_secret,
+                    "allowed_updates": ["message"],
+                    "drop_pending_updates": False,
+                },
+            )
+            if response.status_code != 200:
+                raise ValueError("Telegram refused webhook registration")
+            accepted = response.json()
+            if (
+                not isinstance(accepted, dict)
+                or accepted.get("ok") is not True
+                or accepted.get("result") is not True
+            ):
+                raise ValueError("Telegram did not confirm webhook registration")
+            proof = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getWebhookInfo"
+            )
+            if proof.status_code != 200:
+                raise ValueError("Telegram webhook read-back failed")
+            payload = proof.json()
+            info = payload.get("result") if isinstance(payload, dict) else None
+            if (
+                payload.get("ok") is not True
+                or not isinstance(info, dict)
+                or info.get("url") != destination
+            ):
+                raise ValueError("Telegram webhook URL did not match")
+            # This is remote registration evidence only, not a delivery test.
+            return {"provider_registration_verified": True, "live_connected": False}
+        except Exception:
+            # The POST may have succeeded even if the read-back timed out.
+            # Caller receives an explicit UNKNOWN result, not an invented
+            # rollback, and never provider text or token-bearing URLs.
+            raise PermissionError("Telegram webhook registration unverified") from None
+
     async def verify_event(
         self, *, connection: ChannelConnection,
         headers: Mapping[str, str], body: bytes,

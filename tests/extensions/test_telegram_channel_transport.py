@@ -567,3 +567,100 @@ async def test_webhook_probe_requires_host_activation_and_masks_network_errors()
         await adapter.inspect_webhook(connection=connection())
     assert TOKEN not in str(error.value)
     client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_explicit_telegram_registration_submits_secret_and_verifies_exact_url():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    destination = (
+        f"https://hooks.example.org/api/channels/webhooks/"
+        f"{TENANT}/telegram-conn-1"
+    )
+    client.post.return_value = httpx.Response(200, json={
+        "ok": True, "result": True,
+    })
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True, "result": {"url": destination, "pending_update_count": 0},
+    })
+    result = await adapter.register_webhook(
+        connection=connection(), public_origin="https://hooks.example.org",
+    )
+    assert result == {
+        "provider_registration_verified": True, "live_connected": False,
+    }
+    assert client.post.await_args.kwargs["json"] == {
+        "url": destination,
+        "secret_token": SECRET,
+        "allowed_updates": ["message"],
+        "drop_pending_updates": False,
+    }
+    assert client.post.await_args.args[0].endswith("/setWebhook")
+    assert client.get.await_args.args[0].endswith("/getWebhookInfo")
+    assert SECRET not in str(result)
+    assert TOKEN not in str(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [
+    "http://hooks.example.org", "https://hooks.example.org/path",
+    "https://hooks.example.org:8443", "https://user:pass@hooks.example.org",
+    "https://hooks.example.org?key=one", "https://hooks.example.org/",
+    "",
+])
+async def test_telegram_registration_invalid_origin_never_mutates_provider(origin):
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.post.reset_mock()
+    with pytest.raises(PermissionError, match="registration unavailable"):
+        await adapter.register_webhook(connection=connection(), public_origin=origin)
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_response", [
+    httpx.Response(401, json={"ok": False}),
+    httpx.Response(200, json={"ok": False, "description": "denied"}),
+    httpx.Response(200, json={"ok": True, "result": False}),
+    httpx.Response(200, json={"ok": True, "result": {"wrong": "type"}}),
+])
+async def test_telegram_registration_denial_never_reports_provider_success(provider_response):
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.post.return_value = provider_response
+    client.get.reset_mock()
+    with pytest.raises(PermissionError, match="unverified"):
+        await adapter.register_webhook(
+            connection=connection(), public_origin="https://hooks.example.org",
+        )
+    client.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_registration_unknown_after_provider_post_does_not_fake_rollback():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.post.return_value = httpx.Response(200, json={"ok": True, "result": True})
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True, "result": {
+            "url": f"https://foreign.example/api/channels/webhooks/{TENANT}/telegram-conn-1",
+        },
+    })
+    with pytest.raises(PermissionError, match="unverified"):
+        await adapter.register_webhook(
+            connection=connection(), public_origin="https://hooks.example.org",
+        )
+    client.post.assert_awaited_once()
+    client.get.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_registration_network_uncertainty_masks_bot_token():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.post.side_effect = httpx.TimeoutException(f"secret {TOKEN}")
+    with pytest.raises(PermissionError) as error:
+        await adapter.register_webhook(
+            connection=connection(), public_origin="https://hooks.example.org",
+        )
+    assert TOKEN not in str(error.value)

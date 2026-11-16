@@ -589,6 +589,71 @@ async def activate_telegram_connection(
         raise HTTPException(503, "Telegram activation unavailable") from None
 
 
+class TelegramWebhookRegistrationRequest(BaseModel):
+    """No URL, secret or provider-selected installation may enter from HTTP."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: StrictInt = Field(ge=1)
+
+
+class TelegramWebhookRegistrationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_registration_verified: Literal[True]
+    live_connected: Literal[False]
+
+
+@router.post(
+    "/operator/telegram/connections/{connection_id}/webhook",
+    response_model=TelegramWebhookRegistrationResult,
+)
+async def register_telegram_webhook(
+    connection_id: UUID,
+    payload: TelegramWebhookRegistrationRequest,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> TelegramWebhookRegistrationResult:
+    """Explicitly register only the trusted configured webhook destination."""
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        connection = await host.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+        )
+        if (
+            connection is None
+            or connection.tenant_id != tenant_id
+            or connection.connection_id != str(connection_id)
+            or connection.installation_id != "telegram-bot"
+            or connection.revision != payload.expected_revision
+        ):
+            raise PermissionError("Telegram webhook connection unavailable")
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.webhook.register",
+        )
+        result = await host.register_telegram_webhook(
+            tenant_id=tenant_id, connection_id=str(connection_id),
+            user_id=user_id, session_id=session_id,
+            authorized_plan=plan, expected_revision=payload.expected_revision,
+        )
+    except PermissionError:
+        raise HTTPException(403, "Telegram webhook registration denied or unverified") from None
+    except Exception as exc:
+        logger.error(
+            "channel.telegram.webhook.registration_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "Telegram webhook registration unavailable") from None
+    try:
+        return TelegramWebhookRegistrationResult.model_validate(result)
+    except ValidationError:
+        logger.error("channel.telegram.webhook.registration_result_invalid")
+        raise HTTPException(503, "Telegram webhook registration unverified") from None
+
+
 class PersonalConsentRecoveryItem(BaseModel):
     connection_id: str
     provider_id: str

@@ -218,6 +218,88 @@ class ChannelHostServices:
             settings={"private_chats_only": True},
         )
 
+    async def register_telegram_webhook(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ) -> dict[str, bool]:
+        """Explicitly register a canonical provider endpoint, never at boot.
+
+        The HTTP mutation is not transactional with SQL. Any uncertainty must
+        remain unverified and require later provider reconciliation.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Channel webhook registration host unavailable")
+        origin = self.settings.telegram_webhook_public_origin
+        if not origin:
+            raise PermissionError("Channel public webhook origin not configured")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise PermissionError("Expected connection revision required")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "telegram-bot"
+            or connection.revision != expected_revision
+        ):
+            raise PermissionError("Telegram webhook connection unavailable")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.webhook.register", plan=authorized_plan,
+        )
+        adapter = self._installed.get(connection.installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(
+                connection.installation_id
+            ) is None
+            or not self.kernel.is_canonical_channel_adapter(
+                connection.installation_id, adapter
+            )
+        ):
+            raise PermissionError("Canonical Telegram transport unavailable")
+        register = getattr(adapter, "register_webhook", None)
+        if not callable(register):
+            raise PermissionError("Telegram registration not supported")
+        # Double-check the persisted revision immediately before mutation;
+        # the provider operation still needs post-call reconciliation.
+        current = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if current != connection:
+            raise PermissionError("Telegram webhook connection changed")
+        try:
+            result = await register(connection=connection, public_origin=origin)
+        except PermissionError:
+            # Provider/network uncertainty is an unavailable diagnosis, not
+            # an operator authorization failure (HTTP 403).
+            raise RuntimeError("Telegram webhook registration unverified") from None
+        fresh = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if fresh != connection:
+            raise PermissionError("Telegram webhook registration revision changed")
+        if (
+            not isinstance(result, dict)
+            or result != {
+                "provider_registration_verified": True,
+                "live_connected": False,
+            }
+        ):
+            raise PermissionError("Telegram webhook registration unverified")
+        logger.info(
+            "channel.telegram.webhook.registration_verified",
+            extra={
+                "tenant_id": tenant_id, "connection_id": connection_id,
+                "revision": connection.revision, "user_id": user_id,
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            },
+        )
+        return dict(result)
+
     async def inspect_channel_webhook(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,

@@ -127,7 +127,7 @@ class ChannelActivationService:
         if action not in {
             "channel.send", "channel.recover", "channel.provision",
             "channel.activate", "channel.deactivate", "channel.consent",
-            "channel.inspect",
+            "channel.inspect", "channel.webhook.register",
         }:
             raise ChannelActivationDenied("Unknown channel action")
         if not tenant_id or not user_id or not session_id:
