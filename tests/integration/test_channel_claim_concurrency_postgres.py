@@ -1346,6 +1346,46 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                      AND connection_id=$3 AND receipt_id=$4""",
                 "0" * 64, tenant_a, historical_id, orphan.provider_receipt_id,
             )
+        # A non-superuser gets tenant-visible tombstones only. Even a
+        # deliberately granted DELETE privilege cannot remove audit evidence
+        # because migration 57 deliberately omits a DELETE RLS policy.
+        await raw.execute("CREATE ROLE karen_status_retention_probe NOLOGIN")
+        await raw.execute(
+            "GRANT USAGE ON SCHEMA public TO karen_status_retention_probe"
+        )
+        await raw.execute(
+            "GRANT SELECT, DELETE ON public.channel_provider_status_tombstones "
+            "TO karen_status_retention_probe"
+        )
+        async with raw.transaction():
+            await raw.execute("SET LOCAL ROLE karen_status_retention_probe")
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_a),
+            )
+            assert await raw.fetchval(
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+            ) == 1
+            assert await raw.execute(
+                "DELETE FROM public.channel_provider_status_tombstones "
+                "WHERE tenant_id=$1 AND connection_id=$2",
+                tenant_a, historical_id,
+            ) == "DELETE 0"
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant_b),
+            )
+            assert await raw.fetchval(
+                "SELECT COUNT(*) FROM public.channel_provider_status_tombstones"
+            ) == 0
+        await raw.execute(
+            "REVOKE SELECT, DELETE ON public.channel_provider_status_tombstones "
+            "FROM karen_status_retention_probe"
+        )
+        await raw.execute(
+            "REVOKE USAGE ON SCHEMA public FROM karen_status_retention_probe"
+        )
+        await raw.execute("DROP ROLE karen_status_retention_probe")
         assert await history_repo.prune_unmatched_provider_statuses(
             tenant_id=str(tenant_a), connection_id=historical_id,
             expected_revision=3, retention_days=90, limit=10,
