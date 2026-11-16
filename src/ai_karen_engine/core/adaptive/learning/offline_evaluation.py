@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -157,6 +157,39 @@ class OfflinePolicyEvaluator:
             estimates["dr"] = dr.estimate(observations, candidate_policy)
         except Exception as exc:
             logger.warning("DR estimator failed: %s", exc)
+
+        # Only use logged baseline behavior as the baseline target when
+        # *every* row was actually sampled under that exact policy/version.
+        # These are real behavior propensities, not reconstructed or invented
+        # counterfactual policy probabilities. Mixed or unknown baselines are
+        # deliberately ineligible for relative-gain promotion.
+        if (
+            self._baseline_policy is not None
+            and all(
+                obs.behavior_policy_id == baseline_id
+                and obs.behavior_policy_version == baseline_version
+                for obs in observations
+            )
+        ):
+            baseline_rows = [
+                replace(
+                    obs,
+                    candidate_probabilities=dict(obs.behavior_probabilities),
+                    candidate_policy_id=baseline_id,
+                    candidate_policy_version=baseline_version,
+                )
+                for obs in observations
+            ]
+            for name, estimator_type in (
+                ("ips", IPSEstimator),
+                ("snips", SNIPSEstimator),
+            ):
+                try:
+                    estimates[f"baseline_{name}"] = estimator_type(
+                        max_importance_weight=self._max_importance_weight,
+                    ).estimate(baseline_rows, self._baseline_policy)
+                except Exception as exc:
+                    logger.warning("Baseline %s estimator failed: %s", name, exc)
 
         overlap = compute_overlap_diagnostics(observations, candidate_policy, self._max_importance_weight)
 

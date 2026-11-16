@@ -39,7 +39,7 @@
 - **Proof:** synthetic exact arithmetic and negative support tests, missing/invalid reward model, returned estimator evidence, and no false automatic promotion. Gate under Cognitive Proof CI and verify the exact head before merge.
 - **Remaining acceptance:** separately validated and registered action-conditioned nuisance model, held-out label provenance, effective overlap and non-inferiority on correctness/safety, latency and cost. No automatically activated verification change.
 
-## KCOG-01B3: Observational-policy report provenance (draft, not accepted)
+## KCOG-01B3: Observational-policy report provenance (merged #900)
 
 - **Base:** KCOG-01B2 #895 merged as `219889ed5c032652230eeb1bf24fb1cc6a93e3a6`. Subsequent unrelated voice changes may land on live main before PR creation.
 - **Owner:** existing `OfflinePolicyEvaluator` in `core/adaptive/learning/offline_evaluation.py`; keep the Intelligence/ML canonical estimators and policy contracts unchanged.
@@ -47,6 +47,16 @@
 - **Fix:** report an explicit overall observed reward-threshold rate, and split baseline/candidate observed rates by **exact logged behavior policy ID and version**. A never-executed candidate or missing baseline has a `None` rate and zero observed count, not fabricated success. The legacy status path reports only an unattributed observed completion fraction; empty corpora expose nullable fields. Include a `rate_source` qualifier to prevent treating the threshold as verified answer correctness or a counterfactual estimate.
 - **Proof:** synthetic exact-cohort tests, no-candidate execution, wrong version, no-baseline, mixed-policy corpus, legacy completion, empty outcome, and existing adaptive learning regression. Added to Cognitive Proof CI.
 - **Limits:** descriptive logged reward thresholds do not measure causal benefit or independently judged correctness, and cannot authorize a policy change. An independently reviewed held-out prospective dataset remains necessary.
+
+## KCOG-01B4: Baseline-relative OPE promotion guard (draft, not accepted)
+
+- **Base:** KCOG-01B3 #900 merged as `682d5a2972a16b98c03533e53cb07e5704843ed3`. Live main can advance independently; the branch must pass exact-head CI.
+- **Owners:** the canonical `core/intelligence/ml/policy_evaluation/promotion.py` for policy promotion evidence, and existing `core/adaptive/learning/offline_evaluation.py` for evaluating recorded decisions. No new estimator, routing policy, runtime path or store.
+- **Audit finding:** a positive candidate policy estimate was checked against zero, not against an evaluated active baseline, so an inferior policy could appear eligible on absolute utility alone.
+- **Promotion gate:** every candidate IPS/SNIPS/DR estimator must have a corresponding baseline estimate on the same sample-count window. The candidate's lower bound must strictly exceed the baseline's upper bound by more than the configured minimum gain. Missing or invalid baseline estimates, mismatched cohort counts, nonfinite bounds, or low confidence block eligibility. This is a conservative independent-bound screening rule; it is **not** a formal paired-difference confidence interval or a claim of 95% causal certainty.
+- **Baseline evidence:** compute baseline IPS/SNIPS on a separate, copied observation list only when *every* row was logged under the exact versioned baseline behavior policy. Reuse actual recorded baseline behavior probabilities; never synthesize them. Mixed-policy or differently versioned logs cannot produce baseline OPE estimates by this method. No action-conditioned DR reward model is independently validated/registered, so baseline DR remains absent and the existing DR-required promotion gate stays closed.
+- **Proof:** direct promotion positive-negative fixtures, unpaired/missing baseline, tie, insufficient margin, nonfinite confidence bounds, different sample counts, missing baseline DR, logged baseline-only measurement, mixed/version mismatch, and no mutation of original observations. Gate alongside existing KCOG-01B2/01B3 regressions.
+- **Limits:** these are statistical eligibility checks only. Independent held-out correctness labels, verified propensity logging, appropriate reward-model provenance and RuntimePolicy authorization remain requirements before any live verification strategy can change.
 
 ## Scope, product acceptance and exit
 
