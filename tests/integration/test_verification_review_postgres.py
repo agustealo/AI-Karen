@@ -18,6 +18,7 @@ import asyncio
 import os
 import uuid
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,6 +34,16 @@ from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
 from ai_karen_engine.core.intelligence.ml.verification_review_evidence import (
     GovernedVerificationReviewEvidence,
 )
+from ai_karen_engine.core.intelligence.ml.verification_review_workflow import (
+    ReviewJudgement,
+    VerificationReviewWorkflow,
+)
+from ai_karen_engine.core.runtime.trajectory.contracts import ExecutionTrajectory
+from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
+    DecisionObservation,
+    FeatureSnapshot,
+)
+from ai_karen_engine.core.runtime.trajectory.store import PostgresTrajectoryStore
 from ai_karen_engine.core.runtime.outcome.store import (
     OutcomeStoreError,
     PostgresOutcomeStore,
@@ -46,6 +57,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _MIGRATIONS = (
     "20261003010000_20_runtime_outcome_evidence.sql",
     "20261019020000_37_intelligence_ml_outcome_evidence.sql",
+    "20261006010000_24_learning_decision_lineage.sql",
 )
 
 
@@ -262,6 +274,95 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             tenant_a, user_id=subject_a,
             source="runtime.execution", outcome_ids=refs,
         ) == []
+
+        # KCOG-01B9: the API submission owner must independently load the
+        # real persisted decision and feature snapshot from the canonical
+        # runtime learning lineage. Reviewers do not submit policy matrices.
+        lineage = PostgresTrajectoryStore()
+        trajectory = ExecutionTrajectory(
+            trajectory_id="pg-review-lineage-1",
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        )
+        await lineage.save_async(trajectory)
+        feature = FeatureSnapshot(
+            feature_snapshot_id="pg-review-snapshot-1",
+            trajectory_id=trajectory.trajectory_id,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+            request_id="pg-review-request-1",
+            correlation_id="pg-review-correlation-1",
+            feature_version="pg-verification-features-v1",
+            created_at=datetime.now(timezone.utc),
+            metadata={"secret_prompt": "NEVER_PERSIST_REVIEW_PROMPT"},
+        )
+        await lineage.save_feature_snapshot_async(feature)
+        decision = DecisionObservation(
+            decision_observation_id="pg-review-decision-1",
+            trajectory_id=trajectory.trajectory_id,
+            feature_snapshot_id=feature.feature_snapshot_id,
+            decision_type="respond_strategy",
+            behavior_policy_id="pg-verified-baseline",
+            behavior_policy_version="v1",
+            candidate_actions=tuple(_ACTIONS),
+            eligible_actions=tuple(_ACTIONS),
+            chosen_action=_ACTIONS[0],
+            chosen_probability=0.5,
+            action_probabilities={_ACTIONS[0]: 0.5, _ACTIONS[1]: 0.5},
+            created_at=datetime.now(timezone.utc),
+            ope_eligible=True,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+            metadata={
+                "verification_policy_snapshot": {
+                    "schema_version": "verification_policy_snapshot_v1",
+                    "candidate_policy_id": "pg-frozen-candidate",
+                    "candidate_policy_version": "v1",
+                    "candidate_probabilities": {
+                        _ACTIONS[0]: 0.25, _ACTIONS[1]: 0.75,
+                    },
+                    "risk_class": "low",
+                    "utility_policy_version": "pg-independent-review-v1",
+                },
+            },
+        )
+        await lineage.save_decision_observation_async(decision)
+        reviewer = _principal(reviewer_id, tenant_a, reviewer=True)
+        authenticated_review = VerificationReviewWorkflow(
+            lineage_store=PostgresTrajectoryStore(),
+            outcome_store=PostgresOutcomeStore(),
+        )
+        reviewed = ReviewJudgement(
+            decision_observation_id=decision.decision_observation_id,
+            subject_user_id=subject_a,
+            reward=0.9,
+            verification_needed=True,
+        )
+        submitted = await authenticated_review.submit(
+            reviewed, reviewer=reviewer,
+            correlation_id="pg-review-correlation-1",
+        )
+        assert submitted["stored"] is True
+        assert submitted["decision_provenance"] == "durable_runtime_lineage"
+        assert submitted["policy_activated"] is False
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE decision_observation_id='pg-review-decision-1'"
+            " AND source='intelligence.ml'"
+        ) == 2
+        with pytest.raises(OutcomeStoreError):
+            await authenticated_review.submit(
+                reviewed, reviewer=reviewer,
+            )
+        with pytest.raises(LookupError):
+            await authenticated_review.submit(
+                reviewed,
+                reviewer=_principal(reviewer_id, tenant_b, reviewer=True),
+            )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE decision_observation_id='pg-review-decision-1'"
+        ) == 2
 
         # A second attempted decision with an original *label* ID causes
         # statement two to conflict. Statement one MUST roll back as well.
