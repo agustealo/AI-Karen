@@ -116,3 +116,18 @@ test at a production tenant database.
 Treat missing GitHub Actions results for a rewritten branch as missing
 verification, even when the old PR head was green. Only exact-head results
 authorize merging.
+
+## Provider-side verification boundaries
+
+An operator may inspect Telegram Bot API `getWebhookInfo` using the
+configured bot identity, but provider response data must be treated as
+untrusted until it is authenticated by the existing host transport. The
+operator must compare the reported URL with the expected HTTPS channel
+webhook endpoint and confirm that outstanding provider errors are not
+silently ignored. Never capture the bot token, full webhook URL containing
+sensitive routing identifiers, or native message body in routine telemetry.
+
+The existence of a public HTTPS URL is not itself proof of a valid webhook:
+native authentication, the correct tenant connection, a linked actor, a
+durably accepted inbox event, a governed ChatRuntime invocation, and a
+matching Telegram send receipt are separate acceptance observations.
