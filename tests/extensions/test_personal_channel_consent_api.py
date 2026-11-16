@@ -1390,11 +1390,11 @@ async def test_telegram_operator_provision_calls_governed_service_and_never_leak
     host.activation.provision = AsyncMock(return_value=ChannelConnection(
         connection_id=CONNECTION, tenant_id=TENANT,
         installation_id="telegram-bot", provider_account_id="telegram-account",
-        credential_handle="vault://sensitive-credential", revision=1, enabled=False,
+        credential_handle="vault://11111111-1111-1111-1111-111111111111", revision=1, enabled=False,
     ))
     payload = api.TelegramProvisionRequest(
         provider_account_id="telegram-account",
-        credential_handle="vault://sensitive-credential",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
     )
     result = await api.provision_telegram_connection(
         payload=payload, request=request, user=actor(roles=["admin"]),
@@ -1420,6 +1420,8 @@ async def test_telegram_operator_provision_calls_governed_service_and_never_leak
     "",
     "vault://missing:rawsecret",
     "vault://has whitespace",
+    "vault://11111111-1111-1111-1111-111111111111:rawtoken",
+    "vault://11111111-1111-1111-1111-11111111111A",
 ])
 def test_telegram_provision_request_rejects_raw_credentials(credential):
     with pytest.raises(ValidationError):
@@ -1437,7 +1439,7 @@ async def test_telegram_provision_denies_policy_before_persistence():
         await api.provision_telegram_connection(
             payload=api.TelegramProvisionRequest(
                 provider_account_id="account",
-                credential_handle="vault://credential",
+                credential_handle="vault://11111111-1111-1111-1111-111111111111",
             ),
             request=request, user=actor(),
         )
@@ -1457,7 +1459,7 @@ async def test_telegram_provision_cannot_claim_activated_connection():
         await api.provision_telegram_connection(
             payload=api.TelegramProvisionRequest(
                 provider_account_id="account",
-                credential_handle="vault://credential",
+                credential_handle="vault://11111111-1111-1111-1111-111111111111",
             ),
             request=request, user=actor(roles=["admin"]),
         )
@@ -1475,7 +1477,7 @@ async def test_telegram_provision_ignores_untrusted_actor_fields_and_refuses_for
     with pytest.raises(HTTPException) as error:
         await api.provision_telegram_connection(
             payload=api.TelegramProvisionRequest(
-                provider_account_id="account", credential_handle="vault://credential",
+                provider_account_id="account", credential_handle="vault://11111111-1111-1111-1111-111111111111",
             ),
             request=request, user=actor(roles=["admin"]),
         )
