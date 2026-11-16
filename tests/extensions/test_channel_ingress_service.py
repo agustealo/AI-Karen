@@ -374,3 +374,82 @@ async def test_invalid_signature_rejects_native_batch_before_normalization():
     adapter.normalize_events.assert_not_awaited()
     repo.record_provider_status.assert_not_awaited()
     repo.admit_verified_inbound.assert_not_awaited()
+
+
+def disabled_whatsapp_ingress(*, matched=True):
+    service, adapter, repo, registration = components()
+    connection = ChannelConnection(
+        connection_id="connection-a", installation_id="whatsapp-cloud",
+        tenant_id=TENANT, provider_account_id="10987654321",
+        credential_handle="vault://meta", revision=4, enabled=False,
+    )
+    repo.get_enabled_connection.return_value = None
+    repo.get_connection = AsyncMock(return_value=connection)
+    repo.record_deactivated_provider_status = AsyncMock(return_value=matched)
+    adapter.normalize_deactivated_statuses = AsyncMock(
+        return_value=(batch_status(),),
+    )
+    service._kernel.loader = SimpleNamespace(load_extension=lambda _: adapter)
+    return service, adapter, repo, registration
+
+
+@pytest.mark.asyncio
+async def test_deactivated_whatsapp_status_only_route_has_no_chat_or_send_authority():
+    service, adapter, repo, _ = disabled_whatsapp_ingress()
+    result = await service.verify_and_route_installed(
+        tenant_id=TENANT, connection_id="connection-a",
+        headers={"X-Hub-Signature-256": "signed"}, body=b"status-only",
+    )
+    assert result == "status_recorded"
+    adapter.normalize_deactivated_statuses.assert_awaited_once()
+    repo.record_deactivated_provider_status.assert_awaited_once()
+    assert repo.record_deactivated_provider_status.await_args.kwargs["connection"].enabled is False
+    adapter.verify_event.assert_not_awaited()
+    adapter.normalize_event.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unmatched_deactivated_status_never_fabricates_delivery():
+    service, adapter, repo, _ = disabled_whatsapp_ingress(matched=False)
+    result = await service.verify_and_route_installed(
+        tenant_id=TENANT, connection_id="connection-a",
+        headers={}, body=b"signed-status",
+    )
+    assert result == "ignored"
+    repo.record_deactivated_provider_status.assert_awaited_once()
+    repo.admit_verified_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_historical_status_cannot_bypass_signature_or_mix_with_inbound():
+    service, adapter, repo, _ = disabled_whatsapp_ingress()
+    adapter.normalize_deactivated_statuses.side_effect = ValueError(
+        "Historical WhatsApp callback must contain statuses only"
+    )
+    with pytest.raises(ChannelAdmissionDenied, match="Historical native status"):
+        await service.verify_and_route_installed(
+            tenant_id=TENANT, connection_id="connection-a",
+            headers={}, body=b"untrusted",
+        )
+    repo.record_deactivated_provider_status.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_historical_status_refuses_non_whatsapp_and_reenabled_connection():
+    service, adapter, repo, _ = disabled_whatsapp_ingress()
+    disabled = await repo.get_connection()
+    for invalid in (
+        disabled.model_copy(update={"installation_id": "telegram-bot"}),
+        disabled.model_copy(update={"enabled": True}),
+        disabled.model_copy(update={"tenant_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}),
+    ):
+        repo.get_connection.return_value = invalid
+        with pytest.raises(ChannelAdmissionDenied):
+            await service.verify_and_route_installed(
+                tenant_id=TENANT, connection_id="connection-a",
+                headers={}, body=b"status",
+            )
+    adapter.normalize_deactivated_statuses.assert_not_awaited()
+    repo.record_deactivated_provider_status.assert_not_awaited()
