@@ -478,7 +478,7 @@ def create_decision_observation(
     if (
         len(candidate_actions) != len(set(candidate_actions))
         or len(eligible_actions) != len(set(eligible_actions))
-        or not set(eligible_actions).issubset(set(candidate_actions))
+        or (candidate_actions and not set(eligible_actions).issubset(set(candidate_actions)))
         or any(not isinstance(action, str) or not action for action in candidate_actions)
         or any(not isinstance(action, str) or not action for action in eligible_actions)
     ):
