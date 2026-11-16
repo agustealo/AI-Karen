@@ -79,3 +79,27 @@ class BenchmarkResult:
     fallback_count: int
     abstention_count: int
     outcomes: list[PredictionOutcome] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class GovernedConfidenceEvaluation:
+    """Shadow-only confidence calibration from principal-scoped evaluated labels.
+
+    Scores describe observed, independently labelled predictor correctness,
+    not global model accuracy, causal certainty or a RuntimePolicy grant.
+    A missing/undersized corpus has absent scores, never numeric zeros.
+    """
+
+    task: PredictionTask
+    model_id: str
+    model_version: str
+    feature_version: str
+    status: str
+    sample_count: int
+    minimum_samples: int
+    window_limit: int
+    evidence_version: str
+    brier_score: MetricResult | None = None
+    expected_calibration_error: MetricResult | None = None
+    scope: str = "principal_scoped_bounded_window"
+    runtime_authorized: bool = False
