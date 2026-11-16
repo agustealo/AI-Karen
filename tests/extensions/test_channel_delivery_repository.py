@@ -12,6 +12,7 @@ from ai_karen_engine.extensions.channels.contracts import (
     ChannelProviderStatusEvent,
     ChannelConnection,
     ChannelDeliveryRequest,
+    InboundChannelEvent,
 )
 from ai_karen_engine.persistence.repositories import channel_repository as module
 from ai_karen_engine.persistence.repositories.channel_repository import (
@@ -134,6 +135,53 @@ async def test_whatsapp_window_rejects_unsafe_network_budget(budget):
             tenant_id=TENANT, claimed=whatsapp_claim(),
             send_budget_seconds=budget,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_row,accepted", [(True, True), (False, False)])
+async def test_legacy_whatsapp_retry_preserves_dedupe_without_new_window(
+    monkeypatch, old_row, accepted,
+):
+    from ai_karen_engine.persistence.repositories.channel_repository import (
+        ChannelAdmissionConflict,
+    )
+
+    event = InboundChannelEvent(
+        connection_id="conn-wa", external_event_id="wamid.legacy",
+        external_sender_id="15551234567",
+        external_conversation_id="15551234567",
+        message_kind="text", text="Original",
+        provider_timestamp=1770000000,
+    )
+    original_digest = module._event_digest(
+        event.model_copy(update={"provider_timestamp": None})
+    )
+    session = FakeSession(
+        RowResult(row=None),
+        RowResult(row={
+            "inbox_id": "11111111-1111-1111-1111-111111111111",
+            "correlation_id": "22222222-2222-2222-2222-222222222222",
+            "tenant_id": TENANT,
+            "user_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            "binding_id": "33333333-3333-3333-3333-333333333333",
+            "event_digest": original_digest,
+            "provider_event_at": None if old_row else "verified-present",
+        }),
+    )
+    install(monkeypatch, session)
+    if accepted:
+        receipt = await SqlChannelRepository().admit_verified_inbound(
+            connection=whatsapp_claim().connection, event=event,
+        )
+        assert receipt.inserted is False
+    else:
+        with pytest.raises(ChannelAdmissionConflict):
+            await SqlChannelRepository().admit_verified_inbound(
+                connection=whatsapp_claim().connection, event=event,
+            )
+    assert len(session.calls) == 2
+    assert "i.provider_event_at" in session.calls[1][0]
+    assert session.calls[0][1]["provider_ts"] == 1770000000
 
 
 @pytest.mark.asyncio
