@@ -39,8 +39,9 @@ The caller provides:
    existing configuration/runtime owner, not a hardcoded global allowance.
 
 The projector deduplicates and sorts evidence references before querying
-the reader, then checks their tenant, active status, verification time,
-expiry, receipt ID and source revision. Absent, expired, stale, disputed,
+the reader, then checks their tenant, exact Karen-self subject, active status,
+verification time, expiry, receipt ID and source revision. User-subject
+attestations are never sufficient to justify Karen's own identity. Absent, expired, stale, disputed,
 withdrawn or cross-tenant evidence cannot become an active property.
 
 Identity facets, declared principles and limitations may use verified
