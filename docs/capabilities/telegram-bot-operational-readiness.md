@@ -398,3 +398,24 @@ durable evidence of provider unlink, credential revocation and a separately
 authorized lifecycle transition. No admin UI action or external webhook
 inspection may silently clear these rows. The unique owner guard does not
 by itself prove a live signed inbound message or a successful AI reply.
+
+## Bot ownership preflight for read-only recovery evidence
+
+The authenticated Telegram reconciliation endpoint now requires the *current*
+Vault-resolved Telegram `getMe` numeric bot identity to match an ownership
+record in the globally unique `channel_telegram_bot_owners` ledger for the
+same tenant, connection, and enabled revision. This lookup runs within the
+canonical tenant-RLS repository. A foreign or absent owner is a denial,
+not a provider URL diagnostic.
+
+After the external `getWebhookInfo` read, the host rechecks both the
+connection/claim snapshot **and** the current provider bot identity and
+ownership. A credential rotation or owner transition during observation
+invalidates the response. Successful evidence includes
+`bot_identity_owner_verified=true`, but still always returns
+`claim_released=false`, `reconciliation_authorized=false`, and
+`live_connected=false`.
+
+This is only a prerequisite for future governed recovery. It does not grant
+a claim reset, authorization to revoke ownership, remote `deleteWebhook`,
+or a proof of signed inbound message processing.

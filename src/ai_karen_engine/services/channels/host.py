@@ -367,8 +367,18 @@ class ChannelHostServices:
         ):
             raise PermissionError("Telegram reconciliation adapter unavailable")
         observe = getattr(adapter, "observe_registration", None)
-        if not callable(observe):
+        identify_bot = getattr(adapter, "identify_bot", None)
+        if not callable(observe) or not callable(identify_bot):
             raise PermissionError("Telegram reconciliation observation unavailable")
+        provider_bot_id = await identify_bot(connection=connection)
+        if type(provider_bot_id) is not int or not 0 < provider_bot_id < 2**63:
+            raise PermissionError("Telegram bot ownership verification unavailable")
+        owned = await self.repository.inspect_telegram_bot_ownership(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision, provider_bot_id=provider_bot_id,
+        )
+        if owned is not True:
+            raise PermissionError("Telegram bot ownership unverified")
         claim = await self.repository.inspect_telegram_webhook_claim(
             tenant_id=tenant_id, connection_id=connection_id,
             expected_revision=expected_revision,
@@ -381,10 +391,19 @@ class ChannelHostServices:
             tenant_id=tenant_id, connection_id=connection_id,
             expected_revision=expected_revision,
         )
+        current_bot_id = await identify_bot(connection=connection)
+        current_owner = (
+            type(current_bot_id) is int
+            and current_bot_id == provider_bot_id
+            and await self.repository.inspect_telegram_bot_ownership(
+                tenant_id=tenant_id, connection_id=connection_id,
+                expected_revision=expected_revision, provider_bot_id=current_bot_id,
+            ) is True
+        )
         # The provider call is outside the SQL snapshot. Refuse to combine
         # evidence from different claim generations or lifecycle revisions.
         # A changed expiry is a real state transition, not a retry signal.
-        if fresh != connection or current_claim != claim:
+        if fresh != connection or current_claim != claim or not current_owner:
             raise RuntimeError("Telegram reconciliation evidence changed")
         if (
             not isinstance(claim, dict)
@@ -409,6 +428,7 @@ class ChannelHostServices:
             raise RuntimeError("Telegram reconciliation evidence invalid")
         return {
             **claim, **observation,
+            "bot_identity_owner_verified": True,
             "claim_released": False,
             "reconciliation_authorized": False,
         }

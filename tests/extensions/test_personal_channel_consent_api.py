@@ -1703,7 +1703,8 @@ async def test_telegram_reconciliation_inspection_is_scoped_read_only_and_not_re
     ))
     host.inspect_telegram_registration_evidence = AsyncMock(return_value={
         "claim_state": "uncertain", "claim_revision_matches": True,
-        "claim_expired": True, "provider_url_matches": True,
+        "claim_expired": True, "bot_identity_owner_verified": True,
+        "provider_url_matches": True,
         "provider_webhook_registered": True, "live_connected": False,
         "claim_released": False, "reconciliation_authorized": False,
     })
@@ -1712,6 +1713,7 @@ async def test_telegram_reconciliation_inspection_is_scoped_read_only_and_not_re
         request=request, user=actor(roles=["admin"]),
     )
     assert result.claim_state == "uncertain"
+    assert result.bot_identity_owner_verified is True
     assert result.claim_expired is True
     assert result.claim_released is False
     assert result.live_connected is False
@@ -1749,7 +1751,8 @@ async def test_telegram_reconciliation_refuses_fabricated_release():
     ))
     host.inspect_telegram_registration_evidence = AsyncMock(return_value={
         "claim_state": "verified", "claim_revision_matches": True,
-        "claim_expired": False, "provider_url_matches": True,
+        "claim_expired": False, "bot_identity_owner_verified": True,
+        "provider_url_matches": True,
         "provider_webhook_registered": True, "live_connected": False,
         "claim_released": True, "reconciliation_authorized": True,
     })

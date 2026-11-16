@@ -977,3 +977,46 @@ async def test_telegram_global_bot_ownership_same_connection_is_idempotent(monke
         tenant_id=TENANT, connection_id="telegram-connect",
         expected_revision=2, provider_bot_id=123456,
     )
+
+
+@pytest.mark.asyncio
+async def test_telegram_owner_preflight_requires_verified_tenant_connection_revision(monkeypatch):
+    session = FakeSession(RowResult(scalar=True))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().inspect_telegram_bot_ownership(
+        tenant_id=TENANT, connection_id="telegram-connect",
+        expected_revision=2, provider_bot_id=123456,
+    ) is True
+    sql, params = session.calls[0]
+    assert "channel_telegram_bot_owners" in sql
+    assert "o.tenant_id = CAST(:tenant AS uuid)" in sql
+    assert "o.connection_id = :connection" in sql
+    assert "o.connection_revision = :revision" in sql
+    assert "c.enabled = true" in sql
+    assert "c.installation_id = 'telegram-bot'" in sql
+    assert params["bot_id"] == 123456
+    assert "credential_handle" not in sql
+
+
+@pytest.mark.asyncio
+async def test_telegram_owner_preflight_never_discloses_foreign_owner(monkeypatch):
+    session = FakeSession(RowResult(scalar=None))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().inspect_telegram_bot_ownership(
+        tenant_id=TENANT, connection_id="telegram-connect",
+        expected_revision=2, provider_bot_id=123456,
+    ) is False
+    assert len(session.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bot_id", [0, -1, True, "123456", 2**63])
+async def test_telegram_owner_preflight_rejects_invalid_bot_identity(monkeypatch, bot_id):
+    session = FakeSession()
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().inspect_telegram_bot_ownership(
+            tenant_id=TENANT, connection_id="telegram-connect",
+            expected_revision=2, provider_bot_id=bot_id,
+        )
+    assert session.calls == []
