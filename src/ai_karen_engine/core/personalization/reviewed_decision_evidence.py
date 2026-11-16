@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, Sequence
+from typing import Sequence
 
 from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
     PolicyObservation,
@@ -63,18 +63,6 @@ class KcmReviewedDecisionEvidence:
     training_authorized: bool = False
 
 
-class KcmDecisionReviewAuthority(Protocol):
-    """Existing governed verification receipt reconciler, not a new evaluator."""
-
-    async def require_persisted_reviews(
-        self,
-        observations: Sequence[PolicyObservation],
-        *,
-        subject: AuthenticatedPrincipal,
-    ) -> dict[str, object]:
-        ...
-
-
 class KcmReviewedDecisionProjector:
     """Read verified decision receipts with authenticated user and tenant scope.
 
@@ -83,22 +71,19 @@ class KcmReviewedDecisionProjector:
     persisted reviewer-issued receipts, so caller-provided rewards alone have
     no evidentiary value.
 
-    An optional authority is injected for isolated tests or trusted app
-    composition. Production defaults to the canonical governed adapter.
+    The only verifier is Karen's canonical governed review authority. An
+    optional store may be injected by trusted composition (in-memory in
+    isolated tests); caller-supplied verification summaries are never trusted.
     """
 
     def __init__(
         self,
         *,
-        authority: KcmDecisionReviewAuthority | None = None,
         store: OutcomeStore | None = None,
         max_decisions: int,
     ) -> None:
         if type(max_decisions) is not int or not 1 <= max_decisions <= _MAX_CASES:
             raise ValueError("KCM decision evidence budget must be 1-500")
-        if authority is not None and store is not None:
-            raise ValueError("Supply one canonical review authority, not both")
-        self._authority = authority
         self._store = store
         self._max_decisions = max_decisions
 
@@ -166,13 +151,11 @@ class KcmReviewedDecisionProjector:
         # The canonical reconciler verifies this exact copy against immutable
         # stored labels and the original frozen decision feature digest.
         frozen = tuple(copy.deepcopy(row) for row in observations)
-        authority = self._authority
-        if authority is None:
-            authority = GovernedVerificationReviewEvidence(
-                tenant_id=tenant_id,
-                subject_user_id=user_id,
-                store=self._store,
-            )
+        authority = GovernedVerificationReviewEvidence(
+            tenant_id=tenant_id,
+            subject_user_id=user_id,
+            store=self._store,
+        )
         try:
             receipt = await authority.require_persisted_reviews(
                 frozen, subject=subject,
@@ -276,6 +259,5 @@ class KcmReviewedDecisionProjector:
 __all__ = [
     "KcmDecisionEvidenceHealth",
     "KcmReviewedDecisionEvidence",
-    "KcmDecisionReviewAuthority",
     "KcmReviewedDecisionProjector",
 ]
