@@ -84,6 +84,16 @@ CREATE FUNCTION kcm_internal.kcm_reject_revoked_lineage()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog AS $kcm_replay$
 BEGIN
+    -- Serialize lineage registration with the revocation function's
+    -- owner-row lock. Otherwise concurrent insert can miss an uncommitted
+    -- tombstone and resurrect a quarantined reference after revocation.
+    PERFORM 1 FROM public.kcm_training_scope_state
+    WHERE tenant_id = NEW.tenant_id AND user_id = NEW.user_id
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'KCM scope unavailable for lineage registration'
+            USING ERRCODE = '23514';
+    END IF;
     IF NEW.lineage_status = 'quarantined'
        AND EXISTS (
            SELECT 1 FROM public.kcm_training_source_revocations r
