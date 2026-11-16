@@ -157,6 +157,7 @@ def test_optional_verification_probe_is_policy_permission_not_execution() -> Non
         )
         assert probe.source_decision_id == selected.decision_id
         assert probe.source_policy_version == selected.policy_version
+        assert probe.alternative_policy_decision_id != selected.decision_id
         assert probe.status == "alternative_reasoning_mode_policy_permitted"
         assert probe.to_metadata()["execution_eligibility_established"] is False
         assert probe.to_metadata()["randomized_selection"] is False
@@ -216,7 +217,9 @@ def test_optional_verification_probe_rejects_unsafe_alternatives() -> None:
             result = await policy.probe_optional_verification(
                 request, selected, direct_plan_authorized=True,
             )
-            assert result.policy_permitted_actions == ("respond_direct",)
+            assert result.policy_permitted_actions == (
+                ("respond_direct",) if selected.allowed else ()
+            )
             assert result.alternative_policy_decision_id is None
             assert result.to_metadata()["ope_eligible"] is False
 
@@ -226,7 +229,8 @@ def test_optional_verification_probe_rejects_unsafe_alternatives() -> None:
         rejected = await policy.probe_optional_verification(
             direct, selected, direct_plan_authorized=False,
         )
-        assert rejected.status == "selected_only"
+        assert rejected.status == "not_authorized"
+        assert rejected.policy_permitted_actions == ()
 
     asyncio.run(run())
 
