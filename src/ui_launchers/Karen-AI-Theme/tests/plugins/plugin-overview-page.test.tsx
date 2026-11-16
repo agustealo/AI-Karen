@@ -81,6 +81,7 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
         version: '1.0.0',
         enabled: true,
         has_gui: false,
+        supportsVoiceOutput: true,
         promptFirstValid: true,
         menuContributions: [],
         rawStatus: 'enabled',
