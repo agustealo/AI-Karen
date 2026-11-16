@@ -26,6 +26,7 @@ on:
       - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
       - 'tests/integration/test_channel_claim_concurrency_postgres.py'
+      - 'tests/integration/test_channel_status_batch_benchmark_postgres.py'
       - 'tests/integration/test_plugin_settings_postgres.py'
       - 'supabase/migrations/*channel*.sql'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
@@ -70,6 +71,7 @@ on:
       - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
       - 'tests/integration/test_channel_claim_concurrency_postgres.py'
+      - 'tests/integration/test_channel_status_batch_benchmark_postgres.py'
       - 'tests/integration/test_plugin_settings_postgres.py'
       - 'supabase/migrations/*channel*.sql'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
@@ -250,6 +252,23 @@ jobs:
           # Dedicated disposable DB: the live proof recreates its own schema.
           psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE karen_channel_test'
           pytest tests/integration/test_channel_claim_concurrency_postgres.py -q --timeout=120 --tb=short
+
+      - name: Measure bounded channel status PostgreSQL batch latency
+        env:
+          CHANNEL_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/karen_channel_test
+          KAREN_CHANNEL_STATUS_BENCHMARK_REPETITIONS: '6'
+        run: |
+          # Reuse ONLY the disposable DB initialized by the preceding channel
+          # migration/claim test. No production accounts, credentials or data.
+          pytest tests/integration/test_channel_status_batch_benchmark_postgres.py -q --timeout=180 --tb=short
+
+      - name: Upload bounded status benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-status-postgres-benchmark
+          path: artifacts/ci/channel-status-postgres-benchmark.json
+          if-no-files-found: warn
 
       - name: Live PostgreSQL plugin settings tenant RLS and revision proof
         env:
