@@ -18,6 +18,7 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
   const [available, setAvailable] = useState(false);
   const [recording, setRecording] = useState(false);
   const [requesting, setRequesting] = useState(false);
+  const [finishing, setFinishing] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -26,6 +27,10 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mounted = useRef(true);
   const starting = useRef(false);
+  // MediaRecorder.stop() dispatches onstop asynchronously in real browsers.
+  // Keep ownership and the Start gate until that exact recorder finalizes.
+  const finalizing = useRef(false);
+  const processingRef = useRef(false);
   const recordingFailed = useRef(false);
   const generation = useRef(0);
 
@@ -48,6 +53,8 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
       active = false;
       mounted.current = false;
       generation.current += 1;
+      finalizing.current = false;
+      processingRef.current = false;
       if (timer.current) clearTimeout(timer.current);
       abort.current?.abort();
       recordingFailed.current = true;
@@ -62,8 +69,14 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     try {
-      if (recorder.current?.state === "recording") recorder.current.stop();
+      if (recorder.current?.state === "recording") {
+        finalizing.current = true;
+        if (mounted.current) setFinishing(true);
+        recorder.current.stop();
+      }
     } catch {
+      finalizing.current = false;
+      if (mounted.current) setFinishing(false);
       recordingFailed.current = true;
       generation.current += 1;
       stream.current?.getTracks().forEach((track) => track.stop());
@@ -79,13 +92,24 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
     recordingFailed.current = true;
     abort.current?.abort();
     starting.current = false;
+    processingRef.current = false;
     setRequesting(false);
     stop();
+    // Discard must release a recorder that is waiting for a delayed onstop.
+    // Its eventual callback will fail the exact-recorder ownership fence.
+    if (finalizing.current) {
+      finalizing.current = false;
+      recorder.current = null;
+      stream.current?.getTracks().forEach((track) => track.stop());
+      stream.current = null;
+      if (mounted.current) setFinishing(false);
+    }
     if (mounted.current) setProcessing(false);
   };
 
   const start = async () => {
-    if (processing || recording || starting.current) return;
+    if (processing || processingRef.current || recording ||
+        starting.current || finalizing.current || recorder.current !== null) return;
     starting.current = true;
     setRequesting(true);
     const currentGeneration = ++generation.current;
@@ -117,6 +141,8 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
         mic.getTracks().forEach((track) => track.stop());
         if (stream.current === mic) stream.current = null;
         if (recorder.current === media) recorder.current = null;
+        finalizing.current = false;
+        if (mounted.current) setFinishing(false);
       };
       media.onstop = async () => {
         mic.getTracks().forEach((track) => track.stop());
@@ -126,15 +152,20 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
         if (recorder.current !== media) return;
         if (recorder.current === media) {
           recorder.current = null;
+          finalizing.current = false;
           if (timer.current) clearTimeout(timer.current);
           timer.current = null;
-          if (mounted.current) setRecording(false);
+          if (mounted.current) {
+            setFinishing(false);
+            setRecording(false);
+          }
         }
         if (!isCurrentVoiceSession(mounted.current, generation.current, currentGeneration) || recordingFailed.current) return;
         if (!chunks.length) {
           setError("No audio was captured. Your message was not sent.");
           return;
         }
+        processingRef.current = true;
         setProcessing(true);
         const controller = new AbortController();
         abort.current = controller;
@@ -158,7 +189,10 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
           }
         } finally {
           try { await audioContext?.close(); } catch { /* Audio context may already be closed. */ }
-          if (mounted.current && generation.current === currentGeneration) setProcessing(false);
+          if (generation.current === currentGeneration) {
+            processingRef.current = false;
+            if (mounted.current) setProcessing(false);
+          }
           if (abort.current === controller) abort.current = null;
         }
       };
@@ -176,7 +210,9 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
         generation.current += 1;
         recordingFailed.current = true;
         starting.current = false;
+        finalizing.current = false;
         setRequesting(false);
+        if (mounted.current) setFinishing(false);
         stream.current?.getTracks().forEach((track) => track.stop());
         stream.current = null;
         recorder.current = null;
@@ -186,7 +222,7 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
   };
 
   return <div className="flex items-center gap-1">
-    <button type="button" disabled={processing || requesting} aria-label={recording ? "Stop local dictation" : "Start local dictation"}
+    <button type="button" disabled={processing || requesting || finishing} aria-label={recording ? "Stop local dictation" : "Start local dictation"}
       aria-pressed={recording} onClick={recording ? stop : start}
       className="flex h-11 w-11 items-center justify-center rounded-xl border border-input disabled:opacity-40">
       {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
@@ -195,10 +231,13 @@ export function KarenLocalDictationCapture({ port, onAvailabilityChange }: {
       className="rounded-lg border border-input px-2 py-2 text-xs">Cancel</button>}
     {recording && <button type="button" onClick={cancel} aria-label="Discard local recording"
       className="rounded-lg border border-input px-2 py-2 text-xs">Discard</button>}
+    {finishing && <button type="button" onClick={cancel} aria-label="Discard finalizing local recording"
+      className="rounded-lg border border-input px-2 py-2 text-xs">Discard</button>}
     {processing && <button type="button" onClick={cancel} aria-label="Cancel local transcription"
       className="rounded-lg border border-input px-2 py-2 text-xs">Cancel</button>}
     {requesting && <span role="status" className="text-xs">Waiting for microphone permission…</span>}
     {recording && <span role="status" className="text-xs">Recording locally…</span>}
+    {finishing && <span role="status" className="text-xs">Finalizing local recording…</span>}
     {processing && <span role="status" className="text-xs">Transcribing locally…</span>}
     {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
   </div>;
