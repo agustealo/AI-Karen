@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 
+from ai_karen_engine.config.learning import get_learning_settings
 from ai_karen_engine.core.intelligence.ml.contracts import PredictionTask
 from ai_karen_engine.core.intelligence.ml.durable_outcomes import (
     GovernedMLLearningEvidence,
@@ -124,15 +125,13 @@ class KcmBenchmarkTaskProjector:
             raise ValueError("KCM benchmark case bounds must satisfy 1 <= min <= max <= 1000")
         if not isinstance(registry_dir, Path):
             raise TypeError("Canonical ML registry path required")
-        if (
-            max_evidence_age_seconds is not None
-            and (
-                type(max_evidence_age_seconds) is not int
-                or not 1 <= max_evidence_age_seconds <= 31_536_000
-            )
-        ):
+        age_limit = (
+            get_learning_settings().kcm_benchmark_max_evidence_age_seconds
+            if max_evidence_age_seconds is None else max_evidence_age_seconds
+        )
+        if type(age_limit) is not int or not 1 <= age_limit <= 31_536_000:
             raise ValueError("KCM benchmark evidence age must be 1-31536000 seconds")
-        self._max_evidence_age_seconds = max_evidence_age_seconds
+        self._max_evidence_age_seconds = age_limit
         self._directory = registry_dir
         self._minimum = minimum_cases
         self._maximum = maximum_cases
@@ -239,13 +238,11 @@ class KcmBenchmarkTaskProjector:
                 return reject("benchmark_issuer_timestamp_unavailable")
             if receipt.evaluated_at > now:
                 return reject("benchmark_issuer_timestamp_in_future")
-            expires_at: datetime | None = None
-            if self._max_evidence_age_seconds is not None:
-                expires_at = receipt.evaluated_at + timedelta(
-                    seconds=self._max_evidence_age_seconds,
-                )
-                if now >= expires_at:
-                    return reject("benchmark_evidence_expired")
+            expires_at = receipt.evaluated_at + timedelta(
+                seconds=self._max_evidence_age_seconds,
+            )
+            if now >= expires_at:
+                return reject("benchmark_evidence_expired")
             return self._measure(
                 receipt=receipt, observations=observations,
                 tenant_id=tenant_id, user_id=user_id,
@@ -355,9 +352,7 @@ class KcmBenchmarkTaskProjector:
                 "curated_oracle_source_verified"
                 if receipt.curated_oracle_sha256
                 else "oracle_source_not_verified",
-                "freshness_window_verified"
-                if expires_at is not None
-                else "freshness_window_unenforced",
+                "freshness_window_verified",
                 "declared_groups_not_independent",
                 "case_independence_unverified",
                 "production_conditions_unverified",
