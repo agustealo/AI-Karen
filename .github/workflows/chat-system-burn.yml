@@ -151,6 +151,9 @@ jobs:
             tests/core/runtime/test_runtime_fallback_memory.py
           pytest -q tests/core/runtime/test_chat_http_recovery_persistence.py
 
+      - name: Prove atomic runtime budget reservations and monotonic expiry
+        run: pytest -q tests/core/runtime/test_execution_budget_meter_integrity.py
+
       - name: Burn empty and prematurely terminated chat SSE failures
         run: |
           # These targeted stream regressions have isolated runtime doubles.
