@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, PredictionTask
+from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus, PredictionTask
 from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkResult
 from ai_karen_engine.core.intelligence.ml.promotion import (
     PromotionDecision,
@@ -192,6 +192,11 @@ class EvaluationEvidenceStore:
         registered = registry.get(manifest.model_id)
         if (
             registered is None
+            or registered.status not in {
+                ModelStatus.CANDIDATE.value,
+                ModelStatus.SHADOW.value,
+                ModelStatus.ACTIVE.value,
+            }
             or registered.model_version != manifest.model_version
             or registered.purpose != manifest.purpose
             or registered.artifact_hash != manifest.artifact_hash
