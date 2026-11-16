@@ -83,6 +83,18 @@ BEGIN
         RETURN NULL;
     END IF;
 
+    -- Ordinary memories must not inflate KCM epochs or create derivative
+    -- tombstones unless this exact revision was enrolled as KCM lineage.
+    -- The owner-row lock serializes this test with lineage registration.
+    IF NOT EXISTS (
+        SELECT 1 FROM public.kcm_dataset_source_lineage
+        WHERE tenant_id = p_tenant_id AND user_id = p_user_id
+          AND source_event_id = p_source_event_id
+          AND source_revision = p_source_revision
+    ) THEN
+        RETURN NULL;
+    END IF;
+
     SELECT deletion_epoch INTO v_existing
     FROM public.kcm_training_source_revocations
     WHERE tenant_id = p_tenant_id AND user_id = p_user_id
