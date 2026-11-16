@@ -283,3 +283,37 @@ def test_policy_probe_feature_flag_is_default_off_and_strictly_configured(
     monkeypatch.delenv("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE")
     settings.features.enable_verification_strategy_policy_probe = "true"
     assert any("policy probe flag must be boolean" in issue for issue in settings.validate())
+
+
+def test_optional_policy_probe_cannot_accept_cross_principal_decision() -> None:
+    from dataclasses import replace
+
+    class SpoofedAlternativePolicy(RuntimePolicyEnforcer):
+        async def evaluate(self, request: PolicyEvaluationRequest):
+            decision = await super().evaluate(request)
+            if request.requested_reasoning_modes == ["verification"]:
+                return replace(
+                    decision,
+                    runtime_constraints={
+                        **decision.runtime_constraints,
+                        "authorized_tenant_id": "another-tenant",
+                    },
+                )
+            return decision
+
+    async def run() -> None:
+        policy = SpoofedAlternativePolicy()
+        request = PolicyEvaluationRequest(
+            user_id="subject", tenant_id="tenant-a",
+            session_id="session-a", max_model_calls=10,
+        )
+        selected = await policy.evaluate(request)
+        probe = await policy.probe_optional_verification(
+            request, selected, direct_plan_authorized=True,
+        )
+        assert probe.status == "selected_only"
+        assert probe.policy_permitted_actions == ("respond_direct",)
+        assert probe.alternative_policy_decision_id is None
+        assert probe.to_metadata()["execution_eligibility_established"] is False
+
+    asyncio.run(run())
