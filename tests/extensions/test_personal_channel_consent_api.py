@@ -1596,3 +1596,97 @@ async def test_telegram_activation_rejects_fake_provider_readiness_result():
 def test_telegram_activation_requires_strict_positive_revision(bad):
     with pytest.raises(ValidationError):
         api.TelegramActivationRequest(expected_revision=bad)
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_api_mints_separate_policy_plan_and_never_claims_chat():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    host.register_telegram_webhook = AsyncMock(return_value={
+        "provider_registration_verified": True, "live_connected": False,
+    })
+    result = await api.register_telegram_webhook(
+        connection_id=api.UUID(CONNECTION),
+        payload=api.TelegramWebhookRegistrationRequest(expected_revision=2),
+        request=request, user=actor(roles=["admin"]),
+    )
+    assert result.provider_registration_verified is True
+    assert result.live_connected is False
+    issued = host.activation.issue_action_plan.await_args.kwargs
+    assert issued["action"] == "channel.webhook.register"
+    assert issued["tenant_id"] == TENANT
+    assert issued["user_id"] == USER
+    call = host.register_telegram_webhook.await_args.kwargs
+    assert call["expected_revision"] == 2
+    assert call["authorized_plan"] == "trusted-plan"
+    assert call["session_id"] == issued["session_id"]
+    assert "vault://" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_api_denies_stale_revision_before_policy():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    host.register_telegram_webhook = AsyncMock()
+    with pytest.raises(HTTPException) as exc:
+        await api.register_telegram_webhook(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.TelegramWebhookRegistrationRequest(expected_revision=3),
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert exc.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.register_telegram_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_api_denies_unprivileged_actor_before_provider():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    host.activation.issue_action_plan.side_effect = PermissionError("Denied")
+    host.register_telegram_webhook = AsyncMock()
+    with pytest.raises(HTTPException) as exc:
+        await api.register_telegram_webhook(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.TelegramWebhookRegistrationRequest(expected_revision=2),
+            request=request, user=actor(),
+        )
+    assert exc.value.status_code == 403
+    host.register_telegram_webhook.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_api_rejects_forged_registered_and_connected_state():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    host.register_telegram_webhook = AsyncMock(return_value={
+        "provider_registration_verified": True,
+        "live_connected": True,
+    })
+    with pytest.raises(HTTPException) as exc:
+        await api.register_telegram_webhook(
+            connection_id=api.UUID(CONNECTION),
+            payload=api.TelegramWebhookRegistrationRequest(expected_revision=2),
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert exc.value.status_code == 503
