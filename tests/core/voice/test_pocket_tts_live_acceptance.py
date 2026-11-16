@@ -392,13 +392,35 @@ class _TargetProcessSampler:
             pytest.fail("Target CPU/RSS measurements were not observable")
 
 
+def _validated_local_pid(raw: str) -> int:
+    """Include container PID 1; reject invalid/zero/negative host process IDs."""
+    value = raw.strip()
+    if not value.isascii() or not value.isdecimal():
+        raise ValueError("invalid_pocket_server_pid")
+    pid = int(value)
+    if not 0 < pid < 2**31:
+        raise ValueError("invalid_pocket_server_pid")
+    return pid
+
+
+@pytest.mark.parametrize("raw, expected", [("1", 1), (" 1 ", 1), ("237", 237)])
+def test_server_pid_validation_accepts_host_and_container_processes(
+    raw: str, expected: int,
+) -> None:
+    assert _validated_local_pid(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "0", "-1", "not-a-pid", "1.5", str(2**31)])
+def test_server_pid_validation_rejects_invalid_targets(raw: str) -> None:
+    with pytest.raises(ValueError, match="invalid_pocket_server_pid"):
+        _validated_local_pid(raw)
+
+
 def _benchmark_process() -> tuple[Any, Any]:
     """An operator must name the actual local Karen server process explicitly."""
-    raw_pid = os.getenv(_SERVER_PID_ENV, "").strip()
-    if not raw_pid.isascii() or not raw_pid.isdecimal():
-        pytest.fail("Pocket benchmark requires a valid local Karen server PID")
-    pid = int(raw_pid)
-    if not 1 < pid < 2**31:
+    try:
+        pid = _validated_local_pid(os.getenv(_SERVER_PID_ENV, ""))
+    except ValueError:
         pytest.fail("Pocket benchmark requires a valid local Karen server PID")
     try:
         import psutil
