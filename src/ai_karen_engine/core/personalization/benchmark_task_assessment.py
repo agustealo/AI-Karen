@@ -239,7 +239,7 @@ class KcmBenchmarkTaskProjector:
         reject,
     ) -> KcmBenchmarkTaskAssessment:
         prefix = f"benchmark:{receipt.receipt_id}:"
-        expected = set(receipt.case_hashes)
+        expected = dict(receipt.case_verdicts)
         by_hash: dict[str, bool] = {}
         for row in observations:
             ref = row.metadata.get("label_evidence_ref")
@@ -256,6 +256,7 @@ class KcmBenchmarkTaskProjector:
                 or row.feature_version != receipt.feature_version
                 or row.fallback_used
                 or type(row.correct) is not bool
+                or row.correct is not expected[case_hash]
             ):
                 return reject("benchmark_case_identity_or_label_invalid")
             by_hash[case_hash] = row.correct
