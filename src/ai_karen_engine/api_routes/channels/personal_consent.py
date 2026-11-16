@@ -408,6 +408,97 @@ async def inspect_telegram_webhook(
     )
 
 
+class TelegramProvisionRequest(BaseModel):
+    """Operator supplies Vault reference only; never a raw Telegram bot token."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_account_id: str = Field(min_length=1, max_length=256)
+    credential_handle: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def require_vault_reference(self) -> "TelegramProvisionRequest":
+        # The Vault resolver validates actual permissions and secret types.
+        # Refuse obviously raw tokens before invoking any authorization or SQL.
+        if (
+            not self.provider_account_id.strip()
+            or self.provider_account_id != self.provider_account_id.strip()
+            or not self.credential_handle.startswith("vault://")
+            or any(character.isspace() for character in self.credential_handle)
+            or ":" in self.credential_handle[len("vault://"):]
+        ):
+            raise ValueError("Valid provider identity and Vault reference required")
+        return self
+
+
+class TelegramProvisionResult(BaseModel):
+    """No credential handle, provider identity, secrets or live health claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: UUID
+    installation_id: Literal["telegram-bot"]
+    enabled: Literal[False]
+    revision: Literal[1]
+    operational: Literal[False]
+
+
+@router.post(
+    "/operator/telegram/connections",
+    status_code=201,
+    response_model=TelegramProvisionResult,
+)
+async def provision_telegram_connection(
+    payload: TelegramProvisionRequest,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+) -> TelegramProvisionResult:
+    """Create only a disabled Telegram connection after canonical authorization.
+
+    This route does not accept caller identity, tenant, installation, policy
+    plan or an activation flag. The separate activation and linking owners
+    must still verify provider identity, signed delivery and ChatRuntime.
+    """
+    host, tenant_id, user_id = _host_and_actor(request, user)
+    try:
+        session_id = str(uuid4())
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="telegram-bot", action="channel.provision",
+        )
+        result = await host.activation.provision(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="telegram-bot",
+            provider_account_id=payload.provider_account_id,
+            credential_handle=payload.credential_handle,
+            authorized_plan=plan,
+        )
+    except PermissionError:
+        raise HTTPException(403, "Telegram provisioning denied") from None
+    except Exception as exc:
+        logger.error(
+            "channel.telegram.provision_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "Telegram provisioning unavailable") from None
+    try:
+        if (
+            result.tenant_id != tenant_id
+            or result.installation_id != "telegram-bot"
+            or result.enabled is not False
+            or result.revision != 1
+        ):
+            raise ValueError("Invalid provisioned connection")
+        return TelegramProvisionResult(
+            connection_id=UUID(result.connection_id),
+            installation_id="telegram-bot",
+            enabled=False, revision=1, operational=False,
+        )
+    except (ValueError, ValidationError, AttributeError, TypeError):
+        logger.error("channel.telegram.provision_result_invalid")
+        raise HTTPException(503, "Telegram provisioning unavailable") from None
+
+
 class PersonalConsentRecoveryItem(BaseModel):
     connection_id: str
     provider_id: str
