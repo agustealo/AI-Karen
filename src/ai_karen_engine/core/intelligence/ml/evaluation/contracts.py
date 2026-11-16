@@ -19,6 +19,9 @@ class EvaluationCase:
     source: str = "curated"
     dataset_version: str = "ml-eval-v1"
     features: dict[str, Any] = field(default_factory=dict)
+    # Optional curator-declared grouping. No independence claim follows from
+    # this string alone; independent grouping requires separately reviewed proof.
+    evaluation_group_id: str | None = None
 
 
 @dataclass
