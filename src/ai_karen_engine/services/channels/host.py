@@ -368,8 +368,15 @@ class ChannelHostServices:
         fresh = await self.repository.get_enabled_connection(
             tenant_id=tenant_id, connection_id=connection_id,
         )
-        if fresh != connection:
-            raise RuntimeError("Telegram reconciliation revision changed")
+        current_claim = await self.repository.inspect_telegram_webhook_claim(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision,
+        )
+        # The provider call is outside the SQL snapshot. Refuse to combine
+        # evidence from different claim generations or lifecycle revisions.
+        # A changed expiry is a real state transition, not a retry signal.
+        if fresh != connection or current_claim != claim:
+            raise RuntimeError("Telegram reconciliation evidence changed")
         if (
             not isinstance(claim, dict)
             or set(claim) != {
