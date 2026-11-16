@@ -683,3 +683,45 @@ async def test_whatsapp_signed_native_body_exact_64k_boundary_is_consistent():
             connection=account, headers=over_headers, body=over_body,
         )
     client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_signed_entry_and_change_boundary():
+    """A bounded provider envelope must not bypass aggregate change limits."""
+    _, adapter, account, _, client = adapter_components()
+    await adapter.start(connection=account)
+    change = {"field": "unsupported_metadata"}
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [dict(change), dict(change)]} for _ in range(16)],
+    }
+    body, headers = signed_batch(payload)
+    assert len(body) <= 65_536
+    assert await adapter.verify_event(connection=account, headers=headers, body=body)
+    accepted = await adapter.normalize_events(
+        connection=account, headers=headers, body=body,
+    )
+    assert accepted.messages == ()
+    assert accepted.statuses == ()
+    assert accepted.ignored_count == 32
+
+    payload["entry"].append({"changes": [dict(change)]})
+    over_entry_body, over_entry_headers = signed_batch(payload)
+    assert await adapter.verify_event(
+        connection=account, headers=over_entry_headers, body=over_entry_body,
+    )
+    with pytest.raises(ValueError, match="entry count"):
+        await adapter.normalize_events(
+            connection=account, headers=over_entry_headers, body=over_entry_body,
+        )
+
+    payload["entry"] = [{"changes": [dict(change)] * 11} for _ in range(3)]
+    over_change_body, over_change_headers = signed_batch(payload)
+    assert await adapter.verify_event(
+        connection=account, headers=over_change_headers, body=over_change_body,
+    )
+    with pytest.raises(ValueError, match="Too many WhatsApp webhook changes"):
+        await adapter.normalize_events(
+            connection=account, headers=over_change_headers, body=over_change_body,
+        )
+    client.post.assert_not_awaited()
