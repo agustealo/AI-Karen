@@ -203,13 +203,13 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         # Ownership cannot evaporate through implicit tenant or connection
         # deletion. A separate governed release must first prove unlink.
         owner_foreign_keys = await raw.fetch("""
-            SELECT conname, confdeltype
+            SELECT conname, confdeltype::text AS delete_action
             FROM pg_constraint
             WHERE conrelid = 'public.channel_telegram_bot_owners'::regclass
               AND contype = 'f'
         """)
         assert len(owner_foreign_keys) == 2
-        assert all(row["confdeltype"] == "r" for row in owner_foreign_keys)
+        assert all(row["delete_action"] == "r" for row in owner_foreign_keys)
         competitor = f"telegram-competing-{uuid.uuid4().hex}"
         await raw.execute(
             """INSERT INTO public.channel_connections
