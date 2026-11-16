@@ -8,7 +8,6 @@ propensities. It does not promote or authorize a candidate strategy.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -96,6 +95,8 @@ def evaluate_verification_effort_candidate(
             or not all(ch.isalnum() or ch in "-._:/" for ch in label_ref)
         ):
             raise ValueError("An independently evaluated verification-need label is required")
+        if label_ref == metadata["reward_evidence_ref"]:
+            raise ValueError("Verification label and reward require distinct evidence receipts")
         if label_ref in verified_labels:
             raise ValueError("Duplicate verification-need label is not independent evidence")
         verified_labels.add(label_ref)
