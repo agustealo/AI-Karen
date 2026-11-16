@@ -2209,12 +2209,17 @@ class SqlChannelRepository:
                 current = (await session.execute(
                     text("""
                         SELECT o.connection_id, o.destination_id,
-                               i.connection_revision
+                               i.connection_revision,
+                               c.enabled AS connection_enabled,
+                               c.revision AS current_revision
                         FROM public.channel_outbox o
                         JOIN public.channel_inbox i
                           ON i.tenant_id = o.tenant_id
                          AND i.connection_id = o.connection_id
                          AND i.inbox_id = o.inbox_id
+                        JOIN public.channel_connections c
+                          ON c.tenant_id = o.tenant_id
+                         AND c.connection_id = o.connection_id
                         WHERE o.tenant_id = CAST(:tenant AS uuid)
                           AND o.delivery_id = CAST(:delivery AS uuid)
                           AND o.provider_message_id = :provider_message
@@ -2230,10 +2235,19 @@ class SqlChannelRepository:
                     raise ChannelAdmissionDenied(
                         "Finalized send lost tenant-scoped inbox attribution"
                     )
+                original_revision = int(current["connection_revision"])
+                current_revision = int(current["current_revision"])
+                historical = current["connection_enabled"] is False
+                if historical and current_revision <= original_revision:
+                    raise ChannelAdmissionDenied(
+                        "Historical send revision cannot exceed disabled connection fence"
+                    )
                 await self._reconcile_provider_status(
                     session, tenant_id=tenant_id,
                     connection_id=str(current["connection_id"]),
-                    revision=int(current["connection_revision"]),
+                    revision=original_revision,
+                    current_revision=current_revision,
+                    historical=historical,
                     provider_message_id=receipt.provider_message_id,
                     recipient_id=str(current["destination_id"]),
                 )
