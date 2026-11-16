@@ -507,3 +507,40 @@ async def test_generic_use_request_does_not_bypass_channel_operator_roles():
     assert result.payload["requested_action"] == "execute"
     assert result.payload["requested_action_executed"] is False
     service.execute_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cortex_plugin_inspection_cannot_inherit_incidental_ml_tool_hints():
+    """No caller's request for a plugin can mint filesystem or web actions."""
+    decider = CortexExecutionDecider(force_graph=False)
+    decider._intelligence = SimpleNamespace(analyze=AsyncMock(
+        return_value=SimpleNamespace(
+            intent="general_assist",
+            intent_confidence=0.98,
+            task_complexity="complex",
+            topics=["development"],
+            memory_relevance=0.8,
+            topology_signals={
+                "code_execution": True, "external_lookup": True,
+                "multiple_actions": True,
+            },
+            risk_signals={"score": 0.0, "categories": []},
+            capability_hints={
+                "code_execution": True, "web_search": True,
+                "filesystem_write": True,
+            },
+            reasoning_modes=[],
+        ),
+    ))
+    decision = await decider.decide(
+        _request("Use my ArticleButtler plugin to debug code")
+    )
+    assert decision.intent == "plugin.inspect"
+    assert decision.topology is ExecutionTopology.DIRECT
+    assert decision.graph_required is False
+    assert decision.tool_requirements == []
+    assert decision.plugin_candidates == []
+    assert decision.required_capabilities == ["plugin.inspect"]
+    assert decision.workflow_id is None
+    assert decision.memory_recall_required is False
+    assert decision.memory_write_allowed is False
