@@ -107,6 +107,56 @@ def test_default_verification_has_no_unwired_model_strategies() -> None:
 
 
 
+def test_generic_deep_reasoning_does_not_invent_causal_authority() -> None:
+    """CORTEX must reserve causal modes for an actual explicit decision.
+
+    Deep reasoning or generic reasoning_required is not evidence that a
+    causal effect is identifiable. This lightweight source contract also
+    guards the production Ollama Settings reasoning-to-model handoff.
+    """
+    import ast
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "src/ai_karen_engine/core/cortex/executive.py"
+    )
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    cortex = next(
+        node for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "CortexExecutionDecider"
+    )
+    decide = next(
+        node for node in cortex.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "decide"
+    )
+    fallback = [
+        node for node in ast.walk(decide)
+        if isinstance(node, ast.If)
+        and "reasoning_depth" in ast.unparse(node.test)
+        and "not reasoning_modes" in ast.unparse(node.test)
+    ]
+    assert len(fallback) == 1
+    assignments = [
+        node for statement in fallback[0].body
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "reasoning_modes"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1
+    normalization = assignments[0].value
+    assert isinstance(normalization, ast.Call)
+    assert isinstance(normalization.func, ast.Name)
+    assert normalization.func.id == "normalize_reasoning_modes"
+    assert ast.literal_eval(normalization.args[0]) == [
+        "verification", "metacognition"
+    ]
+
+
+
 @pytest.mark.asyncio
 async def test_nonstream_selected_model_generates_after_reasoning() -> None:
     runtime = _runtime()
