@@ -178,6 +178,7 @@ jobs:
           pytest \
             tests/core/runtime/test_authorized_reasoning_selection.py \
             tests/core/runtime/test_reasoning_model_attribution_truth.py \
+            tests/core/runtime/test_reasoning_provider_synthesis.py \
             -q --timeout=300 --tb=short
 
       - name: Architecture authority contracts
