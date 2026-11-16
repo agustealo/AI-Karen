@@ -333,12 +333,20 @@ CREATE FUNCTION kcm_internal.kcm_privacy_erasure_invalidation()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog AS $kcm_privacy$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.request_type = 'erasure'
+           AND NEW.status IN ('in_progress', 'completed')
+        THEN
+            PERFORM kcm_internal.kcm_invalidate_owner_training(
+                NEW.tenant_id, NEW.user_id, 'privacy_erasure', NEW.request_id
+            );
+        END IF;
+        RETURN NEW;
+    END IF;
+
     IF NEW.request_type = 'erasure'
        AND NEW.status IN ('in_progress', 'completed')
-       AND (
-           TG_OP = 'INSERT'
-           OR OLD.status IS DISTINCT FROM NEW.status
-       )
+       AND OLD.status IS DISTINCT FROM NEW.status
     THEN
         PERFORM kcm_internal.kcm_invalidate_owner_training(
             NEW.tenant_id, NEW.user_id, 'privacy_erasure', NEW.request_id
