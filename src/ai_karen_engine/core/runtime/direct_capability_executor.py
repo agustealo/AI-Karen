@@ -613,7 +613,9 @@ class DirectCapabilityExecutor:
             )
         try:
             result = await get_plugin_service().inspect_for_conversation(
-                tenant_id=str(principal.tenant_id), target=parsed.target,
+                tenant_id=str(principal.tenant_id),
+                target=parsed.target,
+                caller_roles=list(principal.roles or []),
             )
         except Exception as exc:
             logger.warning(
@@ -648,20 +650,48 @@ class DirectCapabilityExecutor:
                 f"More than one registered plugin matches {parsed.target!r}: "
                 f"{names}. Please choose the specific plugin. Nothing was changed."
             )
-        elif parsed.operation == "list":
+        elif parsed.operation in {"list", "discover"}:
             names = ", ".join(
                 str(entry.get("display_name") or entry.get("installation_id"))
                 for entry in matches[:12]
             )
             text = (
                 f"Registered plugin catalog: {names or 'no validated entries'}."
-                " This is package inventory, not proof of configured connections."
-                " No plugin was executed."
+                + (
+                    " These are catalog candidates, not verified matches to "
+                    "your requested task. "
+                    if parsed.operation == "discover" else " "
+                )
+                + "Package inventory does not prove permission, connection, "
+                "or execution readiness. No plugin was executed."
             )
         elif matches:
             plugin = matches[0]
             name = str(plugin.get("display_name") or plugin.get("installation_id"))
-            if plugin.get("execution_route") == "channel_host":
+            if parsed.operation in {"manage", "use"}:
+                action = str(parsed.requested_action or "execute")
+                role_notice = (
+                    " Your account does not match the plugin's declared "
+                    "operator roles."
+                    if plugin.get("role_eligible") is False else ""
+                )
+                text = (
+                    f"{name} was found in Karen's plugin catalog. "
+                    f"The requested {action} action has NOT been performed."
+                    f"{role_notice} This read-only inspection does not authorize "
+                    "plugin execution or lifecycle mutations. A separate "
+                    "RuntimePolicy approval and canonical host/plugin action "
+                    "are required. No credentials or provider operations were used."
+                )
+            elif parsed.operation == "features":
+                declared = ", ".join(plugin.get("declared_features") or [])
+                text = (
+                    f"{name}'s manifest declares: "
+                    f"{declared or 'no additional features'}. "
+                    "These are metadata declarations, not verified execution "
+                    "or account readiness. No plugin was executed."
+                )
+            elif plugin.get("execution_route") == "channel_host":
                 features = ", ".join(plugin.get("declared_features") or [])
                 text = (
                     f"{name} is present in Karen's registered channel catalog. "
@@ -697,6 +727,12 @@ class DirectCapabilityExecutor:
             payload={
                 "status": status,
                 "plugin_inspection": result,
+                "requested_operation": parsed.operation,
+                "requested_action": parsed.requested_action,
+                "requested_action_executed": False,
+                "requires_fresh_action_authorization": parsed.operation in {
+                    "setup", "resume", "manage", "use",
+                },
                 "next_action": (
                     matches[0]["next_action"] if len(matches) == 1
                     else "select_plugin" if status == "ambiguous" else None
