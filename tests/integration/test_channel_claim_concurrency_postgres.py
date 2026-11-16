@@ -1286,11 +1286,32 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             expected_revision=4, retention_days=90, limit=10,
             dry_run=False,
         ) == 0
-        assert await history_repo.prune_unmatched_provider_statuses(
-            tenant_id=str(tenant_a), connection_id=historical_id,
-            expected_revision=3, retention_days=90, limit=10,
-            dry_run=False,
-        ) == 1
+        # Compete a signed replay against pruning while a separate
+        # transaction holds the same scoped advisory lock. Regardless of who
+        # runs first, replay cannot resurrect the scrubbed phone/message.
+        async with raw.transaction():
+            await raw.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"karen:channel-status:{tenant_a}:{historical_id}",
+            )
+            purge_task = asyncio.create_task(
+                history_repo.prune_unmatched_provider_statuses(
+                    tenant_id=str(tenant_a), connection_id=historical_id,
+                    expected_revision=3, retention_days=90, limit=10,
+                    dry_run=False,
+                )
+            )
+            replay_task = asyncio.create_task(
+                history_repo.record_provider_status(
+                    connection=retention_account, status=orphan,
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not purge_task.done()
+            assert not replay_task.done()
+        removed, replayed = await asyncio.gather(purge_task, replay_task)
+        assert removed == 1
+        assert replayed is True
         assert await raw.fetchval(
             """SELECT COUNT(*) FROM public.channel_provider_status_events
                WHERE tenant_id=$1 AND connection_id=$2""",
