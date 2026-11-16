@@ -575,7 +575,68 @@ class ChatRuntime:
                 meter=meter,
             )
             if fallback is not None and fallback.answer:
-                if decision.memory_write_allowed:
+                # A recovered model answer is not a completed conversation
+                # until the same transcript owner used by ordinary chat has
+                # durably admitted the user and assistant turn. Never allow
+                # model recovery to become an unpersisted UI success.
+                recovery_meta = fallback.metadata.to_dict()
+                try:
+                    transcript_result = await self._persist_transcript(
+                        request,
+                        fallback.answer,
+                        recovery_meta,
+                        trajectory_id=trajectory.trajectory_id,
+                    )
+                except Exception as persistence_exc:
+                    logger.error(
+                        "chat.recovery_transcript_persistence_failed",
+                        extra={
+                            "correlation_id": ctx.correlation_id,
+                            "error_type": type(persistence_exc).__name__,
+                        },
+                    )
+                    transcript_result = TranscriptPersistenceResult(
+                        status="failed",
+                        conversation_id=conversation_id,
+                        reason="storage_unavailable",
+                        error_type=type(persistence_exc).__name__,
+                    )
+                    self._emitter.emit(
+                        RuntimeEventType.PERSISTENCE_FAILED,
+                        error_type=type(persistence_exc).__name__,
+                        metadata={
+                            "target": "transcript",
+                            "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                        },
+                    )
+                transcript_meta = transcript_result.to_metadata()
+                recovery_meta.update(transcript_meta)
+                fallback.metadata.extra.update(transcript_meta)
+                fallback.metadata.assistant_message_id = (
+                    transcript_result.assistant_message_id
+                )
+                fallback.metadata.used_fallback = True
+                fallback.metadata.latency_ms = (time.time() - start) * 1000.0
+                if not transcript_result.success:
+                    fallback.answer = ""
+                    fallback.status = ChatExecutionStatus.ERROR
+                    fallback.metadata.degradation_reason = (
+                        "transcript_persistence_failed"
+                    )
+                    fallback.metadata.extra["error_code"] = (
+                        "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+                    )
+                    recovery_meta["degradation_reason"] = (
+                        "transcript_persistence_failed"
+                    )
+                    self._emitter.emit(
+                        RuntimeEventType.REQUEST_FAILED,
+                        status="error",
+                        metadata={
+                            "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                        },
+                    )
+                elif decision.memory_write_allowed:
                     await self._persist_memory(
                         request,
                         fallback.answer,
@@ -588,7 +649,7 @@ class ChatRuntime:
                     fallback.answer,
                     start,
                     meter,
-                    provider_meta or {},
+                    recovery_meta,
                     memory_recall_meta,
                     error=f"fallback:{error_type}",
                 )
@@ -601,7 +662,7 @@ class ChatRuntime:
                     meter,
                     memory_recall_meta,
                     success=False,
-                    provider_meta=provider_meta or {},
+                    provider_meta=recovery_meta,
                 )
                 return fallback
             await self._record_trajectory_completion(
