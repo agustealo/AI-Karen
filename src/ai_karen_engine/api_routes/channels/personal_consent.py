@@ -521,7 +521,7 @@ class TelegramActivationResult(BaseModel):
     enabled: Literal[True]
     revision: StrictInt = Field(ge=2)
     provider_identity_verified_at_activation: Literal[True]
-    webhook_registered: Literal[False]
+    webhook_registration_verified: Literal[False]
     live_connected: Literal[False]
 
 
@@ -582,7 +582,7 @@ async def activate_telegram_connection(
             connection_id=connection_id, installation_id="telegram-bot",
             enabled=True, revision=result.revision,
             provider_identity_verified_at_activation=True,
-            webhook_registered=False, live_connected=False,
+            webhook_registration_verified=False, live_connected=False,
         )
     except (ValueError, ValidationError, AttributeError, TypeError):
         logger.error("channel.telegram.activation_result_invalid")
