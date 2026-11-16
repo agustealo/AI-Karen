@@ -90,9 +90,26 @@ async def test_chat_runtime_records_durable_topology_decision_lineage() -> None:
     assert snapshots[0].intent == "general_assist"
     assert snapshots[0].metadata["policy_decision_id"] == "policy_live"
 
-    assert len(observations) == 1
-    observation = observations[0]
+    assert len(observations) == 2
+    observation = next(
+        row for row in observations
+        if row.decision_type == DecisionType.EXECUTION_TOPOLOGY.value
+    )
+    strategy = next(
+        row for row in observations
+        if row.decision_type == DecisionType.RESPOND_STRATEGY.value
+    )
     assert observation.decision_observation_id == observation_id
+    assert strategy.feature_snapshot_id == snapshots[0].feature_snapshot_id
+    assert strategy.behavior_policy_version == "v7"
+    assert strategy.eligible_actions == ("verify_then_respond",)
+    assert strategy.chosen_action == "verify_then_respond"
+    assert strategy.action_probabilities == {}
+    assert strategy.chosen_probability is None
+    assert strategy.ope_eligible is False
+    assert strategy.ope_ineligible_reason == OpeEligibilityReason.MISSING_PROPENSITY.value
+    assert "verification_policy_snapshot" not in strategy.metadata
+    assert strategy.metadata["selection_source"] == "runtime_authorized_plan"
     assert observation.chosen_action == ExecutionTopology.REASONING.value
     assert observation.ope_eligible is False
     assert (
@@ -258,3 +275,70 @@ async def test_partial_learning_failure_leaves_no_phantom_snapshot_reference() -
     assert stored is not None
     assert stored.feature_snapshot_refs == []
     assert stored.decision_observation_refs == []
+
+
+@pytest.mark.asyncio
+async def test_direct_runtime_plan_records_only_the_truthful_chosen_strategy() -> None:
+    store = InMemoryTrajectoryStore()
+    runtime = _runtime(store)
+    trajectory = _trajectory()
+    decision = ExecutionDecision(
+        topology=ExecutionTopology.DIRECT,
+        reasoning_modes=[],
+        policy_decision_id="policy-direct",
+        policy_version="v8",
+    )
+
+    await runtime._record_learning_decision(trajectory, decision)
+
+    observations = store.list_decision_observations(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    strategy = next(
+        row for row in observations
+        if row.decision_type == DecisionType.RESPOND_STRATEGY.value
+    )
+    assert strategy.chosen_action == "respond_direct"
+    assert strategy.eligible_actions == ("respond_direct",)
+    assert strategy.behavior_policy_version == "v8"
+    assert strategy.action_probabilities == {}
+    assert strategy.ope_eligible is False
+    assert "verification_policy_snapshot" not in strategy.metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "decision",
+    [
+        ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id=None,
+        ),
+        ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id="policy",
+            requires_human_gate=True,
+        ),
+        ExecutionDecision(
+            topology=ExecutionTopology.DIRECT,
+            policy_decision_id="policy",
+            tool_requirements=["web"],
+        ),
+        ExecutionDecision(
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=["causal"],
+            policy_decision_id="policy",
+        ),
+    ],
+)
+async def test_unproven_strategy_alternatives_are_not_manufactured(decision):
+    store = InMemoryTrajectoryStore()
+    runtime = _runtime(store)
+    trajectory = _trajectory()
+    await runtime._record_learning_decision(trajectory, decision)
+    rows = store.list_decision_observations(
+        trajectory.trajectory_id, tenant_id=trajectory.tenant_id,
+    )
+    assert len(rows) == 1
+    assert rows[0].decision_type == DecisionType.EXECUTION_TOPOLOGY.value
+    assert rows[0].ope_eligible is False
