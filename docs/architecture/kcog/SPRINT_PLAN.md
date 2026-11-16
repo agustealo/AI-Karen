@@ -78,7 +78,7 @@
 - **Proof:** missing candidate distribution (including within a large otherwise-valid cohort), stale candidate version, missing snapshot, malformed probabilities/reward, missing behavior provenance, no mutable policy scoring calls, no caller mutation, valid estimator behavior and legacy dict regression. Exact-head Cognitive Proof + Main Quality + First-Boot required.
 - **Remaining evidence:** caller-provided evidence references are **not independently authenticated** by this slice. A durable, tenant/RBAC-authorized, independently issued verification-outcome receipt and source-of-truth lookup remain required before any empirical improvement claim or activation.
 
-## KCOG-01B7: Governed durable verification-review receipts (draft; CI pending)
+## KCOG-01B7: Governed durable verification-review receipts (merged #913)
 
 - **Base:** KCOG-01B6 #910 merged as `0b52d399d9acea9a19107a5de391a159252ce8bf`. No live response-strategy policy change.
 - **Existing source of truth:** `core/runtime/outcome/store.py` is Karen's tenant-RLS, append-only PostgreSQL outcome ledger. Add the versioned `ml_verification_review_v1` **metadata schema** to its existing `intelligence.ml` source; no second evidence database, migration, mutable in-memory review registry or new orchestrator. Retain the original `ml_predictor_evidence_v1` contract unchanged.
@@ -88,6 +88,16 @@
 - **Shadow study:** `evaluate_verification_effort_with_durable_reviews` first proves persisted receipt integrity and then delegates to the existing KCOG/IPS-SNIPS-DR owner. Direct metadata-only study calls explicitly report `durable_review_receipts_verified=False` and cannot turn optimistic OPE promotion output into authenticated eligibility. All paths keep `policy_activated=False`.
 - **Proof:** atomicity, replay rejection, unprivileged/same-subject/cross-tenant review, scoped reads, missing/tampered receipt, mutated decision/risk/reward/label, private-content redaction, malformed schema, 100-row reviewed shadow study and existing model/verification/OutcomeStore regressions, wired to Cognitive Proof CI.
 - **Remaining risk:** ledger integrity is a **trusted-host/authorization-boundary guarantee**, not a cryptographic signature or proof that the reviewer performed a correct human evaluation. The existing authenticated reviewer UI/API integration and independent held-out correctness, safety, latency and cost study must be proven separately before claiming measured learning, improvement or policy activation.
+
+## KCOG-01B8: Real PostgreSQL review receipt acceptance (draft; exact-head CI required)
+
+- **Live baseline:** KCOG-01B7 #913 merged as `40ca17d9b9518be4ef383d3c7b90837d60943c8f`. Its scoped review adapter uses the original `OutcomeStore`, not a new source-of-truth.
+- **Acceptance gap:** previous reviewer-receipt tests used `InMemoryOutcomeStore` and mocked SQL transaction failure behavior. These could not prove the PostgreSQL SQL binder, actual migrations, tenant RLS, atomic two-receipt rollback, or committed cross-transaction read-after-write.
+- **Execution:** `.github/workflows/cognitive-review-postgres-proof.yml` starts the canonical disposable PostgreSQL container, creates an empty database named **only** `karen_review_test`, uses existing CI dependencies and runs a new non-skipping integration test in `tests/integration/test_verification_review_postgres.py`.
+- **Schema source:** the test applies existing `20261003010000_20_runtime_outcome_evidence.sql` and `20261019020000_37_intelligence_ml_outcome_evidence.sql`, with isolated prerequisite `tenants` and `auth_users` fixture tables for their foreign keys. It verifies the actual tenant RLS policy and `FORCE ROW LEVEL SECURITY`.
+- **Proof:** independently constructed `PostgresOutcomeStore` instances must commit the exact two review receipts, read them through real sync SQLAlchemy and async SQLAlchemy transaction pools, filter by tenant/user/source, and preserve data minimization. A conflict on the *second* receipt must roll back a preceding successful insert. Missing or tampered stored evidence must be rejected. A non-superuser role must observe zero foreign-tenant rows and be denied cross-tenant insertion under the production RLS policy.
+- **Boundaries:** this is PostgreSQL acceptance on a disposable database, not production tenant data or an authenticated web reviewer. No schema changes, alternate store, new policies, runtime routing modifications, policy promotion or live verification strategy activation.
+- **Next risks:** authenticate real reviewer action through the current auth/session/RBAC boundary; test the full existing auth-user and tenant migrations in a deployment database; independently judge held-out correctness, safety, latency and cost before any intelligence improvement claim.
 
 ## Scope, product acceptance and exit
 

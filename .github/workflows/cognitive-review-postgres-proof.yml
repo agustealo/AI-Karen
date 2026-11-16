@@ -1,0 +1,97 @@
+name: Cognitive Review PostgreSQL Proof
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/ai_karen_engine/core/intelligence/ml/verification_review_evidence.py"
+      - "src/ai_karen_engine/core/intelligence/ml/verification_policy_evaluation.py"
+      - "src/ai_karen_engine/core/intelligence/ml/policy_evaluation/**"
+      - "src/ai_karen_engine/core/runtime/outcome/**"
+      - "src/ai_karen_engine/platform/security/principal.py"
+      - "src/ai_karen_engine/auth/principal.py"
+      - "src/ai_karen_engine/persistence/postgres/**"
+      - "supabase/migrations/20261003010000_20_runtime_outcome_evidence.sql"
+      - "supabase/migrations/20261019020000_37_intelligence_ml_outcome_evidence.sql"
+      - "tests/core/intelligence/ml/test_verification_review_receipts.py"
+      - "tests/integration/test_verification_review_postgres.py"
+      - "requirements/ci/**"
+      - ".github/workflows/cognitive-review-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cognitive-review-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-review-receipts-postgres:
+    name: Real scoped review receipt and RLS proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      PYTHONPATH: src:tests
+      KAREN_TEST_REVIEW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_review_test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_review_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start canonical isolated PostgreSQL service
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install existing canonical runtime and PostgreSQL test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/chat.txt
+          python -m pip install -r requirements/ci/cognitive.txt
+
+      - name: Create a brand-new, dedicated, disposable review evidence database
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def create():
+              root = await asyncpg.connect(
+                  "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
+              )
+              try:
+                  present = await root.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname = 'karen_review_test'"
+                  )
+                  assert not present, "Refuse to reuse an existing review-proof database"
+                  await root.execute("CREATE DATABASE karen_review_test")
+              finally:
+                  await root.close()
+
+          asyncio.run(create())
+          PY
+
+      - name: Prove actual OutcomeStore migrations, atomic writes and tenant RLS
+        run: |
+          python -m compileall -q \
+            src/ai_karen_engine/core/intelligence/ml/verification_review_evidence.py \
+            src/ai_karen_engine/core/runtime/outcome/store.py \
+            tests/integration/test_verification_review_postgres.py
+          pytest tests/integration/test_verification_review_postgres.py -q --timeout=300 --tb=short
+          pytest tests/core/intelligence/ml/test_verification_review_receipts.py -q --timeout=300 --tb=short
+
+      - name: Record independent database acceptance scope
+        if: always()
+        run: |
+          echo "### Real review-receipt database acceptance" >> "$GITHUB_STEP_SUMMARY"
+          echo "Dedicated database: karen_review_test. Applies canonical outcome-ledger migrations. All tenant/RLS and atomic assertions must run, not skip." >> "$GITHUB_STEP_SUMMARY"
+          echo "A successful test proves persistence and scoping, not independent reviewer accuracy or causal policy benefit." >> "$GITHUB_STEP_SUMMARY"
