@@ -1221,7 +1221,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             """INSERT INTO public.channel_connections
                (connection_id, tenant_id, installation_id, provider_account_id,
                 credential_handle, enabled, revision)
-               VALUES ($1,$2,'whatsapp-cloud','10987654321',
+               VALUES ($1,$2,'whatsapp-cloud','30987654321',
                        'vault://prune-race-disposable',true,1)""",
             race_connection_id, tenant_a,
         )
@@ -1229,7 +1229,7 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_id=str(tenant_a),
             connection_id=race_connection_id,
             installation_id="whatsapp-cloud",
-            provider_account_id="10987654321",
+            provider_account_id="30987654321",
             credential_handle="vault://prune-race-disposable",
             revision=1,
             enabled=True,
