@@ -223,6 +223,43 @@ class MainExtension(ExtensionBase):
             # Provider errors and httpx request URLs can include bot secrets.
             raise PermissionError("Telegram webhook inspection unavailable") from None
 
+    async def observe_registration(
+        self, *, connection: ChannelConnection, public_origin: str,
+    ) -> Mapping[str, bool]:
+        """Read-only exact URL comparison with the host-owned HTTPS origin.
+
+        A match is provider-reported registration evidence, never proof that
+        Telegram delivered a signed inbound message to ChatRuntime.
+        """
+        self._require_active(connection)
+        if not isinstance(public_origin, str):
+            raise PermissionError("Telegram registration observation unavailable")
+        expected = (
+            f"{public_origin}/api/channels/webhooks/"
+            f"{connection.tenant_id}/{connection.connection_id}"
+        )
+        _, token = await self._secrets(connection)
+        try:
+            response = await self._http_client.get(
+                f"{_TELEGRAM_API_BASE}/bot{token}/getWebhookInfo"
+            )
+            if response.status_code != 200:
+                raise ValueError("Provider inspection unavailable")
+            payload = response.json()
+            info = payload.get("result") if isinstance(payload, dict) else None
+            if payload.get("ok") is not True or not isinstance(info, dict):
+                raise ValueError("Provider inspection unavailable")
+            url = info.get("url")
+            if not isinstance(url, str) or len(url) > 2048:
+                raise ValueError("Provider inspection unavailable")
+            return {
+                "provider_url_matches": url == expected,
+                "provider_webhook_registered": bool(url),
+                "live_connected": False,
+            }
+        except Exception:
+            raise PermissionError("Telegram registration observation unavailable") from None
+
     async def register_webhook(
         self, *, connection: ChannelConnection, public_origin: str,
     ) -> Mapping[str, bool]:

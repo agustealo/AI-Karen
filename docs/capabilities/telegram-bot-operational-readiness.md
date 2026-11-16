@@ -316,3 +316,31 @@ not certified by this change. Do not run concurrent registrations for the
 same Telegram bot through different connection IDs. Live signed inbound,
 linked principal and provider-confirmed ChatRuntime reply still require
 actual acceptance testing.
+
+## Read-only registration reconciliation evidence
+
+Authorized channel operators can inspect durable Telegram registration claim
+state side by side with a fresh Telegram `getWebhookInfo` read-back:
+
+`GET /api/channels/personal/operator/telegram/connections/{connection_id}/reconciliation?expected_revision=2`
+
+The API requires an enabled, tenant-matching Telegram connection and a fresh
+`channel.inspect` RuntimePolicy plan. The canonical repository reads the
+tenant-RLS claim ledger without exposing its token. The canonical adapter
+uses host-resolved Vault credentials and the configured public HTTPS origin
+to compare the exact expected webhook URL against Telegram's live response.
+
+Results contain only the claim state (`absent`, `in_flight`, `uncertain`,
+or `verified`), whether its revision matches, whether the lease has
+expired, whether Telegram reports any webhook, and whether Telegram reports
+the exact trusted destination. They **always** report
+`claim_released=false`, `reconciliation_authorized=false`, and
+`live_connected=false`.
+
+This endpoint **never** calls `setWebhook` or `deleteWebhook`, clears a
+claim, extends its lease, deactivates a connection, or grants retry
+authority. A matching URL is a provider observation, not proof of signed
+inbound delivery or a provider-confirmed ChatRuntime reply. An uncertain
+claim remains blocked even if Telegram currently reports the expected URL.
+Durable recovery requires a separate guarded workflow with provider ownership
+and cross-replica fencing proofs.

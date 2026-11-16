@@ -1690,3 +1690,72 @@ async def test_telegram_webhook_api_rejects_forged_registered_and_connected_stat
             request=request, user=actor(roles=["admin"]),
         )
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_telegram_reconciliation_inspection_is_scoped_read_only_and_not_release():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    host.inspect_telegram_registration_evidence = AsyncMock(return_value={
+        "claim_state": "uncertain", "claim_revision_matches": True,
+        "claim_expired": True, "provider_url_matches": True,
+        "provider_webhook_registered": True, "live_connected": False,
+        "claim_released": False, "reconciliation_authorized": False,
+    })
+    result = await api.inspect_telegram_registration_reconciliation(
+        connection_id=api.UUID(CONNECTION), expected_revision=2,
+        request=request, user=actor(roles=["admin"]),
+    )
+    assert result.claim_state == "uncertain"
+    assert result.claim_expired is True
+    assert result.claim_released is False
+    assert result.live_connected is False
+    plan = host.activation.issue_action_plan.await_args.kwargs
+    assert plan["action"] == "channel.inspect"
+    assert plan["tenant_id"] == TENANT and plan["user_id"] == USER
+    assert host.inspect_telegram_registration_evidence.await_args.kwargs[
+        "authorized_plan"
+    ] == "trusted-plan"
+
+
+@pytest.mark.asyncio
+async def test_telegram_reconciliation_refuses_bad_revision_before_policy():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=None)
+    host.inspect_telegram_registration_evidence = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await api.inspect_telegram_registration_reconciliation(
+            connection_id=api.UUID(CONNECTION), expected_revision=2,
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.inspect_telegram_registration_evidence.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telegram_reconciliation_refuses_fabricated_release():
+    host, request = host_context()
+    host.repository.get_enabled_connection = AsyncMock(return_value=ChannelConnection(
+        connection_id=CONNECTION, tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="account",
+        credential_handle="vault://11111111-1111-1111-1111-111111111111",
+        revision=2, enabled=True,
+    ))
+    host.inspect_telegram_registration_evidence = AsyncMock(return_value={
+        "claim_state": "verified", "claim_revision_matches": True,
+        "claim_expired": False, "provider_url_matches": True,
+        "provider_webhook_registered": True, "live_connected": False,
+        "claim_released": True, "reconciliation_authorized": True,
+    })
+    with pytest.raises(HTTPException) as error:
+        await api.inspect_telegram_registration_reconciliation(
+            connection_id=api.UUID(CONNECTION), expected_revision=2,
+            request=request, user=actor(roles=["admin"]),
+        )
+    assert error.value.status_code == 503

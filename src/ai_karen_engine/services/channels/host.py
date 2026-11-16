@@ -324,6 +324,79 @@ class ChannelHostServices:
         )
         return dict(result)
 
+    async def inspect_telegram_registration_evidence(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ) -> dict[str, str | bool]:
+        """Compare durable claim and live provider URL, without releasing a lock."""
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("Telegram reconciliation inspection unavailable")
+        origin = self.settings.telegram_webhook_public_origin
+        if not origin or type(expected_revision) is not int or expected_revision < 1:
+            raise PermissionError("Telegram reconciliation inspection unavailable")
+        connection = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "telegram-bot"
+            or connection.revision != expected_revision
+        ):
+            raise PermissionError("Telegram reconciliation connection unavailable")
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=connection.installation_id,
+            action="channel.inspect", plan=authorized_plan,
+        )
+        adapter = self._installed.get("telegram-bot")
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest("telegram-bot") is None
+            or not self.kernel.is_canonical_channel_adapter("telegram-bot", adapter)
+        ):
+            raise PermissionError("Telegram reconciliation adapter unavailable")
+        observe = getattr(adapter, "observe_registration", None)
+        if not callable(observe):
+            raise PermissionError("Telegram reconciliation observation unavailable")
+        claim = await self.repository.inspect_telegram_webhook_claim(
+            tenant_id=tenant_id, connection_id=connection_id,
+            expected_revision=expected_revision,
+        )
+        observation = await observe(connection=connection, public_origin=origin)
+        fresh = await self.repository.get_enabled_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if fresh != connection:
+            raise RuntimeError("Telegram reconciliation revision changed")
+        if (
+            not isinstance(claim, dict)
+            or set(claim) != {
+                "claim_state", "claim_revision_matches", "claim_expired",
+            }
+            or claim["claim_state"] not in (
+                "absent", "in_flight", "uncertain", "verified",
+            )
+            or type(claim["claim_revision_matches"]) is not bool
+            or type(claim["claim_expired"]) is not bool
+            or not isinstance(observation, dict)
+            or set(observation) != {
+                "provider_url_matches", "provider_webhook_registered",
+                "live_connected",
+            }
+            or any(type(observation[key]) is not bool for key in observation)
+            or observation["live_connected"] is not False
+            or (observation["provider_url_matches"]
+                and not observation["provider_webhook_registered"])
+        ):
+            raise RuntimeError("Telegram reconciliation evidence invalid")
+        return {
+            **claim, **observation,
+            "claim_released": False,
+            "reconciliation_authorized": False,
+        }
+
     async def inspect_channel_webhook(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         session_id: str, authorized_plan: AuthorizedExecutionPlan,
