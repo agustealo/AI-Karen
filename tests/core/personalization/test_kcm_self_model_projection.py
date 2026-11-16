@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -312,6 +313,25 @@ async def test_expired_and_cross_tenant_receipts_fail_closed() -> None:
         model=model(principles=[facet()]), tenant_id=TENANT, at=NOW
     )
     assert expired.health is SelfModelProjectionHealth.UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_malformed_external_evidence_fails_closed_without_exception() -> None:
+    invalid = replace(receipt("config-1"), receipt_id=0)
+    port = EvidenceReader({"config-1": invalid})
+    result = await projector(port).project(
+        model=model(principles=[facet()]), tenant_id=TENANT, at=NOW
+    )
+    assert result.health is SelfModelProjectionHealth.UNAVAILABLE
+    assert not result.model.principles
+
+    port.receipts["config-1"] = replace(
+        receipt("config-1"), verified_at=None
+    )
+    result = await projector(port).project(
+        model=model(principles=[facet()]), tenant_id=TENANT, at=NOW
+    )
+    assert result.health is SelfModelProjectionHealth.UNAVAILABLE
 
 
 @pytest.mark.asyncio
