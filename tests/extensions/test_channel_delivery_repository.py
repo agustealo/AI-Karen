@@ -9,6 +9,7 @@ import pytest
 from ai_karen_engine.extensions.channels.contracts import (
     ChannelDeliveryReceipt,
     ChannelDeliveryState,
+    ChannelProviderStatusEvent,
 )
 from ai_karen_engine.persistence.repositories import channel_repository as module
 from ai_karen_engine.persistence.repositories.channel_repository import SqlChannelRepository
@@ -109,7 +110,14 @@ async def test_claim_when_not_eligible_returns_no_delivery(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_receipt_persists_only_with_unexpired_matching_token(monkeypatch):
-    session = FakeSession(RowResult(scalar=DELIVERY))
+    session = FakeSession(
+        RowResult(scalar=DELIVERY),
+        RowResult(row={
+            "connection_id": "conn", "destination_id": "15551234567",
+            "connection_revision": 3,
+        }),
+        RowResult(scalar=None),
+    )
     install(monkeypatch, session)
     success = await SqlChannelRepository().finalize_outbound_claim(
         tenant_id=TENANT, claim_token=CLAIM,
@@ -125,6 +133,10 @@ async def test_receipt_persists_only_with_unexpired_matching_token(monkeypatch):
     assert "provider_message_id = :provider_message" in sql
     assert args["state"] == "sent"
     assert args["provider_message"] == "real-provider-id"
+    assert len(session.calls) == 3
+    assert "i.connection_revision" in session.calls[1][0]
+    assert "channel_provider_status_events" in session.calls[2][0]
+    assert session.calls[2][1]["revision"] == 3
 
 
 @pytest.mark.asyncio
@@ -217,3 +229,122 @@ async def test_outbound_claim_rejects_every_prior_attempt_even_if_claim_cleared(
     assert "o.attempt_count = 0" in sql
     assert "o.claim_expires_at IS NULL" in sql
     assert "u.is_verified = true" in sql
+
+
+def provider_status(
+    *, state=ChannelDeliveryState.DELIVERED, recipient="15551234567",
+    message="wamid.live-provider", timestamp=1770000000,
+):
+    return ChannelProviderStatusEvent(
+        connection_id="conn",
+        provider_message_id=message,
+        recipient_id=recipient,
+        state=state,
+        provider_timestamp=timestamp,
+        provider_receipt_id=ChannelProviderStatusEvent.receipt_for(
+            provider_message_id=message, recipient_id=recipient,
+            state=state, provider_timestamp=timestamp,
+        ),
+        error_code="whatsapp_provider_failed" if state is ChannelDeliveryState.FAILED else None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_signed_status_insert_is_revision_bound_and_never_a_chat_or_new_send(monkeypatch):
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    connection = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://secret", revision=3, enabled=True,
+    )
+    session = FakeSession(RowResult(scalar="a" * 64), RowResult(scalar=None))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().record_provider_status(
+        connection=connection, status=provider_status(),
+    )
+    sql, args = session.calls[0]
+    assert "INSERT INTO public.channel_provider_status_events" in sql
+    assert "c.enabled = true" in sql
+    assert "c.revision = :revision" in sql
+    assert args["tenant"] == TENANT
+    assert args["revision"] == 3
+    assert args["state"] == "delivered"
+    assert "raw_body" not in args and "user_id" not in args
+    update, params = session.calls[1]
+    assert "UPDATE public.channel_outbox" in update
+    assert "o.destination_id = :recipient" in update
+    assert "i.connection_revision = c.revision" in update
+    assert "o.claim_token IS NULL" in update
+    assert "o.status = 'sent'" in update
+    assert "o.status = 'delivered'" in update
+    assert params["recipient"] == "15551234567"
+
+
+@pytest.mark.asyncio
+async def test_status_replay_checks_exact_persisted_digest_then_reconciles(monkeypatch):
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    connection = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://secret", revision=1, enabled=True,
+    )
+    session = FakeSession(RowResult(scalar="a" * 64), RowResult(scalar=None))
+    install(monkeypatch, session)
+    event = provider_status()
+    assert await SqlChannelRepository().record_provider_status(
+        connection=connection, status=event,
+    )
+    digest = session.calls[0][1]["digest"]
+    session.results.extend([
+        RowResult(scalar=None), RowResult(scalar=digest), RowResult(scalar=None),
+    ])
+    assert await SqlChannelRepository().record_provider_status(
+        connection=connection, status=event,
+    )
+    assert "e.event_digest" in session.calls[3][0]
+    assert session.calls[3][1]["digest"] == digest
+    assert "UPDATE public.channel_outbox" in session.calls[4][0]
+
+
+@pytest.mark.asyncio
+async def test_status_replay_with_missing_connection_denied(monkeypatch):
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    connection = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://secret", revision=1, enabled=True,
+    )
+    session = FakeSession(RowResult(scalar=None), RowResult(scalar=None))
+    install(monkeypatch, session)
+    with pytest.raises(module.ChannelAdmissionDenied):
+        await SqlChannelRepository().record_provider_status(
+            connection=connection, status=provider_status(),
+        )
+    assert len(session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_status_receipt_forgery_and_disabled_connection_denied_before_sql(monkeypatch):
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+
+    connection = ChannelConnection(
+        tenant_id=TENANT, connection_id="conn",
+        installation_id="whatsapp-cloud", provider_account_id="10987654321",
+        credential_handle="vault://secret", revision=1, enabled=False,
+    )
+    session = FakeSession()
+    install(monkeypatch, session)
+    with pytest.raises(module.ChannelAdmissionDenied):
+        await SqlChannelRepository().record_provider_status(
+            connection=connection, status=provider_status(),
+        )
+    active = connection.model_copy(update={"enabled": True})
+    spoofed = provider_status().model_copy(update={"provider_receipt_id": "0" * 64})
+    with pytest.raises(ValueError, match="does not match"):
+        await SqlChannelRepository().record_provider_status(
+            connection=active, status=spoofed,
+        )
+    assert not session.calls
