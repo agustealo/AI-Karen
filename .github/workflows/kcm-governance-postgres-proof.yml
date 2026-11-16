@@ -1,0 +1,85 @@
+name: KCM Governed PostgreSQL Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/migrations/*kcm*"
+      - "src/ai_karen_engine/learning/kcm_governance.py"
+      - "src/ai_karen_engine/learning/kcm_dataset_preflight.py"
+      - "tests/core/learning/test_kcm_governance.py"
+      - "tests/integration/test_kcm_governance_postgres.py"
+      - "requirements/ci/**"
+      - "scripts/ci/start-postgres-container.sh"
+      - ".github/workflows/kcm-governance-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kcm-governance-${ github.workflow }}-${ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kcm-governance-postgres:
+    name: Real KCM scope, RLS and revocation proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      PYTHONPATH: src:tests
+      KCM_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_kcm_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start canonical isolated PostgreSQL service
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install existing canonical PostgreSQL and runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/chat.txt
+
+      - name: Create dedicated disposable KCM proof database
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def main():
+              root = await asyncpg.connect(
+                  "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
+              )
+              try:
+                  assert not await root.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname='karen_kcm_test'"
+                  ), "Refuse to reuse an existing KCM-proof database"
+                  await root.execute("CREATE DATABASE karen_kcm_test")
+              finally:
+                  await root.close()
+
+          asyncio.run(main())
+          PY
+
+      - name: Verify live KCM SQL schema, FORCE RLS, concurrency and erasure
+        run: |
+          python -m compileall -q src/ai_karen_engine/learning/kcm_governance.py tests/core/learning/test_kcm_governance.py tests/integration/test_kcm_governance_postgres.py
+          pytest tests/core/learning/test_kcm_governance.py -q --tb=short
+          pytest tests/integration/test_kcm_governance_postgres.py -q --tb=short
+
+      - name: Record the bounded acceptance claim
+        if: always()
+        run: |
+          echo "### KCM real PostgreSQL proof" >> "$GITHUB_STEP_SUMMARY"
+          echo "Uses a disposable, dedicated karen_kcm_test database, real FORCE RLS and serialized source revocations." >> "$GITHUB_STEP_SUMMARY"
+          echo "This proves the new isolated schema and reader only. Full NeuroVault/consent/rights deletion-hook integration and training-start fencing remain blocked." >> "$GITHUB_STEP_SUMMARY"
