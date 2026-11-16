@@ -11,6 +11,8 @@ on:
       - "src/ai_karen_engine/core/memory/**"
       - "src/ai_karen_engine/core/intelligence/**"
       - "src/ai_karen_engine/core/model_runtime/**"
+      - "src/ai_karen_engine/core/expression/**"
+      - "tests/core/expression/**"
       - "src/ai_karen_engine/core/langgraph_orchestrator/**"
       - "src/ai_karen_engine/platform/memory/**"
       - "src/ai_karen_engine/persistence/**"
@@ -79,6 +81,15 @@ jobs:
             src/ai_karen_engine/core/cortex \
             src/ai_karen_engine/core/expression \
             src/ai_karen_engine/api_routes/chat
+
+      - name: Prove real model response attribution and fail-closed generation
+        run: |
+          pytest -q \
+            tests/core/expression/test_gateway_generation_integrity.py \
+            tests/core/expression/test_gateway_selected_provider_precedence.py \
+            tests/core/expression/test_expression_stream_fallback_integrity.py \
+            tests/core/expression/test_gateway_fallbacks.py \
+            tests/core/expression/test_gateway.py
 
       - name: Verify conversational name and output hygiene contracts
         run: pytest tests/core/runtime/test_name_response_prompt_contract.py tests/core/runtime/test_conversational_output_hygiene.py -q
