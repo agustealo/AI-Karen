@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import time
 import uuid
@@ -473,11 +474,39 @@ class ModelDownloadControlService:
         return self._channels["core_runtime_transformers"]
 
     def _build_install_path(self, channel: ModelDownloadChannel, model_id: str, revision: Optional[str]) -> Path:
-        owner, repo = model_id.split("/", 1)
+        """Keep every publication in its intended model/revision namespace.
+
+        A Hugging Face reference may contain slash-separated branch segments;
+        none may be empty, a traversal component, absolute, or a Windows
+        separator. This protects both the job's durable install_path and the
+        worker's publication/rollback destination.
+        """
+        components = str(model_id).split("/")
+        if (
+            len(components) != 2
+            or any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]*", part)
+                   or part in {".", ".."} for part in components)
+        ):
+            raise ModelOrchestratorError(E_INVALID, "Unsafe model identifier")
+        owner, repo = components
+        root = self.models_root / channel.storage_key
         if channel.id == "core_spacy":
             # SpacyAnalyzer resolves models/spacy/<pipeline-name> directly.
-            return self.models_root / channel.storage_key / repo
-        return self.models_root / channel.storage_key / f"{owner}--{repo}" / (revision or "main")
+            candidate = root / repo
+        else:
+            named_revision = str(revision or "main")
+            reference = named_revision.split("/")
+            if any(
+                not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9._-]*", part)
+                or part in {".", ".."}
+                for part in reference
+            ):
+                raise ModelOrchestratorError(E_INVALID, "Unsafe model revision")
+            candidate = root / f"{owner}--{repo}" / Path(*reference)
+        # Guard pre-existing symlink ancestors as well as lexical escapes.
+        if not candidate.resolve().is_relative_to(root.resolve()):
+            raise ModelOrchestratorError(E_INVALID, "Model installation path escapes root")
+        return candidate
 
     def _job_payload(self, row: Mapping[str, Any]) -> dict[str, Any]:
         payload = dict(row)
@@ -765,7 +794,7 @@ class ModelDownloadControlService:
         # overwrite a different reviewed revision without changing the job's
         # recorded revision. Preserve legacy main-slot behavior only for
         # unreviewed requests that never supplied a revision.
-        installation_revision = revision or reviewed_revision
+        installation_revision = reviewed_revision or revision
         install_path = self._build_install_path(
             install_channel,
             model_id,
