@@ -524,3 +524,18 @@ async def test_disabled_whatsapp_status_respects_declared_transport_bytes():
     adapter.normalize_deactivated_statuses.assert_not_awaited()
     repo.record_deactivated_provider_status.assert_not_awaited()
     repo.admit_verified_inbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disabled_whatsapp_missing_transport_catalog_fails_before_signature():
+    service, adapter, repo, _ = disabled_whatsapp_ingress()
+    service._kernel.get_channel_activation_manifest = lambda _: None
+    with pytest.raises(ChannelAdmissionDenied, match="capability unavailable"):
+        await service.verify_and_route_installed(
+            tenant_id=TENANT, connection_id="connection-a",
+            headers={"X-Hub-Signature-256": "signed"},
+            body=b"status-only",
+        )
+    adapter.normalize_deactivated_statuses.assert_not_awaited()
+    repo.record_deactivated_provider_status.assert_not_awaited()
+    repo.admit_verified_inbound.assert_not_awaited()
