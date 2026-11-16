@@ -26,12 +26,22 @@ class ChannelHostSettings:
     service_principal_id: str = ""
     max_native_body_bytes: int = 65_536
     http_timeout_seconds: float = 10.0
+    # Destructive cleanup needs a separate operator opt-in.
+    status_retention_enabled: bool = False
+    status_retention_days: int = 90
+    status_retention_batch_limit: int = 100
 
     def validate(self) -> "ChannelHostSettings":
         if not 1 <= self.max_native_body_bytes <= 10_485_760:
             raise ValueError("Channel native request budget must be 1..10485760")
         if not 0.5 <= self.http_timeout_seconds <= 60:
             raise ValueError("Channel network timeout must be 0.5..60 seconds")
+        if not isinstance(self.status_retention_enabled, bool):
+            raise ValueError("Channel status retention enablement must be boolean")
+        if type(self.status_retention_days) is not int or not 30 <= self.status_retention_days <= 3650:
+            raise ValueError("Channel status retention days must be 30..3650")
+        if type(self.status_retention_batch_limit) is not int or not 1 <= self.status_retention_batch_limit <= 1000:
+            raise ValueError("Channel status retention batch limit must be 1..1000")
         if not self.enabled:
             # Never parse or activate configured installations on a disabled host.
             return self
@@ -115,6 +125,9 @@ def load_channel_host_settings() -> ChannelHostSettings:
             raise ValueError("Personal pairing provider registry must be a mapping")
         timeout = float(os.getenv("KAREN_CHANNEL_HTTP_TIMEOUT_SECONDS", "10"))
         body_budget = int(os.getenv("KAREN_CHANNEL_MAX_BODY_BYTES", "65536"))
+        status_retention_enabled = _env_boolean("KAREN_CHANNEL_STATUS_RETENTION_ENABLED")
+        status_retention_days = int(os.getenv("KAREN_CHANNEL_STATUS_RETENTION_DAYS", "90"))
+        status_retention_limit = int(os.getenv("KAREN_CHANNEL_STATUS_RETENTION_BATCH_LIMIT", "100"))
     except (ValueError, TypeError) as exc:
         raise ValueError("Invalid enabled channel host configuration") from exc
 
@@ -125,6 +138,9 @@ def load_channel_host_settings() -> ChannelHostSettings:
         service_principal_id=os.getenv("KAREN_CHANNEL_SERVICE_PRINCIPAL_ID", ""),
         max_native_body_bytes=body_budget,
         http_timeout_seconds=timeout,
+        status_retention_enabled=status_retention_enabled,
+        status_retention_days=status_retention_days,
+        status_retention_batch_limit=status_retention_limit,
     ).validate()
 
 
