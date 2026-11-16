@@ -495,3 +495,36 @@ ambiguous outbound delivery. Idempotent SQL claims continue to prevent
 concurrent recovery workers from executing the same inbox receipt twice.
 An observed signed inbound-to-provider-confirmed outbound round trip remains
 a separate live acceptance gate.
+
+
+## Offline signed-webhook-to-provider acceptance contract
+
+The installed Telegram adapter now has one regression covering the entire
+host service seam, in addition to individual webhook, PostgreSQL, Runtime,
+delivery and security tests.
+
+Run: pytest -q tests/extensions/test_telegram_channel_transport.py -k telegram_signed_webhook_executes
+
+The regression exercises the real FastAPI webhook route, actual installed
+Telegram adapter and signature verifier, bounded inbox worker, claimed-message
+ChatRuntime bridge, policy-scoped outbound dispatcher, and Telegram Bot API
+receipt parser. It supplies a simulated tenant-bound SQL repository and
+simulated provider HTTP peer, **not** a live Telegram bot or database.
+
+Expected positive evidence is one signed HTTP 200 durable-admission response,
+a bound principal rather than the forged native tenant/user fields, one
+canonical ChatRuntime turn, a staged reply, one outbound attempt and a stored
+provider-confirmed SENT message ID. Telegram does not supply a separate
+delivered/read receipt; SENT must not be relabeled DELIVERED.
+
+The regression also requires invalid-secret callbacks to stay outside SQL
+and Runtime, authenticated but unbound senders to be denied, and Telegram
+HTTP 429 to produce UNKNOWN provider result, not fabricated send or retry.
+
+**Live acceptance remains unproven.** A separately authorized test using an
+owned bot and verified linked user must capture redacted correlation-linked
+records from a real signed webhook, SQL inbox claim, Runtime execution,
+outbox claim/finalization, and Telegram Bot API sendMessage message ID.
+Read-only webhook registration and recovery counts are not substitutes for
+this evidence. Until then, UI and readiness reports must not call Telegram
+live, delivered, or end-to-end verified.
