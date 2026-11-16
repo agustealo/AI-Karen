@@ -279,3 +279,40 @@ does not offer a durable distributed registration lease across independent
 host replicas. Operators must avoid concurrent registration with credential
 rotation and deactivation until a durable claim protocol is implemented.
 Live acceptance remains mandatory.
+
+## Durable provider-registration claim (KWA-01D)
+
+The existing `SqlChannelRepository` now owns a tenant-scoped, durable
+Telegram registration claim in
+`public.channel_telegram_webhook_claims`. Claims are exclusive per
+tenant/connection, versioned by the exact connection revision and a random
+claim token, with a bounded expiry for *successful completion*.
+
+Before any remote `setWebhook`, ChannelHost must acquire the claim using the
+same PostgreSQL connection-row lock as the lifecycle owner. Concurrent,
+stale, previously verified, expired, or uncertain claims do not authorize
+a new POST. **Expiry is not a retry permission.** An interrupted worker leaves
+a durable `in_flight` record that must be treated as unresolved.
+
+A provider response or successful exact-URL `getWebhookInfo` read-back only
+becomes a verified result after token-matched, unexpired SQL completion.
+Timeouts, malformed provider responses, changed revisions, expired leases
+and other uncertain outcomes must leave the claim `uncertain` or
+`in_flight`. The database refuses connection enabled/revision updates
+while either unresolved state exists. No provider URL, token, signing secret,
+message body or personal data is stored in the claim ledger.
+
+**Operational restriction:** This slice intentionally does not provide a
+reconciliation/reset operation. A stale or uncertain claim blocks further
+registration and lifecycle transitions until a separate, RuntimePolicy-
+authorized read-only reconciliation and recovery path is implemented.
+Do not bypass the SQL guard, delete the row manually, or silently retry
+a potentially accepted remote mutation.
+
+The claim is scoped to a Karen connection, not yet a globally verified
+Telegram bot identity. Reuse of the *same bot token* in another tenant or
+connection remains a separate provider-ownership fencing problem and is
+not certified by this change. Do not run concurrent registrations for the
+same Telegram bot through different connection IDs. Live signed inbound,
+linked principal and provider-confirmed ChatRuntime reply still require
+actual acceptance testing.
