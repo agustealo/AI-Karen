@@ -18,6 +18,7 @@ selection exclusively to MemoryRuntimeManager -> NeuroRecall.
 from dataclasses import replace
 from typing import Optional
 
+from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.cognitive.state import (
     CognitiveState,
     ContextSnapshot,
@@ -91,6 +92,34 @@ class RuntimeDecisionPipeline:
         cognitive = finalize_decision_with_context(preliminary, cognitive_context)
         policy = await self._evaluate_execution_policy(request, cognitive)
         authorized_decision = self._apply_execution_policy(cognitive, policy)
+        # A CORTEX-originated value cannot supply a trusted policy proof.
+        constraints = dict(authorized_decision.policy_constraints)
+        constraints.pop("response_strategy_policy_probe", None)
+        if get_runtime_settings().features.enable_verification_strategy_policy_probe:
+            direct_plan = (
+                policy.allowed
+                and authorized_decision.topology == ExecutionTopology.DIRECT
+                and not authorized_decision.reasoning_modes
+                and not authorized_decision.requires_human_gate
+                and not authorized_decision.tool_requirements
+                and not authorized_decision.plugin_candidates
+                and not authorized_decision.requires_agent_delegation
+                and not authorized_decision.requires_parallel_execution
+                and not authorized_decision.requires_resumability
+                and not scoped_conflict_evidence_ids(cognitive_context)
+            )
+            if direct_plan:
+                permission = await self._policy.probe_optional_verification(
+                    self._build_execution_policy_request(request, cognitive),
+                    policy,
+                    direct_plan_authorized=True,
+                )
+                constraints["response_strategy_policy_probe"] = (
+                    permission.to_metadata()
+                )
+        authorized_decision = replace(
+            authorized_decision, policy_constraints=constraints,
+        )
         return replace(
             authorized_decision,
             cognitive_state=self._project_cognitive_state(
@@ -253,52 +282,59 @@ class RuntimeDecisionPipeline:
             },
         )
 
-    async def _evaluate_execution_policy(
+    def _build_execution_policy_request(
         self,
         request: ChatExecutionRequest,
         cognitive: ExecutionDecision,
-    ) -> PolicyDecision:
+    ) -> PolicyEvaluationRequest:
+        """Single request-construction owner for selected and shadow checks."""
         ctx = request.context
         requested_agents = [
             str(agent_id).strip()
             for agent_id in list(request.metadata.get("requested_agents") or [])
             if str(agent_id).strip()
         ]
+        return PolicyEvaluationRequest(
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=getattr(ctx, "session_id", None),
+            correlation_id=getattr(ctx, "correlation_id", None),
+            roles=list(ctx.roles or []),
+            permissions=list(ctx.permissions or []),
+            action=cognitive.intent or "general_assist",
+            requested_capabilities=list(cognitive.required_capabilities),
+            forbidden_capabilities=list(cognitive.forbidden_capabilities),
+            requested_reasoning_modes=list(cognitive.reasoning_modes),
+            max_model_calls=cognitive.max_model_calls,
+            risk_signals=dict(
+                cognitive.policy_constraints.get("risk_signals", {}) or {}
+            ),
+            runtime_level=self._runtime_level_for(cognitive.risk_level),
+            tool_id=(
+                cognitive.tool_requirements[0]
+                if cognitive.tool_requirements else None
+            ),
+            environment="production",
+            execution_topology={
+                "tool_requirements": list(cognitive.tool_requirements),
+                "plugin_candidates": list(cognitive.plugin_candidates),
+                "requested_agents": requested_agents,
+                "requires_human_gate": cognitive.requires_human_gate,
+                "reasoning_modes": list(cognitive.reasoning_modes),
+                "max_model_calls": cognitive.max_model_calls,
+                "max_steps": cognitive.max_steps,
+                "workflow_id": cognitive.workflow_id,
+                "agent_delegation": cognitive.requires_agent_delegation,
+            },
+        )
+
+    async def _evaluate_execution_policy(
+        self,
+        request: ChatExecutionRequest,
+        cognitive: ExecutionDecision,
+    ) -> PolicyDecision:
         return await self._policy.evaluate(
-            PolicyEvaluationRequest(
-                user_id=ctx.user_id,
-                tenant_id=ctx.tenant_id,
-                session_id=getattr(ctx, "session_id", None),
-                correlation_id=getattr(ctx, "correlation_id", None),
-                roles=list(ctx.roles or []),
-                permissions=list(ctx.permissions or []),
-                action=cognitive.intent or "general_assist",
-                requested_capabilities=list(cognitive.required_capabilities),
-                forbidden_capabilities=list(cognitive.forbidden_capabilities),
-                requested_reasoning_modes=list(cognitive.reasoning_modes),
-                max_model_calls=cognitive.max_model_calls,
-                risk_signals=dict(
-                    cognitive.policy_constraints.get("risk_signals", {}) or {}
-                ),
-                runtime_level=self._runtime_level_for(cognitive.risk_level),
-                tool_id=(
-                    cognitive.tool_requirements[0]
-                    if cognitive.tool_requirements
-                    else None
-                ),
-                environment="production",
-                execution_topology={
-                    "tool_requirements": list(cognitive.tool_requirements),
-                    "plugin_candidates": list(cognitive.plugin_candidates),
-                    "requested_agents": requested_agents,
-                    "requires_human_gate": cognitive.requires_human_gate,
-                    "reasoning_modes": list(cognitive.reasoning_modes),
-                    "max_model_calls": cognitive.max_model_calls,
-                    "max_steps": cognitive.max_steps,
-                    "workflow_id": cognitive.workflow_id,
-                    "agent_delegation": cognitive.requires_agent_delegation,
-                },
-            )
+            self._build_execution_policy_request(request, cognitive)
         )
 
     def _apply_execution_policy(
