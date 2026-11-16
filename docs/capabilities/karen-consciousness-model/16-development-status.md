@@ -6,7 +6,7 @@
 
 ## First code slice: containment + non-promoting admission
 
-The initial pull request is intended to add:
+Draft implementation: [PR #915](https://github.com/agustealo/AI-Karen/pull/915). The pull request is **not merged**.\n\nThe initial pull request adds:
 
 - Containment of legacy `EchoPolicyEngine` importance/retention-only training queueing. `DefaultEchoCoreManager` must reject unsafe `should_queue_training` requests even from legacy or injected policy engines.
 - `echocore/training_admission.py`, a deterministic, side-effect-free evaluator that produces policy-blocked, needs-verification, review, or approved decisions, **but never queues or executes training**.
@@ -20,7 +20,7 @@ The initial pull request is intended to add:
 
 | Proof item | Status |
 |---|---|
-| Independent admission evaluator: isolated local tests | 12 passing in development sandbox; not full-repo CI |
+| Independent admission evaluator: isolated local tests | 13 passing in development sandbox; not full-repo CI |
 | Legacy ingest containment regression suite | Authored; requires repository test/CI execution |
 | `python -m compileall src` on live repository | Not run |
 | Full `pytest tests/ -q` on live repository | Not run |
