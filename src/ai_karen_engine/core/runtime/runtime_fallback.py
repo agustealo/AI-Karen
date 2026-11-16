@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from ai_karen_engine.core.expression.errors import EngineUnavailableError
 from ai_karen_engine.core.model_runtime.provider_policy import evaluate_provider_policy
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -12,12 +13,9 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
-    DegradationState,
-    ExecutionBudget,
     ExecutionBudgetMeter,
-    ExecutionTopology,
 )
-from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision, RuntimeExecutionMode
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision, RiskLevel
 
 logger = get_logger(__name__)
 
@@ -31,6 +29,8 @@ async def build_runtime_fallback(
     conversation_id: str,
     start_time: Optional[float] = None,
     decision: Optional[ExecutionDecision] = None,
+    authorized_plan: Optional[AuthorizedExecutionPlan] = None,
+    meter: Optional[ExecutionBudgetMeter] = None,
 ) -> Optional[ChatExecutionResult]:
     """Unified runtime fallback path (RC1.4).
 
@@ -38,30 +38,37 @@ async def build_runtime_fallback(
     ExpressionGateway fallback chain, then reports a degraded/emergency result
     through the single ChatRuntimeMetadata normalizer.
     """
+    # Recovery is still part of the original authorized execution. It may
+    # never mint a new plan, reset the execution budget or silently substitute
+    # a generated answer for a failed governed tool/plugin/approval operation.
+    if decision is None or authorized_plan is None or meter is None:
+        return None
     ctx = request.context
-    fallback_decision = decision or ExecutionDecision(
-        execution_mode=RuntimeExecutionMode.DEGRADED,
-        graph_required=False,
-        intent="fallback",
-    )
-    plan = AuthorizedExecutionPlan(
-        execution_id=f"fallback-{ctx.request_id}",
-        policy_decision_id=fallback_decision.policy_decision_id or f"policy-{correlation_id}",
-        topology=ExecutionTopology.DIRECT,
-        budget=ExecutionBudget(
-            max_duration_ms=fallback_decision.time_budget_ms,
-            max_model_calls=1,
-            max_output_tokens=request.max_tokens or 4096,
-        ),
-        degraded_allowed=True,
-        degradation_state=DegradationState(
-            degraded=True,
-            reason_code="primary_failure",
-            level=fallback_decision.risk_level.value if hasattr(fallback_decision.risk_level, "value") else str(fallback_decision.risk_level),
-        ),
-    )
-    meter = ExecutionBudgetMeter(plan.budget)
-    meter.start()
+    plan = authorized_plan
+    if (
+        isinstance(failure, (EngineUnavailableError, PermissionError))
+        or decision.requires_human_gate
+        or decision.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
+        or decision.tool_requirements
+        or decision.plugin_candidates
+        or plan.allowed_tools
+        or plan.allowed_plugins
+        or plan.approval_requirements
+        or not plan.degraded_allowed
+        or plan.budget.max_model_calls <= meter.model_calls
+        or meter.exhausted
+        or meter.budget is not plan.budget
+        or not plan.matches_execution_scope(
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=getattr(ctx, "session_id", None),
+            policy_decision_id=decision.policy_decision_id,
+        )
+    ):
+        return None
+    if not await meter.check_duration():
+        return None
+
     try:
         # Preserve the already-authorized, scoped memory evidence across provider
         # recovery. Never perform a second, ungoverned recall in fallback.
@@ -71,17 +78,30 @@ async def build_runtime_fallback(
             )
         }
         text, normalized = await runtime._run_simple(
-            request, fallback_decision, plan, meter, memory_recall_meta
+            request, decision, plan, meter, memory_recall_meta
         )
     except Exception as fb_exc:  # pragma: no cover - defensive boundary
         logger.error(
-            "Runtime fallback chain failed: %s",
-            fb_exc,
-            extra={"correlation_id": correlation_id},
+            "Runtime fallback chain failed",
+            extra={
+                "correlation_id": correlation_id,
+                "error_type": type(fb_exc).__name__,
+            },
         )
         text, normalized = "", {}
 
-    if not (text and text.strip()):
+    if not isinstance(text, str) or not text.strip():
+        return None
+    if (
+        not isinstance(normalized.get("actual_provider"), str)
+        or not normalized["actual_provider"].strip()
+        or not isinstance(normalized.get("actual_model"), str)
+        or not normalized["actual_model"].strip()
+        or normalized.get("response_source") not in {
+            "model", "provider_runtime", "fallback_provider_runtime",
+            "openai_compatible_engine",
+        }
+    ):
         return None
 
     md = ChatRuntimeMetadata(
