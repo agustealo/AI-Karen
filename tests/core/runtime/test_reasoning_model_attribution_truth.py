@@ -51,7 +51,13 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reporte
         },
         executor=SimpleNamespace(execute=AsyncMock(return_value=result)),
     )
-    fake_bridge = SimpleNamespace(activate=lambda **kwargs: activation)
+    activation_calls = []
+
+    def activate(**kwargs):
+        activation_calls.append(kwargs)
+        return activation
+
+    fake_bridge = SimpleNamespace(activate=activate)
     decision = SimpleNamespace(
         memory_top_k=5, reasoning_depth="standard",
         tool_requirements=[], plugin_candidates=[],
@@ -90,3 +96,8 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reporte
         "unverified" if reported_calls else "not_executed"
     )
     assert activation.executor.execute.await_count == 1
+    assert len(activation_calls) == 1
+    assert activation_calls[0]["preferred_provider"] == "ollama-local"
+    assert activation_calls[0]["preferred_model"] == "requested-model"
+    assert activation_calls[0]["plan"] is plan
+    assert activation_calls[0]["decision"] is decision
