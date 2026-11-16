@@ -222,7 +222,9 @@ async def test_model_callback_enforces_shared_budget_for_nested_agent_calls(sdk)
     await callback.on_chat_model_start({}, [])
     with pytest.raises(RuntimeError, match="budget"):
         await callback.on_chat_model_start({}, [])
-    assert ctx.budget_meter.model_calls == 3
+    # A rejected third SDK callback must not be reported as a model call.
+    assert ctx.budget_meter.model_calls == 2
+    assert ctx.budget_meter.exhausted is True
 
 
 @pytest.mark.asyncio
