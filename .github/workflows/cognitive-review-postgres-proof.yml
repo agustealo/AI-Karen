@@ -56,6 +56,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/chat.txt
+          python -m pip install -r requirements/ci/cognitive.txt
 
       - name: Create a brand-new, dedicated, disposable review evidence database
         run: |
