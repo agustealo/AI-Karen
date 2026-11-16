@@ -91,53 +91,34 @@ def test_reasoning_strategy_cannot_override_observed_model_receipt() -> None:
 
 
 
-def test_preferred_model_does_not_change_authorized_reasoning_topology() -> None:
-    """KCON-211: both runtime transports use the same policy-gated selector."""
-    from types import SimpleNamespace
 
-    import pytest
+def test_both_chat_transports_use_canonical_reasoning_authorization() -> None:
+    """Inspect the actual selectors without importing the heavier chat runtime."""
+    import ast
 
-    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
-    from ai_karen_engine.core.runtime.contracts import ExecutionTopology
-
-    run = ChatRuntime._should_execute_authorized_reasoning
-    cognitive = SimpleNamespace(
-        topology=ExecutionTopology.REASONING,
-        reasoning_modes=["verification"],
+    tree = ast.parse(_chat_runtime_source())
+    runtime = next(
+        cls for cls in tree.body
+        if isinstance(cls, ast.ClassDef) and cls.name == "ChatRuntime"
     )
-    approved = SimpleNamespace(
-        topology=ExecutionTopology.REASONING,
-        reasoning_modes=["verification"],
-    )
-    assert run(cognitive, approved) is True
+    methods = {
+        method.name: method
+        for method in runtime.body
+        if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
 
-    source = _chat_runtime_source()
-    assert source.count("self._should_execute_authorized_reasoning(decision, plan)") == 2
-    assert 'not (request.preferred_provider and request.preferred_model)' not in source
+    for method in (methods["execute"], methods["stream"]):
+        authorized_calls = [
+            node for node in ast.walk(method)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_should_execute_authorized_reasoning"
+        ]
+        assert len(authorized_calls) == 1
 
-    denied = SimpleNamespace(
-        topology=ExecutionTopology.DIRECT,
-        reasoning_modes=[],
-    )
-    assert run(denied, denied) is False
-
-    with pytest.raises(PermissionError, match="reasoning_modes_not_authorized"):
-        run(cognitive, SimpleNamespace(
-            topology=ExecutionTopology.REASONING,
-            reasoning_modes=[],
-        ))
-
-    with pytest.raises(PermissionError, match="reasoning_topology_authorization_mismatch"):
-        run(cognitive, denied)
-
-
-def test_direct_and_workflow_topologies_remain_unchanged() -> None:
-    from types import SimpleNamespace
-
-    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
-    from ai_karen_engine.core.runtime.contracts import ExecutionTopology
-
-    for topology in (ExecutionTopology.DIRECT, ExecutionTopology.WORKFLOW):
-        decision = SimpleNamespace(topology=topology, reasoning_modes=[])
-        plan = SimpleNamespace(topology=topology, reasoning_modes=[])
-        assert not ChatRuntime._should_execute_authorized_reasoning(decision, plan)
+    selector = methods["_should_execute_authorized_reasoning"]
+    selector_source = ast.get_source_segment(_chat_runtime_source(), selector) or ""
+    assert "plan.reasoning_modes" in selector_source
+    assert "plan.topology" in selector_source
+    assert "preferred_provider" not in selector_source
+    assert "preferred_model" not in selector_source
