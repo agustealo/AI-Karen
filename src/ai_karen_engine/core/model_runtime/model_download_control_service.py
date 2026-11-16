@@ -1305,8 +1305,17 @@ class ModelDownloadControlService:
             return "Model metadata request failed. Check backend internet access, proxy, DNS and TLS configuration."
         return "Model access terms could not be verified. Inspect backend model-download logs and retry."
 
-    async def get_recommendations(self) -> dict[str, Any]:
-        """Return config-driven first-run recommendations with live install truth."""
+    async def get_recommendations(
+        self, *, tenant_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Return curated recommendations with tenant-qualified plugin installs.
+
+        Ordinary core recommendations retain the model-registry projection.
+        Pinned plugin models require a completed, licensed, safe-code download
+        for the current tenant, never another tenant's shared registry entry.
+        This is acquisition evidence only; the plugin/VoiceRuntime alone can
+        confirm actual inference readiness.
+        """
         config = load_model_download_recommendations()
         recommendations: list[dict[str, Any]] = []
         for raw in config.get("recommendations") or []:
@@ -1388,6 +1397,44 @@ class ModelDownloadControlService:
                 )
                 item["gated"] = bool(item.get("gated", False))
                 item["resolved_revision"] = None
+
+            pinned_revision = str(item.get("revision") or "").strip()
+            plugin_channel = str(item.get("channel_id") or "").strip()
+            if plugin_channel.startswith("plugin_") and pinned_revision:
+                # Registry metadata is shared; it does not establish a
+                # tenant-approved Pocket installation. Reuse the exact scoped
+                # durable download receipt authority consumed by Pocket itself.
+                installed = False
+                install_path = ""
+                if tenant_id:
+                    receipts = await self.list_completed_model_installations(
+                        tenant_id=tenant_id,
+                        model_id=model_id,
+                        revision=pinned_revision,
+                        channel_id=plugin_channel,
+                    )
+                    root = Path(self.models_root)
+                    if root.is_dir() and not root.is_symlink():
+                        root = root.resolve()
+                        for receipt in receipts:
+                            snapshot = Path(str(receipt.get("install_path") or ""))
+                            if (
+                                receipt.get("status") != "completed"
+                                or receipt.get("license_accepted") is not True
+                                or receipt.get("trust_remote_code") is True
+                                or not str(receipt.get("install_path") or "")
+                                or snapshot.is_symlink()
+                                or not snapshot.is_dir()
+                            ):
+                                continue
+                            try:
+                                if not snapshot.resolve().is_relative_to(root):
+                                    continue
+                            except (OSError, RuntimeError, ValueError):
+                                continue
+                            installed = True
+                            install_path = str(snapshot)
+                            break
 
             item["installed"] = installed
             item["install_path"] = install_path or None
