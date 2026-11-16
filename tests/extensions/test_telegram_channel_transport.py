@@ -770,3 +770,36 @@ async def test_telegram_global_ownership_masks_provider_identity_errors():
     with pytest.raises(PermissionError) as error:
         await adapter.identify_bot(connection=connection())
     assert TOKEN not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_telegram_registration_refuses_rotated_token_identity_before_remote_post():
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.post.reset_mock()
+    client.get.return_value = httpx.Response(200, json={
+        "ok": True, "result": {"id": 987654, "is_bot": True},
+    })
+    with pytest.raises(PermissionError, match="unverified"):
+        await adapter.register_webhook(
+            connection=connection(), public_origin="https://hooks.example.org",
+            expected_bot_id=123456,
+        )
+    client.get.assert_awaited()
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bot_id", [0, -1, True, "123456", 2**63])
+async def test_telegram_registration_rejects_untrusted_expected_bot_id(bot_id):
+    _, adapter, _, client = load_transport()
+    await adapter.start(connection=connection())
+    client.post.reset_mock()
+    client.get.reset_mock()
+    with pytest.raises(PermissionError, match="ownership verification unavailable"):
+        await adapter.register_webhook(
+            connection=connection(), public_origin="https://hooks.example.org",
+            expected_bot_id=bot_id,
+        )
+    client.get.assert_not_awaited()
+    client.post.assert_not_awaited()
