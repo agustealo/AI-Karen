@@ -5149,6 +5149,39 @@ class ChatRuntime:
             ):
                 probe = None
 
+            # The readiness assessment is not an execution grant and must
+            # not create a second eligible action or synthetic propensity.
+            readiness = decision.policy_constraints.get(
+                "verification_alternative_readiness",
+            )
+            if not (
+                probe is not None
+                and isinstance(readiness, dict)
+                and readiness.get("schema_version")
+                == "verification_alternative_readiness_v1"
+                and readiness.get("source_decision_id")
+                == decision.policy_decision_id
+                and readiness.get("source_policy_version")
+                == decision.policy_version
+                and readiness.get("alternative_policy_decision_id")
+                == probe.get("alternative_policy_decision_id")
+                and readiness.get("status")
+                in {"not_permitted", "blocked", "unverified"}
+                and isinstance(readiness.get("reason_codes"), list)
+                and 1 <= len(readiness["reason_codes"]) <= 16
+                and all(
+                    isinstance(code, str)
+                    and code.isascii()
+                    and 1 <= len(code) <= 96
+                    and all(char.islower() or char == "_" for char in code)
+                    for code in readiness["reason_codes"]
+                )
+                and readiness.get("execution_eligibility_established") is False
+                and readiness.get("randomized_selection") is False
+                and readiness.get("ope_eligible") is False
+            ):
+                readiness = None
+
             snapshot = self._trajectory_recorder.build_feature_snapshot(
                 trajectory,
                 feature_version=TOPOLOGY_FEATURES_V1,
@@ -5192,6 +5225,10 @@ class ChatRuntime:
                     **(
                         {"response_strategy_policy_probe": dict(probe)}
                         if probe is not None else {}
+                    ),
+                    **(
+                        {"verification_alternative_readiness": dict(readiness)}
+                        if readiness is not None else {}
                     ),
                 },
             )
@@ -5264,6 +5301,10 @@ class ChatRuntime:
                         **(
                             {"response_strategy_policy_probe": dict(probe)}
                             if probe is not None else {}
+                        ),
+                        **(
+                            {"verification_alternative_readiness": dict(readiness)}
+                            if readiness is not None else {}
                         ),
                     },
                 )
