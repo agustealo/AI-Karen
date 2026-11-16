@@ -103,6 +103,9 @@ def _event_digest(event: InboundChannelEvent) -> str:
         "message_kind": event.message_kind,
         "text": event.text,
     }
+    # Preserve existing digest identities for providers without timestamps.
+    if event.provider_timestamp is not None:
+        identity["provider_timestamp"] = event.provider_timestamp
     return hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()
@@ -1291,6 +1294,8 @@ class SqlChannelRepository:
             raise ChannelAdmissionDenied("Channel connection is disabled or mismatched")
         if event.text is not None and len(event.text) > 32768:
             raise ValueError("Inbound text exceeds the governed storage ceiling")
+        if connection.installation_id == "whatsapp-cloud" and event.provider_timestamp is None:
+            raise ChannelAdmissionDenied("WhatsApp inbound provider time is required")
         digest = _event_digest(event)
         args = {
             "tenant": tenant_id,
@@ -1301,6 +1306,7 @@ class SqlChannelRepository:
             "conversation": event.external_conversation_id,
             "message_kind": event.message_kind,
             "message_text": event.text,
+            "provider_ts": event.provider_timestamp or 0,
             "digest": digest,
         }
         async with async_transaction_scope(tenant_id) as session:
@@ -1311,11 +1317,14 @@ class SqlChannelRepository:
                     INSERT INTO public.channel_inbox (
                         tenant_id, connection_id, connection_revision, external_event_id,
                         external_sender_id, external_conversation_id, message_kind,
-                        message_text, event_digest,
+                        message_text, event_digest, provider_event_at,
                         binding_id, user_id
                     )
                     SELECT c.tenant_id, c.connection_id, c.revision, :event, :sender,
                            :conversation, :message_kind, :message_text, :digest,
+                           CASE WHEN c.installation_id = 'whatsapp-cloud'
+                                THEN to_timestamp(CAST(:provider_ts AS double precision))
+                                ELSE NULL END,
                            b.binding_id, b.user_id
                     FROM public.channel_connections c
                     JOIN public.channel_identity_bindings b
@@ -1324,6 +1333,14 @@ class SqlChannelRepository:
                       AND c.connection_id = :connection AND c.enabled = true
                       AND c.revision = :revision
                       AND b.external_sender_id = :sender AND b.revoked_at IS NULL
+                      AND (
+                          c.installation_id <> 'whatsapp-cloud'
+                          OR (
+                              CAST(:provider_ts AS bigint) > 0
+                              AND to_timestamp(CAST(:provider_ts AS double precision))
+                                  <= clock_timestamp() + interval '5 minutes'
+                          )
+                      )
                     ON CONFLICT (tenant_id, connection_id, external_event_id)
                     DO NOTHING
                     RETURNING inbox_id, correlation_id, tenant_id, user_id, binding_id,
@@ -1816,6 +1833,96 @@ class SqlChannelRepository:
             external_conversation_id=str(row["external_conversation_id"]),
             claim_token=token,
         )
+
+    async def whatsapp_customer_window_open(
+        self, *, tenant_id: str, claimed: ClaimedChannelDelivery,
+        send_budget_seconds: int = 65,
+    ) -> bool:
+        """Prove a current signed customer message for this exact claimed send.
+
+        Uses the PostgreSQL clock, never request headers, the worker clock,
+        client state or a mere inbox admission time. The send budget keeps
+        a near-expiry window from closing during a bounded network attempt.
+        This is a host-only check immediately before the provider call.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if not 1 <= send_budget_seconds <= 120:
+            raise ValueError("WhatsApp send budget must be 1..120 seconds")
+        if (
+            claimed.connection.tenant_id != tenant_id
+            or claimed.connection.installation_id != "whatsapp-cloud"
+            or claimed.delivery.connection_id != claimed.connection.connection_id
+        ):
+            return False
+        async with async_transaction_scope(tenant_id) as session:
+            allowed = (await session.execute(
+                text("""
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM public.channel_outbox o
+                        JOIN public.channel_inbox origin
+                          ON origin.tenant_id = o.tenant_id
+                         AND origin.connection_id = o.connection_id
+                         AND origin.inbox_id = o.inbox_id
+                        JOIN public.channel_connections c
+                          ON c.tenant_id = o.tenant_id
+                         AND c.connection_id = o.connection_id
+                        JOIN public.channel_identity_bindings b
+                          ON b.tenant_id = origin.tenant_id
+                         AND b.connection_id = origin.connection_id
+                         AND b.binding_id = origin.binding_id
+                         AND b.user_id = origin.user_id
+                        WHERE o.tenant_id = CAST(:tenant AS uuid)
+                          AND o.delivery_id = CAST(:delivery AS uuid)
+                          AND o.claim_token = CAST(:claim AS uuid)
+                          AND o.claim_expires_at > clock_timestamp()
+                          AND o.status = 'accepted'
+                          AND o.attempt_count = 1
+                          AND o.message_kind = 'text'
+                          AND o.destination_id = :recipient
+                          AND o.connection_id = :connection
+                          AND origin.connection_revision = :revision
+                          AND origin.user_id = CAST(:user AS uuid)
+                          AND origin.external_sender_id = o.destination_id
+                          AND origin.external_conversation_id = :conversation
+                          AND b.external_sender_id = o.destination_id
+                          AND b.revoked_at IS NULL
+                          AND c.revision = :revision
+                          AND c.enabled = true
+                          AND c.installation_id = 'whatsapp-cloud'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM public.channel_inbox customer
+                              WHERE customer.tenant_id = origin.tenant_id
+                                AND customer.connection_id = origin.connection_id
+                                AND customer.connection_revision = origin.connection_revision
+                                AND customer.binding_id = origin.binding_id
+                                AND customer.user_id = origin.user_id
+                                AND customer.external_sender_id = o.destination_id
+                                AND customer.external_conversation_id = origin.external_conversation_id
+                                AND customer.message_kind = 'text'
+                                AND customer.provider_event_at IS NOT NULL
+                                AND customer.provider_event_at <= clock_timestamp()
+                                AND customer.provider_event_at >
+                                    clock_timestamp()
+                                    + make_interval(secs => :budget)
+                                    - interval '24 hours'
+                          )
+                    )
+                """),
+                {
+                    "tenant": tenant_id,
+                    "delivery": str(uuid.UUID(claimed.delivery.delivery_id)),
+                    "claim": str(uuid.UUID(claimed.claim_token)),
+                    "connection": claimed.connection.connection_id,
+                    "revision": claimed.connection.revision,
+                    "user": str(uuid.UUID(claimed.user_id)),
+                    "recipient": claimed.delivery.destination_id,
+                    "conversation": claimed.external_conversation_id,
+                    "budget": send_budget_seconds,
+                },
+            )).scalar_one()
+        return allowed is True
 
     async def renew_outbound_claim(
         self, *, tenant_id: str, delivery_id: str,
