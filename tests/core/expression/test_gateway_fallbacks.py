@@ -2,6 +2,7 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, patch
 from ai_karen_engine.core.expression.gateway import ExpressionGateway
+from ai_karen_engine.core.expression.errors import EngineUnavailableError
 from ai_karen_engine.core.expression.contracts import ExpressionTask, ExpressionResult
 from ai_karen_engine.core.expression.settings import ExpressionSettings, EngineConfig
 
@@ -59,6 +60,8 @@ async def test_gateway_fallback_loop():
         assert result.text == "Success from OpenAI"
         assert result.engine_id == "openai_compatible_local"
         assert result.metadata["fallback_level"] == 1
+        assert result.degraded is True
+        assert result.degradation_reason == "model_engine_fallback"
         assert any(s["engine_id"] == "builtin" and s["reason"] == "exception" for s in result.metadata["skipped_engines"])
 
 @pytest.mark.asyncio
@@ -104,7 +107,5 @@ async def test_gateway_emergency_fallback():
             
         mock_get_engine.side_effect = side_effect
         
-        result = await gateway.generate(task)
-        
-        assert result.engine_id == "disabled"
-        assert result.degraded is True
+        with pytest.raises(EngineUnavailableError, match="No model engine produced"):
+            await gateway.generate(task)
