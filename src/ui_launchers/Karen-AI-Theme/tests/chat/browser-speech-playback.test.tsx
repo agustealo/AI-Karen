@@ -1,8 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   extractAssistantSpeech,
   KarenBrowserSpeechPlayback,
+  stopAssistantPlayback,
+  useAssistantPlaybackPhase,
 } from "@/components/chat/KarenBrowserSpeechPlayback";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
 
@@ -24,6 +27,18 @@ let spoken: Array<{
 }>;
 let speak: ReturnType<typeof vi.fn>;
 let cancel: ReturnType<typeof vi.fn>;
+
+function PlaybackDock(): ReactNode {
+  const phase = useAssistantPlaybackPhase();
+  return (
+    <div data-testid="speech-dock-test">
+      <span data-testid="active-speech-phase">{phase}</span>
+      <button type="button" disabled={phase === "idle"} onClick={stopAssistantPlayback}>
+        Stop speech from dock
+      </button>
+    </div>
+  );
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -159,11 +174,78 @@ describe("canonical assistant speech playback", () => {
     expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
   });
 
+  it("exposes preparing and speaking phases to a global Stop control without replaying audio", async () => {
+    let resolvePreference!: (value: { voice: { engine_id: null; voice_id: null }; available: false }) => void;
+    api.getVoiceSelection.mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePreference = resolve;
+    }));
+    render(<>
+      <KarenBrowserSpeechPlayback message={{ id: "spoken-a", content: "First message" }} />
+      <PlaybackDock />
+    </>);
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(screen.getByTestId("active-speech-phase").textContent).toBe("preparing"));
+    expect(speak).not.toHaveBeenCalled();
+    await act(async () => resolvePreference({
+      voice: { engine_id: null, voice_id: null }, available: false,
+    }));
+    await waitFor(() => expect(screen.getByTestId("active-speech-phase").textContent).toBe("speaking"));
+    fireEvent.click(screen.getByRole("button", { name: "Stop speech from dock" }));
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
+    expect(screen.getByRole("button", { name: "Read Karen's reply aloud" })).toBeTruthy();
+    expect(cancel).toHaveBeenCalled();
+    act(() => spoken[0].onend?.());
+    expect(speak).toHaveBeenCalledTimes(1);
+  });
+
+  it("global Stop aborts an in-flight local synthesis before it creates audio", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    let deliver!: (audio: Blob) => void;
+    api.synthesizeLocalVoice.mockImplementation(() => new Promise((resolve) => {
+      deliver = resolve;
+    }));
+    const create = vi.fn(() => "blob:voice-leak");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: create });
+    render(<>
+      <KarenBrowserSpeechPlayback message={{ content: "Local speech" }} />
+      <PlaybackDock />
+    </>);
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    await waitFor(() => expect(api.synthesizeLocalVoice).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("preparing");
+    fireEvent.click(screen.getByRole("button", { name: "Stop speech from dock" }));
+    expect(api.synthesizeLocalVoice.mock.calls[0][3].aborted).toBe(true);
+    await act(async () => deliver(new Blob([new Uint8Array(48)], { type: "audio/wav" })));
+    expect(create).not.toHaveBeenCalled();
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
+  });
+
+  it("replaces a speaking message without leaving two active playbacks", async () => {
+    render(<>
+      <KarenBrowserSpeechPlayback message={{ id: "older", content: "Older reply" }} />
+      <KarenBrowserSpeechPlayback message={{ id: "newer", content: "Newer reply" }} />
+      <PlaybackDock />
+    </>);
+    const buttons = screen.getAllByRole("button", { name: "Read Karen's reply aloud" });
+    fireEvent.click(buttons[0]);
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(1));
+    fireEvent.click(buttons[1]);
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(2));
+    expect(cancel).toHaveBeenCalled();
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("speaking");
+    expect(screen.getByRole("button", { name: "Stop speech from dock" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Stop speech from dock" }));
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
+  });
+
   it("fails closed when user voice preferences cannot be verified", async () => {
-    api.getVoiceSelection.mockRejectedValue(new Error("network unavailable"));
+    api.getVoiceSelection.mockRejectedValue(new Error("secret-token=private network unavailable"));
     render(<KarenBrowserSpeechPlayback message={{ content: "Private" }} />);
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/network unavailable/i));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/could not prepare speech/i));
     expect(speak).not.toHaveBeenCalled();
   });
 });
