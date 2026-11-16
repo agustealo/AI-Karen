@@ -191,17 +191,11 @@ async def synthesize_with_voice_engine(
             status_code=429, detail="local_synthesis_busy",
             headers={"Retry-After": "1"},
         )
-    try:
-        catalog = await runtime.engine_catalog(
-            user, correlation_id=getattr(request.state, "correlation_id", None)
-        )
-    except VoiceContractError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from None
-    except Exception as exc:
-        logger.error("Voice catalog unavailable", extra={"error_type": type(exc).__name__})
-        raise HTTPException(status_code=503, detail="voice_catalog_unavailable") from None
-    if not any(item["engine_id"] == engine_id for item in catalog["engines"]):
-        raise HTTPException(status_code=503, detail="local_synthesis_unavailable")
+    # Runtime.synthesize_with_plugin is the single governed catalog/admission
+    # authority. A second route-side probe doubles expensive Pocket cold-load
+    # work and creates a check/use race before every bounded speech chunk.
+    # Read only a strictly bounded payload, then delegate eligibility and
+    # execution without caching or trusting a route-owned catalog.
     synthesis_input = await _read_synthesis_input(request)
     try:
         result = await runtime.synthesize_with_plugin(
