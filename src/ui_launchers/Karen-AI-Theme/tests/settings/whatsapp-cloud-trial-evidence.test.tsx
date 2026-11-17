@@ -37,7 +37,10 @@ const evidence = {
 };
 
 function enterEvent(value = EVENT) {
-  fireEvent.change(screen.getByLabelText('Inbound WhatsApp message ID'), {
+  // React's text inputs update controlled state from the native input event.
+  // A bare jsdom property mutation can change the DOM value while leaving
+  // React's onChange state stale and the submit button disabled.
+  fireEvent.input(screen.getByLabelText('Inbound WhatsApp message ID'), {
     target: { value },
   });
 }
