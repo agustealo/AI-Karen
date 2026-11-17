@@ -225,6 +225,7 @@ async def test_streamed_personal_key_uses_fresh_audited_vault_resolution(monkeyp
 
     def client(**kwargs):
         assert kwargs["follow_redirects"] is False
+        assert kwargs["trust_env"] is False
         return original_client(transport=mock, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", client)
@@ -453,8 +454,10 @@ def test_sync_provider_uses_nonglobal_no_redirect_opener(monkeypatch):
             return dummy
 
     def build(*handlers):
-        assert len(handlers) == 1
+        assert len(handlers) == 2
         assert isinstance(handlers[0], transport._RejectProviderRedirect)
+        assert isinstance(handlers[1], transport.ProxyHandler)
+        assert handlers[1].proxies == {}
         return Opener()
 
     monkeypatch.setattr(transport, "build_opener", build)
