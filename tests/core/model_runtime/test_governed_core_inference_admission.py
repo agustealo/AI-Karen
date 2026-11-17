@@ -653,6 +653,28 @@ async def test_real_runtime_policy_evaluation_is_required_before_any_initial_mod
     assert context.original_runtime_model_plan(meter) is plan
 
 
+@pytest.mark.asyncio
+async def test_allowed_zero_model_quota_preserves_tool_only_plan_without_encoder():
+    issuer_scope = _scope(calls=0)
+    issuer_scope._require_scope()
+    assert issuer_scope.plan.budget.max_model_calls == 0
+    assert issuer_scope.meter.model_calls == 0
+    invoked = []
+    manager = object.__new__(ModelManager)
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda data: invoked.append(data) or [0.6],
+    )
+    with pytest.raises(RuntimeError, match="budget_exhausted"):
+        await manager.generate_embedding(
+            "blocked even if local", execution_admission=issuer_scope,
+        )
+    assert invoked == []
+    assert issuer_scope.meter.model_calls == 0
+
+
 def test_runtime_context_binding_is_not_serialized_or_cloned():
     from dataclasses import asdict
 
