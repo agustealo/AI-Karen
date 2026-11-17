@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.expression.gateway import MODEL_GENERATION_RESPONSE_SOURCES
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -163,7 +164,7 @@ def require_gateway_receipt(
         raise LiveStrategyProofError("gateway_selected_model_mismatch")
     if provenance.provider != provider or provenance.model != model:
         raise LiveStrategyProofError("gateway_provenance_identity_mismatch")
-    if source != "model":
+    if source not in (MODEL_GENERATION_RESPONSE_SOURCES - {"fallback_provider_runtime"}):
         raise LiveStrategyProofError("gateway_response_source_unverified")
     if metadata.get("fallback_level") != 0 or metadata.get("degraded_mode") is not False:
         raise LiveStrategyProofError("gateway_degraded_or_fallback")
