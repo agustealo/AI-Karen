@@ -752,9 +752,9 @@ class ModelOrchestratorService:
             )
         except Exception as exc:
             logger.warning(
-                "Remote model metadata refresh failed after download for %s: %s",
+                "Remote model metadata refresh failed model_id=%s error_type=%s",
                 req.model_id,
-                exc,
+                type(exc).__name__,
             )
 
         entry = {
