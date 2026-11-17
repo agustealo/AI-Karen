@@ -16,7 +16,12 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import StructuredChatResult
 from ai_karen_engine.core.model_runtime.structured_tool_chat_model import (
+    GovernedToolModelAdmission,
     KarenGovernedChatModel, _message_to_wire, build_medusa_deepagents_model,
+)
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan, ExecutionBudget, ExecutionBudgetMeter,
+    ExecutionTopology,
 )
 
 
@@ -31,9 +36,26 @@ def endpoint():
 
 
 def model():
+    budget = ExecutionBudget(max_model_calls=3, max_external_requests=2)
+    plan = AuthorizedExecutionPlan(
+        execution_id="run-1",
+        policy_decision_id="policy-1",
+        authorized_user_id="u-1",
+        authorized_tenant_id="t-1",
+        authorized_session_id="s-1",
+        topology=ExecutionTopology.MULTI_AGENT,
+        budget=budget,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    meter.start()
     return KarenGovernedChatModel(
         endpoint=endpoint(),
         selected_model="model-with-tools",
+        execution_admission=GovernedToolModelAdmission(
+            plan=plan, meter=meter, user_id="u-1", tenant_id="t-1",
+            session_id="s-1", policy_decision_id="policy-1",
+            request_id="run-1", correlation_id="corr-1",
+        ),
     )
 
 
