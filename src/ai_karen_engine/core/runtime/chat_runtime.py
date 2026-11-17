@@ -427,10 +427,16 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
-        decision_observation_id = await self._record_learning_decision(
-            trajectory,
-            decision,
-        )
+        try:
+            decision_observation_id = await self._record_learning_decision(
+                trajectory,
+                decision,
+            )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
 
         memory_recall_meta: Dict[str, Any] = {}
         provider_meta: Dict[str, Any] = {}
@@ -441,28 +447,34 @@ class ChatRuntime:
                 "source": "runtime_observed",
             }
         ]
-        if decision.memory_recall_required:
-            memory_recall_meta = await self._consume_resolved_memory(request, decision)
-            trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
-            trajectory.memory_recall_refs = [
-                item.get("id", "")
-                for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
-                if item.get("id")
-            ]
-            await self._record_proactive_continuity_decision(
-                trajectory,
-                decision,
-                memory_recall_meta,
-            )
-            memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
-            if memory_latency_ms > 0:
-                runtime_spans.append(
-                    {
-                        "name": "memory_recall",
-                        "duration_ms": memory_latency_ms,
-                        "source": "runtime_evidence_resolver",
-                    }
+        try:
+            if decision.memory_recall_required:
+                memory_recall_meta = await self._consume_resolved_memory(request, decision)
+                trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
+                trajectory.memory_recall_refs = [
+                    item.get("id", "")
+                    for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
+                    if item.get("id")
+                ]
+                await self._record_proactive_continuity_decision(
+                    trajectory,
+                    decision,
+                    memory_recall_meta,
                 )
+                memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
+                if memory_latency_ms > 0:
+                    runtime_spans.append(
+                        {
+                            "name": "memory_recall",
+                            "duration_ms": memory_latency_ms,
+                            "source": "runtime_evidence_resolver",
+                        }
+                    )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
 
         try:
             grounded = self._grounded_personal_response(
@@ -528,6 +540,12 @@ class ChatRuntime:
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
             elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
+        except asyncio.CancelledError:
+            # Emit cancellation before any best-effort persistence await.
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
         except Exception as exc:
             error_type = type(exc).__name__
             # Log code location only. Never log exception arguments, prompts, or secrets.
@@ -563,17 +581,23 @@ class ChatRuntime:
                 metadata={"error_code": "CHAT_EXECUTION_FAILED"},
             )
             conversation_id = ctx.require_conversation_id()
-            fallback = await build_runtime_fallback(
-                runtime=self,
-                request=request,
-                failure=exc,
-                correlation_id=ctx.correlation_id,
-                conversation_id=conversation_id,
-                start_time=start,
-                decision=decision,
-                authorized_plan=plan,
-                meter=meter,
-            )
+            try:
+                fallback = await build_runtime_fallback(
+                    runtime=self,
+                    request=request,
+                    failure=exc,
+                    correlation_id=ctx.correlation_id,
+                    conversation_id=conversation_id,
+                    start_time=start,
+                    decision=decision,
+                    authorized_plan=plan,
+                    meter=meter,
+                )
+            except asyncio.CancelledError:
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, start,
+                )
+                raise
             if fallback is not None and fallback.answer:
                 # A recovered model answer is not a completed conversation
                 # until the same transcript owner used by ordinary chat has
@@ -587,6 +611,15 @@ class ChatRuntime:
                         recovery_meta,
                         trajectory_id=trajectory.trajectory_id,
                     )
+                except asyncio.CancelledError:
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, start,
+                        pending_transcript_text=fallback.answer,
+                        pending_provider_meta=recovery_meta,
+                        pending_memory_meta=memory_recall_meta,
+                        pending_error=f"fallback:{error_type}",
+                    )
+                    raise
                 except Exception as persistence_exc:
                     logger.error(
                         "chat.recovery_transcript_persistence_failed",
@@ -637,12 +670,25 @@ class ChatRuntime:
                         },
                     )
                 elif decision.memory_write_allowed:
-                    await self._persist_memory(
-                        request,
-                        fallback.answer,
-                        memory_recall_meta,
-                        plan,
-                    )
+                    try:
+                        await self._persist_memory(
+                            request,
+                            fallback.answer,
+                            memory_recall_meta,
+                            plan,
+                        )
+                    except asyncio.CancelledError:
+                        # A successful transcript receipt is already durable.
+                        # Do not overwrite it with a fake uncommitted
+                        # cancellation just because later memory work stopped.
+                        await self._observe_request_cancellation(
+                            trajectory, decision, request, plan, meter, start,
+                            committed_text=fallback.answer,
+                            committed_provider_meta=recovery_meta,
+                            committed_memory_meta=memory_recall_meta,
+                            committed_error=f"fallback:{error_type}",
+                        )
+                        raise
                 await self._record_trajectory_completion(
                     trajectory,
                     decision,
@@ -743,7 +789,15 @@ class ChatRuntime:
 
         if decision.memory_write_allowed and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
-            await self._persist_memory(request, text, memory_recall_meta, plan)
+            try:
+                await self._persist_memory(request, text, memory_recall_meta, plan)
+            except asyncio.CancelledError:
+                # Before transcript commit, interrupted memory persistence
+                # cannot turn generated text into a completed assistant turn.
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, start,
+                )
+                raise
             provider_meta["execution_spans"].append(
                 {
                     "name": "memory_persistence",
@@ -755,9 +809,20 @@ class ChatRuntime:
         # Ordinary and streamed chat must both persist the accepted final
         # answer through the same authorized transcript owner. Episodic memory
         # projection above is a separate concern, not transcript storage.
-        transcript_result = await self._persist_transcript(
-            request, text, provider_meta, trajectory_id=trajectory.trajectory_id
-        )
+        try:
+            transcript_result = await self._persist_transcript(
+                request, text, provider_meta, trajectory_id=trajectory.trajectory_id
+            )
+        except asyncio.CancelledError:
+            # A transaction may have committed before awaited session cleanup
+            # was interrupted. Reconcile canonical owned transcript truth.
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+                pending_transcript_text=text,
+                pending_provider_meta=provider_meta,
+                pending_memory_meta=memory_recall_meta,
+            )
+            raise
         provider_meta.update(transcript_result.to_metadata())
         transcript_failed = not transcript_result.success
         if transcript_failed:
@@ -991,24 +1056,38 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
-        decision_observation_id = await self._record_learning_decision(
-            trajectory,
-            decision,
-        )
         stream_start = time.time()
+        try:
+            decision_observation_id = await self._record_learning_decision(
+                trajectory,
+                decision,
+            )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, stream_start,
+                request_id=request_id, conversation_id=conversation_id,
+            )
+            raise
 
-        yield self._enrich_chunk(
-            ChatStreamChunk(
-                type="status",
-                content="Processing request...",
-                correlation_id=ctx.correlation_id,
-                metadata={"stage": "started"},
-            ),
-            sequence,
-            request_id,
-            response_id,
-            conversation_id,
-        )
+        try:
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type="status",
+                    content="Processing request...",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"stage": "started"},
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+        except (asyncio.CancelledError, GeneratorExit):
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, stream_start,
+                request_id=request_id, conversation_id=conversation_id,
+            )
+            raise
         sequence += 1
 
         memory_recall_meta: Dict[str, Any] = {}
@@ -1019,28 +1098,35 @@ class ChatRuntime:
                 "source": "runtime_observed",
             }
         ]
-        if decision.memory_recall_required:
-            memory_recall_meta = await self._consume_resolved_memory(request, decision)
-            trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
-            trajectory.memory_recall_refs = [
-                item.get("id", "")
-                for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
-                if item.get("id")
-            ]
-            await self._record_proactive_continuity_decision(
-                trajectory,
-                decision,
-                memory_recall_meta,
-            )
-            memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
-            if memory_latency_ms > 0:
-                runtime_spans.append(
-                    {
-                        "name": "memory_recall",
-                        "duration_ms": memory_latency_ms,
-                        "source": "runtime_evidence_resolver",
-                    }
+        try:
+            if decision.memory_recall_required:
+                memory_recall_meta = await self._consume_resolved_memory(request, decision)
+                trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
+                trajectory.memory_recall_refs = [
+                    item.get("id", "")
+                    for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
+                    if item.get("id")
+                ]
+                await self._record_proactive_continuity_decision(
+                    trajectory,
+                    decision,
+                    memory_recall_meta,
                 )
+                memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
+                if memory_latency_ms > 0:
+                    runtime_spans.append(
+                        {
+                            "name": "memory_recall",
+                            "duration_ms": memory_latency_ms,
+                            "source": "runtime_evidence_resolver",
+                        }
+                    )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, stream_start,
+                request_id=request_id, conversation_id=conversation_id,
+            )
+            raise
 
         streamed_text = ""
         provider_meta: Dict[str, Any] = {}
@@ -1066,9 +1152,16 @@ class ChatRuntime:
 
             gen = grounded_stream()
         elif self._is_explicit_save_turn(request):
-            receipt_text = await self._execute_memory_write_receipt(
-                request, decision, plan, memory_recall_meta
-            )
+            try:
+                receipt_text = await self._execute_memory_write_receipt(
+                    request, decision, plan, memory_recall_meta
+                )
+            except asyncio.CancelledError:
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
             provider_meta.update({
                 "response_source": "memory_persistence",
                 "actual_provider": None,
@@ -1190,15 +1283,13 @@ class ChatRuntime:
                     conversation_id,
                 )
                 sequence += 1
-        except asyncio.CancelledError:
-            self._emitter.emit(
-                RuntimeEventType.REQUEST_CANCELLED,
-                correlation_id=ctx.correlation_id,
-                request_id=request_id,
-                user_id=ctx.user_id,
-                tenant_id=ctx.tenant_id,
-                session_id=ctx.session_id,
-                conversation_id=conversation_id,
+        except (asyncio.CancelledError, GeneratorExit):
+            # A client close or a cancelled task cannot claim completed
+            # provider output. The canonical cancellation event is emitted
+            # before the best-effort persistence await.
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, stream_start,
+                request_id=request_id, conversation_id=conversation_id,
             )
             raise
         except Exception as exc:
@@ -1233,6 +1324,12 @@ class ChatRuntime:
                         authorized_plan=plan,
                         meter=meter,
                     )
+            except (asyncio.CancelledError, GeneratorExit):
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
             except Exception as fallback_exc:
                 logger.error(
                     "ChatRuntime stream fallback failed",
@@ -1271,56 +1368,70 @@ class ChatRuntime:
                     or "stream_primary_execution_failed"
                 )
                 streamed_text += fallback.answer
-                yield self._enrich_chunk(
-                    ChatStreamChunk(
-                        type="content",
-                        content=fallback.answer,
-                        correlation_id=ctx.correlation_id,
-                        metadata={
-                            "response_source": provider_meta.get("response_source"),
-                            "actual_provider": provider_meta.get("actual_provider"),
-                            "actual_model": provider_meta.get("actual_model"),
-                            "fallback_level": provider_meta.get("fallback_level", 1),
-                            "degraded_mode": True,
-                        },
-                    ),
-                    sequence,
-                    request_id,
-                    response_id,
-                    conversation_id,
-                )
+                try:
+                    yield self._enrich_chunk(
+                        ChatStreamChunk(
+                            type="content",
+                            content=fallback.answer,
+                            correlation_id=ctx.correlation_id,
+                            metadata={
+                                "response_source": provider_meta.get("response_source"),
+                                "actual_provider": provider_meta.get("actual_provider"),
+                                "actual_model": provider_meta.get("actual_model"),
+                                "fallback_level": provider_meta.get("fallback_level", 1),
+                                "degraded_mode": True,
+                            },
+                        ),
+                        sequence,
+                        request_id,
+                        response_id,
+                        conversation_id,
+                    )
+                except (asyncio.CancelledError, GeneratorExit):
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, stream_start,
+                        request_id=request_id, conversation_id=conversation_id,
+                    )
+                    raise
                 sequence += 1
             else:
                 generation_error = exc
                 provider_meta["generation_error"] = True
                 provider_meta["degraded_mode"] = True
                 provider_meta["degradation_reason"] = "all_execution_paths_failed"
-                yield self._enrich_chunk(
-                    ChatStreamChunk(
-                        type="error",
-                        content="Unable to complete the response.",
-                        correlation_id=ctx.correlation_id,
-                        metadata={
-                            "error_code": "CHAT_GENERATION_FAILED",
-                            "error_type": type(exc).__name__,
-                            "correlation_id": ctx.correlation_id,
-                            "requested_provider": request.preferred_provider,
-                            "requested_model": request.preferred_model,
-                            "actual_provider": provider_meta.get("actual_provider"),
-                            "actual_model": provider_meta.get("actual_model"),
-                            "runtime_engine": provider_meta.get("runtime_engine"),
-                            "fallback_level": provider_meta.get("fallback_level", 0),
-                            "degradation_reason": "all_execution_paths_failed",
-                            "response_source": provider_meta.get("response_source"),
-                            "degraded_mode": True,
-                            "fallback_reason": provider_meta.get("fallback_reason"),
-                        },
-                    ),
-                    sequence,
-                    request_id,
-                    response_id,
-                    conversation_id,
-                )
+                try:
+                    yield self._enrich_chunk(
+                        ChatStreamChunk(
+                            type="error",
+                            content="Unable to complete the response.",
+                            correlation_id=ctx.correlation_id,
+                            metadata={
+                                "error_code": "CHAT_GENERATION_FAILED",
+                                "error_type": type(exc).__name__,
+                                "correlation_id": ctx.correlation_id,
+                                "requested_provider": request.preferred_provider,
+                                "requested_model": request.preferred_model,
+                                "actual_provider": provider_meta.get("actual_provider"),
+                                "actual_model": provider_meta.get("actual_model"),
+                                "runtime_engine": provider_meta.get("runtime_engine"),
+                                "fallback_level": provider_meta.get("fallback_level", 0),
+                                "degradation_reason": "all_execution_paths_failed",
+                                "response_source": provider_meta.get("response_source"),
+                                "degraded_mode": True,
+                                "fallback_reason": provider_meta.get("fallback_reason"),
+                            },
+                        ),
+                        sequence,
+                        request_id,
+                        response_id,
+                        conversation_id,
+                    )
+                except (asyncio.CancelledError, GeneratorExit):
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, stream_start,
+                        request_id=request_id, conversation_id=conversation_id,
+                    )
+                    raise
                 sequence += 1
 
         # A stream that emitted ERROR is failed even if partial text arrived.
@@ -1442,7 +1553,14 @@ class ChatRuntime:
         # committed together; a cancellation winner must leave no answer
         # in durable memory without a canonical transcript.
         if request.runtime_run_lease is None:
-            await persist_authorized_memory()
+            try:
+                await persist_authorized_memory()
+            except (asyncio.CancelledError, GeneratorExit):
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
 
         if verified_presentations:
             provider_meta["verified_presentations_v1"] = verified_presentations
@@ -1456,12 +1574,24 @@ class ChatRuntime:
         )
         if streamed_text and generation_error is None:
             transcript_started = time.perf_counter()
-            transcript_result = await self._persist_transcript(
-                request,
-                streamed_text,
-                provider_meta,
-                trajectory_id=trajectory.trajectory_id,
-            )
+            try:
+                transcript_result = await self._persist_transcript(
+                    request,
+                    streamed_text,
+                    provider_meta,
+                    trajectory_id=trajectory.trajectory_id,
+                )
+            except (asyncio.CancelledError, GeneratorExit):
+                # A cancelled write may already have committed before async
+                # session cleanup; only exact canonical readback settles it.
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                    pending_transcript_text=streamed_text,
+                    pending_provider_meta=provider_meta,
+                    pending_memory_meta=memory_recall_meta,
+                )
+                raise
             provider_meta["execution_spans"].append(
                 {
                     "name": "transcript_persistence",
@@ -1470,7 +1600,22 @@ class ChatRuntime:
                 }
             )
         if request.runtime_run_lease is not None and transcript_result.success:
-            await persist_authorized_memory()
+            try:
+                await persist_authorized_memory()
+            except (asyncio.CancelledError, GeneratorExit):
+                # A leased stream has committed its assistant turn atomically
+                # with the canonical run status. Postcommit memory cleanup
+                # cannot rewrite that durable completion as cancellation.
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                    committed_text=streamed_text,
+                    committed_provider_meta={
+                        **provider_meta, **transcript_result.to_metadata(),
+                    },
+                    committed_memory_meta=memory_recall_meta,
+                )
+                raise
 
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
@@ -5592,6 +5737,212 @@ class ChatRuntime:
             )
             return None
 
+    async def _observe_request_cancellation(
+        self,
+        trajectory: Any,
+        decision: ExecutionDecision,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        started_at: float,
+        *,
+        request_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        committed_text: Optional[str] = None,
+        committed_provider_meta: Optional[Dict[str, Any]] = None,
+        committed_memory_meta: Optional[Dict[str, Any]] = None,
+        committed_error: Optional[str] = None,
+        pending_transcript_text: Optional[str] = None,
+        pending_provider_meta: Optional[Dict[str, Any]] = None,
+        pending_memory_meta: Optional[Dict[str, Any]] = None,
+        pending_error: Optional[str] = None,
+    ) -> None:
+        """Observe cancellation and reconcile an interrupted transcript write.
+
+        The canonical conversation repository determines whether the exact
+        owned transcript pair committed. A missing durable receipt must not be
+        fabricated into either a committed completion or a cancellation.
+        """
+        ctx = request.context
+        self._emitter.emit(
+            RuntimeEventType.REQUEST_CANCELLED,
+            correlation_id=ctx.correlation_id,
+            request_id=request_id or ctx.request_id,
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            conversation_id=conversation_id or ctx.conversation_id,
+        )
+        if pending_transcript_text is not None:
+            try:
+                gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+                snapshot = request.persona_snapshot
+                # The exact persona bound for the attempted write is frozen
+                # before transcript persistence. Never reselect it on cancel.
+                if snapshot is None or not snapshot.matches(ctx):
+                    raise PermissionError("persona_snapshot_identity_unverified")
+                scope_id = snapshot.persona_id if snapshot.memory_filter_required else None
+                receipt = await gateway.reconcile_interrupted_turn(
+                    ctx,
+                    user_text=self._extract_user_message_for_persistence(request),
+                    assistant_text=pending_transcript_text,
+                    persona_scope_id=scope_id,
+                    run_lease=request.runtime_run_lease,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "chat.cancelled_transcript_reconciliation_unavailable",
+                    extra={
+                        "correlation_id": ctx.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                return
+            if receipt.success:
+                if pending_provider_meta is None:
+                    logger.warning(
+                        "chat.cancelled_transcript_provider_receipt_unverified",
+                        extra={"correlation_id": ctx.correlation_id},
+                    )
+                    return
+                committed_text = pending_transcript_text
+                committed_provider_meta = {
+                    **pending_provider_meta,
+                    **receipt.to_metadata(),
+                }
+                committed_memory_meta = pending_memory_meta
+                committed_error = pending_error
+            elif receipt.status != "not_found":
+                # An unavailable readback is not proof of an uncommitted turn.
+                # Keep the trajectory unresolved and preserve the durable run
+                # owner's existing terminal state.
+                logger.warning(
+                    "chat.cancelled_transcript_finality_unverified",
+                    extra={
+                        "correlation_id": ctx.correlation_id,
+                        "reconciliation_status": receipt.status,
+                    },
+                )
+                return
+        if committed_text is not None:
+            # Transcript ownership has already returned successful durability.
+            # Cancellation can interrupt post-commit memory work or delivery,
+            # but it cannot make the completed assistant turn uncommitted.
+            # Never fabricate a reviewer outcome or an OPE training sample.
+            if (
+                not committed_provider_meta
+                or committed_provider_meta.get("transcript_persistence_status")
+                not in {"persisted", "already_persisted"}
+                or not committed_text.strip()
+            ):
+                logger.warning(
+                    "chat.cancelled_postcommit_receipt_unverified",
+                    extra={"correlation_id": ctx.correlation_id},
+                )
+                return
+            try:
+                await self._record_trajectory_completion(
+                    trajectory,
+                    decision,
+                    committed_text,
+                    started_at,
+                    meter,
+                    committed_provider_meta,
+                    committed_memory_meta or {},
+                    error=committed_error,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "chat.cancelled_postcommit_trajectory_recording_failed",
+                    extra={
+                        "correlation_id": ctx.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            return
+
+        await self._record_cancelled_trajectory(
+            trajectory, decision, request, plan, meter, started_at,
+        )
+
+    async def _record_cancelled_trajectory(
+        self,
+        trajectory: Any,
+        decision: ExecutionDecision,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        started_at: float,
+    ) -> None:
+        """Best-effort terminal evidence for an interrupted selected path.
+
+        A partial model stream is not an authoritative provider receipt.
+        Only requested provider/model are retained; actual provider/model and
+        response-source remain unknown. No transcript, reward, OPE sample or
+        independently judged verification result is created here.
+
+        A storage failure means durable cancellation evidence is *unverified*.
+        The canonical chat-run cancellation owner remains authoritative.
+        """
+        ctx = request.context
+        if not (
+            ctx.user_id
+            and ctx.tenant_id
+            and ctx.request_id
+            and ctx.correlation_id
+            and trajectory.user_id == ctx.user_id
+            and trajectory.tenant_id == ctx.tenant_id
+            and trajectory.request_id == ctx.request_id
+            and trajectory.correlation_id == ctx.correlation_id
+            and trajectory.session_id == ctx.session_id
+            and trajectory.conversation_id == ctx.conversation_id
+            and plan.matches_execution_scope(
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+                policy_decision_id=decision.policy_decision_id,
+            )
+        ):
+            logger.warning(
+                "chat.cancelled_trajectory_scope_unverified",
+                extra={"correlation_id": ctx.correlation_id},
+            )
+            return
+
+        try:
+            await self._record_trajectory_completion(
+                trajectory,
+                decision,
+                "",
+                started_at,
+                meter,
+                {
+                    "requested_provider": request.preferred_provider,
+                    "requested_model": request.preferred_model,
+                    "degraded_mode": True,
+                    "degradation_reason": "request_cancelled",
+                },
+                {},
+                error="CHAT_REQUEST_CANCELLED",
+                execution_status="cancelled",
+            )
+        except asyncio.CancelledError:
+            # Another cancellation can interrupt this best-effort write;
+            # the original request must still terminate as cancelled.
+            raise
+        except Exception as exc:
+            logger.warning(
+                "chat.cancelled_trajectory_recording_failed",
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
     async def _record_trajectory_completion(
         self,
         trajectory: Any,
@@ -5602,7 +5953,11 @@ class ChatRuntime:
         provider_meta: Dict[str, Any],
         memory_meta: Dict[str, Any],
         error: Optional[str] = None,
+        *,
+        execution_status: Optional[str] = None,
     ) -> None:
+        if execution_status not in {None, "cancelled"}:
+            raise ValueError("unsupported_trajectory_terminal_status")
         trajectory.intent = decision.intent
         trajectory.executed_topology = decision.topology.value
         trajectory.cortex_decision = {
@@ -5637,7 +5992,10 @@ class ChatRuntime:
             "model_calls": float(meter.model_calls),
             "tool_calls": float(meter.tool_calls),
         }
-        trajectory.execution_status = "success" if text else "failure"
+        trajectory.execution_status = (
+            execution_status if execution_status is not None
+            else "success" if text else "failure"
+        )
         trajectory.error_code = error
         trajectory.response_source = provider_meta.get("response_source")
         await self._trajectory_recorder.complete_async(

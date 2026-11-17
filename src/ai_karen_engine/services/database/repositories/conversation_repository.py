@@ -153,6 +153,28 @@ class ConversationRepository(Repository):
             success=False, error="atomic_completed_turn_not_supported"
         )
 
+    async def read_committed_turn(
+        self,
+        *,
+        conversation_id: str,
+        tenant_id: str,
+        user_id: str,
+        request_id: str,
+        correlation_id: str,
+        session_id: Optional[str],
+        user_message_id: str,
+        assistant_message_id: str,
+        user_text: str,
+        assistant_text: str,
+        persona_scope_id: Optional[str] = None,
+    ) -> RepositoryResult[bool]:
+        """Verify an exact committed pair after an interrupted write.
+
+        This is a scoped read-only reconciliation contract, not a second writer.
+        Unsupported stores must not fabricate a negative or positive receipt.
+        """
+        return RepositoryResult(success=False, error="committed_turn_read_not_supported")
+
     @abstractmethod
     async def get_messages(
         self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0,

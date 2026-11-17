@@ -7,6 +7,7 @@ legacy Web UI service's memory-coupled message helpers.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -785,6 +786,112 @@ class ConversationRuntimeGateway:
                 conversation_id=conversation_id,
                 reason="conversation_history_read_failed",
                 error_type=type(exc).__name__,
+            )
+
+    async def reconcile_interrupted_turn(
+        self,
+        context: ChatExecutionContext,
+        *,
+        user_text: str,
+        assistant_text: str,
+        persona_scope_id: str | None = None,
+        run_lease: Optional["ChatRunLease"] = None,
+    ) -> TranscriptPersistenceResult:
+        """Verify committed transcript truth after cancellation during a write.
+
+        No replay, new conversation, storage mutation, or inference is allowed.
+        A negative receipt is only returned following a successful, scoped
+        canonical database read; a storage failure remains unverified.
+        """
+        conversation_id = resolve_runtime_conversation_id(context)
+        try:
+            self._require_request_identity(context)
+            context.require_authenticated_user()
+            if run_lease is not None and (
+                run_lease.tenant_id != context.tenant_id
+                or run_lease.user_id != context.user_id
+                or run_lease.conversation_id != conversation_id
+                or run_lease.request_id != context.request_id
+                or run_lease.correlation_id != context.correlation_id
+            ):
+                raise PermissionError("chat_run_reconciliation_scope_mismatch")
+            text_user = str(user_text or "").strip()
+            text_assistant = str(assistant_text or "").strip()
+            if not text_user or not text_assistant:
+                raise ValueError("reconciliation_text_incomplete")
+            user_id = self._message_id(
+                context=context, conversation_id=conversation_id, role="user",
+            )
+            assistant_id = self._message_id(
+                context=context, conversation_id=conversation_id, role="assistant",
+            )
+            observed = await self._repository.read_committed_turn(
+                conversation_id=conversation_id,
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
+                request_id=context.request_id,
+                correlation_id=context.correlation_id,
+                session_id=context.session_id,
+                user_message_id=user_id,
+                assistant_message_id=assistant_id,
+                user_text=text_user,
+                assistant_text=text_assistant,
+                persona_scope_id=persona_scope_id,
+            )
+            if not observed.success:
+                return TranscriptPersistenceResult(
+                    status="unverified", conversation_id=conversation_id,
+                    reason="committed_turn_read_unavailable",
+                )
+            if not observed.data:
+                return TranscriptPersistenceResult(
+                    status="not_found", conversation_id=conversation_id,
+                )
+            if run_lease is not None:
+                # The canonical run ledger is atomically completed with the
+                # same transcript transaction. Never promote a detached pair
+                # to a completed leased run if that receipt cannot be read.
+                from ai_karen_engine.persistence.repositories.chat_run_repository import (
+                    SqlChatRunRepository,
+                )
+
+                if not await SqlChatRunRepository().completed(run_lease):
+                    return TranscriptPersistenceResult(
+                        status="unverified", conversation_id=conversation_id,
+                        reason="chat_run_finality_unverified",
+                    )
+            return TranscriptPersistenceResult(
+                status="already_persisted",
+                conversation_id=conversation_id,
+                user_message_id=user_id,
+                assistant_message_id=assistant_id,
+                persisted_messages=0,
+            )
+        except asyncio.CancelledError:
+            raise
+        except (PermissionError, ValueError) as exc:
+            logger.warning(
+                "chat.interrupted_turn_reconciliation_rejected",
+                extra={
+                    "correlation_id": context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return TranscriptPersistenceResult(
+                status="unverified", conversation_id=conversation_id,
+                reason="scope_or_identity_unverified",
+            )
+        except Exception as exc:
+            logger.warning(
+                "chat.interrupted_turn_reconciliation_failed",
+                extra={
+                    "correlation_id": context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return TranscriptPersistenceResult(
+                status="unverified", conversation_id=conversation_id,
+                reason="storage_unavailable",
             )
 
     async def persist_completed_turn(

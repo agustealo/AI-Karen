@@ -267,3 +267,97 @@ async def test_canonical_delete_requires_server_verified_owner() -> None:
     assert not result.success
     assert "conversation_deletion_owner_required" in result.error
     assert tx.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["committed", "different_owner", "different_content", "no_pair", "db_failure"])
+async def test_b2c2_committed_turn_read_uses_owned_parent_lock_and_exact_pair(
+    case: str,
+) -> None:
+    """A post-commit cleanup cancellation is resolved by actual saved rows."""
+    current = lease()
+    user, assistant = messages(current)
+    shared = {
+        "request_id": current.request_id,
+        "correlation_id": current.correlation_id,
+        "session_id": "session-1",
+        "conversation_id": current.conversation_id,
+        "source": "chat_runtime",
+        "authorized_user_id": current.user_id,
+    }
+    user.metadata.update(shared)
+    assistant.metadata.update(shared)
+    rows = [
+        {
+            "message_id": user.id,
+            "conversation_id": current.conversation_id,
+            "role": "user",
+            "content": user.content,
+            "message_metadata": user.metadata,
+        },
+        {
+            "message_id": assistant.id,
+            "conversation_id": current.conversation_id,
+            "role": "assistant",
+            "content": (
+                assistant.content + " tampered"
+                if case == "different_content" else assistant.content
+            ),
+            "message_metadata": assistant.metadata,
+        },
+    ]
+    if case == "no_pair":
+        rows.pop()
+
+    class ScopedReadTransaction(FakeTransaction):
+        async def execute(self, sql, args=None):
+            statement = str(sql)
+            self.calls.append((statement, dict(args or {})))
+            if "FROM public.conversations" in statement and "FOR SHARE" in statement:
+                return SimpleNamespace(
+                    scalar_one_or_none=lambda: (
+                        None if case == "different_owner" else 1
+                    ),
+                )
+            if "FROM public.messages AS m" in statement:
+                if case == "db_failure":
+                    raise RuntimeError("injected storage outage")
+                return SimpleNamespace(
+                    mappings=lambda: SimpleNamespace(all=lambda: rows),
+                )
+            return SimpleNamespace()
+
+    tx = ScopedReadTransaction()
+    receipt = await make_repo(tx).read_committed_turn(
+        conversation_id=current.conversation_id,
+        tenant_id=current.tenant_id,
+        user_id=current.user_id,
+        request_id=current.request_id,
+        correlation_id=current.correlation_id,
+        session_id="session-1",
+        user_message_id=user.id,
+        assistant_message_id=assistant.id,
+        user_text=user.content,
+        assistant_text=assistant.content,
+    )
+    assert receipt.success is (case != "db_failure")
+    if case == "db_failure":
+        assert receipt.data is None
+    else:
+        assert receipt.data is (case == "committed")
+    statements = [sql for sql, _ in tx.calls]
+    assert next(i for i, x in enumerate(statements) if "app.current_tenant_id" in x) < next(
+        i for i, x in enumerate(statements) if "FOR SHARE" in x
+    )
+    assert next(i for i, x in enumerate(statements) if "app.current_user_id" in x) < next(
+        i for i, x in enumerate(statements) if "FOR SHARE" in x
+    )
+    if case != "different_owner":
+        assert next(i for i, x in enumerate(statements) if "FOR SHARE" in x) < next(
+            i for i, x in enumerate(statements) if "FROM public.messages AS m" in x
+        )
+    # A verification path is strictly read-only, including on error.
+    assert not any(
+        "INSERT INTO messages" in sql or "UPDATE public.runtime_chat_runs" in sql
+        for sql in statements
+    )

@@ -117,6 +117,38 @@ async def test_real_postgres_rejects_cross_tenant_transcript_read_append_and_rep
 
     assert persisted.status == "persisted"
     assert persisted.persisted_messages == 2
+
+    # B2C2: real committed transaction readback, not a fabricated application
+    # receipt. The verification path must see both exact rows under tenant
+    # and owner scope, and reject all altered caller-provided evidence.
+    readback_scope = {
+        "conversation_id": persisted.conversation_id,
+        "tenant_id": tenant_a,
+        "user_id": user_a,
+        "request_id": owner_context.request_id,
+        "correlation_id": owner_context.correlation_id,
+        "session_id": owner_context.session_id,
+        "user_message_id": persisted.user_message_id,
+        "assistant_message_id": persisted.assistant_message_id,
+        "user_text": "Tenant A durable context.",
+        "assistant_text": "Tenant A durable response.",
+    }
+    committed_readback = await repository.read_committed_turn(**readback_scope)
+    assert committed_readback.success and committed_readback.data is True
+    for field, foreign in (
+        ("tenant_id", tenant_b),
+        ("user_id", user_b),
+        ("request_id", "incorrect-request"),
+        ("correlation_id", "incorrect-correlation"),
+        ("session_id", "incorrect-session"),
+        ("assistant_text", "uncommitted content"),
+        ("assistant_message_id", str(uuid.uuid4())),
+    ):
+        rejected_readback = await repository.read_committed_turn(
+            **{**readback_scope, field: foreign},
+        )
+        assert rejected_readback.success and rejected_readback.data is False, field
+
     attacked_conversation_id = persisted.conversation_id
 
     attacker_context = _context(
