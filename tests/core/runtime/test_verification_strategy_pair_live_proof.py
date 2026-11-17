@@ -197,6 +197,16 @@ def _observed(*, verification: bool = False):
     }
 
 
+@pytest.mark.parametrize("source", ["model", "provider_runtime", "openai_compatible_engine"])
+@pytest.mark.parametrize("verification", [False, True])
+def test_canonical_non_fallback_gateway_sources_are_genuine_model_receipts(
+    source: str, verification: bool,
+) -> None:
+    payload = _observed(verification=verification)
+    payload["metadata"]["response_source"] = source
+    require_gateway_receipt(**payload)
+
+
 @pytest.mark.parametrize("verification", [False, True])
 def test_valid_typed_receipt_meets_structural_contract(verification) -> None:
     # A fixture receipt is intentionally not real model execution. The live
@@ -208,6 +218,8 @@ def test_valid_typed_receipt_meets_structural_contract(verification) -> None:
     ("actual_model", "invented-model"),
     ("actual_provider", "external"),
     ("response_source", "static"),
+    ("response_source", "fallback_provider_runtime"),
+    ("response_source", "model_unavailable"),
     ("fallback_level", 1),
     ("degraded_mode", True),
     ("provenance", None),
