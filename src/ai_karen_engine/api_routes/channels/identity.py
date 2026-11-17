@@ -91,8 +91,15 @@ async def inspect_whatsapp_self_link_status(
         raise
     except PermissionError:
         raise HTTPException(403, "WhatsApp identity linking denied") from None
-    except ValueError:
-        raise HTTPException(422, "Invalid WhatsApp identity linking request") from None
+    except ValueError as exc:
+        # With UUID route parameters already validated by FastAPI, invalid
+        # persisted status/Pydantic response data is a host inconsistency,
+        # never a malformed caller request. Do not reveal internal values.
+        logger.error(
+            "channel.identity.challenge_status_invalid",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "WhatsApp link status unavailable") from None
     except Exception as exc:
         logger.error(
             "channel.identity.challenge_status_unavailable",
