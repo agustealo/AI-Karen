@@ -20,12 +20,12 @@ const OTHER = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const TOKEN = 'a'.repeat(43);
 const COMMAND = '/link ' + TOKEN;
 const ENDPOINT = `/api/channels/identity/whatsapp/connections/${ID}/challenge`;
-const STATUS_ENDPOINT = `/api/channels/identity/whatsapp/connections/${ID}/challenges/${challenge.challenge_id}/status`;
 const challenge = {
   challenge_id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
   command: COMMAND,
   expires_in_seconds: 600,
 };
+const STATUS_ENDPOINT = `/api/channels/identity/whatsapp/connections/${ID}/challenges/${challenge.challenge_id}/status`;
 
 function enterConnection(value = ID) {
   fireEvent.change(screen.getByLabelText('Operator-provided connection ID'), {
@@ -210,8 +210,6 @@ describe('WhatsApp Cloud single-use consumer self-link', () => {
     { challenge_id: challenge.challenge_id, status: 'consumed', provider_message_id: 'secret' },
   ])('refuses forged status responses and retains no false provider claim', async (override) => {
     vi.mocked(apiClient.get).mockResolvedValue({
-      challenge_id: challenge.challenge_id,
-      status: 'pending',
       evidence_basis: 'host_link_challenge_ledger',
       current_binding_verified: false,
       delivery_verified: false,
