@@ -828,6 +828,73 @@ class ChannelHostServices:
             action="channel.consent", plan=authorized_plan,
         )
 
+    async def inspect_owned_channel_connections(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        request_id: str, correlation_id: str, installation_id: str,
+    ) -> dict:
+        """Authorize one owner-scoped SQL inventory read, never claim live health.
+
+        Reuse the existing channel.consent contract for personal ownership.
+        One fresh action plan is bound to the actual chat session, including
+        when no owned connections exist. No credentials, bot/provider IDs,
+        remote URLs or connection identifiers leave this projection.
+        """
+        if (
+            not self._initialized or self._closed or self.activation is None
+            or installation_id not in self._installed
+            or self.kernel.get_channel_activation_manifest(installation_id) is None
+        ):
+            raise RuntimeError("Channel inspection host unavailable")
+        if not tenant_id or not user_id or not session_id or not request_id or not correlation_id:
+            raise PermissionError("Scoped channel inspection identity required")
+        await self.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id=installation_id, action="channel.consent",
+        )
+        owned = await self.repository.list_personal_owned_connections(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        scoped = []
+        for connection in owned:
+            if connection.tenant_id != tenant_id:
+                raise PermissionError("Cross-tenant channel inspection denied")
+            if connection.installation_id == installation_id:
+                scoped.append(connection)
+        if len(scoped) > 50:
+            raise ValueError("Channel inspection result limit exceeded")
+        enabled_count = sum(1 for item in scoped if item.enabled is True)
+        status = (
+            "none_owned" if not scoped
+            else "owned_enabled_recorded" if enabled_count
+            else "owned_disabled_recorded"
+        )
+        logger.info(
+            "channel.personal.owner_inspection",
+            extra={
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "installation_id": installation_id,
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "session_id": session_id,
+                "owned_connection_count": len(scoped),
+                "persisted_enabled_count": enabled_count,
+                "inspection_source": "tenant_scoped_channel_owner_ledger",
+            },
+        )
+        return {
+            "inspection_source": "tenant_scoped_channel_owner_ledger",
+            "owned_connection_count": len(scoped),
+            "persisted_enabled_count": enabled_count,
+            "latest_connection_revision": max(
+                (item.revision for item in scoped), default=None
+            ),
+            "connection_status": status,
+            "provider_registration_verified": False,
+            "runtime_execution_verified": False,
+            "provider_delivery_verified": False,
+        }
+
     async def list_owned_personal_channels(
         self, *, tenant_id: str, user_id: str,
     ) -> list[dict]:
