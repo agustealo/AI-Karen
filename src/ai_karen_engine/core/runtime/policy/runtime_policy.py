@@ -11,11 +11,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
-from weakref import WeakValueDictionary
+from weakref import WeakValueDictionary, finalize
 
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
@@ -291,6 +292,10 @@ class RuntimePolicyEnforcer:
         self._issued_model_decisions: WeakValueDictionary[str, PolicyDecision] = (
             WeakValueDictionary()
         )
+        # Immutable issuer-time content, retained only as long as the
+        # original weakly held decision exists. An in-process mutation of
+        # PolicyDecision.runtime_constraints cannot increase privileges.
+        self._issued_model_claims: Dict[str, Any] = {}
         self._issued_model_lock = threading.RLock()
         self.level_transitions = {
             RuntimeLevel.FULL: [RuntimeLevel.REDUCED],
@@ -561,12 +566,50 @@ class RuntimePolicyEnforcer:
         """
         decision = await self._evaluate_policy_request(request)
         if decision.allowed:
-            with self._issued_model_lock:
-                existing = self._issued_model_decisions.get(decision.decision_id)
-                if existing is not None and existing is not decision:
-                    raise PermissionError("runtime_model_policy_issuance_conflict")
-                self._issued_model_decisions[decision.decision_id] = decision
+            self._record_issued_model_decision(decision)
         return decision
+
+    @staticmethod
+    def _snapshot_issued_model_claims(decision: PolicyDecision) -> tuple[Any, ...]:
+        """Freeze the evaluator-issued grants, separate from mutable decisions."""
+        return (
+            decision.allowed,
+            decision.decision_id,
+            decision.policy_version,
+            deepcopy(decision.runtime_constraints),
+            tuple(decision.allowed_capabilities),
+            tuple(decision.denied_capabilities),
+            deepcopy(decision.provider_constraints),
+        )
+
+    def _record_issued_model_decision(self, decision: PolicyDecision) -> None:
+        """Private policy-issuer bookkeeping, not an alternative grant path."""
+        if not decision.allowed:
+            raise PermissionError("runtime_model_policy_issuance_invalid")
+        with self._issued_model_lock:
+            existing = self._issued_model_decisions.get(decision.decision_id)
+            if existing is not None and existing is not decision:
+                raise PermissionError("runtime_model_policy_issuance_conflict")
+            if existing is decision:
+                if not self._matches_issued_model_claims(decision):
+                    raise PermissionError("runtime_model_policy_issuance_invalid")
+                return
+            claim = self._snapshot_issued_model_claims(decision)
+            self._issued_model_decisions[decision.decision_id] = decision
+            self._issued_model_claims[decision.decision_id] = claim
+            finalize(
+                decision,
+                self._issued_model_claims.pop,
+                decision.decision_id,
+                None,
+            )
+
+    def _matches_issued_model_claims(self, decision: PolicyDecision) -> bool:
+        return (
+            self._issued_model_decisions.get(decision.decision_id) is decision
+            and self._issued_model_claims.get(decision.decision_id)
+            == self._snapshot_issued_model_claims(decision)
+        )
 
     def bind_chat_model_policy(
         self,
@@ -586,7 +629,7 @@ class RuntimePolicyEnforcer:
         with self._issued_model_lock:
             if (
                 not decision.allowed
-                or self._issued_model_decisions.get(decision.decision_id) is not decision
+                or not self._matches_issued_model_claims(decision)
                 or constraints.get("authorized_user_id") != context.user_id
                 or constraints.get("authorized_tenant_id") != context.tenant_id
                 or constraints.get("authorized_session_id") != context.session_id
@@ -622,7 +665,7 @@ class RuntimePolicyEnforcer:
         with self._issued_model_lock:
             if (
                 not decision.allowed
-                or self._issued_model_decisions.get(decision.decision_id) is not decision
+                or not self._matches_issued_model_claims(decision)
                 or decision.__dict__.get("_issued_model_context") is not context
                 or plan.policy_decision_id != decision.decision_id
                 or not plan.matches_execution_scope(
