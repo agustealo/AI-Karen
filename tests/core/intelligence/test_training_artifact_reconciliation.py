@@ -789,3 +789,28 @@ def test_fit_receipt_is_not_derived_from_unverified_frozen_manifest(
     assert result.source_ancestry_verified is False
     assert result.training_example_inventory_verified is False
     assert result.training_evaluation_disjointness_verified is False
+
+
+
+def test_fit_observation_rejects_identity_change_between_two_proofs(
+    tmp_path, monkeypatch,
+):
+    _set_fit_observation_key(monkeypatch)
+    verifier, _, registry, principal, model_id, _, _ = (
+        _scoped_training_lineage_fixture(tmp_path, fit_observation=True)
+    )
+    original = registry.validate_artifact
+    hashes = 0
+
+    def change_session_between_proofs(manifest):
+        nonlocal hashes
+        hashes += 1
+        if hashes == 3:
+            principal.session_id = "unexpected-new-session"
+        return original(manifest)
+
+    registry.validate_artifact = change_session_between_proofs
+    assert verifier.inspect_exact_sklearn_fit_artifact(
+        principal=principal, model_id=model_id,
+    ) is None
+    assert hashes == 4
