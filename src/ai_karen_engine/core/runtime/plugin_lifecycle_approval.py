@@ -84,4 +84,41 @@ class PluginLifecycleApprovalScope:
         }
 
 
-__all__ = ["PluginLifecycleApprovalScope"]
+@dataclass(frozen=True, slots=True)
+class PluginLifecycleKernelObservation:
+    """Backend-only PluginKernel state observation for one prepared operation.
+
+    This value is not an authorization token. Only PluginKernel may construct
+    production evidence, after inspecting the runtime state and durable
+    activation marker under its process-local lifecycle lock. The global SQL
+    revision CAS is independently required before any terminal receipt.
+    """
+
+    operation_id: str
+    installation_id: str
+    manifest_checksum: str
+    observed_state: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.installation_id, str)
+            or not _PLUGIN_ID.fullmatch(self.installation_id)
+            or not isinstance(self.manifest_checksum, str)
+            or not _DIGEST.fullmatch(self.manifest_checksum)
+            or self.observed_state not in {"enabled", "disabled"}
+        ):
+            raise ValueError("Invalid kernel lifecycle observation")
+        if not isinstance(self.operation_id, str):
+            raise ValueError("Invalid lifecycle observation operation")
+        try:
+            identifier = str(uuid.UUID(self.operation_id))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("Invalid lifecycle observation operation") from exc
+        if self.operation_id != identifier:
+            raise ValueError("Noncanonical lifecycle observation operation")
+
+
+__all__ = [
+    "PluginLifecycleApprovalScope",
+    "PluginLifecycleKernelObservation",
+]

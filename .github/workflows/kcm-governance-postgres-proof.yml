@@ -34,6 +34,7 @@ on:
       - "tests/core/personalization/test_kcm_benchmark_task_assessment.py"
       - "tests/core/intelligence/test_training_artifact_reconciliation.py"
       - "tests/core/intelligence/test_training_fit_observation.py"
+      - "tests/core/intelligence/test_training_fit_input_snapshot.py"
       - "tests/integration/test_kcm_governance_postgres.py"
       - "tests/integration/test_kcm_lifecycle_revocation_postgres.py"
       - "requirements/ci/**"
@@ -122,6 +123,8 @@ jobs:
           pytest tests/core/learning/test_kcm_sklearn_assessment_join.py -q --tb=short
           python -m compileall -q src/ai_karen_engine/core/intelligence/ml/training/consumption_evidence.py tests/core/intelligence/test_training_fit_observation.py
           pytest tests/core/intelligence/test_training_fit_observation.py -q --tb=short -k 'not real_sklearn_executor and not legacy_sklearn'
+          python -m compileall -q tests/core/intelligence/test_training_fit_input_snapshot.py
+          pytest tests/core/intelligence/test_training_fit_input_snapshot.py -q --tb=short
           pytest tests/integration/test_kcm_governance_postgres.py -q --tb=short
           python -m compileall -q tests/integration/test_kcm_lifecycle_revocation_postgres.py
           pytest tests/integration/test_kcm_lifecycle_revocation_postgres.py -q --tb=short

@@ -8,6 +8,7 @@ discovery authority. All invocation is delegated to ExtensionExecutionService.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -32,6 +33,9 @@ from ai_karen_engine.extensions.contracts import (
     SideEffectLevel,
     TenantScope,
     TrustTier,
+)
+from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+    PluginLifecycleKernelObservation,
 )
 from ai_karen_engine.extensions.executor import ExtensionExecutionService
 from ai_karen_engine.extensions.lifecycle import ExtensionLifecycleManager
@@ -734,6 +738,107 @@ class PluginKernel:
         if self._is_uploaded_plugin(plugin_id):
             record["activation_blocked_reason"] = "isolated_runtime_required"
         return record
+
+    async def observe_lifecycle_for_finalization(
+        self, plugin_id: str, *, operation_id: str
+    ) -> PluginLifecycleKernelObservation:
+        """Inspect one actual kernel state without granting a lifecycle action.
+
+        Only the canonical backend should call this after executing an already
+        reserved, freshly approved operation. It is not a cross-worker fence
+        and does not make legacy management paths safe for chat mutations.
+        """
+        async with self._state_lock:
+            if not self._initialized:
+                raise RuntimeError("Plugin kernel is not initialized")
+            if plugin_id in self._retirement_pending:
+                raise RuntimeError("Plugin retirement is not verified")
+            if plugin_id in self._active.values():
+                raise RuntimeError("Plugin has active executions")
+            record = self.get_record(plugin_id)
+            registration = self.runtime_registry.get(plugin_id)
+            manifest = self._catalog_manifests.get(plugin_id)
+            if (
+                record is None
+                or registration is None
+                or manifest is None
+                or record.get("dependencies_resolved") is not True
+                or record.get("compatibility_checked") is not True
+                or self._is_uploaded_plugin(plugin_id)
+            ):
+                raise RuntimeError("Verified general plugin installation unavailable")
+            # The communication and voice owners have dedicated lifecycle
+            # contracts and cannot be finalized as generic plugins.
+            capabilities = manifest.capabilities
+            if (
+                capabilities.communication_channel is not None
+                or capabilities.voice_modality is not None
+            ):
+                raise RuntimeError("Specialized plugin lifecycle authority required")
+            state = registration.state
+            if state not in {
+                ExtensionLifecycleState.ENABLED, ExtensionLifecycleState.DISABLED
+            }:
+                raise RuntimeError("Plugin runtime state is not terminal")
+            observed_state = (
+                "enabled" if state is ExtensionLifecycleState.ENABLED else "disabled"
+            )
+            if record.get("status") != observed_state:
+                raise RuntimeError("Catalog and runtime lifecycle states disagree")
+            root = self.extensions_root / plugin_id
+            disabled_marker = root / ".karen-manual-disabled"
+            enabled_marker = root / self.MANUAL_ENABLED_MARKER
+            if (
+                root.is_symlink()
+                or not root.is_dir()
+                or disabled_marker.is_symlink()
+                or enabled_marker.is_symlink()
+                or (
+                    enabled_marker.exists()
+                    and not self._explicitly_enabled(plugin_id)
+                )
+            ):
+                raise RuntimeError("Untrusted plugin lifecycle marker")
+            if observed_state == "disabled":
+                # Derived disabled state is not proof of an explicit mutation.
+                if not disabled_marker.is_file():
+                    raise RuntimeError("Explicit disable marker is missing")
+            else:
+                if disabled_marker.exists():
+                    raise RuntimeError("Plugin still has the disabled marker")
+                if (
+                    not manifest.rbac.default_enabled
+                    and not self._explicitly_enabled(plugin_id)
+                ):
+                    raise RuntimeError("Explicit enable marker is missing")
+            # Catalog file_hash is a legacy MD5 directory fingerprint. The
+            # durable lifecycle approval contract requires SHA-256 of the
+            # loader-selected immutable manifest, independent of state markers.
+            manifest_path = self.loader._find_manifest_file(root)
+            if (
+                manifest_path is None
+                or manifest_path.is_symlink()
+                or not manifest_path.is_file()
+                or manifest_path.parent.resolve() != root.resolve()
+            ):
+                raise RuntimeError("Canonical plugin manifest is unavailable")
+            # A changed on-disk manifest cannot be attested against a
+            # previously loaded runtime registration even when its SHA is new.
+            try:
+                observed_manifest = self.loader.load_manifest(plugin_id)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Installed manifest cannot be revalidated"
+                ) from exc
+            if observed_manifest != manifest:
+                raise RuntimeError("Installed manifest drifted after registration")
+            digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            return PluginLifecycleKernelObservation(
+                operation_id=operation_id,
+                installation_id=plugin_id,
+                manifest_checksum=digest,
+                observed_state=observed_state,
+            )
 
     def list_records(self) -> list[Dict[str, Any]]:
         records: list[Dict[str, Any]] = []

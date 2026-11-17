@@ -4214,6 +4214,7 @@ class ChatRuntime:
             "reasoning_model_calls",
             "reasoning_steps",
             "reasoning_model_attribution_status",
+            "verification_strategy_executed",
         ):
             if key in reasoning_meta:
                 result[key] = reasoning_meta[key]
@@ -4409,6 +4410,13 @@ class ChatRuntime:
             "reasoning_modes": list(activation.reasoning_modes),
             "reasoning_model_calls": consumed_model_calls,
             "reasoning_steps": consumed_steps,
+            # Only the canonical executor's executed-ID receipt can establish
+            # whether the verifier actually ran. Neither a requested mode
+            # nor a registered strategy proves execution or correctness.
+            "verification_strategy_executed": (
+                "verification" in activation.reasoning_modes
+                and "verify" in (result.diagnostics.get("strategies_executed") or [])
+            ),
             "execution_spans": [
                 {
                     "name": "reasoning_executor",
@@ -4423,6 +4431,12 @@ class ChatRuntime:
                     "actual_model", "runtime_engine", "response_source",
                     "fallback_level", "degraded_mode", "degradation_reason",
                     "reasoning_model_attribution_status",
+                    # Only ReasoningExecutor execution diagnostics own these
+                    # receipts; activation hints cannot forge actual work.
+                    "reasoning_id", "reasoning_status",
+                    "reasoning_model_calls", "reasoning_steps",
+                    "verification_strategy_executed",
+                    "execution_spans",
                 }
             },
         }
@@ -5676,6 +5690,14 @@ class ChatRuntime:
         else:
             return None
 
+        # The ExpressionGateway is the canonical owner of genuinely
+        # generative source identifiers. A verified provider_runtime response
+        # is model execution, but fallback_provider_runtime is not a
+        # non-fallback receipt, even with forged fallback_level metadata.
+        from ai_karen_engine.core.expression.gateway import (
+            MODEL_GENERATION_RESPONSE_SOURCES,
+        )
+
         provenance = provider_meta.get("provenance")
         provider = provider_meta.get("actual_provider")
         model = provider_meta.get("actual_model")
@@ -5689,7 +5711,8 @@ class ChatRuntime:
             and provenance.decision_id == decision.policy_decision_id
             and isinstance(correlation_id, str) and bool(correlation_id.strip())
             and provenance.correlation_id == correlation_id
-            and provider_meta.get("response_source") == "model"
+            and provider_meta.get("response_source")
+            in (MODEL_GENERATION_RESPONSE_SOURCES - {"fallback_provider_runtime"})
             and isinstance(observed_model_calls, int)
             and not isinstance(observed_model_calls, bool)
             and observed_model_calls > 0
@@ -5714,6 +5737,9 @@ class ChatRuntime:
                 and provider_meta.get("reasoning_generation_mode")
                 == "model_after_authorized_reasoning"
                 and provider_meta.get("reasoning_model_calls") == 0
+                # Report actual core verifier execution, not merely that
+                # CORTEX requested a verification mode.
+                and provider_meta.get("verification_strategy_executed") is True
                 and provider_meta.get("reasoning_model_attribution_status")
                 == "not_executed"
                 and isinstance(provider_meta.get("reasoning_steps"), int)

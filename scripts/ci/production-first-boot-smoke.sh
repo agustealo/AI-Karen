@@ -482,6 +482,33 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
       docker logs "${API_CONTAINER}" 2>&1 | grep -F "ChatRuntime.execute failed; attempting canonical fallback; error_type=" | tail -n 3 >&2 || true
       exit 1
     }
+  if [[ "${KAREN_SMOKE_DUAL_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
+    # /api/auth/me was read after the real session-cookie login and verified
+    # by the first-boot harness. Bind the isolated internal executor proof
+    # to this same authorized principal, never a guessed tenant identity.
+    mapfile -t dual_identity < <(
+      printf '%s' "${me_after_restart}" |
+        "${PYTHON_BIN}" -c 'import json,sys; p=json.load(sys.stdin); print(p["user_id"]); print(p["tenant_id"])'
+    )
+    if [[ "${#dual_identity[@]}" -ne 2 ||
+          -z "${dual_identity[0]}" || -z "${dual_identity[1]}" ||
+          -z "${LIVE_MODEL_NAME}" ]]; then
+      echo "Live pair proof requires complete authenticated identity and installed model" >&2
+      exit 1
+    fi
+    echo "[smoke] proving both independently policy-authorized response paths on installed Ollama"
+    # The proof module is streamed in from the exact checked-out CI source.
+    # It is not installed as a production API route and never samples actions
+    # during consumer chat. No raw assistant text or authenticated IDs printed.
+    docker exec -i \
+      -e KAREN_CI_DUAL_STRATEGY_PROOF=enabled \
+      -e "KAREN_CI_DUAL_USER_ID=${dual_identity[0]}" \
+      -e "KAREN_CI_DUAL_TENANT_ID=${dual_identity[1]}" \
+      -e "KAREN_CI_DUAL_MODEL=${LIVE_MODEL_NAME}" \
+      "${API_CONTAINER}" python - \
+      < scripts/ci/verification_strategy_pair_live_proof.py
+    echo "INDEPENDENT RESPONSE STRATEGY REAL-MODEL PROOF PASSED"
+  fi
   if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" ]]; then
     echo "PRODUCTION OLLAMA SETTINGS-TO-RUNTIME LIVE PROOF PASSED"
     exit 0
