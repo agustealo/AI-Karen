@@ -42,6 +42,11 @@ describe('WhatsApp acceptance deployment authority', () => {
   it.each([
     'http://reviewed-karen.example',
     'http://localhost:8010',
+    'https://127.0.0.1',
+    'https://10.1.1.1',
+    'https://192.168.1.4',
+    'https://karen.local',
+    'https://localhost.example.internal',
     'https://reviewed-karen.example:8010',
     'https://reviewed-karen.example/path',
     'https://reviewed-karen.example/?debug=true',
