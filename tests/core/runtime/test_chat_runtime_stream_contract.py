@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+from contextlib import ExitStack
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1630,3 +1631,115 @@ async def test_b2c2_close_at_recovered_stream_token_does_not_commit() -> None:
     assert gateway.calls == []
     persist.assert_not_awaited()
     outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("persistence_stage", ["memory", "transcript"])
+async def test_b2c2_cancel_during_precommit_persistence_is_terminal(
+    streamed: bool, persistence_stage: str,
+) -> None:
+    """An interrupted write has no completed transcript or learning reward."""
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = persistence_stage == "memory"
+    plan = _make_plan()
+    persistence_entered = asyncio.Event()
+
+    async def block_before_commit(*args, **kwargs):
+        persistence_entered.set()
+        await asyncio.Event().wait()
+
+    async def successful_stream(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="not committed", correlation_id="corr-1",
+        )
+
+    async def consume_stream() -> None:
+        async for _ in runtime.execute_stream(request):
+            pass
+
+    with ExitStack() as patches:
+        patches.enter_context(patch.object(
+            runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_decide", new_callable=AsyncMock, return_value=decision,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_build_authorized_plan", return_value=plan,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_grounded_personal_response", return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_is_explicit_save_turn", return_value=False,
+        ))
+        direct = patches.enter_context(patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+        ))
+        direct.return_value.can_handle.return_value = False
+        if streamed:
+            patches.enter_context(patch.object(
+                runtime, "_run_simple_stream", side_effect=successful_stream,
+            ))
+        else:
+            patches.enter_context(patch.object(
+                runtime, "_freeze_persona_snapshot", new_callable=AsyncMock,
+            ))
+            patches.enter_context(patch.object(
+                runtime, "_prepare_conversation_continuation", new_callable=AsyncMock,
+            ))
+            patches.enter_context(patch.object(
+                runtime, "_record_user_behavior_observation", new_callable=AsyncMock,
+            ))
+            patches.enter_context(patch.object(
+                runtime, "_run_simple", new_callable=AsyncMock,
+                return_value=("not committed", {
+                    "response_source": "model",
+                    "actual_provider": "ollama-local",
+                    "actual_model": "installed-model",
+                }),
+            ))
+
+        memory = patches.enter_context(patch.object(
+            runtime, "_persist_memory",
+            side_effect=block_before_commit if persistence_stage == "memory" else AsyncMock(),
+        ))
+        transcript = patches.enter_context(patch.object(
+            runtime, "_persist_transcript",
+            side_effect=block_before_commit if persistence_stage == "transcript" else AsyncMock(),
+        ))
+        outcome = patches.enter_context(patch.object(
+            runtime, "_record_execution_outcome", new_callable=AsyncMock,
+        ))
+
+        task = asyncio.create_task(
+            consume_stream() if streamed else runtime.execute(request),
+        )
+        try:
+            await asyncio.wait_for(persistence_entered.wait(), timeout=5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    rows = store.list_for_tenant(TENANT_ID)
+    assert len(rows) == 1
+    assert rows[0].execution_status == "cancelled"
+    assert rows[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert rows[0].actual_provider is None
+    assert rows[0].response_source is None
+    assert gateway.calls == []
+    outcome.assert_not_awaited()
+    if persistence_stage == "memory":
+        memory.assert_awaited_once()
+        transcript.assert_not_awaited()
+    else:
+        transcript.assert_awaited_once()
