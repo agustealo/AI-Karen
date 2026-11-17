@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from ai_karen_engine.core.intelligence.ml.training.artifact_reconciliation import (
     TrainingArtifactReconciler,
 )
@@ -431,3 +433,95 @@ def test_exact_model_lineage_rejects_symlinked_model_member(tmp_path):
     assert verifier.inspect_exact_model_lineage(
         principal=principal, model_id=model_id,
     ) is None
+
+
+@pytest.mark.parametrize("missing_version", ["model_version", "dataset_version"])
+def test_exact_lineage_rejects_missing_version_even_if_all_sources_agree(
+    tmp_path, missing_version,
+):
+    """Null/missing evidence may compare equal, but is never provenance."""
+    import hashlib
+    import json
+
+    verifier, ledger, registry, principal, model_id, job_id, artifact = (
+        _scoped_training_lineage_fixture(tmp_path)
+    )
+    manifest = registry.get(model_id)
+    metadata_file = artifact / "training_metadata.json"
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    if missing_version == "model_version":
+        manifest.model_version = None
+        metadata.pop("model_version")
+    else:
+        manifest.training_dataset_version = None
+        manifest.metrics.pop("dataset_version")
+        metadata.pop("dataset_version")
+    metadata_file.write_text(json.dumps(metadata, sort_keys=True), encoding="utf-8")
+
+    # Make the stored artifact digest and the succeeded job agree with this
+    # deliberately malformed manifest. Hash and owner checks must still pass.
+    digest_hasher = hashlib.sha256()
+    registry._hash_directory(artifact, digest_hasher)
+    digest = digest_hasher.hexdigest()
+    manifest.artifact_hash = digest
+    with ledger._connect() as db:
+        row = db.execute(
+            "SELECT body FROM training_jobs WHERE job_id = ?", (job_id,),
+        ).fetchone()
+        job_body = json.loads(row["body"])
+        job_body["artifact_hash"] = digest
+        if missing_version == "dataset_version":
+            job_body.pop("dataset_version")
+        db.execute(
+            "UPDATE training_jobs SET body = ? WHERE job_id = ?",
+            (json.dumps(job_body), job_id),
+        )
+    assert registry.validate_artifact(manifest)
+    assert ledger.get(
+        job_id, tenant_id=principal.tenant_id, user_id=principal.user_id,
+    )["status"] == "SUCCEEDED"
+    assert verifier.inspect_exact_model_lineage(
+        principal=principal, model_id=model_id,
+    ) is None
+
+
+@pytest.mark.parametrize("late_change", ["session_expiry", "manifest", "job"])
+def test_exact_lineage_rechecks_evidence_after_final_artifact_hash(
+    tmp_path, late_change,
+):
+    """Changes inside the second hash must not produce verified lineage."""
+    from datetime import datetime, timezone
+
+    verifier, ledger, registry, principal, model_id, job_id, _ = (
+        _scoped_training_lineage_fixture(tmp_path)
+    )
+
+    class MutatingAtSecondHash:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, key):
+            return registry.get(key)
+
+        def validate_artifact(self, manifest):
+            self.calls += 1
+            valid = registry.validate_artifact(manifest)
+            if self.calls == 2:
+                if late_change == "session_expiry":
+                    principal.expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+                elif late_change == "manifest":
+                    registry.get(model_id).model_version = "changed-after-hash"
+                else:
+                    with ledger._connect() as db:
+                        db.execute(
+                            "UPDATE training_jobs SET state = 'FAILED' "
+                            "WHERE job_id = ? AND tenant_id = ?",
+                            (job_id, principal.tenant_id),
+                        )
+            return valid
+
+    verifier.registry = MutatingAtSecondHash()
+    assert verifier.inspect_exact_model_lineage(
+        principal=principal, model_id=model_id,
+    ) is None
+    assert verifier.registry.calls == 2
