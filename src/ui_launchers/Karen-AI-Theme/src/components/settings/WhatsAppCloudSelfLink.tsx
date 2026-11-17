@@ -317,7 +317,7 @@ export default function WhatsAppCloudSelfLink() {
               </p>
             )}
             <p className="text-xs text-muted-foreground">
-              This checks only Karen's own one-time challenge ledger. It does
+              This checks only Karen&apos;s own one-time challenge ledger. It does
               not independently verify Meta origin, the current sender binding,
               a ChatRuntime reply, or delivery.
             </p>
