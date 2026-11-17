@@ -1,8 +1,8 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Governed learning-admission, memory revocation and self-model foundations merged. KCM benchmark provenance, task conditioning and runner-time freshness are merged through PR #961. Scoped curated-oracle reviewer acknowledgment is merged in PR #963. Reviewer withdrawal is under review in PR #968; independently verified ground truth, held-out task-group separation, production environment certification and neural training remain disabled.  
+**Status:** Governed learning-admission, memory revocation and self-model foundations merged. KCM benchmark provenance, task conditioning and runner-time freshness are merged through PR #961. Scoped curated-oracle reviewer acknowledgment is merged in PR #963. Reviewer withdrawal is merged in PR #968. Owner-scoped model-to-training-job provenance is under review in PR #973; independently verified training-example inventory, ground truth, held-out task-group separation, production environment certification and neural training remain disabled.  
 **Research cutoff:** 2026-11-16  
-**Repository baseline audited:** `agustealo/AI-Karen` `main` at `69d62965550f79f964cc9850283dfcb868cc1f4f` (PR #963 reviewed against this baseline)  
+**Repository baseline audited:** `agustealo/AI-Karen` `main` at `24621fccd0f7d5b065408f406ecc0f82d02d8573` (read-only model/job provenance branch base)  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
 **Primary decision:** Memory retention **does not** confer training eligibility.
 
@@ -52,6 +52,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [25 — Runner observation and evidence age](25-run-observation-and-freshness.md) | Runner-observed inference window, receipt replay fencing, freshness-bound diagnostics |
 | [26 — Reviewed oracle observations](26-reviewed-curated-oracle-observations.md) | Tenant-scoped authorized reviewer acknowledgment, exact source snapshot, no independent group certification |
 | [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Append-only reviewer withdrawal and revocation-aware task evidence without permission grants |
+| [28 — Model/job artifact provenance](28-model-training-job-lineage.md) | Exact owner-scoped training job and registry hash link, explicitly not held-out evidence |
 
 ### Machine-readable proposed contracts
 

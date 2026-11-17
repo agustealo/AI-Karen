@@ -24,7 +24,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B3B: conditioned curated-oracle source and assessment expiry | [PR #956](https://github.com/agustealo/AI-Karen/pull/956), merge `a1188e594201e0713cc6a16833a5acc1f4ae40ae` | Merged; 19/19 exact-head checks passed; source integrity and issuer freshness only |
 | KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961), merge `69d62965550f79f964cc9850283dfcb868cc1f4f` · [25 — Runner observation](25-run-observation-and-freshness.md) | Merged; 18/18 exact-head checks passed; runner observation is not signed production attestation |
 | KCM-02B3C2A: owner-scoped curated-oracle reviewer observation | [PR #963](https://github.com/agustealo/AI-Karen/pull/963), merge `25ee6b58a38e4f49049db201072f1a588cf77705` · [26 — Reviewer observations](26-reviewed-curated-oracle-observations.md) | Merged; 24/24 exact-head checks passed, no independent group/ground truth/execution claim |
-| KCM-02B3C2B: append-only original-reviewer withdrawal and revocation-aware reads | [PR #968](https://github.com/agustealo/AI-Karen/pull/968) · [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Draft against merged main, exact-head tests pending; no administrative override or training permission |
+| KCM-02B3C2B: append-only original-reviewer withdrawal and revocation-aware reads | [PR #968](https://github.com/agustealo/AI-Karen/pull/968), merge `24621fccd0f7d5b065408f406ecc0f82d02d8573` · [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Merged; 25/25 exact-head checks passed; no administrative override or training permission |
+| KCM-02B3C3A: owner-scoped training-job to model artifact verification | [PR #973](https://github.com/agustealo/AI-Karen/pull/973) · [28 — Model/job provenance](28-model-training-job-lineage.md) | Draft; exact-head tests in progress. Training sample inventory and held-out disjointness remain unverified |
 
 ## Configuration
 
@@ -73,12 +74,13 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Complete KCM-02B3C2A's reviewer acknowledgment
-of the exact canonical benchmark cohort with separately authorized, strictly
-append-only proposed and confirmed receipts. Only a confirmed pair is
-consumable. Require live PostgreSQL RLS, evidence revocation and exact-head CI
-before merging. Separately prove independent oracle labels, evaluator/author
-separation, held-out split leakage, reproducible task-group independence and
-production environment attestation before any proficiency policy. No model
-training, general skill activation, permission grant or training-start lease
-is introduced by reviewer acknowledgment.
+**Next controlled slice:** Verify exact owner-scoped successful training job,
+current registered model and hashed artifact metadata through canonical
+`TrainingJobLedger`, `MLModelRegistry` and `TrainingArtifactReconciler`.
+This only proves model/job linkage, never the actual training-example set,
+training/evaluation disjointness, independent oracle labels or production
+runtime readiness. The next separate gate must bind a frozen training
+inventory to that exact model, then compare content/source ancestry against
+held-out benchmark cases with revocation-checked independent review.
+Training rights, promotion, autonomous execution and general-skill
+certification all remain disabled.
