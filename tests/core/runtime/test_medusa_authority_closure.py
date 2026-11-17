@@ -316,6 +316,9 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
         }
         request.query = "test"
         request.context = {}
+        # This standalone Medusa fixture has no trusted ChatRuntime meter.
+        # MagicMock would otherwise synthesize a non-None host-only field.
+        request.runtime_budget_meter = None
         request.user_id = "user-1"
         request.tenant_id = "tenant-1"
         request.session_id = "session-1"

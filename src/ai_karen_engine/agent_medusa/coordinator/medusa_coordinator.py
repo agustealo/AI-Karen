@@ -9,6 +9,7 @@ from ...core.runtime.outcome.store import OutcomeStoreError
 from ...core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
+    ExecutionBudgetMeter,
     ExecutionRequirements,
 )
 from ..contracts.deep_execution_plan import (
@@ -34,6 +35,39 @@ from ..registry_factory import get_implementation_factory
 from ..response.assembler import ResponseAssembler
 
 logger = logging.getLogger(__name__)
+
+
+def _trusted_chat_execution_context(
+    request: RuntimeRequest,
+    plan: AuthorizedExecutionPlan,
+) -> Any | None:
+    """Admit original authenticated ingress scope, never agent metadata roles."""
+    from ...core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    context = request.context.get("execution_context")
+    requirements = request.execution_requirements
+    if (
+        not isinstance(context, ChatExecutionContext)
+        or not isinstance(requirements, dict)
+        or not requirements.get("correlation_id")
+        or context.user_id != request.user_id
+        or context.tenant_id != request.tenant_id
+        or context.session_id != request.session_id
+        or context.request_id != request.request_id
+        or context.correlation_id != requirements["correlation_id"]
+        or not plan.matches_execution_scope(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            session_id=request.session_id,
+            policy_decision_id=plan.policy_decision_id,
+        )
+    ):
+        return None
+    try:
+        context.require_authenticated_user()
+    except PermissionError:
+        return None
+    return context
 
 
 class MedusaCoordinator:
@@ -208,6 +242,21 @@ class MedusaCoordinator:
         plan_data["budget"] = budget_data
         authorized_plan = AuthorizedExecutionPlan(**plan_data)
 
+        # Preserve the original ChatRuntime meter when the authenticated
+        # request+plan lineage proves it belongs to this Medusa invocation.
+        # Standalone governed Medusa requests retain a fresh plan-bound meter.
+        shared_meter = request.runtime_budget_meter
+        if shared_meter is not None:
+            if (
+                not isinstance(shared_meter, ExecutionBudgetMeter)
+                or _trusted_chat_execution_context(request, authorized_plan) is None
+                or shared_meter.budget != authorized_plan.budget
+            ):
+                raise PermissionError("medusa_shared_budget_authority_invalid")
+            meter = shared_meter
+        else:
+            meter = ExecutionBudgetMeter(authorized_plan.budget)
+
         requirements = ExecutionRequirements(**request.execution_requirements)
 
         plan = await self.planner.create_plan(
@@ -220,11 +269,7 @@ class MedusaCoordinator:
             context=request.context,
         )
 
-        from ...core.runtime.contracts import ExecutionBudgetMeter
-
-        meter = ExecutionBudgetMeter(authorized_plan.budget)
         meter.start()
-        started_at_ms = asyncio.get_running_loop().time() * 1000
         trajectory = ExecutionTrajectory(
             request_id=request.request_id,
             trajectory_id=request.request_id,
@@ -274,10 +319,9 @@ class MedusaCoordinator:
                 # A duration check between waves does not interrupt a hung
                 # specialist. Bound the running wave by the remaining request
                 # deadline, and cancel unfinished child tasks on timeout.
-                elapsed_ms = asyncio.get_running_loop().time() * 1000 - started_at_ms
-                remaining_seconds = (
-                    authorized_plan.budget.max_duration_ms - elapsed_ms
-                ) / 1000
+                # The shared meter carries the original ChatRuntime deadline.
+                # Do not restart the entire budget at the Medusa handoff.
+                remaining_seconds = (await meter.remaining_duration_ms()) / 1000.0
                 if remaining_seconds <= 0:
                     for step in wave:
                         step.status = StepStatus.SKIPPED
@@ -586,6 +630,10 @@ class MedusaCoordinator:
                 else {"status": "not_supplied", "included_memory_count": 0}
             ),
             budget_meter=meter,
+            authenticated_chat_context=_trusted_chat_execution_context(
+                request,
+                specialist_plan,
+            ),
             event_emitter=emitter,
         )
         context = {

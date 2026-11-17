@@ -90,6 +90,19 @@ class ExecutionBudgetMeter:
         async with self._lock:
             return self._within_deadline()
 
+    async def remaining_duration_ms(self) -> float:
+        """Return the original monotonic deadline's remaining milliseconds.
+
+        Caller-specific retries, child graphs and SDK timeouts cannot renew
+        this deadline. A zero result means an explicit denied execution.
+        """
+        async with self._lock:
+            if not self._within_deadline():
+                return 0.0
+            assert self._start_ms is not None
+            elapsed_ms = time.monotonic() * 1000.0 - self._start_ms
+            return max(0.0, float(self._budget.max_duration_ms) - elapsed_ms)
+
     async def _reserve(self, field: str, limit: int, amount: int = 1) -> bool:
         """Commit an authorized nonnegative reservation exactly once.
 
@@ -110,8 +123,33 @@ class ExecutionBudgetMeter:
             setattr(self, field, used + amount)
             return True
 
+    async def reserve_model_execution(self, *, external: bool = False) -> bool:
+        """Atomically reserve an actual model transport and external request.
+
+        Both counters belong to the original execution meter. A rejected
+        reservation never partially consumes either quota, and concurrently
+        executing child agents cannot outrun the shared model limit.
+        """
+        if type(external) is not bool:
+            raise ValueError("external model execution must be a boolean")
+        async with self._lock:
+            if not self._within_deadline():
+                return False
+            limits = [("_model_calls", self._budget.max_model_calls)]
+            if external:
+                limits.append(("_external_requests", self._budget.max_external_requests))
+            for field_name, limit in limits:
+                if type(limit) is not int or limit < 0:
+                    raise ValueError("execution budget limit must be a nonnegative integer")
+                if getattr(self, field_name) + 1 > limit:
+                    self._exhausted = True
+                    return False
+            for field_name, _ in limits:
+                setattr(self, field_name, getattr(self, field_name) + 1)
+            return True
+
     async def reserve_model_call(self) -> bool:
-        return await self._reserve("_model_calls", self._budget.max_model_calls)
+        return await self.reserve_model_execution()
 
     async def reserve_reasoning_step(self) -> bool:
         return await self._reserve("_reasoning_steps", self._budget.max_reasoning_steps)
