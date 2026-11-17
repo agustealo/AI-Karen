@@ -63,8 +63,8 @@ def _request(*, authenticated: bool = True):
         request_id="request-a",
         context={
             "execution_context": context,
-            "execution_budget_meter": meter,
         },
+        runtime_budget_meter=meter,
         authorized_plan=asdict(plan),
         execution_requirements={
             "request_id": "request-a",
@@ -79,7 +79,8 @@ def _request(*, authenticated: bool = True):
 def test_original_principal_scope_is_required_for_trusted_budget_handoff():
     request, plan, meter, context = _request()
     assert _trusted_chat_execution_context(request, plan) is context
-    assert request.context["execution_budget_meter"] is meter
+    assert request.runtime_budget_meter is meter
+    assert "runtime_budget_meter" not in request.to_dict()
 
 
 @pytest.mark.parametrize("mutation", [
@@ -117,11 +118,11 @@ async def test_medusa_refuses_invalid_shared_meter_before_any_planning(invalid):
     if invalid == "untrusted_context":
         context.authenticated_user = None
     elif invalid == "incorrect_budget":
-        request.context["execution_budget_meter"] = ExecutionBudgetMeter(
+        request.runtime_budget_meter = ExecutionBudgetMeter(
             ExecutionBudget(max_model_calls=999),
         )
     else:
-        request.context["execution_budget_meter"] = SimpleNamespace(
+        request.runtime_budget_meter = SimpleNamespace(
             budget=plan.budget, reserve_model_execution=lambda **kwargs: True,
         )
 
@@ -145,5 +146,5 @@ async def test_valid_original_shared_budget_reaches_existing_planner_without_res
     with pytest.raises(RuntimeError, match="planner_sentinel"):
         await coordinator._handle_request(request)
     planner.create_plan.assert_awaited_once()
-    assert request.context["execution_budget_meter"] is meter
+    assert request.runtime_budget_meter is meter
     assert meter.model_calls == 1
