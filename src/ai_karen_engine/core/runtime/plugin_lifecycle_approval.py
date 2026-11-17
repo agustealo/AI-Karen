@@ -36,9 +36,11 @@ class PluginLifecycleApprovalScope:
         if (
             not isinstance(self.installation_id, str)
             or not _PLUGIN_ID.fullmatch(self.installation_id)
+            or not isinstance(self.action, str)
             or self.action not in {"enable", "disable"}
             or not isinstance(self.manifest_checksum, str)
             or not _DIGEST.fullmatch(self.manifest_checksum)
+            or not isinstance(self.expected_state, str)
             or self.expected_state not in {"enabled", "disabled"}
             or type(self.expected_revision) is not int
             or self.expected_revision < 1
