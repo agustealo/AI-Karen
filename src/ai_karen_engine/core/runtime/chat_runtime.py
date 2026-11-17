@@ -614,6 +614,10 @@ class ChatRuntime:
                 except asyncio.CancelledError:
                     await self._observe_request_cancellation(
                         trajectory, decision, request, plan, meter, start,
+                        pending_transcript_text=fallback.answer,
+                        pending_provider_meta=recovery_meta,
+                        pending_memory_meta=memory_recall_meta,
+                        pending_error=f"fallback:{error_type}",
                     )
                     raise
                 except Exception as persistence_exc:
@@ -810,10 +814,13 @@ class ChatRuntime:
                 request, text, provider_meta, trajectory_id=trajectory.trajectory_id
             )
         except asyncio.CancelledError:
-            # No committed transcript receipt was returned. The canonical
-            # run lifecycle still arbitrates any concurrent commit/stop race.
+            # A transaction may have committed before awaited session cleanup
+            # was interrupted. Reconcile canonical owned transcript truth.
             await self._observe_request_cancellation(
                 trajectory, decision, request, plan, meter, start,
+                pending_transcript_text=text,
+                pending_provider_meta=provider_meta,
+                pending_memory_meta=memory_recall_meta,
             )
             raise
         provider_meta.update(transcript_result.to_metadata())
@@ -1575,11 +1582,14 @@ class ChatRuntime:
                     trajectory_id=trajectory.trajectory_id,
                 )
             except (asyncio.CancelledError, GeneratorExit):
-                # A cancelled pre-commit await is not a durable completed
-                # response. Do not infer provider success from partial text.
+                # A cancelled write may already have committed before async
+                # session cleanup; only exact canonical readback settles it.
                 await self._observe_request_cancellation(
                     trajectory, decision, request, plan, meter, stream_start,
                     request_id=request_id, conversation_id=conversation_id,
+                    pending_transcript_text=streamed_text,
+                    pending_provider_meta=provider_meta,
+                    pending_memory_meta=memory_recall_meta,
                 )
                 raise
             provider_meta["execution_spans"].append(
@@ -5727,8 +5737,17 @@ class ChatRuntime:
         committed_provider_meta: Optional[Dict[str, Any]] = None,
         committed_memory_meta: Optional[Dict[str, Any]] = None,
         committed_error: Optional[str] = None,
+        pending_transcript_text: Optional[str] = None,
+        pending_provider_meta: Optional[Dict[str, Any]] = None,
+        pending_memory_meta: Optional[Dict[str, Any]] = None,
+        pending_error: Optional[str] = None,
     ) -> None:
-        """Emit cancellation; never undo a confirmed committed transcript."""
+        """Observe cancellation and reconcile an interrupted transcript write.
+
+        The canonical conversation repository determines whether the exact
+        owned transcript pair committed. A missing durable receipt must not be
+        fabricated into either a committed completion or a cancellation.
+        """
         ctx = request.context
         self._emitter.emit(
             RuntimeEventType.REQUEST_CANCELLED,
@@ -5739,6 +5758,59 @@ class ChatRuntime:
             session_id=ctx.session_id,
             conversation_id=conversation_id or ctx.conversation_id,
         )
+        if pending_transcript_text is not None:
+            try:
+                gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+                snapshot = request.persona_snapshot
+                # The exact persona bound for the attempted write is frozen
+                # before transcript persistence. Never reselect it on cancel.
+                if snapshot is None or not snapshot.matches(ctx):
+                    raise PermissionError("persona_snapshot_identity_unverified")
+                scope_id = snapshot.persona_id if snapshot.memory_filter_required else None
+                receipt = await gateway.reconcile_interrupted_turn(
+                    ctx,
+                    user_text=self._extract_user_message_for_persistence(request),
+                    assistant_text=pending_transcript_text,
+                    persona_scope_id=scope_id,
+                    run_lease=request.runtime_run_lease,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "chat.cancelled_transcript_reconciliation_unavailable",
+                    extra={
+                        "correlation_id": ctx.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                return
+            if receipt.success:
+                if pending_provider_meta is None:
+                    logger.warning(
+                        "chat.cancelled_transcript_provider_receipt_unverified",
+                        extra={"correlation_id": ctx.correlation_id},
+                    )
+                    return
+                committed_text = pending_transcript_text
+                committed_provider_meta = {
+                    **pending_provider_meta,
+                    **receipt.to_metadata(),
+                }
+                committed_memory_meta = pending_memory_meta
+                committed_error = pending_error
+            elif receipt.status != "not_found":
+                # An unavailable readback is not proof of an uncommitted turn.
+                # Keep the trajectory unresolved and preserve the durable run
+                # owner's existing terminal state.
+                logger.warning(
+                    "chat.cancelled_transcript_finality_unverified",
+                    extra={
+                        "correlation_id": ctx.correlation_id,
+                        "reconciliation_status": receipt.status,
+                    },
+                )
+                return
         if committed_text is not None:
             # Transcript ownership has already returned successful durability.
             # Cancellation can interrupt post-commit memory work or delivery,
