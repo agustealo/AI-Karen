@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,6 +76,11 @@ class TrainingArtifactReconciler:
         ):
             raise PermissionError("Authenticated owner session required")
         tenant, owner = principal.tenant_id, principal.user_id
+        trusted_claims = (
+            principal.tenant_id, principal.user_id, principal.session_id,
+            tuple(principal.roles), tuple(principal.permissions),
+            principal.expires_at,
+        )
         if (
             not isinstance(model_id, str)
             or not model_id.strip()
@@ -85,9 +91,13 @@ class TrainingArtifactReconciler:
         if not model_id.startswith(f"tenant-{tenant_key}-"):
             return None
 
-        manifest = self.registry.get(model_id)
-        if manifest is None or manifest.model_id != model_id:
+        original = self.registry.get(model_id)
+        if original is None or original.model_id != model_id:
             return None
+        # Registry.get returns the mutable object stored in its registry.
+        # Take an independent full snapshot, including nested metric maps,
+        # before any filesystem read or hash can overlap an in-place edit.
+        manifest = deepcopy(original)
         metrics = manifest.metrics
         if not isinstance(metrics, dict):
             return None
@@ -138,7 +148,12 @@ class TrainingArtifactReconciler:
             if (
                 not artifact.is_dir() or artifact != job_artifact
                 or not artifact.is_relative_to(root)
-                or path.is_symlink()
+                or any(
+                    component.is_symlink()
+                    for component in (path, *path.parents)
+                    if component.is_relative_to(root)
+                )
+                or any(member.is_symlink() for member in artifact.rglob("*"))
             ):
                 return None
             metadata_file = artifact / "training_metadata.json"
@@ -175,6 +190,11 @@ class TrainingArtifactReconciler:
         replay = self.ledger.get(job_id, tenant_id=tenant, user_id=owner)
         if (
             principal.is_expired()
+            or trusted_claims != (
+                principal.tenant_id, principal.user_id, principal.session_id,
+                tuple(principal.roles), tuple(principal.permissions),
+                principal.expires_at,
+            )
             or current != manifest
             or replay != record
             or not self.registry.validate_artifact(manifest)

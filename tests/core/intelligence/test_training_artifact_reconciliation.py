@@ -355,3 +355,79 @@ def test_exact_model_lineage_rechecks_current_registry_after_verification(
         principal=principal, model_id=model_id,
     ) is None
     assert verifier.registry._calls == 2
+
+
+def test_exact_model_lineage_rejects_mutable_in_place_registry_change(tmp_path):
+    verifier, _, registry, principal, model_id, _, _ = (
+        _scoped_training_lineage_fixture(tmp_path)
+    )
+
+    class MutatingRegistry:
+        def __init__(self, target):
+            self._target = target
+            self._mutated = False
+
+        def get(self, key):
+            return self._target.get(key)
+
+        def validate_artifact(self, manifest):
+            if not self._mutated:
+                self._mutated = True
+                # An unchanged digest is not enough if the registry version
+                # or training dataset can be changed under an aliased object.
+                original = self._target.get(model_id)
+                original.model_version = "forged-version"
+                original.training_dataset_version = "forged-dataset"
+                original.metrics["training_job_id"] = "forged-job"
+            return self._target.validate_artifact(manifest)
+
+    verifier.registry = MutatingRegistry(registry)
+    assert verifier.inspect_exact_model_lineage(
+        principal=principal, model_id=model_id,
+    ) is None
+    assert verifier.registry._mutated is True
+
+
+def test_exact_model_lineage_rejects_identity_drift_during_artifact_read(tmp_path):
+    import pytest
+
+    verifier, _, registry, principal, model_id, _, _ = (
+        _scoped_training_lineage_fixture(tmp_path)
+    )
+
+    class MutatingPrincipalRegistry:
+        def __init__(self, target):
+            self._target = target
+            self._changed = False
+
+        def get(self, key):
+            return self._target.get(key)
+
+        def validate_artifact(self, manifest):
+            if not self._changed:
+                self._changed = True
+                principal.user_id = "different-owner"
+                principal.session_id = "new-session"
+            return self._target.validate_artifact(manifest)
+
+    verifier.registry = MutatingPrincipalRegistry(registry)
+    assert verifier.inspect_exact_model_lineage(
+        principal=principal, model_id=model_id,
+    ) is None
+    assert verifier.registry._changed is True
+
+
+def test_exact_model_lineage_rejects_symlinked_model_member(tmp_path):
+    import pytest
+
+    verifier, _, _, principal, model_id, _, artifact = (
+        _scoped_training_lineage_fixture(tmp_path)
+    )
+    link = artifact / "untrusted-model-payload.link"
+    try:
+        link.symlink_to(tmp_path / "outside.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("Symlink construction is unavailable on this test host")
+    assert verifier.inspect_exact_model_lineage(
+        principal=principal, model_id=model_id,
+    ) is None
