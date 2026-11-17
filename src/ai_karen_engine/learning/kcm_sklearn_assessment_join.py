@@ -8,6 +8,7 @@ keeps provenance, inventory, disjointness and all authority flags false.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import math
@@ -31,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_MEMBERS = 10_000
 _MAX_DATASET_BYTES = 32 * 1024 * 1024
+_MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+_MAX_ROW_BYTES = 1024 * 1024
 _MAX_FIELDS = 128
 _ROW_KEYS = frozenset({"example_id", "feature_version", "features", "target"})
 
@@ -94,47 +97,62 @@ def _training_assessments(*, encoded: bytes, max_members: int) -> frozenset[str]
         raise KcmSklearnAssessmentJoinError("training_jsonl_not_canonical")
     seen: set[str] = set()
     try:
-        decoded = encoded.decode("utf-8")
-        lines = decoded.splitlines(keepends=True)
-        if len(lines) > max_members:
-            raise KcmSklearnAssessmentJoinError("training_row_budget_exceeded")
-        if len(lines) < 2:
-            raise KcmSklearnAssessmentJoinError("training_rows_insufficient")
-        for line in lines:
-            record = json.loads(line)
-            if not isinstance(record, dict) or set(record) != _ROW_KEYS:
-                raise KcmSklearnAssessmentJoinError("training_row_schema_invalid")
-            # Match the canonical immutable JSONL importer, not arbitrary
-            # JSON representations or user-supplied source references.
-            canonical = (
-                json.dumps(
-                    record, ensure_ascii=False, allow_nan=False,
-                    separators=(",", ":"),
-                ) + "\n"
-            )
-            if canonical != line:
-                raise KcmSklearnAssessmentJoinError("training_jsonl_not_canonical")
-            assessment = _canonical_uuid(record["example_id"])
-            if assessment in seen:
-                raise KcmSklearnAssessmentJoinError("duplicate_assessment_row")
-            seen.add(assessment)
-            if not _valid_text(record["feature_version"]):
-                raise KcmSklearnAssessmentJoinError("feature_version_invalid")
-            if not _valid_text(record["target"]):
-                raise KcmSklearnAssessmentJoinError("training_target_invalid")
-            features = record["features"]
-            if (
-                not isinstance(features, dict)
-                or not 1 <= len(features) <= _MAX_FIELDS
-            ):
-                raise KcmSklearnAssessmentJoinError("feature_schema_invalid")
-            for name, value in features.items():
+        # Binary readline uses LF only, like the immutable canonical importer.
+        # Never use str.splitlines(): Unicode U+0085, U+2028 and U+2029 may
+        # legitimately occur inside unescaped JSON strings.
+        with io.BytesIO(encoded) as source:
+            for line_number in range(1, max_members + 2):
+                line_bytes = source.readline(_MAX_ROW_BYTES + 1)
+                if not line_bytes:
+                    break
+                if line_number > max_members:
+                    raise KcmSklearnAssessmentJoinError(
+                        "training_row_budget_exceeded",
+                    )
                 if (
-                    not _valid_text(name)
-                    or not isinstance(value, (int, float, bool))
-                    or not math.isfinite(float(value))
+                    len(line_bytes) > _MAX_ROW_BYTES
+                    or not line_bytes.endswith(b"\n")
                 ):
-                    raise KcmSklearnAssessmentJoinError("training_feature_invalid")
+                    raise KcmSklearnAssessmentJoinError(
+                        "training_row_size_invalid",
+                    )
+                line = line_bytes.decode("utf-8")
+                record = json.loads(line)
+                if not isinstance(record, dict) or set(record) != _ROW_KEYS:
+                    raise KcmSklearnAssessmentJoinError("training_row_schema_invalid")
+                # Match the canonical immutable JSONL importer, not arbitrary
+                # JSON representations or user-supplied source references.
+                canonical = (
+                    json.dumps(
+                        record, ensure_ascii=False, allow_nan=False,
+                        separators=(",", ":"),
+                    ) + "\n"
+                )
+                if canonical != line:
+                    raise KcmSklearnAssessmentJoinError("training_jsonl_not_canonical")
+                assessment = _canonical_uuid(record["example_id"])
+                if assessment in seen:
+                    raise KcmSklearnAssessmentJoinError("duplicate_assessment_row")
+                seen.add(assessment)
+                if not _valid_text(record["feature_version"]):
+                    raise KcmSklearnAssessmentJoinError("feature_version_invalid")
+                if not _valid_text(record["target"]):
+                    raise KcmSklearnAssessmentJoinError("training_target_invalid")
+                features = record["features"]
+                if (
+                    not isinstance(features, dict)
+                    or not 1 <= len(features) <= _MAX_FIELDS
+                ):
+                    raise KcmSklearnAssessmentJoinError("feature_schema_invalid")
+                for name, value in features.items():
+                    if (
+                        not _valid_text(name)
+                        or not isinstance(value, (int, float, bool))
+                        or not math.isfinite(float(value))
+                    ):
+                        raise KcmSklearnAssessmentJoinError("training_feature_invalid")
+        if len(seen) < 2:
+            raise KcmSklearnAssessmentJoinError("training_rows_insufficient")
     except KcmSklearnAssessmentJoinError:
         raise
     except (UnicodeError, TypeError, ValueError, OverflowError, RecursionError):
@@ -185,20 +203,35 @@ async def inspect_kcm_sklearn_assessment_join(
         raise KcmSklearnAssessmentJoinError("inspection_budget_invalid")
     if not isinstance(manifest, Mapping):
         raise KcmSklearnAssessmentJoinError("manifest_invalid")
+    # Freeze the *same* canonical structure before the first await.
+    # A caller may mutate its dict while receipt/epoch ports are awaited;
+    # neither membership extraction nor the second preflight may use it.
+    try:
+        snapshot_raw = json.dumps(
+            dict(manifest), ensure_ascii=False, sort_keys=True,
+            allow_nan=False, separators=(",", ":"),
+        ).encode("utf-8")
+        if not 0 < len(snapshot_raw) <= _MAX_MANIFEST_BYTES:
+            raise KcmSklearnAssessmentJoinError("manifest_budget_exceeded")
+        frozen_manifest = json.loads(snapshot_raw.decode("utf-8"))
+    except KcmSklearnAssessmentJoinError:
+        raise
+    except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+        raise KcmSklearnAssessmentJoinError("manifest_snapshot_invalid") from None
     identity = _trusted_claims(principal)
     principal_kwargs = {
         "tenant_id": principal.tenant_id,
         "user_id": principal.user_id,
     }
     initial = await inspect_kcm_dataset_evidence(
-        manifest,
+        frozen_manifest,
         dataset_bytes=governed_dataset_bytes,
         max_members=max_members,
         evidence_resolver=evidence_resolver,
         deletion_epoch_reader=deletion_epoch_reader,
         **principal_kwargs,
     )
-    train_members = manifest["members"]
+    train_members = frozen_manifest["members"]
     approved_ids = frozenset(
         member["assessment_id"] for member in train_members
         if member["split"] == "train"
@@ -214,7 +247,7 @@ async def inspect_kcm_sklearn_assessment_join(
         raise KcmSklearnAssessmentJoinError("assessment_training_join_mismatch")
 
     final = await inspect_kcm_dataset_evidence(
-        manifest,
+        frozen_manifest,
         dataset_bytes=governed_dataset_bytes,
         max_members=max_members,
         evidence_resolver=evidence_resolver,
