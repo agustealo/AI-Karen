@@ -178,3 +178,15 @@ async def test_inference_port_cannot_turn_ungoverned_external_model_into_wire_ca
             )
         )
     assert attempts == []
+
+    from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
+
+    facade = LLMUtils()
+    with pytest.raises(ProviderNotAvailable):
+        await facade.generate_text_async(
+            "private LLMUtils request",
+            provider="ollama-local",
+        )
+    with pytest.raises(EmbeddingFailed):
+        facade.embed("private LLMUtils embedding", provider="ollama-local")
+    assert attempts == []
