@@ -427,10 +427,16 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
-        decision_observation_id = await self._record_learning_decision(
-            trajectory,
-            decision,
-        )
+        try:
+            decision_observation_id = await self._record_learning_decision(
+                trajectory,
+                decision,
+            )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
 
         memory_recall_meta: Dict[str, Any] = {}
         provider_meta: Dict[str, Any] = {}
@@ -441,28 +447,34 @@ class ChatRuntime:
                 "source": "runtime_observed",
             }
         ]
-        if decision.memory_recall_required:
-            memory_recall_meta = await self._consume_resolved_memory(request, decision)
-            trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
-            trajectory.memory_recall_refs = [
-                item.get("id", "")
-                for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
-                if item.get("id")
-            ]
-            await self._record_proactive_continuity_decision(
-                trajectory,
-                decision,
-                memory_recall_meta,
-            )
-            memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
-            if memory_latency_ms > 0:
-                runtime_spans.append(
-                    {
-                        "name": "memory_recall",
-                        "duration_ms": memory_latency_ms,
-                        "source": "runtime_evidence_resolver",
-                    }
+        try:
+            if decision.memory_recall_required:
+                memory_recall_meta = await self._consume_resolved_memory(request, decision)
+                trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
+                trajectory.memory_recall_refs = [
+                    item.get("id", "")
+                    for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
+                    if item.get("id")
+                ]
+                await self._record_proactive_continuity_decision(
+                    trajectory,
+                    decision,
+                    memory_recall_meta,
                 )
+                memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
+                if memory_latency_ms > 0:
+                    runtime_spans.append(
+                        {
+                            "name": "memory_recall",
+                            "duration_ms": memory_latency_ms,
+                            "source": "runtime_evidence_resolver",
+                        }
+                    )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
 
         try:
             grounded = self._grounded_personal_response(
@@ -529,21 +541,9 @@ class ChatRuntime:
             elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except asyncio.CancelledError:
-            # A cancelled model attempt is not a completed assistant response.
-            # Record only request-scoped terminal trajectory metadata; the
-            # original cancellation must propagate without a fallback model,
-            # transcript write, or synthetic learning outcome.
-            await self._record_cancelled_trajectory(
+            # Emit cancellation before any best-effort persistence await.
+            await self._observe_request_cancellation(
                 trajectory, decision, request, plan, meter, start,
-            )
-            self._emitter.emit(
-                RuntimeEventType.REQUEST_CANCELLED,
-                correlation_id=ctx.correlation_id,
-                request_id=ctx.request_id,
-                user_id=ctx.user_id,
-                tenant_id=ctx.tenant_id,
-                session_id=ctx.session_id,
-                conversation_id=ctx.conversation_id,
             )
             raise
         except Exception as exc:
@@ -1009,24 +1009,38 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         meter.start()
         trajectory = self._trajectory_recorder.start()
-        decision_observation_id = await self._record_learning_decision(
-            trajectory,
-            decision,
-        )
         stream_start = time.time()
+        try:
+            decision_observation_id = await self._record_learning_decision(
+                trajectory,
+                decision,
+            )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, stream_start,
+                request_id=request_id, conversation_id=conversation_id,
+            )
+            raise
 
-        yield self._enrich_chunk(
-            ChatStreamChunk(
-                type="status",
-                content="Processing request...",
-                correlation_id=ctx.correlation_id,
-                metadata={"stage": "started"},
-            ),
-            sequence,
-            request_id,
-            response_id,
-            conversation_id,
-        )
+        try:
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type="status",
+                    content="Processing request...",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"stage": "started"},
+                ),
+                sequence,
+                request_id,
+                response_id,
+                conversation_id,
+            )
+        except (asyncio.CancelledError, GeneratorExit):
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, stream_start,
+                request_id=request_id, conversation_id=conversation_id,
+            )
+            raise
         sequence += 1
 
         memory_recall_meta: Dict[str, Any] = {}
@@ -1037,28 +1051,35 @@ class ChatRuntime:
                 "source": "runtime_observed",
             }
         ]
-        if decision.memory_recall_required:
-            memory_recall_meta = await self._consume_resolved_memory(request, decision)
-            trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
-            trajectory.memory_recall_refs = [
-                item.get("id", "")
-                for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
-                if item.get("id")
-            ]
-            await self._record_proactive_continuity_decision(
-                trajectory,
-                decision,
-                memory_recall_meta,
-            )
-            memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
-            if memory_latency_ms > 0:
-                runtime_spans.append(
-                    {
-                        "name": "memory_recall",
-                        "duration_ms": memory_latency_ms,
-                        "source": "runtime_evidence_resolver",
-                    }
+        try:
+            if decision.memory_recall_required:
+                memory_recall_meta = await self._consume_resolved_memory(request, decision)
+                trajectory.memory_recall_count = memory_recall_meta.get("memory_recall_count")
+                trajectory.memory_recall_refs = [
+                    item.get("id", "")
+                    for item in (memory_recall_meta.get("memory_context") or {}).get("recall", [])[:5]
+                    if item.get("id")
+                ]
+                await self._record_proactive_continuity_decision(
+                    trajectory,
+                    decision,
+                    memory_recall_meta,
                 )
+                memory_latency_ms = float(memory_recall_meta.get("memory_latency_ms") or 0.0)
+                if memory_latency_ms > 0:
+                    runtime_spans.append(
+                        {
+                            "name": "memory_recall",
+                            "duration_ms": memory_latency_ms,
+                            "source": "runtime_evidence_resolver",
+                        }
+                    )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, stream_start,
+                request_id=request_id, conversation_id=conversation_id,
+            )
+            raise
 
         streamed_text = ""
         provider_meta: Dict[str, Any] = {}
@@ -1084,9 +1105,16 @@ class ChatRuntime:
 
             gen = grounded_stream()
         elif self._is_explicit_save_turn(request):
-            receipt_text = await self._execute_memory_write_receipt(
-                request, decision, plan, memory_recall_meta
-            )
+            try:
+                receipt_text = await self._execute_memory_write_receipt(
+                    request, decision, plan, memory_recall_meta
+                )
+            except asyncio.CancelledError:
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
             provider_meta.update({
                 "response_source": "memory_persistence",
                 "actual_provider": None,
@@ -1209,20 +1237,12 @@ class ChatRuntime:
                 )
                 sequence += 1
         except (asyncio.CancelledError, GeneratorExit):
-            # Async-generator closure is also an interrupted run. A partial
-            # token stream must never create a saved assistant turn or a
-            # successful verification-strategy outcome.
-            await self._record_cancelled_trajectory(
+            # A client close or a cancelled task cannot claim completed
+            # provider output. The canonical cancellation event is emitted
+            # before the best-effort persistence await.
+            await self._observe_request_cancellation(
                 trajectory, decision, request, plan, meter, stream_start,
-            )
-            self._emitter.emit(
-                RuntimeEventType.REQUEST_CANCELLED,
-                correlation_id=ctx.correlation_id,
-                request_id=request_id,
-                user_id=ctx.user_id,
-                tenant_id=ctx.tenant_id,
-                session_id=ctx.session_id,
-                conversation_id=conversation_id,
+                request_id=request_id, conversation_id=conversation_id,
             )
             raise
         except Exception as exc:
@@ -5615,6 +5635,33 @@ class ChatRuntime:
                 },
             )
             return None
+
+    async def _observe_request_cancellation(
+        self,
+        trajectory: Any,
+        decision: ExecutionDecision,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        started_at: float,
+        *,
+        request_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> None:
+        """Emit cancellation even if a second cancel disrupts the ledger write."""
+        ctx = request.context
+        self._emitter.emit(
+            RuntimeEventType.REQUEST_CANCELLED,
+            correlation_id=ctx.correlation_id,
+            request_id=request_id or ctx.request_id,
+            user_id=ctx.user_id,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            conversation_id=conversation_id or ctx.conversation_id,
+        )
+        await self._record_cancelled_trajectory(
+            trajectory, decision, request, plan, meter, started_at,
+        )
 
     async def _record_cancelled_trajectory(
         self,
