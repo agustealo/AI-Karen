@@ -116,10 +116,23 @@ class ChatExecutionContext:
         ):
             raise PermissionError("runtime_model_execution_authority_invalid")
         binding = self.__dict__.get("_runtime_model_authority")
-        if binding is None:
+        # A cloned context must never reset the original budget through
+        # a freshly created meter. Anchor the first authoritative objects
+        # on the original budget as well as on the authenticated context.
+        budget_binding = plan.budget.__dict__.get("_runtime_model_authority")
+        if binding is None and budget_binding is None:
             self.__dict__["_runtime_model_authority"] = (plan, meter)
             self.__dict__["_runtime_model_child_plans"] = []
-        elif binding[0] is not plan or binding[1] is not meter:
+            plan.budget.__dict__["_runtime_model_authority"] = (self, plan, meter)
+        elif (
+            binding is None
+            or budget_binding is None
+            or binding[0] is not plan
+            or binding[1] is not meter
+            or budget_binding[0] is not self
+            or budget_binding[1] is not plan
+            or budget_binding[2] is not meter
+        ):
             raise PermissionError("runtime_model_execution_authority_invalid")
 
     def original_runtime_model_plan(self, meter: Any) -> Any | None:
@@ -127,7 +140,16 @@ class ChatExecutionContext:
         binding = self.__dict__.get("_runtime_model_authority")
         if binding is None or binding[1] is not meter:
             return None
-        return binding[0]
+        root = binding[0]
+        budget_binding = root.budget.__dict__.get("_runtime_model_authority")
+        if (
+            budget_binding is None
+            or budget_binding[0] is not self
+            or budget_binding[1] is not root
+            or budget_binding[2] is not meter
+        ):
+            return None
+        return root
 
     def register_runtime_model_child_plan(self, plan: Any, meter: Any) -> None:
         """Register a Medusa-scoped derivative without minting a new grant."""
