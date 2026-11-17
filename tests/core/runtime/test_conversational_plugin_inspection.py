@@ -248,8 +248,10 @@ async def test_direct_runtime_authorized_inspection_never_executes_plugin():
         )
     assert result.handled and result.success
     assert result.source == "plugin_catalog"
-    assert "have not been verified" in result.text
+    assert "not verified" in result.text
+    assert "No setup action was performed" in result.text
     assert result.payload["plugin_inspection"]["matches"][0]["installation_id"] == "telegram-bot"
+    assert result.payload["plugin_inspection"]["matches"][0]["connection_status"] == "not_inspected"
     assert result.normalized_metadata()["structured_content"]["plugin_inspection"]["mutation_performed"] is False
     service.execute_plugin.assert_not_awaited()
 
@@ -544,3 +546,181 @@ async def test_cortex_plugin_inspection_cannot_inherit_incidental_ml_tool_hints(
     assert decision.workflow_id is None
     assert decision.memory_recall_required is False
     assert decision.memory_write_allowed is False
+
+
+@pytest.mark.asyncio
+async def test_owner_scoped_channel_summary_authorizes_once_using_real_chat_session():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+
+    host = object.__new__(ChannelHostServices)
+    host._initialized = True
+    host._closed = False
+    host._installed = {"telegram-bot": object()}
+    host.kernel = SimpleNamespace(
+        get_channel_activation_manifest=lambda name: (
+            object() if name == "telegram-bot" else None
+        ),
+    )
+    host.activation = SimpleNamespace(issue_action_plan=AsyncMock())
+    one = ChannelConnection(
+        connection_id="owned-one", tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="bot-secret-id",
+        credential_handle="vault://never-surface", revision=4, enabled=True,
+    )
+    two = ChannelConnection(
+        connection_id="owned-two", tenant_id=TENANT,
+        installation_id="telegram-bot", provider_account_id="second-secret-id",
+        credential_handle="vault://never-surface-two", revision=8, enabled=False,
+    )
+    host.repository = SimpleNamespace(
+        list_personal_owned_connections=AsyncMock(return_value=[one, two]),
+    )
+    result = await host.inspect_owned_channel_connections(
+        tenant_id=TENANT, user_id=USER, session_id="plugin-session",
+        request_id="plugin-request", correlation_id="plugin-correlation",
+        installation_id="telegram-bot",
+    )
+    assert result["owned_connection_count"] == 2
+    assert result["persisted_enabled_count"] == 1
+    assert result["latest_connection_revision"] == 8
+    assert result["connection_status"] == "owned_enabled_recorded"
+    assert result["provider_registration_verified"] is False
+    assert result["provider_delivery_verified"] is False
+    assert "vault://" not in json.dumps(result)
+    assert "bot-secret-id" not in json.dumps(result)
+    host.activation.issue_action_plan.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER, session_id="plugin-session",
+        installation_id="telegram-bot", action="channel.consent",
+    )
+    host.repository.list_personal_owned_connections.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_owned_channel_still_requires_fresh_consent_before_reporting_none():
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+
+    host = object.__new__(ChannelHostServices)
+    host._initialized, host._closed = True, False
+    host._installed = {"telegram-bot": object()}
+    host.kernel = SimpleNamespace(get_channel_activation_manifest=lambda name: object())
+    host.activation = SimpleNamespace(
+        issue_action_plan=AsyncMock(side_effect=PermissionError("no channel consent")),
+    )
+    host.repository = SimpleNamespace(list_personal_owned_connections=AsyncMock())
+    with pytest.raises(PermissionError, match="no channel consent"):
+        await host.inspect_owned_channel_connections(
+            tenant_id=TENANT, user_id=USER, session_id="plugin-session",
+            request_id="plugin-request", correlation_id="plugin-correlation",
+            installation_id="telegram-bot",
+        )
+    host.repository.list_personal_owned_connections.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owner_channel_summary_rejects_cross_tenant_ledger_evidence():
+    from ai_karen_engine.extensions.channels.contracts import ChannelConnection
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+
+    host = object.__new__(ChannelHostServices)
+    host._initialized, host._closed = True, False
+    host._installed = {"telegram-bot": object()}
+    host.kernel = SimpleNamespace(get_channel_activation_manifest=lambda name: object())
+    host.activation = SimpleNamespace(issue_action_plan=AsyncMock())
+    foreign = ChannelConnection(
+        connection_id="foreign-conn", tenant_id="foreign-tenant",
+        installation_id="telegram-bot", provider_account_id="foreign",
+        credential_handle="vault://foreign", revision=2, enabled=True,
+    )
+    host.repository = SimpleNamespace(
+        list_personal_owned_connections=AsyncMock(return_value=[foreign]),
+    )
+    with pytest.raises(PermissionError, match="Cross-tenant"):
+        await host.inspect_owned_channel_connections(
+            tenant_id=TENANT, user_id=USER, session_id="plugin-session",
+            request_id="plugin-request", correlation_id="plugin-correlation",
+            installation_id="telegram-bot",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("connection_status,owned,enabled,phrase", [
+    ("none_owned", 0, 0, "No personal channel connection"),
+    ("owned_enabled_recorded", 1, 1, "recorded as enabled"),
+    ("owned_disabled_recorded", 1, 0, "recorded as disabled"),
+])
+async def test_runtime_merges_only_owner_authorized_status_without_claiming_delivery(
+    connection_status, owned, enabled, phrase,
+):
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+
+    host = object.__new__(ChannelHostServices)
+    host.inspect_owned_channel_connections = AsyncMock(return_value={
+        "inspection_source": "tenant_scoped_channel_owner_ledger",
+        "owned_connection_count": owned,
+        "persisted_enabled_count": enabled,
+        "connection_status": connection_status,
+        "provider_registration_verified": False,
+        "runtime_execution_verified": False,
+        "provider_delivery_verified": False,
+    })
+    executor = DirectCapabilityExecutor()
+    executor.bind_channel_host(host)
+    service = _catalog()
+    plan = _plan()
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=service,
+    ):
+        result = await executor.execute(
+            request=_request("Is my Telegram connected?"),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success
+    assert phrase in result.text
+    assert "not verified" in result.text
+    plugin = result.payload["plugin_inspection"]["matches"][0]
+    assert plugin["connection_status"] == connection_status
+    assert plugin["provider_delivery_verified"] is False
+    assert result.payload["requested_action_executed"] is False
+    host.inspect_owned_channel_connections.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER, session_id="plugin-session",
+        request_id="plugin-request", correlation_id="plugin-correlation",
+        installation_id="telegram-bot",
+    )
+
+
+@pytest.mark.asyncio
+async def test_denied_channel_owner_status_does_not_expose_private_reason():
+    from ai_karen_engine.services.channels.host import ChannelHostServices
+
+    host = object.__new__(ChannelHostServices)
+    host.inspect_owned_channel_connections = AsyncMock(
+        side_effect=PermissionError("private principal detail"),
+    )
+    executor = DirectCapabilityExecutor()
+    executor.bind_channel_host(host)
+    plan = _plan()
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=_catalog(),
+    ):
+        result = await executor.execute(
+            request=_request("Set up my Telegram"),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success
+    assert "inspection was denied" in result.text
+    assert "private principal detail" not in result.text
+    plugin = result.payload["plugin_inspection"]["matches"][0]
+    assert plugin["connection_status"] == "inspection_denied"
+    assert plugin.get("owned_connection_count") is None
+
+
+def test_channel_host_binding_refuses_untrusted_plugin_provided_host():
+    with pytest.raises(TypeError):
+        DirectCapabilityExecutor().bind_channel_host(SimpleNamespace())

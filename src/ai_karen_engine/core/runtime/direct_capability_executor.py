@@ -132,6 +132,20 @@ class DirectCapabilityExecutor:
     executes that already-authorized single-step plan.
     """
 
+    def __init__(self) -> None:
+        # Bound exclusively by the existing application lifecycle, not from
+        # a request, user input, plugin manifest or model response.
+        self._channel_host: object | None = None
+
+    def bind_channel_host(self, host: object | None) -> None:
+        """Bind or revoke the canonical host without adding a channel runner."""
+        if host is not None:
+            from ai_karen_engine.services.channels.host import ChannelHostServices
+
+            if not isinstance(host, ChannelHostServices):
+                raise TypeError("Canonical ChannelHostServices required")
+        self._channel_host = host
+
     @staticmethod
     def _timer_unavailable(reason: str, message: str) -> DirectCapabilityResult:
         return DirectCapabilityResult(
@@ -872,6 +886,66 @@ class DirectCapabilityExecutor:
             )
             if action_result is not None:
                 return action_result
+        if (
+            status == "found" and len(matches) == 1
+            and parsed.operation in {"setup", "resume", "status"}
+            and matches[0].get("execution_route") == "channel_host"
+            and self._channel_host is not None
+        ):
+            channel = dict(matches[0])
+            try:
+                observed = await self._channel_host.inspect_owned_channel_connections(
+                    tenant_id=str(principal.tenant_id),
+                    user_id=str(principal.user_id),
+                    session_id=str(request.context.session_id or ""),
+                    request_id=str(request.context.request_id or ""),
+                    correlation_id=str(request.context.correlation_id or ""),
+                    installation_id=str(channel["installation_id"]),
+                )
+                if (
+                    not isinstance(observed, dict)
+                    or observed.get("inspection_source") != "tenant_scoped_channel_owner_ledger"
+                    or type(observed.get("owned_connection_count")) is not int
+                    or type(observed.get("persisted_enabled_count")) is not int
+                    or not 0 <= observed["persisted_enabled_count"] <= observed["owned_connection_count"] <= 50
+                    or observed.get("connection_status") not in {
+                        "none_owned", "owned_enabled_recorded", "owned_disabled_recorded",
+                    }
+                    or observed["connection_status"] != (
+                        "none_owned" if observed["owned_connection_count"] == 0
+                        else "owned_enabled_recorded" if observed["persisted_enabled_count"]
+                        else "owned_disabled_recorded"
+                    )
+                ):
+                    raise ValueError("Invalid channel owner inspection evidence")
+                channel["connection_status"] = observed["connection_status"]
+                channel["owned_connection_count"] = observed["owned_connection_count"]
+                channel["persisted_enabled_count"] = observed["persisted_enabled_count"]
+                channel["connection_inspection_source"] = observed["inspection_source"]
+                channel["next_action"] = (
+                    "channel.request_provision_authorization"
+                    if observed["connection_status"] == "none_owned"
+                    else "channel.request_activation_authorization"
+                    if observed["connection_status"] == "owned_disabled_recorded"
+                    else "channel.verify_activation_and_webhook"
+                )
+            except PermissionError:
+                channel["connection_status"] = "inspection_denied"
+                channel["next_action"] = "channel.request_owner_inspection_access"
+            except Exception as exc:
+                logger.warning(
+                    "plugin.conversation.channel_owner_inspection_unavailable",
+                    extra={
+                        "tenant_id": request.context.tenant_id,
+                        "user_id": request.context.user_id,
+                        "correlation_id": request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                channel["connection_status"] = "inspection_unavailable"
+                channel["next_action"] = "channel.retry_owner_inspection"
+            matches = [channel]
+            result = {**result, "matches": matches}
         if status == "not_found":
             text = (
                 f"No validated registered plugin matched {parsed.target!r}. "
@@ -935,10 +1009,22 @@ class DirectCapabilityExecutor:
                         f"Declared (not live-verified) features: {features}. "
                         if parsed.operation == "features" and features else ""
                     )
-                    + "Channel connection, credentials, bot activation, webhook, "
-                    "identity link, and reply delivery have not been verified by "
-                    "this catalog inspection. The next step is an authorized "
-                    "channel-owner inspection. No setup action was performed."
+                    + (
+                        "No personal channel connection is assigned to your account. "
+                        if plugin.get("connection_status") == "none_owned"
+                        else "Your owned connection is recorded as enabled, but this is "
+                        "not proof that the adapter, bot or webhook is live. "
+                        if plugin.get("connection_status") == "owned_enabled_recorded"
+                        else "Your owned connection is recorded as disabled. "
+                        if plugin.get("connection_status") == "owned_disabled_recorded"
+                        else "Owner-scoped channel inspection was denied. "
+                        if plugin.get("connection_status") == "inspection_denied"
+                        else "Owner-scoped channel inspection is unavailable. "
+                        if plugin.get("connection_status") == "inspection_unavailable"
+                        else "Your personal connection state has not been inspected. "
+                    )
+                    + "Credentials, provider registration, webhook, identity link "
+                    "and reply delivery are not verified. No setup action was performed."
                 )
             elif plugin.get("readiness") == "ready":
                 text = (

@@ -87,6 +87,7 @@ jobs:
         run: |
           pytest -q \
             tests/core/expression/test_gateway_generation_integrity.py \
+             tests/core/expression/test_gateway_additional_engine_budget.py \
             tests/core/expression/test_gateway_selected_provider_precedence.py \
             tests/core/expression/test_expression_stream_fallback_integrity.py \
             tests/core/expression/test_gateway_fallbacks.py \
@@ -150,6 +151,7 @@ jobs:
             tests/core/runtime/test_runtime_fallback_authority.py \
             tests/core/runtime/test_runtime_fallback_memory.py
           pytest -q tests/core/runtime/test_chat_http_recovery_persistence.py
+           pytest -q tests/core/runtime/test_chat_generation_budget.py tests/core/runtime/test_ksi_surface_planning.py
 
       - name: Prove atomic runtime budget reservations and monotonic expiry
         run: pytest -q tests/core/runtime/test_execution_budget_meter_integrity.py
