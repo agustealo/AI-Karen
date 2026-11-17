@@ -11,8 +11,9 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
@@ -24,6 +25,12 @@ from ai_karen_engine.core.runtime.policy.reasoning_policy import (
     ReasoningModePolicyResult,
     authorize_reasoning_modes,
 )
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+        PluginLifecycleApprovalScope,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +432,115 @@ class RuntimePolicyEnforcer:
             status="alternative_reasoning_mode_policy_permitted",
             alternative_policy_decision_id=alternative.decision_id,
             alternative_policy_version=alternative.policy_version,
+        )
+
+    async def authorize_approved_plugin_lifecycle(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        scope: "PluginLifecycleApprovalScope",
+        approval: Dict[str, Any],
+        observed_state: str,
+        manifest_checksum: str,
+        revision: int,
+        disposition: str,
+    ) -> PolicyDecision:
+        """Evaluate one host-retrieved, action-bound plugin lifecycle grant.
+
+        This method does not execute a plugin and is not reachable through a
+        generic PolicyEvaluationRequest. Its approval must be read by
+        ApprovalService from the authenticated tenant/user scope; arbitrary
+        UI/chat permission claims and supplied receipt dictionaries are never
+        an independent grant. PluginService owns the execution admission.
+        """
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+
+        now = datetime.now(timezone.utc)
+        decision_id = f"policy-plugin-lifecycle-{time.time_ns()}"
+        action = (
+            "plugin.lifecycle." + scope.action
+            if isinstance(scope, PluginLifecycleApprovalScope)
+            else "plugin.lifecycle.invalid"
+        )
+        allowed = False
+        reason = PolicyReasonCode.INSUFFICIENT_PERMISSION
+        try:
+            if not isinstance(scope, PluginLifecycleApprovalScope):
+                raise PermissionError("Plugin lifecycle scope must be canonical")
+            if self.config.default_level is not RuntimeLevel.FULL:
+                reason = PolicyReasonCode.RUNTIME_LEVEL_DENIED
+                raise PermissionError("Plugin lifecycle runtime is restricted")
+            principal = context.require_authenticated_user()
+            scope.require_matching_context(context)
+            if not get_rbac_manager().has_permission(
+                principal, Permission.ADMIN_PLUGINS_MANAGE
+            ):
+                raise PermissionError("Plugin lifecycle management permission denied")
+            if (
+                not isinstance(approval, dict)
+                or approval.get("status") != "approved"
+                or approval.get("tenant_id") != scope.tenant_id
+                or approval.get("user_id") != scope.user_id
+                or approval.get("conversation_id") != scope.conversation_id
+                or approval.get("decided_by") != scope.user_id
+                or approval.get("intent") != action
+                or approval.get("risk_level") not in {"high", "critical"}
+                or not str(approval.get("policy_decision_id") or "").strip()
+                or approval.get("request_payload", {}).get(
+                    "plugin_lifecycle_scope"
+                ) != scope.to_record()
+            ):
+                raise PermissionError("Plugin lifecycle approval scope is unavailable")
+            expiry = approval.get("expires_at")
+            if (
+                not isinstance(expiry, datetime)
+                or expiry.tzinfo is None
+                or expiry <= now
+            ):
+                raise PermissionError("Plugin lifecycle approval expired")
+            if (
+                observed_state != scope.expected_state
+                or manifest_checksum != scope.manifest_checksum
+                or type(revision) is not int
+                or revision != scope.expected_revision
+                or disposition != "ready"
+            ):
+                reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
+                raise PermissionError("Plugin lifecycle state/revision drift")
+            allowed = True
+            reason = PolicyReasonCode.ALLOWED
+        except (PermissionError, AttributeError, TypeError, ValueError):
+            pass
+
+        constraints: Dict[str, Any] = {}
+        if allowed:
+            constraints = {
+                "authorized_user_id": scope.user_id,
+                "authorized_tenant_id": scope.tenant_id,
+                "authorized_session_id": scope.session_id,
+                "correlation_id": context.correlation_id,
+                "plugin_lifecycle_approval_id": approval.get("approval_id"),
+                "plugin_lifecycle_installation_id": scope.installation_id,
+                "plugin_lifecycle_expected_revision": scope.expected_revision,
+                "plugin_lifecycle_manifest_checksum": scope.manifest_checksum,
+                "plugin_lifecycle_original_policy_decision_id": approval.get(
+                    "policy_decision_id"
+                ),
+            }
+        return PolicyDecision(
+            decision_id=decision_id,
+            policy_version="v2-lifecycle-bound",
+            allowed=allowed,
+            reason_codes=[reason],
+            allowed_capabilities=[action] if allowed else [],
+            denied_capabilities=[] if allowed else [action],
+            requires_human_gate=True,
+            risk_level="high",
+            evaluated_at=time.time(),
+            runtime_constraints=constraints,
         )
 
     async def evaluate(self, request: PolicyEvaluationRequest) -> PolicyDecision:

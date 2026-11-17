@@ -8,6 +8,7 @@ discovery authority.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import io
@@ -24,7 +25,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ai_karen_engine.core.runtime.contracts import (
     ActionExecutionGate,
@@ -46,6 +47,12 @@ from ai_karen_engine.services.plugin_settings_repository import (
     PluginSettingsValidationError,
     PluginSettingsRepository,
 )
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+        PluginLifecycleApprovalScope,
+    )
 
 logger = logging.getLogger(__name__)
 _ENABLED_STATES = {"registered", "enabled", "loaded", "active"}
@@ -1775,6 +1782,208 @@ class PluginService:
         if self.kernel is not None:
             await self.kernel.cleanup()
         self.initialized = False
+
+    async def execute_approved_lifecycle(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        scope: "PluginLifecycleApprovalScope",
+        approval_id: str,
+    ) -> Dict[str, Any]:
+        """Execute one approved general-plugin lifecycle action, host-only.
+
+        This method is NOT connected to chat or admin API routes. RuntimePolicy
+        authorizes the exact approved action, ActionExecutionGate admits it,
+        and the existing ledger keeps the global physical fence until the
+        kernel observation and terminal CAS are both committed.
+        """
+        from ai_karen_engine.audit_logging import (
+            AuditEventType, AuditSeverity, get_audit_logger,
+        )
+        from ai_karen_engine.auth.rbac_middleware import (
+            Permission, get_rbac_manager,
+        )
+        from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+        from ai_karen_engine.persistence.repositories.plugin_lifecycle_repository import (
+            PluginLifecycleLedger,
+        )
+        from ai_karen_engine.services.approvals import get_approval_service
+
+        if not isinstance(context, ChatExecutionContext):
+            raise TypeError("Authenticated plugin lifecycle context required")
+        if not isinstance(scope, PluginLifecycleApprovalScope):
+            raise TypeError("Validated plugin lifecycle scope required")
+
+        principal = context.require_authenticated_user()
+        scope.require_matching_context(context)
+        if not get_rbac_manager().has_permission(
+            principal, Permission.ADMIN_PLUGINS_MANAGE
+        ):
+            raise PermissionError("Plugin lifecycle management permission required")
+        if not context.request_id or not context.correlation_id:
+            raise ValueError("Plugin lifecycle request and correlation IDs are required")
+
+        # ApprovalService is the sole actor-scoped approval read authority.
+        # The ledger independently proves its DB freshness and single use at
+        # reservation; a UI-supplied approval object is not accepted here.
+        approval = await get_approval_service().get(approval_id, user=principal)
+        await self._ensure_initialized()
+        kernel = self._get_kernel()
+        initial = await kernel.observe_lifecycle_for_finalization(
+            scope.installation_id, operation_id=str(uuid.uuid4()),
+        )
+        ledger = PluginLifecycleLedger()
+        durable = await ledger.initialize_observation(
+            installation_id=scope.installation_id,
+            manifest_checksum=initial.manifest_checksum,
+            observed_state=initial.observed_state,
+        )
+        decision = await self._policy_enforcer.authorize_approved_plugin_lifecycle(
+            context=context,
+            scope=scope,
+            approval=approval,
+            observed_state=initial.observed_state,
+            manifest_checksum=initial.manifest_checksum,
+            revision=durable["revision"],
+            disposition=durable["disposition"],
+        )
+        action = "plugin.lifecycle." + scope.action
+        plan = decision.to_authorized_plan()
+        if (
+            not decision.allowed
+            or not decision.requires_human_gate
+            or not plan.matches_execution_scope(
+                user_id=scope.user_id,
+                tenant_id=scope.tenant_id,
+                session_id=scope.session_id,
+                policy_decision_id=decision.decision_id,
+            )
+            or not await ActionExecutionGate.authorize(plan, action)
+        ):
+            raise PermissionError("Current lifecycle policy denied execution")
+
+        operation_id: Optional[str] = None
+        stage = "approved"
+        metadata: Dict[str, Any] = {
+            "plugin_id": scope.installation_id,
+            "action": scope.action,
+            "tenant_id": scope.tenant_id,
+            "user_id": scope.user_id,
+            "session_id": scope.session_id,
+            "conversation_id": scope.conversation_id,
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+            "policy_decision_id": decision.decision_id,
+            "approval_id": approval_id,
+            "manifest_checksum": scope.manifest_checksum,
+            "expected_revision": scope.expected_revision,
+        }
+
+        def audit(outcome: str, error_type: Optional[str] = None) -> None:
+            try:
+                get_audit_logger().log_audit_event(
+                    {
+                        "event_type": AuditEventType.SECURITY_EVENT,
+                        "severity": (
+                            AuditSeverity.INFO if outcome == "verified_committed"
+                            else AuditSeverity.WARNING
+                        ),
+                        "message": "plugin_lifecycle_" + outcome,
+                        "user_id": scope.user_id,
+                        "tenant_id": scope.tenant_id,
+                        "session_id": scope.session_id,
+                        "correlation_id": context.correlation_id,
+                        "metadata": {
+                            **metadata,
+                            "operation_id": operation_id,
+                            "stage": stage,
+                            "error_type": error_type,
+                        },
+                    }
+                )
+            except Exception:
+                logger.exception(
+                    "plugin.lifecycle.audit_unavailable",
+                    extra={"operation_id": operation_id, "correlation_id": context.correlation_id},
+                )
+
+        try:
+            claim = await ledger.reserve_approved(
+                approval_id=approval_id,
+                scope=scope,
+                request_id=context.request_id,
+                correlation_id=context.correlation_id,
+            )
+            operation_id = claim["operation_id"]
+            stage = "reserved"
+            async with ledger.hold_prepared_execution(
+                scope=scope, operation_id=operation_id,
+            ):
+                stage = "in_flight"
+                # Recheck the verified principal and canonical permission at
+                # physical admission. The prepared DB approval is single use.
+                if (
+                    context.require_authenticated_user() is not principal
+                    or not get_rbac_manager().has_permission(
+                        principal, Permission.ADMIN_PLUGINS_MANAGE
+                    )
+                ):
+                    raise PermissionError("Lifecycle permission revoked before mutation")
+                observation = await kernel.transition_prepared_lifecycle(
+                    scope, operation_id=operation_id,
+                )
+                stage = "observed"
+                receipt = await ledger.complete_verified(
+                    operation_id=operation_id,
+                    tenant_id=scope.tenant_id,
+                    actor_user_id=scope.user_id,
+                    observation=observation,
+                )
+                stage = "verified_committed"
+            audit("verified_committed")
+            return {
+                **receipt,
+                "policy_decision_id": decision.decision_id,
+                "original_policy_decision_id": approval["policy_decision_id"],
+                "correlation_id": context.correlation_id,
+                "request_id": context.request_id,
+                "execution_authority": "plugin_service",
+            }
+        except BaseException as exc:
+            if operation_id is not None:
+                # Unknown is permanent and unretryable. Best-effort freeze is
+                # shielded from repeated coroutine cancellation; the durable
+                # in_flight or prepared row already keeps the global revision
+                # unresolved if PostgreSQL itself becomes unavailable.
+                freeze = asyncio.create_task(
+                    ledger.mark_unknown(
+                        operation_id=operation_id,
+                        tenant_id=scope.tenant_id,
+                        actor_user_id=scope.user_id,
+                    )
+                )
+                while not freeze.done():
+                    try:
+                        await asyncio.shield(freeze)
+                    except asyncio.CancelledError:
+                        if freeze.done():
+                            break
+                    except Exception:
+                        # The attempted freeze can fail when PostgreSQL is
+                        # unavailable. Preserve the original execution error.
+                        break
+                try:
+                    await freeze
+                except Exception:
+                    logger.exception(
+                        "plugin.lifecycle.unknown_persistence_unavailable",
+                        extra={**metadata, "operation_id": operation_id},
+                    )
+            audit("unresolved", type(exc).__name__)
+            raise
 
     async def disable_plugin(self, plugin_name: str) -> bool:
         await self._ensure_initialized()
