@@ -31,6 +31,7 @@ type ModelRecommendation = {
   gated?: boolean;
   include_patterns?: string[] | null;
   app_consumers: string[];
+  download_methods?: Array<"hf_hub" | "direct_https">;
   installed: boolean;
 };
 
@@ -108,65 +109,6 @@ function isModelRecommendation(value: unknown): value is ModelRecommendation {
        item.include_patterns.every((pattern) => typeof pattern === "string")));
 }
 
-
-/** Keep browser and terminal requests on exactly the same backend API contract. */
-function validatedDownloadBody(item: ModelRecommendation, revision: string) {
-  return {
-    model_id: item.model_id,
-    revision,
-    channel_id: item.channel_id,
-    include_patterns: item.include_patterns ?? [],
-    exclude_patterns: [],
-    trust_remote_code: false,
-    accept_license: true,
-  };
-}
-
-function queuedDownloadBody(item: ModelRecommendation, revision: string) {
-  return {
-    ...validatedDownloadBody(item, revision),
-    revision: null,
-    validated_revision: revision,
-    pin: true,
-  };
-}
-
-function shellLiteral(value: string): string {
-  return "'" + value.replace(/'/g, "'\\''") + "'";
-}
-
-/**
- * Terminal alternative to clicking Download: same authorized worker.
- * Never embed authentication material or invent installed model state.
- */
-function governedCurlCommand(item: ModelRecommendation, revision: string): string {
-  const post = (route: string, body: object) => [
-    'curl --fail-with-body --silent --show-error --request POST',
-    '--header "Authorization: Bearer ${KAREN_ACCESS_TOKEN}"',
-    '--header "Content-Type: application/json"',
-    '--data-binary ' + shellLiteral(JSON.stringify(body)),
-    '"${KAREN_BASE_URL%/}' + route + '"',
-  ].join(' ');
-  return [
-    '# Run in a trusted admin terminal after accepting upstream terms.',
-    '# Both methods queue the same Karen worker; this does not import files manually.',
-    'set -euo pipefail',
-    ': "${KAREN_BASE_URL:?Set the approved HTTPS Karen API origin}"',
-    ': "${KAREN_ACCESS_TOKEN:?Set a short-lived authorized Karen admin bearer token}"',
-    'case "${KAREN_BASE_URL}" in https://*) ;; *) echo "HTTPS origin required" >&2; exit 1 ;; esac',
-    'command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }',
-    'validation="$(' + post('/api/models/download/validate', validatedDownloadBody(item, revision)) + ')"',
-    'printf "%s\\n" "$validation" | jq -e --arg model ' +
-      shellLiteral(item.model_id) + ' --arg revision ' + shellLiteral(revision) +
-      ' --arg channel ' + shellLiteral(item.channel_id) +
-      ' \'.allowed == true and .model_id == $model and .channel_id == $channel and .metadata.resolved_revision == $revision\' >/dev/null' +
-      ' || { echo "Source validation denied; no download queued" >&2; exit 1; }',
-    post('/api/models/download', queuedDownloadBody(item, revision)) + ' | jq -e \'{job_id, status}\'',
-    'unset KAREN_ACCESS_TOKEN',
-    '# Check the authenticated job in Models & Runtime; queued is never ready.',
-  ].join('\n');
-}
-
 /** Mount only on explicit plugin-model management, never across the plugin catalog. */
 export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const { user, isAdmin } = useAuth();
@@ -177,6 +119,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const [channels, setChannels] = useState<DownloadChannel[]>([]);
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
   const [accepted, setAccepted] = useState<Record<string, boolean>>({});
+  const [downloadMethods, setDownloadMethods] = useState<Record<string, "hf_hub" | "direct_https">>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -295,6 +238,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const install = async (item: ModelRecommendation) => {
     const revision = item.resolved_revision;
     const channel = channels.find((entry) => entry.id === item.channel_id);
+    const downloadMethod = downloadMethods[item.id] || "hf_hub";
+    if (!(item.download_methods || ["hf_hub"]).includes(downloadMethod)) return;
     const alreadyRunning = jobs.some((job) =>
       job.model_id === item.model_id && job.revision === revision &&
       job.channel_id === item.channel_id && ACTIVE.has(job.status));
@@ -315,7 +260,13 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       // them. Never queue a moving branch head or permit remote-code execution.
       const validation = await apiClient.post<DownloadValidation>(
         "/api/models/download/validate", {
-          ...validatedDownloadBody(item, revision),
+          model_id: item.model_id,
+          revision,
+          channel_id: item.channel_id,
+          include_patterns: item.include_patterns ?? [],
+          exclude_patterns: [],
+          trust_remote_code: false,
+          accept_license: true,
         },
       );
       if (!validation.allowed || validation.model_id !== item.model_id ||
@@ -326,7 +277,16 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
 
       const receipt = await apiClient.post<DownloadReceipt>(
         "/api/models/download", {
-          ...queuedDownloadBody(item, revision),
+          model_id: item.model_id,
+          revision: null,
+          validated_revision: revision,
+          channel_id: item.channel_id,
+          include_patterns: item.include_patterns ?? [],
+          exclude_patterns: [],
+          trust_remote_code: false,
+          accept_license: true,
+          pin: true,
+          download_method: downloadMethod,
         },
       );
       if (!JOB_ID.test(receipt.job_id) || !ACTIVE.has(receipt.status)) {
@@ -421,7 +381,13 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         const blocked = !policy?.master_enabled || policy.block_new_downloads ||
           !channel?.effective_enabled;
         const acceptanceKey = `${item.id}:${revision || "unverified"}`;
+        const availableMethods: Array<"hf_hub" | "direct_https"> =
+          item.download_methods?.filter((value) =>
+            value === "hf_hub" || value === "direct_https",
+          ) ?? ["hf_hub"];
+        const selectedMethod = downloadMethods[item.id] || "hf_hub";
         const canQueue = !item.installed && !activeJob && !blocked && verified &&
+          availableMethods.includes(selectedMethod) &&
           accepted[acceptanceKey] === true && busyId === null;
         return (
           <div key={item.id} className="space-y-3 rounded-lg border bg-background p-3">
@@ -492,6 +458,34 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                     </label>
                   </div>
                 )}
+                {verified && !blocked && availableMethods.length > 1 && (
+                  <label className="block space-y-1 text-xs">
+                    <span className="font-medium">Download method</span>
+                    <select aria-label="Download method"
+                      className="w-full rounded-md border bg-background px-2 py-2"
+                      value={selectedMethod}
+                      disabled={busyId !== null}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        if (next === "hf_hub" || next === "direct_https") {
+                          if (availableMethods.includes(next)) {
+                            setDownloadMethods((old) => ({ ...old, [item.id]: next }));
+                          }
+                        }
+                      }}>
+                      {availableMethods.includes("hf_hub") && (
+                        <option value="hf_hub">Hugging Face Hub (SDK)</option>
+                      )}
+                      {availableMethods.includes("direct_https") && (
+                        <option value="direct_https">Direct HTTPS (no Hub SDK for transfer)</option>
+                      )}
+                    </select>
+                    <span className="block text-muted-foreground">
+                      Both methods require the same reviewed license, backend authentication,
+                      model revision, audited download worker and installation checks.
+                    </span>
+                  </label>
+                )}
                 <Button type="button" size="sm" disabled={!canQueue}
                   onClick={() => void install(item)}>
                   {busyId === item.id ?
@@ -499,29 +493,6 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                     <Download className="mr-1 h-4 w-4" aria-hidden="true" />}
                   {busyId === item.id ? "Validating & queueing…" : "Download recommended model"}
                 </Button>
-                {verified && !blocked && !item.installed && (
-                  <details className="space-y-2 rounded-md border p-2 text-xs"
-                    data-testid="plugin-model-curl-option">
-                    <summary className="cursor-pointer font-medium">
-                      Use curl from an admin terminal
-                    </summary>
-                    <p className="mt-2 text-muted-foreground">
-                      An alternative way to request the same authenticated, audited download.
-                      Requires an approved HTTPS Karen API origin, a permitted admin bearer
-                      token and jq. No token is copied or stored by the plugin.
-                    </p>
-                    {accepted[acceptanceKey] === true && revision ? (
-                      <pre data-testid="plugin-model-curl-command"
-                        className="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted p-2 select-text">
-                        {governedCurlCommand(item, revision)}
-                      </pre>
-                    ) : (
-                      <p className="mt-2 text-muted-foreground" role="note">
-                        Review and accept the model license above before using the terminal command.
-                      </p>
-                    )}
-                  </details>
-                )}
               </>
             )}
           </div>
