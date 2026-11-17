@@ -25,7 +25,7 @@ from ai_karen_engine.core.intelligence.ml.policy_evaluation.contracts import (
 from ai_karen_engine.core.intelligence.ml.verification_review_evidence import (
     GovernedVerificationReviewEvidence,
 )
-from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStore, get_outcome_store
 from ai_karen_engine.core.runtime.trajectory.store import (
     TrajectoryStore,
     get_trajectory_store,
@@ -143,6 +143,111 @@ class VerificationReviewWorkflow:
             or features.feature_snapshot_id != recorded.feature_snapshot_id
         ):
             raise PermissionError("Decision feature snapshot provenance mismatch")
+
+        # B2C3A: a frozen OPE decision is not evidence that its selected
+        # action actually executed or that its transcript was committed.
+        # Load the existing runtime truth, in the same reviewer tenant,
+        # before accepting any independently judged quality label.
+        trajectory = await asyncio.to_thread(
+            self._lineage_store.get,
+            recorded.trajectory_id,
+            tenant_id=reviewer.tenant_id,
+        )
+        if trajectory is None:
+            raise ValueError("Selected runtime execution evidence is unavailable")
+        if not (
+            trajectory.trajectory_id == recorded.trajectory_id
+            and trajectory.tenant_id == reviewer.tenant_id
+            and trajectory.user_id == judgement.subject_user_id
+            and trajectory.request_id
+            and trajectory.request_id == features.request_id
+            and trajectory.correlation_id
+            and trajectory.correlation_id == features.correlation_id
+            and trajectory.policy_decision_id
+            and features.metadata.get("policy_decision_id")
+            == trajectory.policy_decision_id
+            and trajectory.execution_status == "success"
+            and trajectory.completed_at is not None
+            and trajectory.error_code is None
+            and trajectory.actual_provider
+            and trajectory.actual_model
+            and trajectory.degraded_mode is False
+            and trajectory.fallback_level == 0
+            and not trajectory.plugin_actions
+            and trajectory.executed_topology == (
+                "direct" if recorded.chosen_action == "respond_direct"
+                else "reasoning"
+            )
+        ):
+            raise ValueError("Completed selected runtime trajectory is unverified")
+
+        # Canonical OutcomeStore owns the immutable execution observation.
+        # Neither caller metadata nor a generated model answer can stand in
+        # for the original persisted outcome and typed gateway provenance.
+        outcome_store = self._outcome_store or get_outcome_store()
+        observed_outcomes = await asyncio.to_thread(
+            outcome_store.get_for_trajectory,
+            recorded.trajectory_id,
+            tenant_id=reviewer.tenant_id,
+        )
+        if not isinstance(observed_outcomes, list):
+            raise ValueError("Selected execution outcome readback is unavailable")
+        matching = [
+            row for row in observed_outcomes
+            if isinstance(row, dict)
+            and row.get("source") == "runtime.execution"
+            and row.get("decision_observation_id")
+            == recorded.decision_observation_id
+        ]
+        if len(matching) != 1:
+            raise ValueError("Exactly one selected execution receipt is required")
+        outcome = matching[0]
+        outcome_meta = outcome.get("metadata")
+        selected = (
+            outcome_meta.get("selected_strategy_execution")
+            if isinstance(outcome_meta, dict) else None
+        )
+        if not (
+            outcome.get("trajectory_id") == recorded.trajectory_id
+            and outcome.get("tenant_id") == reviewer.tenant_id
+            and outcome.get("user_id") == judgement.subject_user_id
+            and outcome.get("request_id") == trajectory.request_id
+            and outcome.get("correlation_id") == trajectory.correlation_id
+            and outcome.get("session_id") == trajectory.session_id
+            and outcome.get("conversation_id") == trajectory.conversation_id
+            and outcome.get("status") == "success"
+            and outcome.get("response_completed") is True
+            and outcome.get("persistence_success") is True
+            and outcome.get("fallback_count") == 0
+            and isinstance(outcome_meta, dict)
+            and outcome_meta.get("transcript_persistence_status")
+            in {"persisted", "already_persisted"}
+            and outcome_meta.get("actual_provider") == trajectory.actual_provider
+            and outcome_meta.get("actual_model") == trajectory.actual_model
+            and type(outcome_meta.get("model_calls")) is int
+            and outcome_meta["model_calls"] >= 1
+            and outcome_meta.get("tool_calls") == 0
+            and isinstance(selected, dict)
+            and selected.get("schema_version") == "selected_strategy_execution_v1"
+            and selected.get("selected_action") == recorded.chosen_action
+            and selected.get("policy_decision_id") == trajectory.policy_decision_id
+            and selected.get("policy_version") == recorded.behavior_policy_version
+            and selected.get("status") == "selected_runtime_path_observed"
+            and selected.get("provider_receipt_observed") is True
+            and selected.get("response_completed") is True
+            and selected.get("transcript_durable") is True
+            and selected.get("actual_provider") == trajectory.actual_provider
+            and selected.get("actual_model") == trajectory.actual_model
+            and selected.get("execution_observation_only") is True
+            and selected.get("independent_verification_proven") is False
+            and selected.get("dual_action_eligibility_established") is False
+            and selected.get("randomized_selection") is False
+            and selected.get("ope_eligible") is False
+        ):
+            # This is not an outcome or reward, only a selected path
+            # provenance gate. Independent accuracy remains the reviewer
+            # judgement stored separately by the original receipt owner.
+            raise ValueError("Durable selected execution receipt is unverified")
 
         snapshot = recorded.metadata.get("verification_policy_snapshot")
         if (
