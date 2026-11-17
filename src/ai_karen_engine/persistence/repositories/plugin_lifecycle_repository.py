@@ -16,6 +16,7 @@ from sqlalchemy import text
 
 from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
     PluginLifecycleApprovalScope,
+    PluginLifecycleKernelObservation,
 )
 from ai_karen_engine.persistence.postgres.transactions import (
     async_transaction_scope,
@@ -281,6 +282,118 @@ class PluginLifecycleLedger:
             # The entire claim + approval consume commits together, or none
             # of them become visible. This is NOT a kernel execution receipt.
             return claim
+
+    async def complete_verified(
+        self,
+        *,
+        operation_id: str,
+        tenant_id: str,
+        actor_user_id: str,
+        observation: PluginLifecycleKernelObservation,
+    ) -> dict[str, Any]:
+        """CAS a prepared operation to committed only after kernel observation.
+
+        This is backend-only terminal persistence, not a chat execution API.
+        The caller must already have executed the reserved action through the
+        governed kernel path. A missing, unknown or stale operation never
+        receives a success receipt or releases the global revision.
+        """
+        if not isinstance(observation, PluginLifecycleKernelObservation):
+            raise TypeError("Trusted kernel lifecycle observation required")
+        values = {
+            "operation_id": _uuid(operation_id),
+            "tenant_id": _uuid(tenant_id),
+            "actor_user_id": _uuid(actor_user_id),
+        }
+        if observation.operation_id != values["operation_id"]:
+            raise PluginLifecycleRevisionConflict(
+                "Kernel lifecycle evidence does not match the reserved operation"
+            )
+        async with async_transaction_scope(values["tenant_id"]) as session:
+            # Lock the operation first. Concurrent unknown/complete attempts
+            # serialize before touching the application-global revision.
+            result = await session.execute(
+                text(
+                    "SELECT * FROM public.extension_lifecycle_operations "
+                    "WHERE operation_id = CAST(:operation_id AS uuid) "
+                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND actor_user_id = CAST(:actor_user_id AS uuid) "
+                    "AND status = 'prepared' FOR UPDATE"
+                ),
+                values,
+            )
+            row = result.mappings().one_or_none()
+            if row is None:
+                raise PluginLifecycleOperationNotFound(
+                    "Prepared lifecycle operation unavailable in actor scope"
+                )
+            operation = _operation(row)
+            if (
+                observation.installation_id != operation["installation_id"]
+                or observation.manifest_checksum != operation["manifest_checksum"]
+                or observation.observed_state != operation["target_state"]
+            ):
+                raise PluginLifecycleRevisionConflict(
+                    "Observed kernel state does not match approved transition"
+                )
+            expected_revision = operation["expected_revision"]
+            state_values = {
+                **values,
+                "installation_id": operation["installation_id"],
+                "manifest_checksum": operation["manifest_checksum"],
+                "expected_state": operation["expected_state"],
+                "target_state": operation["target_state"],
+                "expected_revision": expected_revision,
+            }
+            change = await session.execute(
+                text(
+                    "UPDATE public.extension_lifecycle_revisions "
+                    "SET observed_state = :target_state, "
+                    "revision = revision + 1, "
+                    "disposition = 'ready', active_operation_id = NULL, "
+                    "updated_at = clock_timestamp() "
+                    "WHERE installation_id = :installation_id "
+                    "AND manifest_checksum = :manifest_checksum "
+                    "AND observed_state = :expected_state "
+                    "AND revision = :expected_revision "
+                    "AND disposition = 'unresolved' "
+                    "AND active_operation_id = CAST(:operation_id AS uuid) "
+                    "RETURNING revision"
+                ),
+                state_values,
+            )
+            new_revision = change.scalar_one_or_none()
+            if new_revision != expected_revision + 1:
+                raise PluginLifecycleRevisionConflict(
+                    "Global plugin lifecycle revision was not exclusively claimed"
+                )
+            final = await session.execute(
+                text(
+                    "UPDATE public.extension_lifecycle_operations "
+                    "SET status = 'verified_committed', "
+                    "updated_at = clock_timestamp() "
+                    "WHERE operation_id = CAST(:operation_id AS uuid) "
+                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "AND actor_user_id = CAST(:actor_user_id AS uuid) "
+                    "AND status = 'prepared' "
+                    "RETURNING *"
+                ),
+                state_values,
+            )
+            recorded = final.mappings().one_or_none()
+            if recorded is None:
+                raise PluginLifecycleRevisionConflict(
+                    "Verified lifecycle receipt was not committed"
+                )
+            # Both updates commit or roll back together. This receipt still
+            # cannot be projected into consumer chat until every mutation path
+            # shares the global fence and fresh policy is enforced at runtime.
+            return {
+                **_operation(recorded),
+                "prior_revision": expected_revision,
+                "next_revision": int(new_revision),
+                "verification_source": "plugin_kernel",
+            }
 
     async def mark_unknown(
         self,
