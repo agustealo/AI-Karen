@@ -40,7 +40,7 @@ def endpoint():
     )
 
 
-def model():
+def model(*, provider_constraints: dict | None = None):
     budget = ExecutionBudget(max_model_calls=3, max_external_requests=2)
     plan = AuthorizedExecutionPlan(
         execution_id="run-1",
@@ -49,6 +49,7 @@ def model():
         authorized_tenant_id="t-1",
         authorized_session_id="s-1",
         topology=ExecutionTopology.MULTI_AGENT,
+        provider_constraints=dict(provider_constraints or {}),
         budget=budget,
     )
     meter = ExecutionBudgetMeter(budget)
@@ -163,8 +164,7 @@ async def test_restricted_structured_model_uses_selected_identity_and_one_meter_
         "execute_structured_provider_endpoint",
         execute,
     )
-    wrapped = model()
-    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    wrapped = model(provider_constraints=restriction)
     response = await wrapped.ainvoke([HumanMessage(content="Authorized tools")])
     assert response.content == "approved tool model response"
     assert response.response_metadata["actual_model"] == "model-with-tools"
@@ -187,8 +187,7 @@ async def test_restricted_structured_model_rejects_disallowed_identity_before_wi
         "execute_structured_provider_endpoint",
         execute,
     )
-    wrapped = model()
-    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    wrapped = model(provider_constraints=restriction)
     with pytest.raises(PermissionError, match="governed_model_identity_not_authorized"):
         await wrapped.ainvoke([HumanMessage(content="Unapproved tools")])
     execute.assert_not_awaited()

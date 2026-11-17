@@ -47,7 +47,11 @@ from ai_karen_engine.core.runtime.contracts import (
 )
 
 
-def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmission:
+def _scope(
+    *, calls: int = 2, tenant: str = "tenant-a",
+    provider_constraints: dict | None = None,
+    meter_model_calls: int | None = None,
+) -> GovernedToolModelAdmission:
     budget = ExecutionBudget(
         max_model_calls=calls,
         max_external_requests=1,
@@ -59,9 +63,13 @@ def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmi
         authorized_user_id="user-a",
         authorized_tenant_id=tenant,
         authorized_session_id="session-a",
+        provider_constraints=dict(provider_constraints or {}),
         budget=budget,
     )
+    if meter_model_calls is not None:
+        budget.max_model_calls = meter_model_calls
     meter = ExecutionBudgetMeter(budget)
+    budget.max_model_calls = calls
     principal = UserData(
         user_id="user-a",
         tenant_id=tenant,
@@ -243,8 +251,9 @@ async def test_deactivated_authenticated_user_denied_locally(monkeypatch):
 @pytest.mark.asyncio
 async def test_policy_provider_constraint_denies_before_client_execution(monkeypatch):
     _, attempts, _ = _local_manager(monkeypatch)
-    scope = _scope()
-    scope.plan.provider_constraints["eligible_providers"] = ["other-provider"]
+    scope = _scope(provider_constraints={
+        "eligible_providers": ["other-provider"],
+    })
     with pytest.raises(PermissionError, match="provider_not_authorized"):
         await ModelManagerInferencePort().generate(
             InferenceRequest(
@@ -272,8 +281,7 @@ async def test_restricted_model_with_unresolved_identity_denied_before_wire(
     manager, attempts, _ = _local_manager(
         monkeypatch, observed_model=selected_model,
     )
-    scope = _scope()
-    scope.plan.provider_constraints.update(restriction)
+    scope = _scope(provider_constraints=restriction)
     with pytest.raises(PermissionError, match="governed_model_identity_not_authorized"):
         await manager.generate_chat(
             [{"role": "user", "content": "restricted model input"}],
@@ -292,8 +300,7 @@ async def test_restricted_model_with_unresolved_identity_denied_before_wire(
 @pytest.mark.asyncio
 async def test_restricted_model_with_exact_identity_can_execute(monkeypatch, restriction):
     manager, attempts, _ = _local_manager(monkeypatch, observed_model="model-a")
-    scope = _scope()
-    scope.plan.provider_constraints.update(restriction)
+    scope = _scope(provider_constraints=restriction)
     response = await manager.generate_chat(
         [{"role": "user", "content": "approved model input"}],
         return_receipt=True,
@@ -814,8 +821,7 @@ def test_embedding_respects_runtime_policy_provider_allow_and_deny(monkeypatch, 
         model=object(),
         embed_authoritative=lambda text: invoked.append(text) or [0.1],
     )
-    scope = _scope()
-    scope.plan.provider_constraints.update(constraints)
+    scope = _scope(provider_constraints=constraints)
     with pytest.raises(PermissionError, match="provider_not_authorized"):
         LLMUtils().embed("private text", execution_admission=scope)
     assert invoked == []
