@@ -72,11 +72,12 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Complete KCM-02B3C1's canonical runner-observed
-inference timestamps and run replay fencing, preserving the separate legacy
-receipt-issuance freshness label. Its in-process timestamp claims do not
-independently certify a live engine, environment, held-out oracle or task-group
-independence. KCM-02B3C2 must introduce reviewer-admitted exact task-family,
-oracle split/leakage and revocation evidence before any independently verified
-proficiency policy. Training rights, checkpoint ancestry and transactional
-training-start/promotion fencing remain separately blocked.
+**Next controlled slice:** Complete KCM-02B3C2A's reviewer acknowledgment
+of the exact canonical benchmark cohort with separately authorized, strictly
+append-only proposed and confirmed receipts. Only a confirmed pair is
+consumable. Require live PostgreSQL RLS, evidence revocation and exact-head CI
+before merging. Separately prove independent oracle labels, evaluator/author
+separation, held-out split leakage, reproducible task-group independence and
+production environment attestation before any proficiency policy. No model
+training, general skill activation, permission grant or training-start lease
+is introduced by reviewer acknowledgment.
