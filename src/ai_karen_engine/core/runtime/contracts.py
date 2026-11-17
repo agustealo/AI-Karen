@@ -81,6 +81,30 @@ class ExecutionBudgetMeter:
         self._exhausted = False
         self._lock = asyncio.Lock()
 
+    def retains_initial_budget_limits(self) -> bool:
+        """Reject a plan whose mutable budget differs from this meter's grant.
+
+        The meter snapshots limits at construction. Initial authority binding
+        must check the very same limits enforced by later reservations; object
+        identity with a subsequently mutated budget is insufficient.
+        """
+        return all(
+            type(original) is int
+            and original >= 0
+            and type(getattr(self._budget, name, None)) is int
+            and getattr(self._budget, name) == original
+            for name, original in self._authorized_limits.items()
+        )
+
+    def within_issued_model_quota(self, max_model_calls: int) -> bool:
+        """Check the enforceable original limit, not a mutable plan value."""
+        return (
+            type(max_model_calls) is int
+            and max_model_calls >= 0
+            and self.retains_initial_budget_limits()
+            and self._authorized_limits["max_model_calls"] <= max_model_calls
+        )
+
     def start(self) -> None:
         """Start once; restarting cannot extend an authorized time budget."""
         if self._start_ms is None:
