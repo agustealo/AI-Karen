@@ -8,8 +8,11 @@ It uses the canonical source metadata resolver, not fabricated HF fixtures.
 """
 from __future__ import annotations
 
+import fnmatch
+import json
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -233,3 +236,134 @@ async def test_qwen_live_registered_provider_inference() -> None:
     assert result.model == item["model_id"], (
         "Provider executed a different model than the recommended Qwen3"
     )
+
+
+def test_pocket_tts_live_pinned_manifest_matches_both_transports() -> None:
+    """Compare independent live HF SDK and direct HTTPS file manifests.
+
+    Explicit opt-in with approved gated source account; metadata only. No
+    model weights, Karen model jobs, plugin activation, or audio inference.
+    """
+    if os.getenv("KAREN_LIVE_POCKET_MANIFEST_PROOF") != "1":
+        pytest.skip("Requires explicit gated Pocket manifest parity opt-in")
+    token = next(
+        (
+            os.environ[name].strip()
+            for name in ("HF_TOKEN", "HUGGINGFACE_API_KEY", "HUGGING_FACE_HUB_TOKEN")
+            if os.environ.get(name, "").strip()
+        ),
+        "",
+    )
+    if not token:
+        pytest.fail(
+            "Licensed Pocket manifest proof requires an approved private HF token",
+            pytrace=False,
+        )
+
+    from huggingface_hub import HfApi, RepoFile
+    from ai_karen_engine.core.model_runtime.management import (
+        direct_https_model_transport as direct,
+    )
+
+    spec_path = (
+        Path(__file__).resolve().parents[2]
+        / "src/ai_karen_engine/extensions/plugins/pocket-tts/model_spec.json"
+    )
+    spec = json.loads(spec_path.read_text(encoding="utf-8"))
+    recommended = next(
+        entry
+        for entry in load_model_download_recommendations()["recommendations"]
+        if entry["id"] == "pocket-tts-english-18m-refl"
+    )
+    model_id = str(spec["model_id"])
+    revision = str(spec["revision"])
+    patterns = list(recommended["include_patterns"])
+    assert recommended["model_id"] == model_id
+    assert recommended["revision"] == revision
+    assert recommended["channel_id"] == spec["channel_id"] == "plugin_audio"
+    assert re.fullmatch(r"[a-f0-9]{40}", revision)
+    assert patterns == [
+        f'{spec["model_subdirectory"]}/{spec["weights"]}',
+        f'{spec["model_subdirectory"]}/{spec["tokenizer"]}',
+        f'{spec["model_subdirectory"]}/{spec["voice_dir"]}/*.safetensors',
+    ]
+
+    api = HfApi()
+    try:
+        remote = api.model_info(model_id, revision=revision, token=token)
+    except Exception:
+        pytest.fail(
+            "Pinned gated Pocket metadata inaccessible to approved HF account",
+            pytrace=False,
+        )
+    assert remote.sha == revision, "HF SDK resolved a different Pocket revision"
+    assert bool(remote.gated), "Reviewed gated model access contract changed"
+
+    # Hub SDK transparently paginates; direct HTTPS independently validates
+    # and follows the cursor chain at the same reviewed repository revision.
+    hub_files: dict[str, dict[str, object]] = {}
+    prefixes = sorted({direct._prefix(pattern) for pattern in patterns})
+    for prefix in prefixes:
+        try:
+            entries = list(
+                api.list_repo_tree(
+                    model_id,
+                    path_in_repo=prefix,
+                    recursive=True,
+                    expand=True,
+                    revision=revision,
+                    token=token,
+                )
+            )
+        except Exception:
+            pytest.fail(
+                "Gated Pocket file tree inaccessible through Hugging Face SDK",
+                pytrace=False,
+            )
+        for entry in entries:
+            if not isinstance(entry, RepoFile):
+                continue
+            path = direct._safe_path(entry.path)
+            if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns):
+                continue
+            assert isinstance(entry.size, int) and 0 < entry.size <= direct._MAX_FILE_BYTES
+            lfs = getattr(entry, "lfs", None)
+            digest = getattr(lfs, "sha256", None) if lfs is not None else None
+            if digest is not None:
+                assert re.fullmatch(r"[0-9a-f]{64}", digest)
+            candidate = {"size": entry.size, "sha256": digest}
+            assert path not in hub_files or hub_files[path] == candidate, (
+                "HF SDK reported inconsistent pinned file metadata"
+            )
+            hub_files[path] = candidate
+
+    assert hub_files, "HF SDK returned no approved Pocket artifacts"
+    assert len(hub_files) <= direct._MAX_FILES
+    assert sum(int(item["size"]) for item in hub_files.values()) <= direct._MAX_TOTAL_BYTES
+
+    try:
+        direct_files = direct._discover(model_id, revision, patterns, [], token)
+    except direct.DirectHttpsDownloadError:
+        pytest.fail(
+            "Direct HTTPS cannot enumerate the complete gated pinned Pocket tree",
+            pytrace=False,
+        )
+    direct_by_path = {
+        item["path"]: {"size": item["size"], "sha256": item["sha256"]}
+        for item in direct_files
+    }
+    assert direct_by_path == hub_files, (
+        "Pinned direct HTTPS and Hub SDK inventories differ; "
+        "neither transport is source-certified by this test"
+    )
+
+    mandatory = {
+        f'{spec["model_subdirectory"]}/{spec["weights"]}',
+        f'{spec["model_subdirectory"]}/{spec["tokenizer"]}',
+    }
+    assert mandatory.issubset(direct_by_path), "Required Pocket model files absent"
+    voice_prefix = f'{spec["model_subdirectory"]}/{spec["voice_dir"]}/'
+    assert any(
+        path.startswith(voice_prefix) and path.endswith(".safetensors")
+        for path in direct_by_path
+    ), "No approved precomputed voice states in reviewed revision"
