@@ -224,7 +224,7 @@ describe('WhatsApp Cloud single-use consumer self-link', () => {
       'could not verify the identity-link request',
     );
     expect(screen.queryByText(/successful one-time proof consumption/)).toBeNull();
-    expect(screen.queryByText(/secret/)).toBeNull();
+    // Static guidance says 'treat it as a secret'; it is the attacker-supplied\n    // value itself that must never appear as rendered content.\n    expect(screen.queryByText('secret')).toBeNull();
   });
 
   it('preserves only a challenge reference after the command expires', async () => {
