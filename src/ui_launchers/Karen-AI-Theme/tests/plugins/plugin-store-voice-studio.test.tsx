@@ -143,7 +143,8 @@ describe('Plugin Store to governed Voice Studio navigation', () => {
     render(<PluginStorePage />);
     fireEvent.click(screen.getByRole("button", { name: "Open plugin details" }));
     fireEvent.click(screen.getByRole("button", { name: "Open Pocket TTS workspace" }));
-    expect(state.push).toHaveBeenCalledExactlyOnceWith("/dashboard?view=pocket-tts");
+    expect(state.push).toHaveBeenCalledOnce();
+    expect(state.push).toHaveBeenCalledWith("/dashboard?view=pocket-tts");
     expect(state.clearSelectedPlugin).toHaveBeenCalledOnce();
   });
 
