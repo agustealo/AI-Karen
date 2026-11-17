@@ -116,6 +116,61 @@ async def test_langchain_model_round_trips_real_tool_call(monkeypatch):
     assert execute.await_args.kwargs["tools"] == wrapped.tool_schemas
 
 
+@pytest.mark.parametrize(
+    "restriction",
+    [{"model": "model-with-tools"}, {"allowed_models": ["model-with-tools"]}],
+)
+@pytest.mark.asyncio
+async def test_restricted_structured_model_uses_selected_identity_and_one_meter_call(
+    monkeypatch, restriction,
+):
+    execute = AsyncMock(
+        return_value=StructuredChatResult(
+            message={"content": "approved tool model response", "tool_calls": []},
+            provider_id="ollama-local",
+            model="model-with-tools",
+            runtime_engine="ollama",
+            finish_reason="stop",
+            usage={"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+        )
+    )
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.structured_tool_chat_model."
+        "execute_structured_provider_endpoint",
+        execute,
+    )
+    wrapped = model()
+    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    response = await wrapped.ainvoke([HumanMessage(content="Authorized tools")])
+    assert response.content == "approved tool model response"
+    assert response.response_metadata["actual_model"] == "model-with-tools"
+    assert execute.await_args.kwargs["model"] == "model-with-tools"
+    assert execute.await_count == 1
+    assert wrapped.execution_admission.meter.model_calls == 1
+
+
+@pytest.mark.parametrize(
+    "restriction",
+    [{"model": "unapproved-model"}, {"allowed_models": ["unapproved-model"]}],
+)
+@pytest.mark.asyncio
+async def test_restricted_structured_model_rejects_disallowed_identity_before_wire(
+    monkeypatch, restriction,
+):
+    execute = AsyncMock()
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.structured_tool_chat_model."
+        "execute_structured_provider_endpoint",
+        execute,
+    )
+    wrapped = model()
+    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    with pytest.raises(PermissionError, match="governed_model_identity_not_authorized"):
+        await wrapped.ainvoke([HumanMessage(content="Unapproved tools")])
+    execute.assert_not_awaited()
+    assert wrapped.execution_admission.meter.model_calls == 0
+
+
 def test_message_converter_preserves_tool_call_pairing():
     call = AIMessage(
         content="",

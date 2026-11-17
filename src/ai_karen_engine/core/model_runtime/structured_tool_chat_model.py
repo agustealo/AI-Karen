@@ -114,7 +114,7 @@ class KarenGovernedChatModel(BaseChatModel):
         admission = self.execution_admission
         if not isinstance(admission, GovernedToolModelAdmission):
             raise PermissionError("governed_model_transport_admission_required")
-        await admission.reserve_transport(self.endpoint)
+        await admission.reserve_transport(self.endpoint, model=self.selected_model)
         result = await execute_structured_provider_endpoint(
             self.endpoint,
             messages=wire_messages,
