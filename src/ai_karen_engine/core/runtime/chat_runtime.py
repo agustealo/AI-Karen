@@ -778,7 +778,15 @@ class ChatRuntime:
 
         if decision.memory_write_allowed and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
-            await self._persist_memory(request, text, memory_recall_meta, plan)
+            try:
+                await self._persist_memory(request, text, memory_recall_meta, plan)
+            except asyncio.CancelledError:
+                # Before transcript commit, interrupted memory persistence
+                # cannot turn generated text into a completed assistant turn.
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, start,
+                )
+                raise
             provider_meta["execution_spans"].append(
                 {
                     "name": "memory_persistence",
@@ -790,9 +798,17 @@ class ChatRuntime:
         # Ordinary and streamed chat must both persist the accepted final
         # answer through the same authorized transcript owner. Episodic memory
         # projection above is a separate concern, not transcript storage.
-        transcript_result = await self._persist_transcript(
-            request, text, provider_meta, trajectory_id=trajectory.trajectory_id
-        )
+        try:
+            transcript_result = await self._persist_transcript(
+                request, text, provider_meta, trajectory_id=trajectory.trajectory_id
+            )
+        except asyncio.CancelledError:
+            # No committed transcript receipt was returned. The canonical
+            # run lifecycle still arbitrates any concurrent commit/stop race.
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
         provider_meta.update(transcript_result.to_metadata())
         transcript_failed = not transcript_result.success
         if transcript_failed:
@@ -1523,7 +1539,14 @@ class ChatRuntime:
         # committed together; a cancellation winner must leave no answer
         # in durable memory without a canonical transcript.
         if request.runtime_run_lease is None:
-            await persist_authorized_memory()
+            try:
+                await persist_authorized_memory()
+            except (asyncio.CancelledError, GeneratorExit):
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
 
         if verified_presentations:
             provider_meta["verified_presentations_v1"] = verified_presentations
@@ -1537,12 +1560,21 @@ class ChatRuntime:
         )
         if streamed_text and generation_error is None:
             transcript_started = time.perf_counter()
-            transcript_result = await self._persist_transcript(
-                request,
-                streamed_text,
-                provider_meta,
-                trajectory_id=trajectory.trajectory_id,
-            )
+            try:
+                transcript_result = await self._persist_transcript(
+                    request,
+                    streamed_text,
+                    provider_meta,
+                    trajectory_id=trajectory.trajectory_id,
+                )
+            except (asyncio.CancelledError, GeneratorExit):
+                # A cancelled pre-commit await is not a durable completed
+                # response. Do not infer provider success from partial text.
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
             provider_meta["execution_spans"].append(
                 {
                     "name": "transcript_persistence",
