@@ -39,6 +39,9 @@ class LearningSettings:
     # Default task-benchmark evidence lifetime for read-only KCM inspection.
     # Expired evidence is unavailable; it cannot certify current capability.
     kcm_benchmark_max_evidence_age_seconds: int = 2_592_000
+    # An optional, engine-specific worker observation. Never authorizes
+    # training, KCM datasets, benchmark independence, or model execution.
+    kcm_sklearn_fit_observation_enabled: bool = False
     model_routing_min_samples: int = 12
     model_routing_history_limit: int = 500
     model_routing_history_days: int = 90
@@ -76,6 +79,26 @@ class LearningSettings:
             if not 0.0 < value < 1.0:
                 raise ValueError("Learning reliability thresholds must lie between 0 and 1")
 
+
+    def get_kcm_sklearn_fit_observation_key(self) -> tuple[str, bytes] | None:
+        """Read a host-managed key without retaining it in settings or logs.
+
+        A missing/invalid enabled key fails closed. Disabled means no receipt,
+        not an implied identity, consent, or training authorization.
+        """
+        if not self.kcm_sklearn_fit_observation_enabled:
+            return None
+        key_id = os.environ.get("KCM_SKLEARN_FIT_OBSERVATION_KEY_ID", "")
+        secret = os.environ.get("KCM_SKLEARN_FIT_OBSERVATION_HMAC_KEY", "")
+        if (
+            not 1 <= len(key_id) <= 64
+            or not all(ch.isascii() and (ch.isalnum() or ch in "._-")
+                       for ch in key_id)
+            or len(secret) != 64
+            or any(ch not in "0123456789abcdefABCDEF" for ch in secret)
+        ):
+            raise ValueError("Configured KCM sklearn observation key is unavailable")
+        return key_id, bytes.fromhex(secret)
 
     def apply_env_overrides(self) -> None:
         env = os.getenv
@@ -148,6 +171,17 @@ class LearningSettings:
             }:
                 raise ValueError("KCM_TRAINING_ADMISSION_ENABLED must be boolean")
             self.kcm_training_admission_enabled = normalized in {
+                "1", "true", "yes", "on",
+            }
+
+        fit_observation = env("KCM_SKLEARN_FIT_OBSERVATION_ENABLED")
+        if fit_observation is not None:
+            normalized = fit_observation.strip().lower()
+            if normalized not in {
+                "1", "0", "true", "false", "yes", "no", "on", "off",
+            }:
+                raise ValueError("KCM_SKLEARN_FIT_OBSERVATION_ENABLED must be boolean")
+            self.kcm_sklearn_fit_observation_enabled = normalized in {
                 "1", "true", "yes", "on",
             }
 
