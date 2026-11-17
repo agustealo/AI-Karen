@@ -148,7 +148,7 @@ def _make_request() -> ChatExecutionRequest:
             "max_model_calls": 5,
         },
     )
-    issuer._issued_model_decisions[issued.decision_id] = issued
+    issuer._record_issued_model_decision(issued)
     issuer.bind_chat_model_policy(context=ctx, decision=issued)
     request = ChatExecutionRequest(
         messages=[{"role": "user", "content": "hello"}],
