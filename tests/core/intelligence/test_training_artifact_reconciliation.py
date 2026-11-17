@@ -849,3 +849,83 @@ def test_fit_observation_rejects_conflicting_registry_sample_counts(
     assert verifier.inspect_exact_sklearn_fit_artifact(
         principal=principal, model_id=model_id,
     ) is None
+
+
+@pytest.mark.parametrize("change", ["rotate_key", "rotate_id", "disable", "remove"])
+def test_fit_observation_rechecks_live_key_during_final_artifact_hash(
+    tmp_path, monkeypatch, change,
+):
+    """A revoked key cannot attest an otherwise unchanged artifact."""
+    from ai_karen_engine.config.learning import LearningSettings
+    from ai_karen_engine.core.intelligence.ml.training import (
+        artifact_reconciliation,
+    )
+
+    _set_fit_observation_key(monkeypatch)
+    settings = LearningSettings(kcm_sklearn_fit_observation_enabled=True)
+    monkeypatch.setattr(
+        artifact_reconciliation, "get_learning_settings", lambda: settings,
+    )
+    verifier, _, registry, principal, model_id, _, _ = (
+        _scoped_training_lineage_fixture(tmp_path, fit_observation=True)
+    )
+    original_hash = registry.validate_artifact
+    calls = 0
+
+    def revoke_during_final_hash(manifest):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            if change == "rotate_key":
+                monkeypatch.setenv(
+                    "KCM_SKLEARN_FIT_OBSERVATION_HMAC_KEY",
+                    (b"b" * 32).hex(),
+                )
+            elif change == "rotate_id":
+                monkeypatch.setenv(
+                    "KCM_SKLEARN_FIT_OBSERVATION_KEY_ID", "next-key",
+                )
+            elif change == "disable":
+                settings.kcm_sklearn_fit_observation_enabled = False
+            else:
+                monkeypatch.delenv(
+                    "KCM_SKLEARN_FIT_OBSERVATION_HMAC_KEY",
+                )
+        return original_hash(manifest)
+
+    registry.validate_artifact = revoke_during_final_hash
+    assert verifier.inspect_exact_sklearn_fit_artifact(
+        principal=principal, model_id=model_id,
+    ) is None
+    assert calls == 4
+
+
+def test_fit_observation_rechecks_live_key_after_final_audit_log(
+    tmp_path, monkeypatch,
+):
+    """A live key rotation during a logging hook cannot return success."""
+    from ai_karen_engine.core.intelligence.ml.training import (
+        artifact_reconciliation,
+    )
+
+    _set_fit_observation_key(monkeypatch)
+    verifier, _, _, principal, model_id, _, _ = (
+        _scoped_training_lineage_fixture(tmp_path, fit_observation=True)
+    )
+    original_log = artifact_reconciliation.logger.info
+
+    def revoke_during_success_log(message, *args, **kwargs):
+        if message == "ml.fit_observation.artifact_link_verified":
+            monkeypatch.setenv(
+                "KCM_SKLEARN_FIT_OBSERVATION_HMAC_KEY",
+                (b"c" * 32).hex(),
+            )
+        return original_log(message, *args, **kwargs)
+
+    monkeypatch.setattr(
+        artifact_reconciliation.logger, "info",
+        revoke_during_success_log,
+    )
+    assert verifier.inspect_exact_sklearn_fit_artifact(
+        principal=principal, model_id=model_id,
+    ) is None
