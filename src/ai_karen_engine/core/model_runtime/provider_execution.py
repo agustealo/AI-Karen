@@ -244,9 +244,12 @@ _LOCAL_PROVIDER_HOSTS = frozenset({
     "localhost", "host.docker.internal", "gateway.docker.internal",
     "host.containers.internal",
 })
+# Never classify link-local destinations as trusted local model servers.
+# IPv4 169.254/16 includes cloud instance metadata; IPv6 fe80::/10 is
+# interface-scoped and must not bypass RuntimePolicy merely for being local.
 _LOCAL_PROVIDER_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
     "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-    "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+    "::1/128", "fc00::/7",
 ))
 
 
