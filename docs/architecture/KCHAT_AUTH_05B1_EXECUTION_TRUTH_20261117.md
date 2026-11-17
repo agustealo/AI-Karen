@@ -6,8 +6,8 @@ Date: 2026-11-17. Depends on merged KCHAT-AUTH-05A (#982).
 ## Existing responsibility owners
 ModelManager remains the sole Core provider selector and actual invocation owner.
 ModelManagerInferencePort consumes a typed observed execution receipt instead of selecting a provider again after execution.
-EmbeddingManager exposes a real-model-only embedding method for the canonical Core path. It never returns synthetic lexical/hash/zero vectors when the model is absent or fails.
-ModelManager rejects caller-supplied model identities outside the selected registry model before runtime resolution.
+EmbeddingManager exposes a real-model-only embedding method for the canonical Core path. It calls the currently loaded encoder directly, without a text-only cache that could contain vectors from another model revision, and never returns synthetic lexical/hash/zero vectors when the model is absent or fails.
+ModelManager rejects caller-supplied model identities outside the selected registry model before runtime resolution and rejects reported model drift after an actual attempt, instead of recording success with mismatched attribution.
 Cached provider runtimes are invalidated when the registered endpoint or selected model changes. Clients with an environment credential are rebuilt so key rotations cannot reuse stale bearers.
 Synchronous generation and embedding methods execute in worker threads, while genuinely async methods stay on the event loop.
 Chat System Burn executes adversarial regressions for source attribution, early denial, cache drift, credential rotation, and authentic embeddings.

@@ -303,6 +303,13 @@ class ModelManager:
             if stream:
                 return self.stream_provider(provider, prompt, **kwargs)
             response = await self.invoke_provider(provider, prompt, **kwargs)
+            reported_model = getattr(provider, "model", None)
+            if (
+                selection.model not in {None, "", "auto"}
+                and isinstance(reported_model, str)
+                and reported_model.strip() not in {"", "auto", selection.model}
+            ):
+                raise ProviderNotAvailable("executed_model_registry_identity_drift")
             self._record_provider_result(selection.provider_id, True, start)
             breaker.record_success()
             if return_receipt:

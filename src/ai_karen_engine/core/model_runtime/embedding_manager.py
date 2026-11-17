@@ -619,7 +619,9 @@ class EmbeddingManager:
         if not self.model_loaded or self.model is None:
             raise EmbeddingFailed("embedding_model_unavailable")
         try:
-            vector = self._get_cached_embedding(text.strip())
+            # The legacy text-only LRU cache is not model-revision keyed.
+            # An authoritative attempt must use the currently loaded encoder.
+            vector = self._compute_embedding(text.strip())
             if (
                 not isinstance(vector, list)
                 or not vector

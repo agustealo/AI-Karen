@@ -137,6 +137,44 @@ async def test_unregistered_model_override_is_denied_before_model_construction(m
 
 
 @pytest.mark.asyncio
+async def test_reported_model_drift_is_not_recorded_as_success(monkeypatch) -> None:
+    manager = object.__new__(ModelManager)
+    selection = RuntimeSelection(
+        provider_id="local",
+        display_name="Local",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        model="registered-model",
+    )
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(
+        manager, "resolve_runtime",
+        lambda _: SimpleNamespace(
+            model="different-server-model",
+            generate_text=lambda prompt: "untrusted response",
+        ),
+    )
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    monkeypatch.setattr(
+        manager, "_get_breaker",
+        lambda _: SimpleNamespace(
+            allow_request=lambda: True,
+            record_success=lambda: None,
+            record_failure=lambda: None,
+        ),
+    )
+    results = []
+    monkeypatch.setattr(
+        manager, "_record_provider_result",
+        lambda provider_id, success, *a, **kw: results.append(success),
+    )
+    with pytest.raises(ProviderNotAvailable, match="executed_model_registry_identity_drift"):
+        await manager.generate_chat(
+            [{"role": "user", "content": "private"}], return_receipt=True
+        )
+    assert results == [False]
+
+
+@pytest.mark.asyncio
 async def test_port_uses_execution_receipt_without_second_selection(monkeypatch) -> None:
     from ai_karen_engine.core.model_runtime import model_manager as manager_module
 
@@ -199,12 +237,15 @@ def test_real_only_embedding_refuses_failures_and_invalid_vectors() -> None:
     manager = object.__new__(EmbeddingManager)
     manager.model_loaded = True
     manager.model = object()
-    manager._get_cached_embedding = lambda text: [0.25, 0.75]
+    manager._get_cached_embedding = lambda text: (_ for _ in ()).throw(
+        AssertionError("Legacy cache cannot establish model provenance")
+    )
+    manager._compute_embedding = lambda text: [0.25, 0.75]
     assert manager.embed_authoritative("  sample  ") == [0.25, 0.75]
-    manager._get_cached_embedding = lambda text: (_ for _ in ()).throw(RuntimeError("encoder"))
+    manager._compute_embedding = lambda text: (_ for _ in ()).throw(RuntimeError("encoder"))
     with pytest.raises(EmbeddingFailed, match="embedding_model_execution_failed"):
         manager.embed_authoritative("sample")
-    manager._get_cached_embedding = lambda text: [float("nan")]
+    manager._compute_embedding = lambda text: [float("nan")]
     with pytest.raises(EmbeddingFailed, match="embedding_model_vector_invalid"):
         manager.embed_authoritative("sample")
 
