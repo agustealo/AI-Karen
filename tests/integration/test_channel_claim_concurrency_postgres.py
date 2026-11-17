@@ -223,6 +223,93 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_a, operator_a_id, tenant_b, operator_b_id,
         ) == "DELETE 2"
 
+        # KWA-01C6C2C1: actual SQL/RLS read projection of one scoped
+        # *fixture-only* WhatsApp inbox -> ChatRuntime outbox -> status chain.
+        # Never interpret manually inserted fixture rows as live Meta evidence.
+        trial_connection = str(uuid.uuid4())
+        trial_inbox, trial_binding, trial_delivery, trial_correlation = [
+            uuid.uuid4() for _ in range(4)
+        ]
+        trial_event = f"wamid.fixture-{uuid.uuid4().hex}"
+        trial_provider_id = f"wamid.fixture-outbound-{uuid.uuid4().hex}"
+        trial_sender = "15551234444"
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id,
+                provider_account_id, credential_handle, enabled, revision)
+               VALUES ($1,$2,'whatsapp-cloud',$3,'vault://trial-fixture',
+                       true,4)""",
+            trial_connection, tenant_a, f"trial-{uuid.uuid4().hex}",
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_identity_bindings
+               (binding_id, tenant_id, connection_id, external_sender_id,
+                user_id, verified_at)
+               VALUES ($1,$2,$3,$4,$5,now())""",
+            trial_binding, tenant_a, trial_connection, trial_sender, user,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id, tenant_id, connection_id, connection_revision,
+                external_event_id, external_sender_id,
+                external_conversation_id, message_kind, message_text,
+                event_digest, status, binding_id, user_id,
+                correlation_id, provider_event_at)
+               VALUES ($1,$2,$3,4,$4,$5,$5,'text','fixture prompt',
+                       $6,'completed',$7,$8,$9,now())""",
+            trial_inbox, tenant_a, trial_connection, trial_event,
+            trial_sender, "a" * 64, trial_binding, user, trial_correlation,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_outbox
+               (delivery_id, tenant_id, connection_id, inbox_id,
+                destination_id, idempotency_key, message_kind,
+                message_text, status, provider_message_id)
+               VALUES ($1,$2,$3,$4,$5,$6,'text','fixture reply',
+                       'read',$7)""",
+            trial_delivery, tenant_a, trial_connection,
+            trial_inbox, trial_sender, str(trial_inbox), trial_provider_id,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_provider_status_events
+               (tenant_id, connection_id, connection_revision,
+                provider_message_id, recipient_id, state,
+                provider_timestamp, receipt_id, event_digest)
+               VALUES ($1,$2,4,$3,$4,'delivered',1770000000,$5,$6),
+                      ($1,$2,4,$3,$4,'read',1770000001,$7,$8),
+                      ($1,$2,3,$3,$4,'sent',1770000002,$9,$10)""",
+            tenant_a, trial_connection, trial_provider_id, trial_sender,
+            "1" * 64, "2" * 64, "3" * 64, "4" * 64,
+            "5" * 64, "6" * 64,
+        )
+        observed = await SqlChannelRepository().inspect_whatsapp_trial(
+            tenant_id=str(tenant_a), connection_id=trial_connection,
+            external_event_id=trial_event,
+        )
+        assert observed is not None
+        assert observed.inbox_id == str(trial_inbox)
+        assert observed.correlation_id == str(trial_correlation)
+        assert observed.inbox_status == "completed"
+        assert observed.outbound_status == "read"
+        assert observed.provider_receipt_states == ("delivered", "read")
+        assert observed.outbound_provider_message_sha256 is not None
+        assert trial_provider_id not in str(observed)
+        assert trial_sender not in str(observed)
+        assert "fixture prompt" not in str(observed)
+        assert await SqlChannelRepository().inspect_whatsapp_trial(
+            tenant_id=str(tenant_b), connection_id=trial_connection,
+            external_event_id=trial_event,
+        ) is None
+        assert await SqlChannelRepository().inspect_whatsapp_trial(
+            tenant_id=str(tenant_a), connection_id=trial_connection,
+            external_event_id="wamid.missing-event",
+        ) is None
+        # Isolate this fixture before the rest of the integration scenario.
+        assert await raw.execute(
+            "DELETE FROM public.channel_connections WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_a, trial_connection,
+        ) == "DELETE 1"
+
         # KWA-01D: actual PostgreSQL row locking and durable claim uniqueness.
         # A separate connection avoids changing the existing outbox assertions.
         webhook_connection = f"telegram-lease-{uuid.uuid4().hex}"

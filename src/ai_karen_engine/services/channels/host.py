@@ -212,6 +212,37 @@ class ChannelHostServices:
             tenant_id=tenant_id,
         )
 
+    async def inspect_whatsapp_trial_evidence(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        connection_id: str, external_event_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ):
+        """Project one redacted durable trial after canonical inspector RBAC."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.inspect", plan=authorized_plan,
+        )
+        evidence = await self.repository.inspect_whatsapp_trial(
+            tenant_id=tenant_id, connection_id=connection_id,
+            external_event_id=external_event_id,
+        )
+        if evidence is not None:
+            logger.info(
+                "channel.whatsapp_operator.trial_inspected",
+                extra={
+                    "tenant_id": tenant_id, "user_id": user_id,
+                    "connection_id": connection_id,
+                    "correlation_id": evidence.correlation_id,
+                    "inbox_status": evidence.inbox_status,
+                    "outbound_status": evidence.outbound_status,
+                    "provider_receipt_count": len(evidence.provider_receipt_states),
+                    "policy_decision_id": authorized_plan.policy_decision_id,
+                },
+            )
+        return evidence
+
     async def issue_whatsapp_self_link_challenge(
         self, *, tenant_id: str, user_id: str, session_id: str,
         connection_id: str, authorized_plan: AuthorizedExecutionPlan,
