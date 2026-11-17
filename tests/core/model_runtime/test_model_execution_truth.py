@@ -15,11 +15,12 @@ from ai_karen_engine.core.model_runtime.inference_port import (
     ModelManagerInferencePort,
 )
 from ai_karen_engine.core.model_runtime.model_manager import (
-    ModelExecutionReceipt,
     ModelManager,
     RuntimeSelection,
 )
 from ai_karen_engine.core.model_runtime.provider_contracts import EmbeddingFailed, ProviderNotAvailable
+from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
+from ai_karen_engine.core.model_runtime.openai_compatible_client import OpenAICompatibleRuntimeClient
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint, ProviderEndpointType
 
 
@@ -84,6 +85,7 @@ async def test_manager_receipt_records_only_actual_selection(monkeypatch) -> Non
         display_name="Selected",
         endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
         model="registered-model",
+        runtime_engine="ollama",
     )
     manager = object.__new__(ModelManager)
     calls = []
@@ -110,11 +112,11 @@ async def test_manager_receipt_records_only_actual_selection(monkeypatch) -> Non
     )
     monkeypatch.setattr(manager, "_record_provider_result", lambda *a, **kw: None)
     result = await manager.generate_chat([{"role": "user", "content": "hello"}], return_receipt=True)
-    assert result == ModelExecutionReceipt(
-        response="output",
+    assert result == ProviderExecutionResult(
+        text="output",
         provider_id="selected-provider",
         model="registered-model",
-        runtime_engine="openai_compatible",
+        runtime_engine="ollama",
     )
     assert calls == ["select"]
 
@@ -146,13 +148,16 @@ async def test_reported_model_drift_is_not_recorded_as_success(monkeypatch) -> N
         model="registered-model",
     )
     monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
-    monkeypatch.setattr(
-        manager, "resolve_runtime",
-        lambda _: SimpleNamespace(
-            model="different-server-model",
-            generate_text=lambda prompt: "untrusted response",
-        ),
+    runtime = OpenAICompatibleRuntimeClient(
+        model="registered-model",
+        base_url="http://127.0.0.1:11434/v1",
+        provider_name="local",
     )
+    monkeypatch.setattr(
+        runtime, "generate_text_with_model",
+        lambda prompt, **kwargs: ("untrusted response", "different-server-model"),
+    )
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: runtime)
     monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
     monkeypatch.setattr(
         manager, "_get_breaker",
@@ -182,9 +187,9 @@ async def test_port_uses_execution_receipt_without_second_selection(monkeypatch)
 
     async def generate_chat(messages, **kwargs):
         calls.append(kwargs)
-        return ModelExecutionReceipt(
-            response="actual output", provider_id="actually-used",
-            model="actual-model", runtime_engine="openai_compatible",
+        return ProviderExecutionResult(
+            text="actual output", provider_id="actually-used",
+            model="actual-model", runtime_engine="ollama",
         )
 
     manager = SimpleNamespace(
@@ -200,7 +205,7 @@ async def test_port_uses_execution_receipt_without_second_selection(monkeypatch)
     assert result.text == "actual output"
     assert result.provider == "actually-used"
     assert result.model == "actual-model"
-    assert result.metadata == {"runtime_engine": "openai_compatible"}
+    assert result.metadata == {"runtime_engine": "ollama"}
     assert len(calls) == 1
     assert calls[0]["return_receipt"] is True
 
@@ -220,6 +225,72 @@ async def test_port_denies_legacy_unattributed_response(monkeypatch) -> None:
         await ModelManagerInferencePort().generate(
             InferenceRequest(messages=[{"role": "user", "content": "hello"}])
         )
+
+
+
+def test_compatible_client_keeps_configured_default_separate_from_response(monkeypatch) -> None:
+    client = OpenAICompatibleRuntimeClient(
+        model="auto", base_url="http://127.0.0.1:11434/v1", provider_name="local",
+    )
+    monkeypatch.setattr(
+        client, "_request",
+        lambda path, payload: {
+            "model": "observed-server-model",
+            "choices": [{"message": {"content": "actual output"}}],
+        },
+    )
+    assert client.generate_text_with_model("prompt") == ("actual output", "observed-server-model")
+    assert client.model == "auto"
+    assert client.generate_text("prompt") == "actual output"
+    assert client.model == "auto"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_auto_model_receipts_never_cross_attribute(monkeypatch) -> None:
+    from ai_karen_engine.core.model_runtime import model_manager as manager_module
+
+    manager = object.__new__(ModelManager)
+    selection = RuntimeSelection(
+        provider_id="ollama-local", display_name="Ollama",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        model=None, runtime_engine="ollama",
+    )
+    client = OpenAICompatibleRuntimeClient(
+        model="auto", base_url="http://127.0.0.1:11434/v1", provider_name="ollama-local",
+    )
+    barrier = threading.Barrier(2)
+
+    def execute(path, payload):
+        barrier.wait(timeout=3.0)
+        content = payload["messages"][0]["content"]
+        suffix = "A" if "first" in content else "B"
+        return {
+            "model": f"model-{suffix}",
+            "choices": [{"message": {"content": f"output-{suffix}"}}],
+        }
+
+    monkeypatch.setattr(client, "_request", execute)
+    monkeypatch.setattr(manager, "select_provider", lambda *args, **kwargs: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: client)
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    monkeypatch.setattr(
+        manager, "_get_breaker",
+        lambda _: SimpleNamespace(
+            allow_request=lambda: True,
+            record_success=lambda: None,
+            record_failure=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(manager, "_record_provider_result", lambda *a, **kw: None)
+    results = await asyncio.gather(
+        manager.generate_chat([{"role": "user", "content": "first"}], return_receipt=True),
+        manager.generate_chat([{"role": "user", "content": "second"}], return_receipt=True),
+    )
+    assert [(x.text, x.model, x.runtime_engine) for x in results] == [
+        ("output-A", "model-A", "ollama"),
+        ("output-B", "model-B", "ollama"),
+    ]
+    assert client.model == "auto"
 
 
 def test_real_only_embedding_refuses_missing_model() -> None:

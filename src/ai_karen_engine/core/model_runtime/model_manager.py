@@ -20,6 +20,7 @@ from ai_karen_engine.core.model_runtime.openai_compatible_client import (
     OpenAICompatibleRuntimeClient,
 )
 from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpoint,
     ProviderEndpointType,
@@ -51,6 +52,7 @@ class RuntimeSelection:
     display_name: str
     endpoint_type: ProviderEndpointType
     model: Optional[str] = None
+    runtime_engine: Optional[str] = None
     base_url: Optional[str] = None
     supports_streaming: bool = False
     supports_embeddings: bool = False
@@ -58,17 +60,7 @@ class RuntimeSelection:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True, slots=True)
-class ModelExecutionReceipt:
-    """Observed result of one actual model attempt, not an authorization grant."""
-
-    response: Any
-    provider_id: str
-    model: Optional[str]
-    runtime_engine: Optional[str]
-
-
-class ModelManager:
+ class ModelManager:
     """Single source of truth for provider selection and model execution."""
 
     def __init__(
@@ -123,6 +115,7 @@ class ModelManager:
             display_name=endpoint.display_name,
             endpoint_type=endpoint.endpoint_type,
             model=endpoint.default_model,
+            runtime_engine=endpoint.runtime_engine.value,
             base_url=endpoint.base_url,
             supports_streaming=endpoint.supports_streaming,
             supports_embeddings=endpoint.supports_embeddings,
@@ -198,6 +191,10 @@ class ModelManager:
             or endpoint.endpoint_type != selection.endpoint_type
             or endpoint.base_url != selection.base_url
             or endpoint.default_model != selection.model
+            or (
+                selection.runtime_engine is not None
+                and selection.runtime_engine != endpoint.runtime_engine.value
+            )
         ):
             raise ProviderNotAvailable("runtime_selection_registry_drift")
         # Provider IDs alone cannot keep a stale endpoint/model runtime alive.
@@ -302,28 +299,35 @@ class ModelManager:
         try:
             if stream:
                 return self.stream_provider(provider, prompt, **kwargs)
-            response = await self.invoke_provider(provider, prompt, **kwargs)
-            reported_model = getattr(provider, "model", None)
+            # Compatibility HTTP may serve an auto-selected model. Obtain
+            # the response and its reported model from *one* request result.
+            # Reading a shared client's mutable "model" after await races
+            # concurrent calls and can attach another request's identity.
+            observed_model = None
+            if return_receipt and isinstance(provider, OpenAICompatibleRuntimeClient):
+                response, observed_model = await asyncio.to_thread(
+                    provider.generate_text_with_model, prompt, **kwargs
+                )
+            else:
+                response = await self.invoke_provider(provider, prompt, **kwargs)
             if (
                 selection.model not in {None, "", "auto"}
-                and isinstance(reported_model, str)
-                and reported_model.strip() not in {"", "auto", selection.model}
+                and observed_model not in {None, "", "auto", selection.model}
             ):
                 raise ProviderNotAvailable("executed_model_registry_identity_drift")
             self._record_provider_result(selection.provider_id, True, start)
             breaker.record_success()
             if return_receipt:
-                observed = getattr(provider, "model", None)
                 actual_model = (
-                    str(observed).strip()
-                    if isinstance(observed, str) and observed.strip() not in {"", "auto"}
-                    else selection.model if selection.model not in {None, "auto"} else None
+                    observed_model
+                    if observed_model not in {None, "", "auto"}
+                    else selection.model if selection.model not in {None, "", "auto"} else None
                 )
-                return ModelExecutionReceipt(
-                    response=response,
+                return ProviderExecutionResult(
+                    text=str(response or ""),
                     provider_id=selection.provider_id,
                     model=actual_model,
-                    runtime_engine=selection.endpoint_type.value,
+                    runtime_engine=selection.runtime_engine,
                 )
             return response
         except Exception as exc:
@@ -525,6 +529,6 @@ def initialize_model_manager() -> ModelManager:
 
 
 __all__ = [
-    "ModelExecutionReceipt", "ModelManager", "RuntimeSelection",
+    "ModelManager", "RuntimeSelection",
     "get_model_manager", "initialize_model_manager",
 ]

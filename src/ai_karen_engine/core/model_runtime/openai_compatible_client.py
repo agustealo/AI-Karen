@@ -88,7 +88,8 @@ class OpenAICompatibleRuntimeClient:
                 f"{self.provider_name} unavailable: {exc.reason}"
             ) from exc
 
-    def generate_text(self, prompt: str, **kwargs: Any) -> str:
+    def generate_text_with_model(self, prompt: str, **kwargs: Any) -> tuple[str, Optional[str]]:
+        """Return the exact text/model observation from this one HTTP response."""
         messages = kwargs.pop("messages", None) or [{"role": "user", "content": prompt}]
         payload: Dict[str, Any] = {
             "messages": messages,
@@ -109,8 +110,11 @@ class OpenAICompatibleRuntimeClient:
         text = str(message.get("content") or first.get("text") or "").strip()
         if not text:
             raise GenerationFailed(f"{self.provider_name} returned empty text")
-        if body.get("model"):
-            self.model = str(body["model"])
+        observed_model = body.get("model")
+        return text, str(observed_model).strip() if observed_model is not None else None
+
+    def generate_text(self, prompt: str, **kwargs: Any) -> str:
+        text, _ = self.generate_text_with_model(prompt, **kwargs)
         return text
 
     def generate_response(self, prompt: str, **kwargs: Any) -> str:
