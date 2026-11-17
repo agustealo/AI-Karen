@@ -608,6 +608,65 @@ The test is part of the exact-head Plugin Backend workflow, not a mock-only
 contract. Startup recovery, policy-bound service orchestration and API caller
 migration remain subsequent KPLUG-CONV-02C3B work.
 
+## Host-only governed lifecycle execution (KPLUG-CONV-02C3B2B)
+
+The existing `PluginService` owns one host-only
+`execute_approved_lifecycle(context, scope, approval_id)` operation. It
+requires `ChatExecutionContext.require_authenticated_user` and
+`ADMIN_PLUGINS_MANAGE` from the canonical RBAC manager, then reads the
+approved human decision from the existing actor-scoped `ApprovalService`.
+It rejects absent or mismatched identities, session/conversation drift and
+noncanonical action scopes before touching physical state.
+
+`RuntimePolicyEnforcer.authorize_approved_plugin_lifecycle` is an isolated
+**specialized** policy evaluation, not an extension of generic
+`PolicyEvaluationRequest`. Generic `plugin.lifecycle.*` requests remain
+denied. The specialized decision requires the exact previously approved
+tenant/user/conversation/action, human decision actor, high-risk intent,
+unexpired approval and scope payload, canonical manifest SHA-256, observed
+state, monotonic global revision and ready disposition. Only an allowed
+`PolicyDecision` converted to the existing `AuthorizedExecutionPlan`
+and accepted by `ActionExecutionGate` can proceed.
+
+The service then reserves the existing approved PostgreSQL claim, holds
+`PluginLifecycleLedger.hold_prepared_execution` across
+`PluginKernel.transition_prepared_lifecycle` and
+`PluginLifecycleLedger.complete_verified`, and returns a receipt **only
+after** terminal CAS. It rechecks authenticated RBAC immediately before
+the physical transition and emits structured audit events with request,
+correlation, actor, tenant, installation, policy and operation identifiers.
+On failure/cancellation after reservation it attempts to permanently mark
+the operation unknown. The durable prepared/in_flight revision remains
+unresolved if the database is unavailable. Never retry a physical effect
+from an uncertain operation.
+
+**Release boundary:** No HTTP, chat, CopilotKit, marketplace or extension
+manager caller invokes this new internal operation. Existing direct
+`PluginService.enable_plugin`/`disable_plugin` compatibility methods
+remain outside the new fence and require follow-on caller migration and
+deletion/guarding audit. This slice does not prove shared plugin filesystem
+semantics across different production hosts, instantaneous revocation from
+a separate identity database or guaranteed audit availability during a
+database outage. The approval itself is consent evidence, not a bearer
+execution grant, and `ApprovalService.authorize_or_request` /
+`consume_for_request` and generic resume stay deliberately unavailable
+for lifecycle mutation.
+
+**Proof:** isolated policy/ActionExecutionGate regression tests preserve
+generic-deny behavior and reject missing identity, ordinary user privileges,
+wrong scope/session, expired or consumed approvals and state/revision drift.
+The dedicated disposable restricted-role PostgreSQL suite exercises the
+actual PluginService execution path through kernel terminal CAS, denies
+untrusted role claims, verifies one-shot approval consumption and freezes
+a deliberately lost post-kernel receipt as unknown. This proof must run
+alongside Plugin Backend, Main Quality, security and first-boot gates on
+the exact PR head.
+
+**Next:** KPLUG-CONV-02C3B3 must inventory all active enable/disable,
+store/install, extension load/unload/reload and startup/refresh paths,
+convert each to this single governed owner, and prohibit direct bypasses
+before any user-facing or conversational activation control is enabled.
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and

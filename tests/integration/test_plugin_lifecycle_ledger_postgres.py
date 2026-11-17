@@ -22,6 +22,12 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.persistence.repositories import approval_repository as approval_repo_module
+from ai_karen_engine.services import approvals as approvals_module
+from ai_karen_engine.services.approvals import ApprovalService
+from ai_karen_engine.persistence.repositories.approval_repository import SqlApprovalRepository
 from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
     PluginLifecycleApprovalScope,
     PluginLifecycleKernelObservation,
@@ -327,6 +333,32 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
         (package / ".karen-manual-disabled").write_text(
             "Plugin disabled explicitly; requires enable\n", encoding="utf-8"
         )
+        # Two extra canonical installations exercise the actual host service
+        # path against the same restricted-role PostgreSQL ledger.
+        for plugin_id in ("governed-demo", "governed-failure"):
+            host_dir = tmp_path / plugin_id
+            host_dir.mkdir()
+            (host_dir / "__init__.py").write_text("", encoding="utf-8")
+            (host_dir / "handler.py").write_text(
+                "class MainExtension:\n    pass\n", encoding="utf-8"
+            )
+            (host_dir / "plugin_manifest.json").write_text(
+                json.dumps({
+                    "name": plugin_id,
+                    "version": "1.0.0",
+                    "display_name": "Governed Host Proof",
+                    "description": "Actor-bound PostgreSQL lifecycle acceptance",
+                    "author": "KAREN",
+                    "license": "MIT",
+                    "category": "test",
+                    "entrypoint": "handler:MainExtension",
+                    "rbac": {"default_enabled": False},
+                }), encoding="utf-8",
+            )
+            (host_dir / ".karen-manual-disabled").write_text(
+                "Plugin disabled explicitly; requires enable\n",
+                encoding="utf-8",
+            )
         service = PluginService(tmp_path, tmp_path)
         await service.initialize()
         kernel = service.kernel
@@ -644,6 +676,136 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 scope=crash_scope, operation_id=crash_claim["operation_id"],
             ):
                 pytest.fail("Unknown operation must remain frozen")
+
+        # ApprovalService resolves its SQL read with the same restricted
+        # tenant-scoped role. The host refuses a forged in-memory approval.
+        monkeypatch.setattr(
+            approval_repo_module, "async_transaction_scope", scoped_transaction
+        )
+        approved_service = ApprovalService(repository=SqlApprovalRepository())
+        monkeypatch.setattr(
+            approvals_module, "get_approval_service", lambda: approved_service
+        )
+        trusted_actor = UserData(
+            user_id=str(actor_a), tenant_id=str(tenant_a), roles=["admin"]
+        )
+
+        def governed_context(*, roles: list[str] | None = None) -> ChatExecutionContext:
+            user = (
+                trusted_actor if roles is None else UserData(
+                    user_id=str(actor_a), tenant_id=str(tenant_a), roles=roles,
+                )
+            )
+            return ChatExecutionContext(
+                user_id=str(actor_a), tenant_id=str(tenant_a),
+                session_id="session-1",
+                conversation_id=str(uuid.UUID("22222222-2222-2222-2222-222222222222")),
+                request_id=str(uuid.uuid4()),
+                correlation_id=str(uuid.uuid4()),
+                roles=["admin"], permissions=["admin.plugins:manage"],
+                authenticated_user=user,
+            )
+
+        async def prepare_governed(plugin_id: str) -> tuple[PluginLifecycleApprovalScope, str]:
+            attested = await kernel.observe_lifecycle_for_finalization(
+                plugin_id, operation_id=str(uuid.uuid4()),
+            )
+            action_scope = PluginLifecycleApprovalScope(
+                installation_id=plugin_id,
+                action="enable",
+                manifest_checksum=attested.manifest_checksum,
+                expected_state="disabled",
+                expected_revision=1,
+                tenant_id=str(tenant_a),
+                user_id=str(actor_a),
+                session_id="session-1",
+                conversation_id=str(uuid.UUID("22222222-2222-2222-2222-222222222222")),
+            )
+            approval_id = await approve(action_scope)
+            await raw.execute(
+                "UPDATE public.runtime_approval_requests "
+                "SET decided_by = $2, decided_at = now() "
+                "WHERE approval_id = $1",
+                uuid.UUID(approval_id), actor_a,
+            )
+            return action_scope, approval_id
+
+        governed_scope, governed_approval = await prepare_governed("governed-demo")
+        denied_user_context = governed_context(roles=["user"])
+        with pytest.raises(PermissionError, match="management permission"):
+            await service.execute_approved_lifecycle(
+                context=denied_user_context,
+                scope=governed_scope,
+                approval_id=governed_approval,
+            )
+        forged_scope = replace(governed_scope, manifest_checksum="b" * 64)
+        with pytest.raises(PermissionError, match="policy denied"):
+            await service.execute_approved_lifecycle(
+                context=governed_context(),
+                scope=forged_scope,
+                approval_id=governed_approval,
+            )
+        scoped_approval = await approved_service.get(
+            governed_approval, user=trusted_actor,
+        )
+        assert scoped_approval["status"] == "approved"
+        assert (tmp_path / "governed-demo" / ".karen-manual-disabled").is_file()
+
+        success_receipt = await service.execute_approved_lifecycle(
+            context=governed_context(),
+            scope=governed_scope,
+            approval_id=governed_approval,
+        )
+        assert success_receipt["status"] == "verified_committed"
+        assert success_receipt["verification_source"] == "plugin_kernel"
+        assert success_receipt["execution_authority"] == "plugin_service"
+        assert success_receipt["next_revision"] == 2
+        assert success_receipt["policy_decision_id"]
+        assert (await ledger.read_observation("governed-demo"))["disposition"] == "ready"
+        assert (await ledger.read_observation("governed-demo"))["observed_state"] == "enabled"
+        # Once consumed, the same approval is rejected by current policy even
+        # if the stored global revision now correctly reflects enabled state.
+        with pytest.raises(PermissionError, match="policy denied"):
+            await service.execute_approved_lifecycle(
+                context=governed_context(),
+                scope=governed_scope,
+                approval_id=governed_approval,
+            )
+
+        uncertain_scope, uncertain_approval = await prepare_governed("governed-failure")
+        actual_transition = kernel.transition_prepared_lifecycle
+
+        async def broken_after_write(
+            scope: PluginLifecycleApprovalScope, *, operation_id: str,
+        ) -> PluginLifecycleKernelObservation:
+            observed = await actual_transition(scope, operation_id=operation_id)
+            if scope.installation_id == "governed-failure":
+                raise RuntimeError("simulated lost terminal receipt after physical write")
+            return observed
+
+        monkeypatch.setattr(kernel, "transition_prepared_lifecycle", broken_after_write)
+        with pytest.raises(RuntimeError, match="simulated lost terminal receipt"):
+            await service.execute_approved_lifecycle(
+                context=governed_context(),
+                scope=uncertain_scope,
+                approval_id=uncertain_approval,
+            )
+        terminal = await ledger.read_observation("governed-failure")
+        assert terminal["disposition"] == "unresolved"
+        assert terminal["revision"] == 1
+        assert terminal["observed_state"] == "disabled"
+        operation = await ledger.read_operation(
+            operation_id=terminal["active_operation_id"],
+            tenant_id=str(tenant_a),
+            actor_user_id=str(actor_a),
+        )
+        assert operation is not None and operation["status"] == "unknown"
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            await service.execute_approved_lifecycle(
+                context=governed_context(),
+                scope=uncertain_scope,
+                approval_id=uncertain_approval,
+            )
 
         # A client with no host privilege must never read global revisions
         # or operation receipts directly, even though the tables exist.
