@@ -203,7 +203,7 @@ async def test_deepagents_tool_invokes_only_canonical_audited_bridge(sdk, monkey
 
 
 @pytest.mark.asyncio
-async def test_model_callback_enforces_shared_budget_for_nested_agent_calls(sdk):
+async def test_model_sdk_callback_cannot_precharge_or_double_count_nested_calls(sdk):
     specialist = DeepAgentsResearchSpecialist(
         registration(),
         model_factory=lambda *_args: SimpleNamespace(
@@ -220,9 +220,14 @@ async def test_model_callback_enforces_shared_budget_for_nested_agent_calls(sdk)
     callback = sdk["config"]["callbacks"][0]
     await callback.on_chat_model_start({}, [])
     await callback.on_chat_model_start({}, [])
+    # An SDK start notification is not evidence that model HTTP happened.
+    assert ctx.budget_meter.model_calls == 0
+    assert ctx.budget_meter.exhausted is False
+    assert await ctx.budget_meter.reserve_model_execution() is True
+    assert await ctx.budget_meter.reserve_model_execution() is True
+    assert await ctx.budget_meter.reserve_model_execution() is False
     with pytest.raises(RuntimeError, match="budget"):
         await callback.on_chat_model_start({}, [])
-    # A rejected third SDK callback must not be reported as a model call.
     assert ctx.budget_meter.model_calls == 2
     assert ctx.budget_meter.exhausted is True
 
