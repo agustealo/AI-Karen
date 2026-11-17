@@ -8,7 +8,7 @@
  * binding. Never persist the command, copy it automatically, or log it.
  */
 import { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Copy, Loader2, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Copy, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,51 @@ import { ApiError, apiClient } from '@/lib/api';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COMMAND = /^\/link [A-Za-z0-9_-]{43}$/;
+
+type WhatsAppConnectionChoice = Readonly<{
+  connection_id: string;
+  connection_revision: number;
+}>;
+
+function validateConnectionChoices(value: unknown): WhatsAppConnectionChoice[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Unverified WhatsApp connection inventory');
+  }
+  const source = value as Record<string, unknown>;
+  if (Object.keys(source).length !== 1 || !Array.isArray(source.connections) ||
+    source.connections.length > 50) {
+    throw new Error('Unverified WhatsApp connection inventory');
+  }
+  const ids = new Set<string>();
+  const result: WhatsAppConnectionChoice[] = [];
+  for (const item of source.connections) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error('Unverified WhatsApp connection inventory');
+    }
+    const row = item as Record<string, unknown>;
+    if (Object.keys(row).length !== 2 ||
+      typeof row.connection_id !== 'string' || !UUID.test(row.connection_id) ||
+      typeof row.connection_revision !== 'number' ||
+      !Number.isSafeInteger(row.connection_revision) || row.connection_revision < 1 ||
+      ids.has(row.connection_id)) {
+      throw new Error('Unverified WhatsApp connection inventory');
+    }
+    ids.add(row.connection_id);
+    result.push({
+      connection_id: row.connection_id,
+      connection_revision: row.connection_revision,
+    });
+  }
+  return result;
+}
+
+function describeInventoryFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) return 'Sign in to view your WhatsApp Cloud connection choices.';
+    if (error.status === 403) return 'Your account cannot list WhatsApp Cloud connections.';
+  }
+  return 'Karen could not verify your available WhatsApp Cloud connections.';
+}
 
 type IssuedChallenge = Readonly<{
   challenge_id: string;
@@ -109,6 +154,10 @@ function describeFailure(error: unknown, statusRequest = false): string {
 
 export default function WhatsAppCloudSelfLink() {
   const [connectionId, setConnectionId] = useState('');
+  const [connectionChoices, setConnectionChoices] = useState<WhatsAppConnectionChoice[] | null>(null);
+  const [inventoryPending, setInventoryPending] = useState(false);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const inventoryEpoch = useRef(0);
   const [issued, setIssued] = useState<IssuedChallenge | null>(null);
   const [lastChallengeId, setLastChallengeId] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<ChallengeStatus | null>(null);
@@ -120,7 +169,10 @@ export default function WhatsAppCloudSelfLink() {
 
   // The parent keys and unmounts this panel on signed-in principal changes.
   // Drop stale responses on unmount and erase the token after its TTL.
-  useEffect(() => () => { requestEpoch.current += 1; }, []);
+  useEffect(() => () => {
+    requestEpoch.current += 1;
+    inventoryEpoch.current += 1;
+  }, []);
   useEffect(() => {
     if (issued === null) return;
     const clear = window.setTimeout(() => {
@@ -148,6 +200,27 @@ export default function WhatsAppCloudSelfLink() {
   const changeConnection = (nextValue: string) => {
     clearCommand();
     setConnectionId(nextValue.trim());
+  };
+
+  const refreshConnectionChoices = async () => {
+    if (inventoryPending) return;
+    const epoch = ++inventoryEpoch.current;
+    setInventoryPending(true);
+    setInventoryError(null);
+    setConnectionChoices(null);
+    try {
+      const response = await apiClient.get<unknown>(
+        '/api/channels/identity/whatsapp/connections',
+      );
+      const verified = validateConnectionChoices(response);
+      if (inventoryEpoch.current === epoch) setConnectionChoices(verified);
+    } catch (failure) {
+      if (inventoryEpoch.current === epoch) {
+        setInventoryError(describeInventoryFailure(failure));
+      }
+    } finally {
+      if (inventoryEpoch.current === epoch) setInventoryPending(false);
+    }
   };
 
   const issueChallenge = async () => {
@@ -227,12 +300,63 @@ export default function WhatsAppCloudSelfLink() {
           Link your WhatsApp Cloud sender
         </CardTitle>
         <CardDescription>
-          For an official WhatsApp Business Cloud API connection supplied by your Karen
-          operator, request a one-time command for your verified Karen account.
+          Choose a configured WhatsApp Business Cloud API connection in your
+          tenant, or enter a connection ID provided by an authorized operator.
+          Then request a one-time command for your verified Karen account.
           This is separate from personal WhatsApp Linked Devices pairing.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="space-y-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void refreshConnectionChoices()}
+            disabled={inventoryPending}
+          >
+            {inventoryPending
+              ? <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />
+              : <RefreshCw aria-hidden="true" className="mr-2 h-4 w-4" />}
+            Find available WhatsApp Cloud connections
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Only enabled connections in your verified Karen tenant are returned.
+            This inventory does not establish live Meta connectivity.
+          </p>
+          {inventoryError && (
+            <p role="alert" className="text-xs text-destructive">{inventoryError}</p>
+          )}
+          {connectionChoices && connectionChoices.length === 0 && (
+            <p role="status" className="text-xs text-muted-foreground">
+              Karen returned no enabled WhatsApp Cloud connections for your account.
+              Ask your operator to configure and enable one before linking.
+            </p>
+          )}
+          {connectionChoices && connectionChoices.length > 0 && (
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-self-link-available">Available connections</Label>
+              <select
+                id="whatsapp-self-link-available"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={connectionChoices.some((entry) => entry.connection_id === connectionId)
+                  ? connectionId : ''}
+                onChange={(event) => changeConnection(event.target.value)}
+                disabled={pending}
+              >
+                <option value="">Select a connection</option>
+                {connectionChoices.map((entry) => (
+                  <option key={entry.connection_id} value={entry.connection_id}>
+                    {entry.connection_id} (revision {entry.connection_revision})
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                An enabled host connection is not confirmation that Meta can send or receive.
+              </p>
+            </div>
+          )}
+        </div>
         <div className="space-y-2">
           <Label htmlFor="whatsapp-self-link-connection">Operator-provided connection ID</Label>
           <Input

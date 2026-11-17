@@ -1116,6 +1116,50 @@ class SqlChannelRepository:
             revision=int(row["revision"]),
         )
 
+    async def list_whatsapp_self_link_connections(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict[str, str | int]]:
+        """Bounded enabled-only tenant inventory for an authorized self-linker.
+
+        The host enforces the canonical channel.link policy. SQL additionally
+        checks the same active verified tenant user, enabled canonical provider
+        and RLS. No provider account IDs, phone numbers or secrets are read.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        principal_id = str(uuid.UUID(user_id))
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT c.connection_id, c.revision
+                    FROM public.channel_connections c
+                    JOIN public.auth_users u
+                      ON u.tenant_id = c.tenant_id
+                     AND u.user_id = CAST(:user AS uuid)
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.installation_id = 'whatsapp-cloud'
+                      AND c.enabled = true
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ORDER BY c.connection_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id, "user": principal_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise ChannelAdmissionDenied(
+                "WhatsApp self-link connection inventory exceeds safe limit"
+            )
+        result: list[dict[str, str | int]] = []
+        for row in rows:
+            revision = row["revision"]
+            if type(revision) is not int or revision < 1:
+                raise ChannelAdmissionDenied("Invalid self-link connection revision")
+            result.append({
+                "connection_id": str(uuid.UUID(str(row["connection_id"]))),
+                "connection_revision": revision,
+            })
+        return result
+
     async def list_whatsapp_operator_connections(
         self, *, tenant_id: str,
     ) -> list[dict[str, str | int | bool]]:

@@ -6,9 +6,42 @@ identity store, secret Vault, policy plan, chat execution or delivery status.
 
 ## User workflow
 
-In **Settings → Channels**, a signed-in and verified Karen user can enter
-a WhatsApp Cloud connection UUID supplied by their authorized tenant operator.
-It is never fetched from another tenant or guessed from the UI.
+In **Settings → Personal → Channels**, a signed-in, verified Karen user
+can explicitly select **Find available WhatsApp Cloud connections**. Karen
+returns only currently enabled canonical WhatsApp Cloud connections in that
+user's tenant, guarded by the existing `channel.link` permission and a fresh
+RuntimePolicy decision. The user chooses an actual returned UUID before
+requesting a proof. They may also enter an operator-provided UUID manually
+as a compatibility option. No connection is guessed, selected or linked
+automatically.
+
+### Governed connection discovery
+
+```text
+GET /api/channels/identity/whatsapp/connections
+```
+
+The existing identity ingress authenticates the session and requires an
+active, verified account. The canonical host checks the installed WhatsApp
+adapter, existing `channel.link` ActionExecutionGate, fresh role/tenant
+RuntimePolicy decision and bounded SQL repository. PostgreSQL additionally
+joins the same active verified `auth_users` principal, enforces tenant RLS,
+filters `installation_id = 'whatsapp-cloud'` and `enabled = true`, orders
+deterministically, and refuses more than 50 results.
+
+Each returned choice contains **only** `connection_id` (UUID) and
+`connection_revision` (positive integer). No phone numbers, provider
+account IDs, Vault handles, sender identities, activation tokens or
+credential state are queried or returned. Empty means the host returned no
+currently enabled eligible tenant connection rows, **not** that Meta is
+offline or that a live provider test failed. Client parsing rejects extra
+fields, duplicate IDs, malformed revisions, and unbounded result sets.
+
+The GET endpoint responds with `Cache-Control: no-store, private`.
+Retrieval is opt-in, and the UI never issues a link command simply because
+one connection exists. Changing the selection clears an existing bearer
+command and any previously inspected challenge reference; an in-flight
+inventory response cannot restore state after principal unmount.
 
 After the user explicitly selects **Request one-time link command**, the app
 posts an empty object to:
@@ -95,7 +128,12 @@ npm run typecheck
 npm run build
 ```
 
-Backend proof runs from the repository root with:\n\n```bash\npytest -q tests/extensions/test_whatsapp_self_link_api.py tests/extensions/test_channel_link_repository.py\n```\n\nUnit tests use mocked API **response contracts** only, not simulated Meta
+Backend proof runs from the repository root with:\n\n```bash\npytest -q tests/extensions/test_whatsapp_self_link_api.py tests/extensions/test_channel_link_repository.py\n```\n\nThe source suite additionally exercises opt-in connection discovery, strict
+untrusted result parsing, no automatic challenge issuance, secret-safe errors,
+and a real disposable PostgreSQL test for enabled-only tenant choices,
+unverified principals and connection disablement.
+
+Unit tests use mocked API **response contracts** only, not simulated Meta
 transport success. They cover empty/invalid UUIDs, explicit request only,
 redacted authorization failures, fake provider claims, precise response shape,
 request cancellation, TTL cleanup and clipboard opt-in. Existing

@@ -11,7 +11,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from ai_karen_engine.api_routes.channels.personal_consent import _verified_actor
 from ai_karen_engine.auth.models import UserData
@@ -43,6 +43,21 @@ class WhatsAppSelfLinkChallenge(BaseModel):
     expires_in_seconds: int = Field(ge=60, le=900)
 
 
+class WhatsAppSelfLinkConnection(BaseModel):
+    """Backend-confirmed enabled connection, never provider live health."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: UUID
+    connection_revision: StrictInt = Field(ge=1)
+
+
+class WhatsAppSelfLinkConnectionInventory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connections: list[WhatsAppSelfLinkConnection] = Field(max_length=50)
+
+
 class WhatsAppLinkChallengeStatus(BaseModel):
     """No bearer token, external sender or unverified provider readiness."""
 
@@ -53,6 +68,44 @@ class WhatsAppLinkChallengeStatus(BaseModel):
     evidence_basis: Literal["host_link_challenge_ledger"] = "host_link_challenge_ledger"
     current_binding_verified: Literal[False] = False
     delivery_verified: Literal[False] = False
+
+
+@router.get(
+    "/connections",
+    response_model=WhatsAppSelfLinkConnectionInventory,
+)
+async def list_whatsapp_self_link_connections(
+    request: Request, response: Response,
+    user: UserData = Depends(get_current_user),
+) -> WhatsAppSelfLinkConnectionInventory:
+    """List only the current verified user's enabled tenant connection choices."""
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    tenant_id, user_id = _verified_actor(user)
+    host = getattr(request.app.state, "channel_host_services", None)
+    if not isinstance(host, ChannelHostServices) or host.activation is None:
+        raise HTTPException(503, "WhatsApp connection choices unavailable")
+    session_id = str(uuid4())
+    try:
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud", action="channel.link",
+        )
+        rows = await host.list_whatsapp_self_link_connections(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            authorized_plan=plan,
+        )
+        return WhatsAppSelfLinkConnectionInventory.model_validate({
+            "connections": rows,
+        })
+    except PermissionError:
+        raise HTTPException(403, "WhatsApp connection choices denied") from None
+    except Exception as exc:
+        logger.error(
+            "channel.identity.self_link_connections_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(503, "WhatsApp connection choices unavailable") from None
 
 
 @router.get(
@@ -160,4 +213,4 @@ async def issue_whatsapp_self_link_challenge(
         raise HTTPException(503, "WhatsApp identity linking unavailable") from None
 
 
-__all__ = ["WhatsAppLinkChallengeStatus", "WhatsAppSelfLinkChallenge", "WhatsAppSelfLinkRequest", "inspect_whatsapp_self_link_status", "issue_whatsapp_self_link_challenge", "router"]
+__all__ = ["WhatsAppLinkChallengeStatus", "WhatsAppSelfLinkChallenge", "WhatsAppSelfLinkConnection", "WhatsAppSelfLinkConnectionInventory", "WhatsAppSelfLinkRequest", "inspect_whatsapp_self_link_status", "issue_whatsapp_self_link_challenge", "list_whatsapp_self_link_connections", "router"]

@@ -10,7 +10,9 @@ import pytest
 
 from ai_karen_engine.extensions.channels.contracts import ChannelConnection
 from ai_karen_engine.persistence.repositories import channel_repository as module
-from ai_karen_engine.persistence.repositories.channel_repository import SqlChannelRepository
+from ai_karen_engine.persistence.repositories.channel_repository import (
+    ChannelAdmissionDenied, SqlChannelRepository,
+)
 
 
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -20,9 +22,10 @@ DIGEST = hashlib.sha256(TOKEN.encode()).hexdigest()
 
 
 class Result:
-    def __init__(self, row=None, scalar=None):
+    def __init__(self, row=None, scalar=None, rows=None):
         self.row = row
         self.scalar = scalar
+        self.rows = [] if rows is None else rows
 
     def mappings(self):
         return self
@@ -32,6 +35,9 @@ class Result:
 
     def scalar_one_or_none(self):
         return self.scalar
+
+    def all(self):
+        return self.rows
 
 
 class Session:
@@ -258,6 +264,80 @@ async def test_bad_link_status_scope_never_queries_database(
         await SqlChannelRepository().inspect_link_challenge_status(
             tenant_id=TENANT, user_id=user,
             connection_id=connection_id, challenge_id=challenge,
+        )
+    assert session.calls == []
+
+
+
+@pytest.mark.asyncio
+async def test_available_whatsapp_self_link_connections_read_only_valid_enabled_rows(
+    monkeypatch,
+):
+    connection_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    session = Session(Result(rows=[{
+        "connection_id": connection_id, "revision": 4,
+    }]))
+    install(monkeypatch, session)
+    rows = await SqlChannelRepository().list_whatsapp_self_link_connections(
+        tenant_id=TENANT, user_id=USER,
+    )
+    assert rows == [{
+        "connection_id": connection_id, "connection_revision": 4,
+    }]
+    query, params = session.calls[0]
+    for condition in (
+        "FROM public.channel_connections c",
+        "JOIN public.auth_users u",
+        "u.tenant_id = c.tenant_id",
+        "u.user_id = CAST(:user AS uuid)",
+        "c.tenant_id = CAST(:tenant AS uuid)",
+        "c.installation_id = 'whatsapp-cloud'",
+        "c.enabled = true",
+        "u.is_active = true",
+        "u.is_verified = true",
+        "LIMIT 51",
+    ):
+        assert condition in query
+    assert params == {"tenant": TENANT, "user": USER}
+    assert "credential_handle" not in query
+    assert "provider_account_id" not in query
+    assert "external_sender_id" not in query
+    assert "phone" not in query
+
+
+@pytest.mark.asyncio
+async def test_self_link_inventory_does_not_invent_connections(monkeypatch):
+    session = Session(Result(rows=[]))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().list_whatsapp_self_link_connections(
+        tenant_id=TENANT, user_id=USER,
+    ) == []
+
+
+@pytest.mark.asyncio
+async def test_self_link_inventory_invalid_rows_or_excess_are_denied(monkeypatch):
+    connection_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    for rows in (
+        [{"connection_id": connection_id, "revision": True}],
+        [{"connection_id": connection_id, "revision": 0}],
+        [{"connection_id": "invalid", "revision": 2}],
+        [{"connection_id": connection_id, "revision": 1}] * 51,
+    ):
+        session = Session(Result(rows=rows))
+        install(monkeypatch, session)
+        with pytest.raises((ChannelAdmissionDenied, ValueError)):
+            await SqlChannelRepository().list_whatsapp_self_link_connections(
+                tenant_id=TENANT, user_id=USER,
+            )
+
+
+@pytest.mark.asyncio
+async def test_self_link_inventory_rejects_invalid_principal_before_database(monkeypatch):
+    session = Session()
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().list_whatsapp_self_link_connections(
+            tenant_id=TENANT, user_id="not-a-user",
         )
     assert session.calls == []
 

@@ -44,6 +44,9 @@ def client_and_host():
         ),
     )
     host.inspect_whatsapp_self_link_status = AsyncMock(return_value="pending")
+    host.list_whatsapp_self_link_connections = AsyncMock(return_value=[
+        {"connection_id": CONNECTION, "connection_revision": 3},
+    ])
     app = FastAPI()
     app.include_router(router)
     app.state.channel_host_services = host
@@ -184,6 +187,114 @@ async def test_host_reuses_canonical_link_service_and_transport():
             connection_id=CONNECTION, authorized_plan=plan,
         )
     host.linking.issue_challenge.assert_awaited_once()
+
+
+def _choices(client):
+    return client.get("/api/channels/identity/whatsapp/connections")
+
+
+def test_approved_user_can_list_only_enabled_tenant_connection_ids(client_and_host):
+    client, host, _user = client_and_host
+    response = _choices(client)
+    assert response.status_code == 200
+    assert response.json() == {
+        "connections": [{
+            "connection_id": CONNECTION, "connection_revision": 3,
+        }],
+    }
+    assert "no-store" in response.headers["cache-control"]
+    assert "no-cache" in response.headers["pragma"]
+    assert "provider_account_id" not in response.text
+    assert "credential_handle" not in response.text
+    kwargs = host.activation.issue_action_plan.await_args.kwargs
+    assert kwargs["action"] == "channel.link"
+    assert kwargs["tenant_id"] == TENANT
+    assert kwargs["user_id"] == USER
+    host.list_whatsapp_self_link_connections.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+        session_id=kwargs["session_id"],
+        authorized_plan=host.activation.issue_action_plan.return_value,
+    )
+
+
+def test_empty_self_link_inventory_means_no_enabled_choices_not_provider_health(
+    client_and_host,
+):
+    client, host, _ = client_and_host
+    host.list_whatsapp_self_link_connections.return_value = []
+    assert _choices(client).json() == {"connections": []}
+
+
+@pytest.mark.parametrize("bad", [
+    [{"connection_id": CONNECTION, "connection_revision": 0}],
+    [{"connection_id": CONNECTION, "connection_revision": True}],
+    [{"connection_id": CONNECTION, "connection_revision": 3,
+      "provider_account_id": "private-id"}],
+    [{"connection_id": "not-a-uuid", "connection_revision": 3}],
+    [{"connection_id": CONNECTION, "connection_revision": 3}] * 51,
+])
+def test_self_link_inventory_rejects_invalid_host_data(client_and_host, bad):
+    client, host, _ = client_and_host
+    host.list_whatsapp_self_link_connections.return_value = bad
+    response = _choices(client)
+    assert response.status_code == 503
+    assert "private-id" not in response.text
+    assert "not-a-uuid" not in response.text
+
+
+def test_self_link_inventory_fails_closed_before_host_for_unverified_user(
+    client_and_host,
+):
+    client, host, user = client_and_host
+    user.is_verified = False
+    assert _choices(client).status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.list_whatsapp_self_link_connections.assert_not_awaited()
+
+
+def test_self_link_inventory_cannot_bypass_rbac_policy(client_and_host):
+    client, host, _ = client_and_host
+    host.activation.issue_action_plan.side_effect = PermissionError("secret-policy")
+    response = _choices(client)
+    assert response.status_code == 403
+    assert "secret-policy" not in response.text
+    host.list_whatsapp_self_link_connections.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_self_link_inventory_host_requires_canonical_installed_adapter():
+    host = object.__new__(ChannelHostServices)
+    host._initialized = True
+    host._closed = False
+    canonical = object()
+    host._installed = {"whatsapp-cloud": canonical}
+    host.activation = SimpleNamespace(_authorize=AsyncMock())
+    host.kernel = SimpleNamespace(
+        get_channel_activation_manifest=lambda _: object(),
+        is_canonical_channel_adapter=lambda _, candidate: candidate is canonical,
+    )
+    host.repository = SimpleNamespace(
+        list_whatsapp_self_link_connections=AsyncMock(return_value=[
+            {"connection_id": CONNECTION, "connection_revision": 3},
+        ]),
+    )
+    plan = SimpleNamespace(policy_decision_id="operator-policy")
+    result = await host.list_whatsapp_self_link_connections(
+        tenant_id=TENANT, user_id=USER, session_id="verified-session",
+        authorized_plan=plan,
+    )
+    assert result == [{"connection_id": CONNECTION, "connection_revision": 3}]
+    assert host.activation._authorize.await_args.kwargs["action"] == "channel.link"
+    host.repository.list_whatsapp_self_link_connections.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER,
+    )
+    host.activation._authorize.side_effect = PermissionError("denied")
+    with pytest.raises(PermissionError):
+        await host.list_whatsapp_self_link_connections(
+            tenant_id=TENANT, user_id=USER, session_id="verified-session",
+            authorized_plan=plan,
+        )
+    host.repository.list_whatsapp_self_link_connections.assert_awaited_once()
 
 
 def _status(client):
