@@ -1,11 +1,13 @@
 'use client';
 
 /**
- * KOC-05: read-only, backend-owned personal channel inventory.
+ * KOC-05: backend-owned personal channel inventory and governed self-link.
  *
  * Only the canonical ChannelHost may report an assigned connection or its
- * evidence status. This panel never initiates pairing, infers provider health,
- * manufactures a QR, or treats the last stored event as a live session.
+ * evidence status. Personal channel inventory remains read-only; the separate
+ * WhatsApp Cloud self-link control can request a host-issued one-time proof.
+ * Neither action initiates personal Linked Devices pairing, infers provider
+ * health, manufactures a QR, or treats stored events as a live session.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -22,6 +24,7 @@ import {
 } from '@/components/ui/card';
 import { apiClient, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
+import WhatsAppCloudSelfLink from './WhatsAppCloudSelfLink';
 
 type PersonalChannel = {
   connection_id: string;
@@ -1266,6 +1269,9 @@ export default function ChannelsSettings() {
             </Card>
           ))}
         </div>
+      )}
+      {isAuthenticated && !isAuthLoading && (
+        <WhatsAppCloudSelfLink key={principalKey + ":whatsapp-cloud-link"} />
       )}
       <RetiredPersonalConsentRecovery
         key={'consent:' + principalKey}
