@@ -128,6 +128,36 @@ async def test_manager_receipt_records_only_actual_selection(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_default_nonreceipt_generation_preserves_registered_model(monkeypatch) -> None:
+    manager = object.__new__(ModelManager)
+    selection = RuntimeSelection(
+        provider_id="local", display_name="Local",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        model="registered-model", runtime_engine="ollama",
+    )
+    provider = SimpleNamespace(generate_text=lambda prompt: "actual plain text")
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: provider)
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    results = []
+    monkeypatch.setattr(
+        manager, "_get_breaker",
+        lambda _: SimpleNamespace(
+            allow_request=lambda: True,
+            record_success=lambda: results.append("success"),
+            record_failure=lambda: results.append("failure"),
+        ),
+    )
+    monkeypatch.setattr(
+        manager, "_record_provider_result",
+        lambda provider_id, succeeded, *a, **kw: results.append(succeeded),
+    )
+    output = await manager.generate_chat([{"role": "user", "content": "hello"}])
+    assert output == "actual plain text"
+    assert results == [True, "success"]
+
+
+@pytest.mark.asyncio
 async def test_unregistered_model_override_is_denied_before_model_construction(monkeypatch) -> None:
     manager = object.__new__(ModelManager)
     selection = RuntimeSelection(

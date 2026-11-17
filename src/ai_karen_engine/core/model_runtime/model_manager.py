@@ -326,22 +326,21 @@ class ModelManager:
                         raise ProviderNotAvailable(denial)
                 else:
                     raise ProviderNotAvailable("model_execution_provenance_unsupported")
+                # Observed-model identity is part of the typed receipt path.
+                # Text-only callers must not be forced to invent provenance.
+                if selection.model not in {None, "", "auto"}:
+                    if isinstance(provider, TransformersRuntime):
+                        matching_model = (
+                            isinstance(observed_model, str)
+                            and os.path.realpath(selection.model)
+                            == os.path.realpath(observed_model)
+                        )
+                    else:
+                        matching_model = observed_model == selection.model
+                    if not matching_model:
+                        raise ProviderNotAvailable("executed_model_registry_identity_drift")
             else:
                 response = await self.invoke_provider(provider, prompt, **kwargs)
-            if selection.model not in {None, "", "auto"}:
-                if isinstance(provider, TransformersRuntime):
-                    # warm() resolves installed local directories to absolute
-                    # paths; aliases for the same actual path are not fallback.
-                    # Never apply filesystem normalization to remote model IDs.
-                    matching_model = (
-                        isinstance(observed_model, str)
-                        and os.path.realpath(selection.model)
-                        == os.path.realpath(observed_model)
-                    )
-                else:
-                    matching_model = observed_model == selection.model
-                if not matching_model:
-                    raise ProviderNotAvailable("executed_model_registry_identity_drift")
             self._record_provider_result(selection.provider_id, True, start)
             breaker.record_success()
             if return_receipt:
