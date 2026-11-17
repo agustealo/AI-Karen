@@ -241,18 +241,6 @@ class MedusaCoordinator:
         plan_data["budget"] = budget_data
         authorized_plan = AuthorizedExecutionPlan(**plan_data)
 
-        requirements = ExecutionRequirements(**request.execution_requirements)
-
-        plan = await self.planner.create_plan(
-            request_id=request.request_id,
-            query=request.query,
-            requirements=requirements,
-            authorized_plan=authorized_plan,
-            registry=self.registry,
-            budget=authorized_plan.budget,
-            context=request.context,
-        )
-
         # Preserve the original ChatRuntime meter when the authenticated
         # request+plan lineage proves it belongs to this Medusa invocation.
         # Standalone governed Medusa requests retain a fresh plan-bound meter.
@@ -267,6 +255,19 @@ class MedusaCoordinator:
             meter = shared_meter
         else:
             meter = ExecutionBudgetMeter(authorized_plan.budget)
+
+        requirements = ExecutionRequirements(**request.execution_requirements)
+
+        plan = await self.planner.create_plan(
+            request_id=request.request_id,
+            query=request.query,
+            requirements=requirements,
+            authorized_plan=authorized_plan,
+            registry=self.registry,
+            budget=authorized_plan.budget,
+            context=request.context,
+        )
+
         meter.start()
         started_at_ms = asyncio.get_running_loop().time() * 1000
         trajectory = ExecutionTrajectory(
