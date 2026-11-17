@@ -22,7 +22,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B2: scoped independently reviewed verification-policy decision evidence | [PR #951](https://github.com/agustealo/AI-Karen/pull/951), merge `c8544ef54afbebfd8ed99bccbbf76c8527ec1b67` | Merged; 8/8 exact-head checks passed |
 | KCM-02B3A: exact ML task benchmark artifact and evaluated case projection | [PR #953](https://github.com/agustealo/AI-Karen/pull/953), merge `7abce8006c973906ba3e90aa3b4915cfb8550a2a` | Merged; 11/11 exact-head checks passed |
 | KCM-02B3B: conditioned curated-oracle source and assessment expiry | [PR #956](https://github.com/agustealo/AI-Karen/pull/956), merge `a1188e594201e0713cc6a16833a5acc1f4ae40ae` | Merged; 19/19 exact-head checks passed; source integrity and issuer freshness only |
-| KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961) · [25 — Runner observation](25-run-observation-and-freshness.md) | In review; no independently signed runtime or general-skill certification |
+| KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961), merge `69d62965550f79f964cc9850283dfcb868cc1f4f` · [25 — Runner observation](25-run-observation-and-freshness.md) | Merged; 18/18 exact-head checks passed; runner observation is not signed production attestation |
+| KCM-02B3C2A: owner-scoped curated-oracle reviewer observation | [PR #963](https://github.com/agustealo/AI-Karen/pull/963) · [26 — Reviewer observations](26-reviewed-curated-oracle-observations.md) | In review; acknowledgment only, no independently verified groups/ground truth/execution |
 
 ## Configuration
 
@@ -71,11 +72,12 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Complete KCM-02B3C1's canonical runner-observed
-inference timestamps and run replay fencing, preserving the separate legacy
-receipt-issuance freshness label. Its in-process timestamp claims do not
-independently certify a live engine, environment, held-out oracle or task-group
-independence. KCM-02B3C2 must introduce reviewer-admitted exact task-family,
-oracle split/leakage and revocation evidence before any independently verified
-proficiency policy. Training rights, checkpoint ancestry and transactional
-training-start/promotion fencing remain separately blocked.
+**Next controlled slice:** Complete KCM-02B3C2A's reviewer acknowledgment
+of the exact canonical benchmark cohort with separately authorized, strictly
+append-only proposed and confirmed receipts. Only a confirmed pair is
+consumable. Require live PostgreSQL RLS, evidence revocation and exact-head CI
+before merging. Separately prove independent oracle labels, evaluator/author
+separation, held-out split leakage, reproducible task-group independence and
+production environment attestation before any proficiency policy. No model
+training, general skill activation, permission grant or training-start lease
+is introduced by reviewer acknowledgment.
