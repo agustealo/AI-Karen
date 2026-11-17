@@ -653,6 +653,21 @@ async def test_real_runtime_policy_evaluation_is_required_before_any_initial_mod
     original_decision.allowed_capabilities.pop()
 
     issuer.bind_chat_model_policy(context=context, decision=original_decision)
+
+    # A serialized or in-process plan assembled before first binding cannot
+    # introduce permissions that the *real evaluated policy* never granted.
+    for attribute, unauthorized in (
+        ("allowed_tools", ["unapproved-tool"]),
+        ("allowed_plugins", ["unapproved-plugin"]),
+        ("allowed_agents", ["unapproved-agent"]),
+        ("allowed_capabilities", ["model.personal_key.execute"]),
+    ):
+        forged = replace(plan, **{attribute: unauthorized})
+        with pytest.raises(
+            PermissionError, match="runtime_model_execution_authority_invalid",
+        ):
+            context.bind_runtime_model_authority(forged, meter)
+        assert context.original_runtime_model_plan(meter) is None
     context.bind_runtime_model_authority(plan, meter)
     assert context.original_runtime_model_plan(meter) is plan
 
