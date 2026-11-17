@@ -245,9 +245,10 @@ async def test_real_postgres_exact_oracle_reviewer_receipt_rls_and_replay(tmp_pa
         )
         assert reviewer_row is not None
         review_id = reviewer_row["outcome_id"]
-        assert canonical_case_not_in_receipt(
-            str(reviewer_row["payload"]),
-            CanonicalEvaluationCorpus.get_cases(task=PredictionTask.INTENT)[0].input_text,
+        assert (
+            CanonicalEvaluationCorpus.get_cases(
+                task=PredictionTask.INTENT,
+            )[0].input_text not in str(reviewer_row["payload"])
         )
 
         with pytest.raises(OutcomeStoreError):
@@ -317,6 +318,3 @@ async def test_real_postgres_exact_oracle_reviewer_receipt_rls_and_replay(tmp_pa
     finally:
         await raw.close()
 
-
-def canonical_case_not_in_receipt(payload: str, raw_prompt: str) -> bool:
-    return raw_prompt not in payload

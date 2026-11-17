@@ -131,5 +131,5 @@ jobs:
         if: always()
         run: |
           echo "### Real review-receipt database acceptance" >> "$GITHUB_STEP_SUMMARY"
-          echo "Dedicated database: karen_review_test. Applies canonical outcome-ledger migrations. All tenant/RLS and atomic assertions must run, not skip." >> "$GITHUB_STEP_SUMMARY"
+          echo "Dedicated disposable databases: karen_review_test and karen_kcm_oracle_test. Both apply canonical outcome-ledger migrations; independent reviewer receipt, tenant/FORCE RLS and atomic assertions must execute, not skip." >> "$GITHUB_STEP_SUMMARY"
           echo "A successful test proves persistence and scoping, not independent reviewer accuracy or causal policy benefit." >> "$GITHUB_STEP_SUMMARY"

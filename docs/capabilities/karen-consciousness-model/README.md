@@ -1,8 +1,8 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Governed learning-admission, memory revocation and self-model foundation merged (PRs #915, #924, #930, #931, #938, #940, #946, #951, #953 and #956). Conditioned task-benchmark provenance and source expiry merged in #956. Runner-time inference provenance is under review in #961. Independent oracle/group review, production environment certification and neural training remain disabled.  
+**Status:** Governed learning-admission, memory revocation and self-model foundations merged. KCM benchmark provenance, task conditioning and runner-time freshness are merged through PR #961. Scoped curated-oracle reviewer acknowledgment is in review in PR #963; independently verified ground truth, held-out task-group separation, production environment certification and neural training remain disabled.  
 **Research cutoff:** 2026-11-16  
-**Repository baseline audited:** `agustealo/AI-Karen` `main` at `e570d950501915a9fce9e089ac91e583a71eb80e`  
+**Repository baseline audited:** `agustealo/AI-Karen` `main` at `69d62965550f79f964cc9850283dfcb868cc1f4f` (PR #963 reviewed against this baseline)  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
 **Primary decision:** Memory retention **does not** confer training eligibility.
 
