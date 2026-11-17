@@ -674,8 +674,15 @@ class ChatRuntime:
                             plan,
                         )
                     except asyncio.CancelledError:
+                        # A successful transcript receipt is already durable.
+                        # Do not overwrite it with a fake uncommitted
+                        # cancellation just because later memory work stopped.
                         await self._observe_request_cancellation(
                             trajectory, decision, request, plan, meter, start,
+                            committed_text=fallback.answer,
+                            committed_provider_meta=recovery_meta,
+                            committed_memory_meta=memory_recall_meta,
+                            committed_error=f"fallback:{error_type}",
                         )
                         raise
                 await self._record_trajectory_completion(
@@ -5716,8 +5723,12 @@ class ChatRuntime:
         *,
         request_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
+        committed_text: Optional[str] = None,
+        committed_provider_meta: Optional[Dict[str, Any]] = None,
+        committed_memory_meta: Optional[Dict[str, Any]] = None,
+        committed_error: Optional[str] = None,
     ) -> None:
-        """Emit cancellation even if a second cancel disrupts the ledger write."""
+        """Emit cancellation; never undo a confirmed committed transcript."""
         ctx = request.context
         self._emitter.emit(
             RuntimeEventType.REQUEST_CANCELLED,
@@ -5728,6 +5739,45 @@ class ChatRuntime:
             session_id=ctx.session_id,
             conversation_id=conversation_id or ctx.conversation_id,
         )
+        if committed_text is not None:
+            # Transcript ownership has already returned successful durability.
+            # Cancellation can interrupt post-commit memory work or delivery,
+            # but it cannot make the completed assistant turn uncommitted.
+            # Never fabricate a reviewer outcome or an OPE training sample.
+            if (
+                not committed_provider_meta
+                or committed_provider_meta.get("transcript_persistence_status")
+                not in {"persisted", "already_persisted"}
+                or not committed_text.strip()
+            ):
+                logger.warning(
+                    "chat.cancelled_postcommit_receipt_unverified",
+                    extra={"correlation_id": ctx.correlation_id},
+                )
+                return
+            try:
+                await self._record_trajectory_completion(
+                    trajectory,
+                    decision,
+                    committed_text,
+                    started_at,
+                    meter,
+                    committed_provider_meta,
+                    committed_memory_meta or {},
+                    error=committed_error,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "chat.cancelled_postcommit_trajectory_recording_failed",
+                    extra={
+                        "correlation_id": ctx.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            return
+
         await self._record_cancelled_trajectory(
             trajectory, decision, request, plan, meter, started_at,
         )
