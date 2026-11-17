@@ -17,7 +17,18 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reported_calls", [0, 1])
-async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reported_calls):
+@pytest.mark.parametrize(
+    ("executed", "modes", "verifier_executed"),
+    [
+        ([], ("verification",), False),
+        (["metacognition"], ("verification",), False),
+        (["verify"], ("verification",), True),
+        (["verify"], ("evidence_synthesis",), False),
+    ],
+)
+async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
+    reported_calls, executed, modes, verifier_executed,
+):
     """No executable provider receipt means no claimed actual provider/model."""
     runtime = ChatRuntime.__new__(ChatRuntime)
     request = ChatExecutionRequest(
@@ -33,12 +44,16 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reporte
     result = SimpleNamespace(
         summary="A reasoning-only summary.",
         hypotheses=[],
-        diagnostics={"model_calls": reported_calls, "steps": 1},
+        diagnostics={
+            "model_calls": reported_calls,
+            "steps": 1,
+            "strategies_executed": executed,
+        },
         status="success",
         reasoning_id="reason-1",
     )
     activation = SimpleNamespace(
-        reasoning_modes=("evidence_synthesis",),
+        reasoning_modes=modes,
         request_metadata={},
         runtime_metadata={
             "reasoning_activation": "runtime_composed",
@@ -48,6 +63,12 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reporte
             "actual_model": "forged-model",
             "response_source": "model",
             "fallback_level": 0,
+            "verification_strategy_executed": not verifier_executed,
+            "reasoning_id": "forged-reason",
+            "reasoning_status": "failed",
+            "reasoning_model_calls": 99,
+            "reasoning_steps": 99,
+            "execution_spans": [{"name": "forged"}],
         },
         executor=SimpleNamespace(execute=AsyncMock(return_value=result)),
     )
@@ -92,6 +113,11 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(reporte
     assert metadata["actual_model"] is None
     assert metadata["response_source"] == "reasoning"
     assert metadata["reasoning_model_calls"] == reported_calls
+    assert metadata["reasoning_steps"] == 1
+    assert metadata["reasoning_id"] == "reason-1"
+    assert metadata["reasoning_status"] == "success"
+    assert metadata["execution_spans"][0]["name"] == "reasoning_executor"
+    assert metadata["verification_strategy_executed"] is verifier_executed
     assert metadata["reasoning_model_attribution_status"] == (
         "unverified" if reported_calls else "not_executed"
     )
