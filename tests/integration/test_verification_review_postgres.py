@@ -870,16 +870,8 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
         # observation through the existing runtime OutcomeRecorder. Neither
         # an empty model receipt nor a saved diagnostic is a verification
         # judgment, and the selected-only row remains reviewer-ineligible.
-        import time
-        from types import SimpleNamespace
-
-        from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
-        from ai_karen_engine.platform.observability.context import (
-            CorrelationContext,
-            reset_correlation_context,
-            set_correlation_context,
-        )
-
+        # Shared imports are module-scoped: do not shadow the same
+        # runtime test owners earlier in this function.
         runtime._outcome_recorder = OutcomeRecorder(
             store=PostgresOutcomeStore(),
         )
