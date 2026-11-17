@@ -589,6 +589,9 @@ async def test_lifecycle_approval_fails_closed_before_any_repository_write(
         await service.authorize_or_request(
             request, wrong_action, lifecycle_scope=scope,
         )
+    unsupported = _lifecycle_decision(action="uninstall")
+    with pytest.raises(ApprovalScopeError, match="Unsupported plugin lifecycle"):
+        await service.authorize_or_request(request, unsupported)
     assert repo.records == {}
 
 
