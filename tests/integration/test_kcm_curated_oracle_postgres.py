@@ -315,6 +315,46 @@ async def test_real_postgres_exact_oracle_reviewer_receipt_rls_and_replay(tmp_pa
             store.list_scoped_ml_predictor_outcomes,
             tenant_a, user_id=subject_a, limit=1,
         )) == 1
+        # The issuer's separate, append-only withdrawal must immediately
+        # invalidate the previously confirmed reviewer claim without
+        # deleting the numeric benchmark evidence or touching another tenant.
+        await raw.execute(
+            """
+            UPDATE public.outcome_records
+            SET payload=jsonb_set(
+                payload,'{metadata,exact_snapshot_sha256}',to_jsonb($2::text)
+            ) WHERE outcome_id=$1
+            """,
+            review_id, adapter._snapshot(
+                model_id=manifest.model_id, receipt_id=receipt,
+            ).snapshot_sha256,
+        )
+        assert await adapter.inspect_review(
+            subject=subject, model_id=manifest.model_id, receipt_id=receipt,
+        ) is not None
+        withdrawal_id = await adapter.withdraw_review(
+            subject=subject, reviewer=reviewer,
+            model_id=manifest.model_id, receipt_id=receipt,
+        )
+        assert withdrawal_id.startswith("kcm_curated_withdrawal_")
+        assert await adapter.inspect_review(
+            subject=subject, model_id=manifest.model_id, receipt_id=receipt,
+        ) is None
+        assert await raw.fetchval(
+            "SELECT COUNT(*) FROM public.outcome_records "
+            "WHERE tenant_id=$1 AND user_id=$2 AND source='intelligence.ml'",
+            uuid.UUID(tenant_a), uuid.UUID(subject_a),
+        ) == 4
+        with pytest.raises(OutcomeStoreError):
+            await adapter.withdraw_review(
+                subject=subject, reviewer=reviewer,
+                model_id=manifest.model_id, receipt_id=receipt,
+            )
+        assert await asyncio.to_thread(
+            store.list_scoped_outcomes_by_ids,
+            tenant_b, user_id=subject_b, source="intelligence.ml",
+            outcome_ids=[withdrawal_id],
+        ) == []
     finally:
         await raw.close()
 

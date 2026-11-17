@@ -1434,3 +1434,170 @@ async def test_final_await_subject_revocation_prevents_readout(tmp_path):
         await adapter.inspect_review(
             subject=subject, model_id=manifest.model_id, receipt_id=receipt,
         )
+
+
+@pytest.mark.asyncio
+async def test_original_reviewer_can_withdraw_exact_confirmed_cohort(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=store, maximum_cases=1,
+    )
+    reviewer = _authorized_curated_reviewer()
+    reviewed = await adapter.record_review(
+        subject=identity(), reviewer=reviewer,
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    assert reviewed.exact_cohort_reviewer_acknowledged
+    before = len(store._records)
+    withdrawal_id = await adapter.withdraw_review(
+        subject=identity(), reviewer=reviewer,
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    assert withdrawal_id.startswith("kcm_curated_withdrawal_")
+    assert len(store._records) == before + 1
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
+    numeric = store.list_scoped_ml_predictor_outcomes(
+        TENANT, user_id=USER, limit=1,
+    )
+    assert len(numeric) == 1
+    assert numeric[0]["metadata"]["schema_version"] == "ml_predictor_evidence_v1"
+    with pytest.raises(OutcomeStoreError):
+        await adapter.withdraw_review(
+            subject=identity(), reviewer=reviewer,
+            model_id=manifest.model_id, receipt_id=receipt,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_withdrawal_denies_other_reviewer_and_wrong_tenant(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER,
+        registry_dir=tmp_path, store=store,
+    )
+    reviewer = _authorized_curated_reviewer()
+    await adapter.record_review(
+        subject=identity(), reviewer=reviewer,
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    for unauthorized in (
+        _authorized_curated_reviewer(user="unrelated-reviewer"),
+        _authorized_curated_reviewer(tenant=OTHER_TENANT),
+        identity(),
+    ):
+        with pytest.raises(PermissionError):
+            await adapter.withdraw_review(
+                subject=identity(), reviewer=unauthorized,
+                model_id=manifest.model_id, receipt_id=receipt,
+            )
+    with pytest.raises(PermissionError):
+        await adapter.withdraw_review(
+            subject=identity(OTHER_TENANT, USER), reviewer=reviewer,
+            model_id=manifest.model_id, receipt_id=receipt,
+        )
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is not None
+    assert not any(
+        (row.get("metadata") or {}).get("schema_version")
+        == "kcm_curated_oracle_reviewer_withdrawal_v1"
+        for row in store._records
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_withdrawal_after_final_numeric_read_blocks_review(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+    writer = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=store,
+    )
+    reader = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=store,
+    )
+    reviewer = _authorized_curated_reviewer()
+    await writer.record_review(
+        subject=identity(), reviewer=reviewer,
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    original = reader._require_measured
+    checked = 0
+
+    async def withdraw_during_last_measure(*, subject, snapshot):
+        nonlocal checked
+        await original(subject=subject, snapshot=snapshot)
+        checked += 1
+        if checked == 2:
+            await writer.withdraw_review(
+                subject=identity(), reviewer=reviewer,
+                model_id=manifest.model_id, receipt_id=receipt,
+            )
+
+    reader._require_measured = withdraw_during_last_measure
+    assert await reader.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
+    assert checked == 2
+
+
+def test_canonical_store_fences_malformed_reviewer_withdrawal_receipts():
+    from ai_karen_engine.core.runtime.outcome.store import (
+        OutcomeStoreError, PostgresOutcomeStore,
+    )
+    from copy import deepcopy
+
+    now = datetime.now(timezone.utc).isoformat()
+    valid = {
+        "tenant_id": TENANT,
+        "user_id": USER,
+        "outcome_id": "kcm_curated_withdrawal_" + "b" * 64,
+        "source": "intelligence.ml",
+        "recorded_at": now,
+        "metadata": {
+            "schema_version": "kcm_curated_oracle_reviewer_withdrawal_v1",
+            "receipt_id": "a" * 32,
+            "model_id": model_id(),
+            "reviewer_user_id": OTHER_USER,
+            "review_confirmed_outcome_id": "kcm_curated_review_" + "c" * 64,
+            "review_snapshot_sha256": "d" * 64,
+            "revoked_at": now,
+            "reason_code": "reviewer_withdrawal",
+            "review_withdrawn": True,
+        },
+    }
+    assert PostgresOutcomeStore._validated_identity(valid) == (
+        TENANT, "intelligence.ml",
+    )
+    for k, v in (
+        ("reviewer_user_id", USER),
+        ("review_confirmed_outcome_id", "unknown"),
+        ("review_snapshot_sha256", "bad"),
+        ("reason_code", "training_authorized"),
+        ("review_withdrawn", False),
+        ("revoked_at", "2020-01-01T00:00:00+00:00"),
+    ):
+        bad = deepcopy(valid)
+        bad["metadata"][k] = v
+        with pytest.raises(OutcomeStoreError):
+            PostgresOutcomeStore._validated_identity(bad)
+    bad = deepcopy(valid)
+    bad["metadata"]["execution_authorized"] = True
+    with pytest.raises(OutcomeStoreError):
+        PostgresOutcomeStore._validated_identity(bad)
