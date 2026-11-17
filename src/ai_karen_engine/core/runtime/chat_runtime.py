@@ -528,6 +528,24 @@ class ChatRuntime:
                 text, provider_meta = await self._run_graph(request, decision, plan, meter)
             elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
+        except asyncio.CancelledError:
+            # A cancelled model attempt is not a completed assistant response.
+            # Record only request-scoped terminal trajectory metadata; the
+            # original cancellation must propagate without a fallback model,
+            # transcript write, or synthetic learning outcome.
+            await self._record_cancelled_trajectory(
+                trajectory, decision, request, plan, meter, start,
+            )
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_CANCELLED,
+                correlation_id=ctx.correlation_id,
+                request_id=ctx.request_id,
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+                conversation_id=ctx.conversation_id,
+            )
+            raise
         except Exception as exc:
             error_type = type(exc).__name__
             # Log code location only. Never log exception arguments, prompts, or secrets.
@@ -1190,7 +1208,13 @@ class ChatRuntime:
                     conversation_id,
                 )
                 sequence += 1
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
+            # Async-generator closure is also an interrupted run. A partial
+            # token stream must never create a saved assistant turn or a
+            # successful verification-strategy outcome.
+            await self._record_cancelled_trajectory(
+                trajectory, decision, request, plan, meter, stream_start,
+            )
             self._emitter.emit(
                 RuntimeEventType.REQUEST_CANCELLED,
                 correlation_id=ctx.correlation_id,
@@ -5592,6 +5616,80 @@ class ChatRuntime:
             )
             return None
 
+    async def _record_cancelled_trajectory(
+        self,
+        trajectory: Any,
+        decision: ExecutionDecision,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        started_at: float,
+    ) -> None:
+        """Best-effort terminal evidence for an interrupted selected path.
+
+        A partial model stream is not an authoritative provider receipt.
+        Only requested provider/model are retained; actual provider/model and
+        response-source remain unknown. No transcript, reward, OPE sample or
+        independently judged verification result is created here.
+
+        A storage failure means durable cancellation evidence is *unverified*.
+        The canonical chat-run cancellation owner remains authoritative.
+        """
+        ctx = request.context
+        if not (
+            ctx.user_id
+            and ctx.tenant_id
+            and ctx.request_id
+            and ctx.correlation_id
+            and trajectory.user_id == ctx.user_id
+            and trajectory.tenant_id == ctx.tenant_id
+            and trajectory.request_id == ctx.request_id
+            and trajectory.correlation_id == ctx.correlation_id
+            and trajectory.session_id == ctx.session_id
+            and trajectory.conversation_id == ctx.conversation_id
+            and plan.matches_execution_scope(
+                user_id=ctx.user_id,
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+                policy_decision_id=decision.policy_decision_id,
+            )
+        ):
+            logger.warning(
+                "chat.cancelled_trajectory_scope_unverified",
+                extra={"correlation_id": ctx.correlation_id},
+            )
+            return
+
+        try:
+            await self._record_trajectory_completion(
+                trajectory,
+                decision,
+                "",
+                started_at,
+                meter,
+                {
+                    "requested_provider": request.preferred_provider,
+                    "requested_model": request.preferred_model,
+                    "degraded_mode": True,
+                    "degradation_reason": "request_cancelled",
+                },
+                {},
+                error="CHAT_REQUEST_CANCELLED",
+                execution_status="cancelled",
+            )
+        except asyncio.CancelledError:
+            # Another cancellation can interrupt this best-effort write;
+            # the original request must still terminate as cancelled.
+            raise
+        except Exception as exc:
+            logger.warning(
+                "chat.cancelled_trajectory_recording_failed",
+                extra={
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
     async def _record_trajectory_completion(
         self,
         trajectory: Any,
@@ -5602,7 +5700,11 @@ class ChatRuntime:
         provider_meta: Dict[str, Any],
         memory_meta: Dict[str, Any],
         error: Optional[str] = None,
+        *,
+        execution_status: Optional[str] = None,
     ) -> None:
+        if execution_status not in {None, "cancelled"}:
+            raise ValueError("unsupported_trajectory_terminal_status")
         trajectory.intent = decision.intent
         trajectory.executed_topology = decision.topology.value
         trajectory.cortex_decision = {
@@ -5637,7 +5739,10 @@ class ChatRuntime:
             "model_calls": float(meter.model_calls),
             "tool_calls": float(meter.tool_calls),
         }
-        trajectory.execution_status = "success" if text else "failure"
+        trajectory.execution_status = (
+            execution_status if execution_status is not None
+            else "success" if text else "failure"
+        )
         trajectory.error_code = error
         trajectory.response_source = provider_meta.get("response_source")
         await self._trajectory_recorder.complete_async(
