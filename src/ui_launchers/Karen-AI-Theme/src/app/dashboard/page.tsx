@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
   Bell,
@@ -21,6 +22,7 @@ import {
   PlugZap,
   RefreshCw,
   ScrollText,
+  ShieldCheck,
   SettingsIcon as SettingsIconLucide,
   SlidersHorizontal,
   UserCircle,
@@ -225,6 +227,7 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 ];
 
 export default function DashboardPage() {
+  const { isAdmin } = useAuth();
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
   const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model' | 'voice'>('behavior');
   // A fixed, host-owned deep link from the Plugin Store opens the same
@@ -617,6 +620,24 @@ export default function DashboardPage() {
                     )}
                   </div>
                 ))}
+
+                {isAdmin() && (
+                  <SidebarGroup>
+                    <SidebarGroupLabel className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground/75">
+                      Administration
+                    </SidebarGroupLabel>
+                    <SidebarMenu>
+                      <SidebarMenuItem>
+                        <SidebarMenuButton asChild>
+                          <Link href="/admin">
+                            <ShieldCheck className="h-4 w-4" />
+                            <span>Admin settings</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    </SidebarMenu>
+                  </SidebarGroup>
+                )}
 
                 <Separator className="mx-2 bg-border/50" />
 
