@@ -175,6 +175,7 @@ def require_gateway_receipt(
             and metadata["reasoning_steps"] >= 1
             and metadata.get("reasoning_model_attribution_status")
             == "not_executed"
+            and metadata.get("verification_strategy_executed") is True
             and "verification" in (metadata.get("reasoning_modes") or [])
             and meter.reasoning_steps >= 1
             and meter.reasoning_steps <= decision.max_steps
