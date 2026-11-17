@@ -269,7 +269,6 @@ class MedusaCoordinator:
         )
 
         meter.start()
-        started_at_ms = asyncio.get_running_loop().time() * 1000
         trajectory = ExecutionTrajectory(
             request_id=request.request_id,
             trajectory_id=request.request_id,
@@ -319,10 +318,9 @@ class MedusaCoordinator:
                 # A duration check between waves does not interrupt a hung
                 # specialist. Bound the running wave by the remaining request
                 # deadline, and cancel unfinished child tasks on timeout.
-                elapsed_ms = asyncio.get_running_loop().time() * 1000 - started_at_ms
-                remaining_seconds = (
-                    authorized_plan.budget.max_duration_ms - elapsed_ms
-                ) / 1000
+                # The shared meter carries the original ChatRuntime deadline.
+                # Do not restart the entire budget at the Medusa handoff.
+                remaining_seconds = (await meter.remaining_duration_ms()) / 1000.0
                 if remaining_seconds <= 0:
                     for step in wave:
                         step.status = StepStatus.SKIPPED
