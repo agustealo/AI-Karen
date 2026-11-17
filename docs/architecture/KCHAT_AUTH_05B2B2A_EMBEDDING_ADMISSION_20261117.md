@@ -72,3 +72,21 @@ recovering the original request-owned plan, because nested degradation and
 provenance data become dictionaries in the transfer payload. An empty root
 allowlist retains its existing unspecified semantics; nonempty root lists
 cannot be widened by specialist child registration.
+
+### Runtime request-lineage replay containment
+
+The original plan, meter and authenticated `ChatExecutionContext` are bound
+by **request identity**, not by a copyable budget object. The existing Core
+context owner maintains an ephemeral, weak-value mapping keyed by the real
+user/tenant/session/request/correlation/policy/execution identifiers. An
+independent `dataclasses.replace` of the plan, budget and context with the
+same runtime identity cannot register a second model budget or re-execute an
+embedding after the original meter is exhausted. Original execution budgets
+remain slotted and serialize only their declared, bounded policy fields.
+
+This registry is an in-process lineage defense, **not a policy-decision issuer**.
+Only existing ChatRuntime and a validated standalone Medusa handoff may
+register an authenticated plan/meter. It does not certify arbitrary in-process
+Python execution as a security boundary or replace ingress RBAC checks.
+The full 05B2B authorization migration and host-level network containment
+remain outstanding.
