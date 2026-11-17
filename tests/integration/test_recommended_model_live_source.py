@@ -302,40 +302,40 @@ def test_pocket_tts_live_pinned_manifest_matches_both_transports() -> None:
     # Hub SDK transparently paginates; direct HTTPS independently validates
     # and follows the cursor chain at the same reviewed repository revision.
     hub_files: dict[str, dict[str, object]] = {}
-    prefixes = sorted({direct._prefix(pattern) for pattern in patterns})
-    for prefix in prefixes:
-        try:
-            entries = list(
-                api.list_repo_tree(
-                    model_id,
-                    path_in_repo=prefix,
-                    recursive=True,
-                    expand=True,
-                    revision=revision,
-                    token=token,
-                )
+    # SDK discovery uses the full reviewed language directory independently
+    # of the direct transport's per-pattern prefix and cursor selection.
+    try:
+        entries = list(
+            api.list_repo_tree(
+                model_id,
+                path_in_repo=str(spec["model_subdirectory"]),
+                recursive=True,
+                expand=True,
+                revision=revision,
+                token=token,
             )
-        except Exception:
-            pytest.fail(
-                "Gated Pocket file tree inaccessible through Hugging Face SDK",
-                pytrace=False,
-            )
-        for entry in entries:
-            if not isinstance(entry, RepoFile):
-                continue
-            path = direct._safe_path(entry.path)
-            if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns):
-                continue
-            assert isinstance(entry.size, int) and 0 < entry.size <= direct._MAX_FILE_BYTES
-            lfs = getattr(entry, "lfs", None)
-            digest = getattr(lfs, "sha256", None) if lfs is not None else None
-            if digest is not None:
-                assert re.fullmatch(r"[0-9a-f]{64}", digest)
-            candidate = {"size": entry.size, "sha256": digest}
-            assert path not in hub_files or hub_files[path] == candidate, (
-                "HF SDK reported inconsistent pinned file metadata"
-            )
-            hub_files[path] = candidate
+        )
+    except Exception:
+        pytest.fail(
+            "Gated Pocket file tree inaccessible through Hugging Face SDK",
+            pytrace=False,
+        )
+    for entry in entries:
+        if not isinstance(entry, RepoFile):
+            continue
+        path = direct._safe_path(entry.path)
+        if not any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns):
+            continue
+        assert isinstance(entry.size, int) and 0 < entry.size <= direct._MAX_FILE_BYTES
+        lfs = getattr(entry, "lfs", None)
+        digest = getattr(lfs, "sha256", None) if lfs is not None else None
+        if digest is not None:
+            assert re.fullmatch(r"[0-9a-f]{64}", digest)
+        candidate = {"size": entry.size, "sha256": digest}
+        assert path not in hub_files or hub_files[path] == candidate, (
+            "HF SDK reported inconsistent pinned file metadata"
+        )
+        hub_files[path] = candidate
 
     assert hub_files, "HF SDK returned no approved Pocket artifacts"
     assert len(hub_files) <= direct._MAX_FILES
