@@ -169,7 +169,10 @@ class TrainingArtifactReconciler:
             ):
                 return None
             stored_meta = json.loads(metadata_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError, UnicodeError, TypeError):
+        except (OSError, ValueError, UnicodeError, TypeError, RecursionError):
+            # Small but deeply nested JSON can exceed Python's parser recursion
+            # limit. Never turn malformed, untrusted artifact metadata into an
+            # uncaught diagnostic exception or an affirmative lineage claim.
             return None
         if not isinstance(stored_meta, dict):
             return None
