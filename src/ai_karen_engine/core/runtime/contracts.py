@@ -32,10 +32,7 @@ class ResponseSource(str, Enum):
     DEGRADED = "degraded"
 
 
-# The canonical request owns an ephemeral, non-serialized meter-identity binding
-# on its ExecutionBudget. Unlike slots, an instance __dict__ permits that
-# attachment without adding authority objects to dataclass serialization.
-@dataclass
+@dataclass(slots=True)
 class ExecutionBudget:
     """Resource boundaries enforced by RuntimeExecutor."""
 
