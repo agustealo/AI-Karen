@@ -1140,16 +1140,14 @@ async def test_oracle_review_never_claims_success_without_durable_readback(tmp_p
     manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
 
     class FalseAcknowledgmentStore(InMemoryOutcomeStore):
-        def __init__(self, records):
-            super().__init__()
-            self._records = records
-
         async def save_unique_outcome_async(self, payload):
             # Simulate a defective or interrupted persistence adapter that
             # returns without writing the requested review receipt.
             return None
 
-    broken = FalseAcknowledgmentStore(store._records)
+    broken = FalseAcknowledgmentStore()
+    for source_record in store._records:
+        broken.save_outcome(source_record)
     adapter = GovernedCuratedOracleReviewEvidence(
         tenant_id=TENANT, subject_user_id=USER,
         registry_dir=tmp_path, store=broken,
