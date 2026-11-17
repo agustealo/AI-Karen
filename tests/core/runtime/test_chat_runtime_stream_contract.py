@@ -1917,6 +1917,11 @@ async def test_b2c2_cancel_during_postcommit_session_cleanup_reconciles_truth(
         await asyncio.Event().wait()
 
     async def output_stream(*args, **kwargs):
+        kwargs["_meta"].update({
+            "response_source": "provider_runtime",
+            "actual_provider": "ollama-local",
+            "actual_model": "installed-model",
+        })
         yield ChatStreamChunk(
             type="content", content="Durable answer", correlation_id="corr-1",
         )
