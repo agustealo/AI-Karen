@@ -83,7 +83,7 @@ def _test_governed_admission():
             "max_model_calls": plan.budget.max_model_calls,
         },
     )
-    issuer._issued_model_decisions[issued_decision.decision_id] = issued_decision
+    issuer._record_issued_model_decision(issued_decision)
     issuer.bind_chat_model_policy(context=context, decision=issued_decision)
     context.bind_runtime_model_authority(admission.plan, admission.meter)
     return admission
