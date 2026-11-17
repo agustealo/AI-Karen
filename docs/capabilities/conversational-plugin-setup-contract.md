@@ -420,6 +420,27 @@ live completion, failed persistence, schema denial, replay attestation,
 mutation-claim rejection, and honest text-only restoration. The source test
 runs in both Main Quality and Plugin Backend.
 
+## Consumer presentation for management preflight (KPLUG-CONV-02B)
+
+The canonical CopilotKit verified assistant slot and legacy chat renderer present verified `plugin_management_preflight` data as a
+small status panel instead of exposing the raw backend JSON. The component
+accepts only an application-global, nonexecuted and nonapproved preflight with
+the canonical `admin.plugins:manage` permission and bounded plugin/action
+identifiers. Invalid or unknown evidence cannot produce an action link.
+
+For `needs_explicit_confirmation` with `permission_verified=true` and the
+canonical `plugin.open_admin_management` hint, the panel may navigate to the
+existing `/plugins` page. This is **navigation only**, not confirmation,
+policy authorization, an enable/disable request or an execution receipt.
+User-origin structured content can never produce the management panel.
+The existing Plugins & Tools owner performs any later mutation after its own
+authentication, authorization and verification checks.
+
+Proof: `KarenPluginManagementPreflight.test.tsx` plus the canonical verified-history parse and replay suite tests the responsive chat
+presentation, permission denial, unknown envelopes, forgery attempts and the
+absence of execution claims. CI runs the standard frontend Vitest and TS
+checks; no second settings or action owner is introduced.
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and

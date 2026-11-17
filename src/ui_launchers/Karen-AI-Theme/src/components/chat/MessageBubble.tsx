@@ -45,6 +45,7 @@ import { ChatRenderedContent } from '@/lib/chat-renderer';
 
 import CitationBadge from './CitationBadge';
 import SourceList from './SourceList';
+import { KarenPluginManagementPreflight } from './KarenPluginManagementPreflight';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -239,9 +240,13 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
       : [];
   const hasCitations = !isUser && citations.length > 0;
 
-  const hasStructuredContent =
-    Boolean(message.structuredContent) &&
-    Object.keys(message.structuredContent || {}).length > 0;
+  const managementPreflight = isAssistant
+    ? message.structuredContent?.plugin_management_preflight
+    : undefined;
+  const structuredEntries = Object.entries(message.structuredContent || {}).filter(
+    ([key]) => !isAssistant || key !== 'plugin_management_preflight',
+  );
+  const hasStructuredContent = structuredEntries.length > 0;
 
   const hasApprovalActions = Boolean(
     message.actions?.some((action) => action.type.startsWith('approval.')),
@@ -596,9 +601,15 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                 </div>
               )}
 
+              {managementPreflight != null && (
+                <div className="mt-3 rounded-xl border border-border/60 bg-card/50 p-3">
+                  <KarenPluginManagementPreflight data={managementPreflight} />
+                </div>
+              )}
+
               {hasStructuredContent && (
                 <div className="mt-3 flex flex-col gap-2 2xl:hidden">
-                  {Object.entries(message.structuredContent || {}).map(
+                  {structuredEntries.map(
                     ([key, value]) => (
                       <div
                         key={key}
