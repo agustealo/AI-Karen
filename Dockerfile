@@ -66,6 +66,17 @@ RUN python -m pip install --no-cache-dir \
     && python -c "import spacy, en_core_web_sm; assert en_core_web_sm.__version__ == '3.8.0'; nlp = spacy.load('en_core_web_sm'); nlp.to_disk('/app/models/spacy/en_core_web_sm')"
 
 # -----------------------------
+# Opt-in Pocket TTS CPU synthesis host (licensed weights are NOT in the image).
+# Select API_BUILD_TARGET=runtime-pocket-tts in Karen's existing Compose build.
+# PluginKernel and VoiceRuntime still control installation and execution.
+# -----------------------------
+FROM runtime AS runtime-pocket-tts
+COPY requirements/pocket-tts.txt /app/requirements/pocket-tts.txt
+RUN python -m pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r /app/requirements/pocket-tts.txt && \
+    python -m pip check && \
+    python -c "from importlib.metadata import version; from pocket_tts import TTSModel; assert version('pocket-tts') == '4.0.1'"
+
+# -----------------------------
 # Runtime-perf stage (OpenBLAS enabled)
 # -----------------------------
 FROM base AS runtime-perf

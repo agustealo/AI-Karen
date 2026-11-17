@@ -15,3 +15,13 @@ export function isVoiceStudioDashboardRoute(search: string): boolean {
     query.get('view') === 'settings' &&
     query.get('section') === 'voice';
 }
+
+/** User-facing plugin workspace. This is not an authorization decision. */
+export const POCKET_TTS_DASHBOARD_HREF = '/dashboard?view=pocket-tts' as const;
+
+export function isPocketTtsDashboardRoute(search: string): boolean {
+  const query = new URLSearchParams(search);
+  return query.getAll('view').length === 1 &&
+    query.get('view') === 'pocket-tts' &&
+    query.getAll('section').length === 0;
+}

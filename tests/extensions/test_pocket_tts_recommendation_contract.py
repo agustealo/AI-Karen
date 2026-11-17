@@ -103,3 +103,31 @@ def test_pocket_model_download_remains_in_canonical_admin_governed_service() -> 
     assert "isAdmin()" in ui
     assert "metadata_verified" in ui
     assert "No installation was started." in ui
+
+
+def test_pocket_optional_cpu_image_uses_pinned_native_runtime() -> None:
+    """Build-time dependency must match the loader, without baking in weights."""
+    spec = json.loads((PLUGIN / "model_spec.json").read_text(encoding="utf-8"))
+    requirements = (
+        ROOT / "requirements/pocket-tts.txt"
+    ).read_text(encoding="utf-8").splitlines()
+    packages = [line.strip() for line in requirements if line.strip() and not line.startswith("#")]
+    assert packages == [f"{spec['runtime_package']}=={spec['runtime_version']}"]
+
+    image = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "FROM runtime AS runtime-pocket-tts" in image
+    assert "COPY requirements/pocket-tts.txt /app/requirements/pocket-tts.txt" in image
+    assert "--extra-index-url https://download.pytorch.org/whl/cpu" in image
+    assert "-r /app/requirements/pocket-tts.txt" in image
+    assert "python -m pip check" in image
+    assert "from pocket_tts import TTSModel" in image
+    assert "FROM ${PROFILE} AS app" in image
+    for filename in ("docker-compose.yml", "docker-compose.prod-simple.yml"):
+        compose = (ROOT / filename).read_text(encoding="utf-8")
+        assert "PROFILE: ${API_BUILD_TARGET:-runtime}" in compose
+
+    # A host package may be installed at image build, but licensed model
+    # weights must still be fetched only through Karen's governed model worker.
+    assert "snapshot_download" not in image
+    assert "huggingface-cli download" not in image
+    assert "HF_TOKEN" not in image

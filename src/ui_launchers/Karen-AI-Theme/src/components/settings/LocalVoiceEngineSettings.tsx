@@ -25,7 +25,7 @@ function errorMessage(error: unknown): string {
   return "Karen could not verify the local voice engine catalog.";
 }
 
-export default function LocalVoiceEngineSettings() {
+export default function LocalVoiceEngineSettings({ engineFilter }: { engineFilter?: string } = {}) {
   const { toast } = useToast();
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [catalog, setCatalog] = useState<VoiceCatalog | null>(null);
@@ -69,8 +69,17 @@ export default function LocalVoiceEngineSettings() {
       if (revisionRef.current !== epoch) return;
       setCatalog(engines);
       setSaved(preference);
-      setEngineId(preference.voice.engine_id ?? BROWSER);
-      setVoiceId(preference.voice.voice_id ?? "");
+      if (engineFilter) {
+        const available = engines.engines.find((entry) => entry.engine_id === engineFilter);
+        const savedVoice = preference.voice.engine_id === engineFilter &&
+          available?.voices.some((voice) => voice.id === preference.voice.voice_id)
+          ? preference.voice.voice_id : null;
+        setEngineId(engineFilter);
+        setVoiceId(savedVoice ?? available?.voices[0]?.id ?? "");
+      } else {
+        setEngineId(preference.voice.engine_id ?? BROWSER);
+        setVoiceId(preference.voice.voice_id ?? "");
+      }
       setStatus("ready");
     } catch (cause) {
       if (revisionRef.current !== epoch) return;
@@ -79,7 +88,7 @@ export default function LocalVoiceEngineSettings() {
       setStatus("failed");
       setError(errorMessage(cause));
     }
-  }, []);
+  }, [engineFilter]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -101,7 +110,12 @@ export default function LocalVoiceEngineSettings() {
     };
   }, [refresh]);
 
-  const selectedEngine: VoiceEngine | undefined = catalog?.engines.find(
+  // Filtering is a presentation contract. Runtime still owns which
+  // engines and voices actually exist and may execute.
+  const visibleEngines = catalog?.engines.filter(
+    (entry) => !engineFilter || entry.engine_id === engineFilter,
+  ) ?? [];
+  const selectedEngine: VoiceEngine | undefined = visibleEngines.find(
     (item) => item.engine_id === engineId,
   );
   const selectedVoice = selectedEngine?.voices.find((voice) => voice.id === voiceId);
@@ -164,6 +178,10 @@ export default function LocalVoiceEngineSettings() {
 
   const save = async () => {
     if (savingRef.current || status !== "ready") return;
+    if (engineFilter && (!selectedEngine || !selectedVoice)) {
+      setError("Pocket TTS must be verified and a real voice selected before saving.");
+      return;
+    }
     if (engineId !== BROWSER && (!selectedEngine || !selectedVoice)) {
       setError("Choose a currently available local voice before saving.");
       return;
@@ -247,10 +265,11 @@ export default function LocalVoiceEngineSettings() {
               <Headphones className="h-6 w-6" aria-hidden="true" />
             </div>
             <div>
-              <CardTitle className="text-xl">Local Voice Studio</CardTitle>
+              <CardTitle className="text-xl">{engineFilter ? "Pocket TTS Voice Lab" : "Local Voice Studio"}</CardTitle>
               <CardDescription className="mt-1 max-w-xl">
-                Choose your authorized speech engine, hear an actual model-backed sample, and
-                save the voice Karen uses when you choose Read aloud.
+                {engineFilter
+                  ? "Choose an installed Pocket TTS voice, generate a real local sample, and save it for Karen’s Read aloud feature."
+                  : "Choose your authorized speech engine, hear an actual model-backed sample, and save the voice Karen uses when you choose Read aloud."}
               </CardDescription>
             </div>
           </div>
@@ -258,12 +277,12 @@ export default function LocalVoiceEngineSettings() {
             role="status" data-testid="voice-studio-readiness">
             {status === "loading"
               ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-              : status === "ready" && Boolean(catalog?.engines.length)
+              : status === "ready" && Boolean(visibleEngines.length)
                 ? <CircleCheck className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" />
                 : <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />}
             {status === "loading" ? "Verifying engines" :
               status === "failed" ? "Catalog unavailable" :
-                catalog?.engines.length ? `${catalog.engines.length} local engine${catalog.engines.length === 1 ? "" : "s"} ready` : "No local engines ready"}
+                visibleEngines.length ? `${visibleEngines.length} local engine${visibleEngines.length === 1 ? "" : "s"} ready` : "No local engines ready"}
           </span>
         </div>
         {status === "ready" && saved && (
@@ -295,14 +314,14 @@ export default function LocalVoiceEngineSettings() {
         )}
         {status === "ready" && (
           <>
-            {!catalog?.engines.length && (
+            {!visibleEngines.length && (
               <Alert>
                 <AlertCircle className="h-4 w-4" />
-                <AlertTitle>No Local TTS Plugin Ready</AlertTitle>
+                <AlertTitle>{engineFilter ? "Pocket TTS Not Ready" : "No Local TTS Plugin Ready"}</AlertTitle>
                 <AlertDescription>
-                  An enabled plugin is not necessarily ready for speech. An administrator must
-                  install and license its approved model through Models &amp; Runtime → Model Downloads,
-                  enable the trusted plugin, then refresh here. No browser fallback is selected automatically.
+                  {engineFilter
+                    ? "An administrator must license and install the pinned Pocket model and enable the trusted plugin. Only a backend-verified model and voice can become available here."
+                    : "An enabled plugin is not necessarily ready for speech. An administrator must install and license its approved model through Models & Runtime → Model Downloads, enable the trusted plugin, then refresh here. No browser fallback is selected automatically."}
                 </AlertDescription>
               </Alert>
             )}
@@ -314,7 +333,11 @@ export default function LocalVoiceEngineSettings() {
             )}
             <div className="space-y-2">
               <Label htmlFor="karen-local-engine">Speech output source</Label>
-              <Select value={engineId === BROWSER || selectedEngine ? engineId : "_missing_saved_"}
+              {engineFilter ? (
+                <div id="karen-local-engine" role="status" className="rounded-lg border bg-muted/20 px-3 py-2 text-sm" data-testid="pocket-tts-engine-scope">
+                  Pocket TTS · governed local CPU synthesis
+                </div>
+              ) : <Select value={engineId === BROWSER || selectedEngine ? engineId : "_missing_saved_"}
                 disabled={saving} onValueChange={changeEngine}>
                 <SelectTrigger id="karen-local-engine"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -327,10 +350,11 @@ export default function LocalVoiceEngineSettings() {
                     </SelectItem>
                   ))}
                 </SelectContent>
-              </Select>
+              </Select>}
               <p className="text-xs text-muted-foreground">
-                Local speech is generated through Karen&apos;s authenticated runtime.
-                Browser speech depends on your device and may use vendor services.
+                {engineFilter
+                  ? "Only Karen’s verified Pocket TTS model may synthesize audio here. No browser speech or other engine is substituted."
+                  : "Local speech is generated through Karen’s authenticated runtime. Browser speech depends on your device and may use vendor services."}
               </p>
             </div>
             {selectedEngine ? (
@@ -406,8 +430,9 @@ export default function LocalVoiceEngineSettings() {
               </section>
             ) : (
               <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">
-                Browser speech is a separate device feature. Use the Browser voice panel below to
-                choose and preview an installed browser voice.
+                {engineFilter
+                  ? "Pocket TTS voice controls unlock only when an installed, enabled model passes Karen’s live runtime checks."
+                  : "Browser speech is a separate device feature. Use the Browser voice panel below to choose and preview an installed browser voice."}
               </div>
             )}
           </>
@@ -424,7 +449,7 @@ export default function LocalVoiceEngineSettings() {
           Read aloud remains opt-in on every assistant reply.
         </span>
         <Button type="button" onClick={() => void save()}
-          disabled={status !== "ready" || saving || (engineId !== BROWSER && !selectedVoice)}>
+          disabled={status !== "ready" || saving || (engineFilter ? !selectedEngine || !selectedVoice : engineId !== BROWSER && !selectedVoice)}>
           {saving ? "Saving…" : "Save speech engine"}
         </Button>
       </CardFooter>
