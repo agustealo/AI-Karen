@@ -189,9 +189,9 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             """INSERT INTO public.channel_connections
                (connection_id, tenant_id, installation_id,
                 provider_account_id, credential_handle, enabled, revision)
-               VALUES ($1,$2,'whatsapp-cloud','30987654321',
+               VALUES ($1,$2,'whatsapp-cloud','990000000000001',
                        'vault://tenant-a-private',false,1),
-                      ($3,$4,'whatsapp-cloud','30987654322',
+                      ($3,$4,'whatsapp-cloud','990000000000002',
                        'vault://tenant-b-private',true,2)""",
             operator_a_id, tenant_a, operator_b_id, tenant_b,
         )
@@ -213,6 +213,15 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
         assert await operator_repository.list_whatsapp_operator_connections(
             tenant_id=str(uuid.uuid4()),
         ) == []
+        # Keep the existing multi-scenario test isolated. Later WhatsApp
+        # acceptance cases deliberately reuse a known Meta account identity,
+        # and PostgreSQL must continue enforcing its account uniqueness index.
+        assert await raw.execute(
+            """DELETE FROM public.channel_connections
+               WHERE (tenant_id=$1 AND connection_id=$2)
+                  OR (tenant_id=$3 AND connection_id=$4)""",
+            tenant_a, operator_a_id, tenant_b, operator_b_id,
+        ) == "DELETE 2"
 
         # KWA-01D: actual PostgreSQL row locking and durable claim uniqueness.
         # A separate connection avoids changing the existing outbox assertions.
