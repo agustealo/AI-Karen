@@ -226,6 +226,10 @@ async def test_local_endpoint_keeps_local_first_without_cloud_auth_callback():
         "http://169.254.%31%36%39.254/latest/meta-data",
         "http://%30xa9fea9fe/latest/meta-data",
         "http://%31%32%37.0.0.1:11434/v1",
+        # The OS IDNA resolver can map these Unicode hosts into metadata IPs.
+        "http://１６９.254.169.254/latest/meta-data",
+        "http://169．254．169．254/latest/meta-data",
+        "http://①⑥⑨.254.169.254/latest/meta-data",
         "http://[fe80::1]:11434/v1",
         "http://[::ffff:169.254.169.254]/latest/meta-data",
         "http://0.0.0.0:11434/v1",

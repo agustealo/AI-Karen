@@ -182,6 +182,10 @@ def _open_provider_request(request: Request, timeout: float):
         parsed.scheme not in {"http", "https"}
         or not parsed_hostname
         or "%" in parsed.netloc
+        # libc's IDNA conversion can normalize Unicode digits/dot lookalikes
+        # into a forbidden numeric IP, bypassing ipaddress and inet_aton.
+        # Configured IDN servers must use their canonical ASCII/punycode host.
+        or not parsed.netloc.isascii()
         or parsed.username is not None
         or parsed.password is not None
         or request.host.lower() != parsed.netloc.lower()
