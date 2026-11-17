@@ -636,6 +636,22 @@ async def test_real_runtime_policy_evaluation_is_required_before_any_initial_mod
             decision=replace(original_decision),
         )
 
+    # The issuer must enforce its actual evaluated values, not mutable
+    # attributes on the same PolicyDecision identity.
+    original_decision.runtime_constraints["max_model_calls"] = 9
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(context=context, decision=original_decision)
+    original_decision.runtime_constraints["max_model_calls"] = 1
+
+    original_decision.allowed_capabilities.append("model.personal_key.execute")
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(context=context, decision=original_decision)
+    original_decision.allowed_capabilities.pop()
+
     issuer.bind_chat_model_policy(context=context, decision=original_decision)
     context.bind_runtime_model_authority(plan, meter)
     assert context.original_runtime_model_plan(meter) is plan
