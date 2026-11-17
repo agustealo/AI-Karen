@@ -117,21 +117,21 @@ Pocket download or audible voice trial.
 
 ### Opt-in live upstream manifest parity (unverified until executed)
 
-The existing \`Model Download Durable Worker Gate\` now exposes the manually
-dispatched \`verify_pocket_manifest\` boolean. An authorized operator must
+The existing `Model Download Durable Worker Gate` now exposes the manually
+dispatched `verify_pocket_manifest` boolean. An authorized operator must
 first accept Hugging Face's gated upstream model terms for the exact account,
 then provide a protected GitHub Actions secret named
-\`KAREN_POCKET_HF_TOKEN\`. With explicit dispatch opt-in, the workflow
+`KAREN_POCKET_HF_TOKEN`. With explicit dispatch opt-in, the workflow
 invokes
-\`test_pocket_tts_live_pinned_manifest_matches_both_transports\` from the
-**existing** \`tests/integration/test_recommended_model_live_source.py\`.
+`test_pocket_tts_live_pinned_manifest_matches_both_transports` from the
+**existing** `tests/integration/test_recommended_model_live_source.py`.
 
 This non-mocked, read-only source check compares the Hub SDK's complete
 paginated model-language file inventory with the direct HTTPS transport's
 independently enumerated curated file inventory at the exact reviewed
 revision. The test rejects missing model/tokenizer/voice states, different
 paths, file sizes or published LFS checksums; it checks the model identity,
-gated status, revision and \`plugin_audio\` recommendation contract. It makes
+gated status, revision and `plugin_audio` recommendation contract. It makes
 **no** file-resolution download, model-install job, registry publication,
 inference call or browser request, and does not record tokens in logs.
 An unset token or denied upstream terms fails the explicit source check
