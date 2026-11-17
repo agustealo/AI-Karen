@@ -216,7 +216,10 @@ class DeepAgentsResearchSpecialist:
                 self, serialized: dict, messages: list, **kwargs: Any
             ) -> None:
                 del serialized, messages, kwargs
-                if not await meter.check_duration() or not await meter.consume_model_call():
+                # The canonical KarenGovernedChatModel reserves the actual
+                # transport, including nested calls. Charging here would double
+                # count and SDK callback omission could otherwise bypass quota.
+                if not await meter.check_duration():
                     raise RuntimeError("Deep Agents model execution exceeded RuntimePolicy budget")
 
             async def _emit_activity(
