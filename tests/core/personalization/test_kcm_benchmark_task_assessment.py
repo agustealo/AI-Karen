@@ -934,3 +934,197 @@ async def test_partial_or_malformed_runner_window_in_receipt_fails_closed(tmp_pa
     ).read_case_receipt(
         manifest=manifest, tenant_id=TENANT, receipt_id=receipt_id,
     ) is None
+
+
+async def _actual_runner_scoped_review_fixture(tmp_path):
+    """Actual canonical evaluation, current receipt, and exact owner outcomes."""
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    receipt_id = EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+    exact_outcome = benchmark.outcomes[0]
+    case_hash = hashlib.sha256(
+        exact_outcome.case_id.encode("utf-8"),
+    ).hexdigest()[:24]
+    store = InMemoryOutcomeStore()
+    row = MLOutcomeRecord(
+        outcome_id="scoped-curated-oracle-review-outcome",
+        task=TASK,
+        model_id=manifest.model_id,
+        model_version=manifest.model_version,
+        feature_version=manifest.feature_version,
+        predicted_label="",
+        expected_label="",
+        correct=exact_outcome.correct,
+        raw_probability=0.9,
+        calibrated_probability=0.9,
+        confidence=0.9,
+        latency_ms=exact_outcome.latency_ms,
+        fallback_used=False,
+        calibration_error=abs(0.9 - float(exact_outcome.correct)),
+    )
+    await GovernedMLLearningEvidence(
+        tenant_id=TENANT, user_id=USER, store=store,
+    ).record_verified_batch([
+        (row, "heldout_evaluation", f"benchmark:{receipt_id}:{case_hash}"),
+    ])
+    return manifest, receipt_id, store
+
+
+def _authorized_curated_reviewer(*, tenant=TENANT, user=OTHER_USER):
+    from ai_karen_engine.auth.rbac_middleware import Permission
+
+    return AuthenticatedPrincipal(
+        tenant_id=tenant,
+        user_id=user,
+        session_id="trusted-reviewer-session",
+        permissions=[Permission.BENCHMARK_ORACLE_REVIEW.value],
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoped_curated_oracle_reviewer_receipt_is_observational_only(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=store,
+    )
+    reviewer = _authorized_curated_reviewer()
+    issued = await adapter.record_review(
+        subject=identity(), reviewer=reviewer,
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    read = await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    )
+    assert issued == read
+    assert read is not None
+    assert read.reviewer_user_id == OTHER_USER
+    assert read.exact_cohort_reviewer_acknowledged is True
+    assert read.curated_source_integrity_verified is True
+    assert read.group_membership_integrity_verified is True
+    assert read.independent_trial_groups_verified is False
+    assert read.independent_ground_truth_verified is False
+    assert read.training_data_disjointness_verified is False
+    assert read.general_skill_certified is False
+    assert read.execution_authorized is False
+    assert read.training_authorized is False
+
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+    with pytest.raises(OutcomeStoreError):
+        await adapter.record_review(
+            subject=identity(), reviewer=reviewer,
+            model_id=manifest.model_id, receipt_id=receipt,
+        )
+
+
+@pytest.mark.asyncio
+async def test_oracle_review_requires_separate_active_authorized_reviewer(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path, store=store,
+    )
+    bad = (
+        identity(),
+        AuthenticatedPrincipal(
+            tenant_id=TENANT, user_id=OTHER_USER, session_id="s",
+        ),
+        _authorized_curated_reviewer(tenant=OTHER_TENANT),
+        AuthenticatedPrincipal(
+            tenant_id=TENANT, user_id=OTHER_USER,
+            permissions=_authorized_curated_reviewer().permissions,
+        ),
+        AuthenticatedPrincipal(
+            tenant_id=TENANT, user_id=OTHER_USER, session_id="s",
+            permissions=_authorized_curated_reviewer().permissions,
+            expires_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+    for reviewer in bad:
+        with pytest.raises(PermissionError):
+            await adapter.record_review(
+                subject=identity(), reviewer=reviewer,
+                model_id=manifest.model_id, receipt_id=receipt,
+            )
+    with pytest.raises(PermissionError):
+        await adapter.inspect_review(
+            subject=identity(OTHER_TENANT, USER),
+            model_id=manifest.model_id, receipt_id=receipt,
+        )
+    with pytest.raises(PermissionError):
+        await adapter.record_review(
+            subject=identity(OTHER_TENANT, USER),
+            reviewer=_authorized_curated_reviewer(),
+            model_id=manifest.model_id, receipt_id=receipt,
+        )
+    assert not any(
+        row["metadata"].get("schema_version")
+        == "kcm_curated_oracle_reviewer_observation_v1"
+        for row in store._records
+    )
+
+
+@pytest.mark.asyncio
+async def test_oracle_review_drift_tampering_and_revocation_fail_closed(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path, store=store,
+    )
+    await adapter.record_review(
+        subject=identity(), reviewer=_authorized_curated_reviewer(),
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    review_payload = store._records[-1]
+    review_payload["metadata"]["exact_snapshot_sha256"] = "0" * 64
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
+    review_payload["metadata"]["exact_snapshot_sha256"] = (
+        adapter._snapshot(model_id=manifest.model_id, receipt_id=receipt)
+        .snapshot_sha256
+    )
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is not None
+    saved = store._records.pop()
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
+    store._records.append(saved)
+    from pathlib import Path
+    Path(manifest.artifact_path).write_bytes(b"tampered-model")
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_receipt_cannot_gain_reviewer_provenance(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, use_canonical_curated_oracles=True,
+    )
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path, store=store,
+    )
+    with pytest.raises(OutcomeStoreError):
+        await adapter.record_review(
+            subject=identity(), reviewer=_authorized_curated_reviewer(),
+            model_id=manifest.model_id, receipt_id=receipt,
+        )

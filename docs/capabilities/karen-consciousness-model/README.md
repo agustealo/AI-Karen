@@ -50,6 +50,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [23 — Task-specific benchmark assessment](23-task-specific-benchmark-assessment.md) | Exact model/feature/case provenance, observed test accuracy and uncertainty |
 | [24 — Conditioned benchmark and expiry](24-conditioned-task-evidence.md) | Canonical curated oracle integrity, group limits, environment truth and required freshness |
 | [25 — Runner observation and evidence age](25-run-observation-and-freshness.md) | Runner-observed inference window, receipt replay fencing, freshness-bound diagnostics |
+| [26 — Reviewed oracle observations](26-reviewed-curated-oracle-observations.md) | Tenant-scoped authorized reviewer acknowledgment, exact source snapshot, no independent group certification |
 
 ### Machine-readable proposed contracts
 
