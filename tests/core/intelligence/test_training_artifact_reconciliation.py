@@ -120,9 +120,6 @@ def _scoped_training_lineage_fixture(tmp_path):
 
     from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest
     from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
-    from ai_karen_engine.core.intelligence.ml.training.sklearn_executor import (
-        _hash_directory,
-    )
     from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
 
     root = tmp_path / "registry"
@@ -151,8 +148,12 @@ def _scoped_training_lineage_fixture(tmp_path):
     (artifact / "training_metadata.json").write_text(
         json.dumps(metadata, sort_keys=True), encoding="utf-8",
     )
-    digest = _hash_directory(artifact)
+    # Reuse the actual ML registry's artifact hashing algorithm without
+    # importing the optional scikit-learn training engine in governance CI.
     registry = MLModelRegistry(registry_dir=str(root))
+    digest_hasher = hashlib.sha256()
+    registry._hash_directory(artifact, digest_hasher)
+    digest = digest_hasher.hexdigest()
     registry.register(MLModelManifest(
         model_id=model_id,
         purpose="affect",
