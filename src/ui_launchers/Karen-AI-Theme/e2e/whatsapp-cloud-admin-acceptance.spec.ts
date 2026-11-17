@@ -76,7 +76,13 @@ for (const width of [390, 768, 1440]) {
     });
 
     await signInApprovedKaren(page, email, password);
-    await page.goto('/admin');
+    const adminLink = page.getByRole('link', { name: 'Admin settings', exact: true });
+    if (!(await adminLink.isVisible())) {
+      await page.locator('[data-sidebar="trigger"]').first().click();
+    }
+    await expect(adminLink).toBeVisible();
+    await adminLink.click();
+    await expect(page).toHaveURL(/\/admin(?:[/?#]|$)/);
     const tab = page.getByRole('tab', { name: 'WhatsApp Cloud', exact: true });
     await expect(tab).toBeVisible();
 
