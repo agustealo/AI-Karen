@@ -1600,7 +1600,22 @@ class ChatRuntime:
                 }
             )
         if request.runtime_run_lease is not None and transcript_result.success:
-            await persist_authorized_memory()
+            try:
+                await persist_authorized_memory()
+            except (asyncio.CancelledError, GeneratorExit):
+                # A leased stream has committed its assistant turn atomically
+                # with the canonical run status. Postcommit memory cleanup
+                # cannot rewrite that durable completion as cancellation.
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                    committed_text=streamed_text,
+                    committed_provider_meta={
+                        **provider_meta, **transcript_result.to_metadata(),
+                    },
+                    committed_memory_meta=memory_recall_meta,
+                )
+                raise
 
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
