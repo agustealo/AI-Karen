@@ -27,6 +27,7 @@ on:
       - 'src/ai_karen_engine/config/learning.py'
       - 'tests/core/intelligence/ml/test_model_outcome_signals.py'
       - 'tests/core/model_runtime/test_structured_tool_chat_model.py'
+      - 'tests/core/model_runtime/test_structured_tool_transport_admission.py'
       - '.github/workflows/medusa-core-ci.yml'
   pull_request:
     branches: [main, develop]
@@ -54,6 +55,7 @@ on:
       - 'src/ai_karen_engine/config/learning.py'
       - 'tests/core/intelligence/ml/test_model_outcome_signals.py'
       - 'tests/core/model_runtime/test_structured_tool_chat_model.py'
+      - 'tests/core/model_runtime/test_structured_tool_transport_admission.py'
       - '.github/workflows/medusa-core-ci.yml'
 
 concurrency:
@@ -249,6 +251,7 @@ jobs:
             tests/core/runtime/test_deepagents_live_activity.py \
             tests/core/model_runtime/test_structured_tool_provider_execution.py \
             tests/core/model_runtime/test_structured_tool_chat_model.py \
+            tests/core/model_runtime/test_structured_tool_transport_admission.py \
             tests/core/model_runtime/test_deepagents_live_tool_smoke_contract.py \
             -q --timeout=120
 
