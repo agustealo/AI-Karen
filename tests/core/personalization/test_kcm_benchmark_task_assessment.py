@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -22,7 +22,7 @@ from ai_karen_engine.core.intelligence.ml.durable_outcomes import (
     GovernedMLLearningEvidence,
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
-    BenchmarkResult, EvaluationCase, PredictionOutcome,
+    BenchmarkConfig, BenchmarkResult, EvaluationCase, PredictionOutcome,
     evaluation_case_sha256,
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.corpus import (
@@ -31,6 +31,7 @@ from ai_karen_engine.core.intelligence.ml.evaluation.corpus import (
 from ai_karen_engine.core.intelligence.ml.evaluation.evidence import (
     EvaluationEvidenceStore,
 )
+from ai_karen_engine.core.intelligence.ml.evaluation.runner import BenchmarkRunner
 from ai_karen_engine.core.intelligence.ml.online_learning import MLOutcomeRecord
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.personalization.benchmark_task_assessment import (
@@ -742,3 +743,194 @@ def test_benchmark_bounds_are_explicit_and_validated(tmp_path):
             minimum_cases=1,
             maximum_cases=10,
         )
+
+
+async def _actual_runner_result(manifest: MLModelManifest) -> BenchmarkResult:
+    """Real canonical runner, exact curated case and typed predictor output."""
+    case = CanonicalEvaluationCorpus.get_cases(task=TASK)[0]
+
+    class ExactTaskPredictor:
+        def predict(self, features):
+            assert features.text == case.input_text
+            return Prediction(
+                task=TASK, label=case.expected_label,
+                model_id=manifest.model_id,
+                model_version=manifest.model_version,
+                feature_version=manifest.feature_version,
+                probability=0.9, confidence=0.9,
+            )
+
+    return await BenchmarkRunner().run(
+        ExactTaskPredictor(),
+        BenchmarkConfig(
+            model_id=manifest.model_id,
+            model_version=manifest.model_version,
+            task=TASK,
+            dataset_version=CanonicalEvaluationCorpus.DATASET_VERSION,
+            case_ids=[case.case_id],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_actual_runner_window_is_recorded_and_reissued_run_fails(tmp_path):
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    assert benchmark.sample_count == 1
+    assert benchmark.evaluation_run_id
+    assert benchmark.evaluation_started_at is not None
+    assert benchmark.evaluation_finished_at is not None
+    assert benchmark.evaluation_finished_at >= benchmark.evaluation_started_at
+    issuer = EvaluationEvidenceStore(tmp_path)
+    receipt_id = issuer._record(manifest, benchmark)
+    assert receipt_id == benchmark.evaluation_run_id
+    observed = issuer.read_case_receipt(
+        manifest=manifest, tenant_id=TENANT, receipt_id=receipt_id,
+    )
+    assert observed is not None
+    assert observed.runner_evaluation_started_at == benchmark.evaluation_started_at
+    assert observed.runner_evaluation_finished_at == benchmark.evaluation_finished_at
+    with pytest.raises(sqlite3.IntegrityError):
+        issuer._record(manifest, benchmark)
+
+
+@pytest.mark.asyncio
+async def test_recent_issuance_cannot_refresh_old_runner_evaluation(tmp_path):
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    benchmark.evaluation_started_at = datetime(
+        2020, 1, 1, tzinfo=timezone.utc,
+    )
+    benchmark.evaluation_finished_at = (
+        benchmark.evaluation_started_at + timedelta(seconds=1)
+    )
+    receipt_id = EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+    result = await inspect(
+        tmp_path, manifest, receipt_id, InMemoryOutcomeStore(),
+        max_evidence_age_seconds=300,
+    )
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert "benchmark_evidence_expired" in result.reason_codes
+    assert result.observed_fraction_correct is None
+
+
+@pytest.mark.asyncio
+async def test_future_runner_window_and_partial_window_cannot_be_issued(tmp_path):
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    original_finish = benchmark.evaluation_finished_at
+    benchmark.evaluation_finished_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    with pytest.raises(ValueError, match="runner window"):
+        EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+    benchmark.evaluation_finished_at = original_finish
+    benchmark.evaluation_started_at = None
+    with pytest.raises(ValueError, match="runner window"):
+        EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_digest_binds_freshness_policy_and_legacy_basis(tmp_path):
+    manifest, receipt, store, _ = await fixture(tmp_path)
+    short = await inspect(
+        tmp_path, manifest, receipt, store, max_evidence_age_seconds=120,
+    )
+    long = await inspect(
+        tmp_path, manifest, receipt, store, max_evidence_age_seconds=600,
+    )
+    assert short.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert long.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert short.freshness_basis == "receipt_issuance_only"
+    assert not short.runner_execution_window_recorded
+    assert short.evidence_sha256 != long.evidence_sha256
+    assert not short.production_environment_verified
+    assert not short.independent_trial_groups_verified
+    assert not short.general_skill_certified
+
+
+@pytest.mark.asyncio
+async def test_live_canonical_runner_projection_reports_actual_freshness_basis(tmp_path):
+    """Exact registered artifact, canonical runner, SQLite and scoped outcomes."""
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    receipt_id = EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+    record_store = InMemoryOutcomeStore()
+    evaluated = benchmark.outcomes[0]
+    evidence_ref = (
+        f"benchmark:{receipt_id}:"
+        + hashlib.sha256(evaluated.case_id.encode("utf-8")).hexdigest()[:24]
+    )
+    persisted = MLOutcomeRecord(
+        outcome_id="runner-window-measured-outcome",
+        task=TASK,
+        model_id=manifest.model_id,
+        model_version=manifest.model_version,
+        feature_version=manifest.feature_version,
+        predicted_label="",
+        expected_label="",
+        correct=evaluated.correct,
+        raw_probability=0.9,
+        calibrated_probability=0.9,
+        confidence=0.9,
+        latency_ms=evaluated.latency_ms,
+        fallback_used=False,
+        calibration_error=abs(0.9 - float(evaluated.correct)),
+    )
+    await GovernedMLLearningEvidence(
+        tenant_id=TENANT, user_id=USER, store=record_store,
+    ).record_verified_batch([(persisted, "heldout_evaluation", evidence_ref)])
+    assessment = await inspect(
+        tmp_path, manifest, receipt_id, record_store,
+        max_evidence_age_seconds=300,
+    )
+    assert assessment.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert assessment.runner_execution_window_recorded is True
+    assert assessment.freshness_basis == "runner_observed_inference_end"
+    assert assessment.runner_evaluation_started_at == benchmark.evaluation_started_at
+    assert assessment.runner_evaluation_finished_at == benchmark.evaluation_finished_at
+    assert assessment.expires_at == (
+        benchmark.evaluation_finished_at + timedelta(seconds=300)
+    )
+    assert assessment.curated_oracle_source_verified is True
+    assert assessment.independent_trial_groups_verified is False
+    assert assessment.production_environment_verified is False
+    assert assessment.general_skill_certified is False
+    assert assessment.execution_authorized is False
+    assert assessment.training_authorized is False
+
+
+@pytest.mark.asyncio
+async def test_partial_or_malformed_runner_window_in_receipt_fails_closed(tmp_path):
+    import json
+
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    receipt_id = EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+    database = tmp_path / "benchmark_evidence.sqlite3"
+    with sqlite3.connect(database) as db:
+        original = json.loads(db.execute(
+            "SELECT evidence_json FROM benchmark_receipts WHERE receipt_id=?",
+            (receipt_id,),
+        ).fetchone()[0])
+        corrupted = dict(original)
+        corrupted.pop("runner_evaluation_finished_at")
+        db.execute(
+            "UPDATE benchmark_receipts SET evidence_json=? WHERE receipt_id=?",
+            (json.dumps(corrupted), receipt_id),
+        )
+    assert EvaluationEvidenceStore(
+        tmp_path, create_if_missing=False,
+    ).read_case_receipt(
+        manifest=manifest, tenant_id=TENANT, receipt_id=receipt_id,
+    ) is None
+
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "UPDATE benchmark_receipts SET evidence_json=?, created_at=?"
+            " WHERE receipt_id=?",
+            (json.dumps(original), "2020-01-01 00:00:00", receipt_id),
+        )
+    assert EvaluationEvidenceStore(
+        tmp_path, create_if_missing=False,
+    ).read_case_receipt(
+        manifest=manifest, tenant_id=TENANT, receipt_id=receipt_id,
+    ) is None

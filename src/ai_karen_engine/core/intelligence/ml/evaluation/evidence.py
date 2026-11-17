@@ -10,7 +10,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections.abc import Sequence
 from uuid import uuid4
@@ -46,6 +46,9 @@ class BenchmarkCaseReceipt:
     artifact_architecture: str = ""
     curated_oracle_sha256: str = ""
     declared_group_count: int = 0
+    runner_evaluation_run_id: str = ""
+    runner_evaluation_started_at: datetime | None = None
+    runner_evaluation_finished_at: datetime | None = None
 
 
 def _canonical_curated_oracle_snapshot(
@@ -227,7 +230,30 @@ class EvaluationEvidenceStore:
                 or registered.purpose != manifest.purpose):
             raise ValueError("Registered candidate identity changed")
         decision, reasons = evaluate_promotion(result, active_result)
-        receipt_id = uuid4().hex
+        # The runner observes inference start/end. Receipt issuance can occur
+        # much later, so re-issuing an old result cannot reset inference age.
+        run_id = result.evaluation_run_id
+        started = result.evaluation_started_at
+        finished = result.evaluation_finished_at
+        has_runner_window = bool(run_id) or started is not None or finished is not None
+        if has_runner_window and (
+            type(run_id) is not str
+            or len(run_id) != 32
+            or any(char not in "0123456789abcdef" for char in run_id)
+            or not isinstance(started, datetime)
+            or not isinstance(finished, datetime)
+            or started.tzinfo is None
+            or finished.tzinfo is None
+            or started.utcoffset() is None
+            or finished.utcoffset() is None
+            or finished < started
+            or finished > datetime.now(timezone.utc) + timedelta(seconds=1)
+        ):
+            raise ValueError("Canonical benchmark runner window is invalid")
+        # Existing receipts keep their historical random identity. Newly
+        # runner-attributed receipts use the run ID as the receipt PK, so
+        # replaying the same run cannot mint a freshly dated second receipt.
+        receipt_id = run_id if has_runner_window else uuid4().hex
         evidence = {
             "decision": decision.value,
             "reasons": reasons,
@@ -238,6 +264,13 @@ class EvaluationEvidenceStore:
                 for name, metric in result.metrics.items()
             },
         }
+        if has_runner_window:
+            evidence.update({
+                "kcm_runner_window_version": "canonical_runner_window_v1",
+                "runner_evaluation_run_id": run_id,
+                "runner_evaluation_started_at": started.astimezone(timezone.utc).isoformat(),
+                "runner_evaluation_finished_at": finished.astimezone(timezone.utc).isoformat(),
+            })
         # Preserve existing benchmark-promotion compatibility: older
         # evaluators may emit the Prediction default feature version even
         # when the registered manifest has a more specific version.
@@ -380,6 +413,43 @@ class EvaluationEvidenceStore:
             evaluated_at = datetime.strptime(
                 row["created_at"], "%Y-%m-%d %H:%M:%S"
             ).replace(tzinfo=timezone.utc)
+            runner_version = evidence.get("kcm_runner_window_version")
+            runner_started = None
+            runner_finished = None
+            runner_id = ""
+            if runner_version is None:
+                if any(key in evidence for key in (
+                    "runner_evaluation_run_id",
+                    "runner_evaluation_started_at",
+                    "runner_evaluation_finished_at",
+                )):
+                    return None
+            else:
+                runner_id = evidence.get("runner_evaluation_run_id", "")
+                if (
+                    runner_version != "canonical_runner_window_v1"
+                    or runner_id != receipt_id
+                    or not isinstance(runner_id, str)
+                    or len(runner_id) != 32
+                    or any(ch not in "0123456789abcdef" for ch in runner_id)
+                ):
+                    return None
+                runner_started = datetime.fromisoformat(
+                    evidence["runner_evaluation_started_at"]
+                )
+                runner_finished = datetime.fromisoformat(
+                    evidence["runner_evaluation_finished_at"]
+                )
+                if (
+                    runner_started.tzinfo is None
+                    or runner_finished.tzinfo is None
+                    or runner_started.utcoffset() is None
+                    or runner_finished.utcoffset() is None
+                    or runner_finished < runner_started
+                    or runner_finished > evaluated_at + timedelta(seconds=2)
+                    or runner_finished > datetime.now(timezone.utc) + timedelta(seconds=2)
+                ):
+                    return None
             condition_version = evidence.get("kcm_curated_oracle_version")
             curated_digest = evidence.get("curated_oracle_sha256", "")
             declared_groups = evidence.get("declared_group_count", 0)
@@ -457,6 +527,9 @@ class EvaluationEvidenceStore:
             artifact_architecture=architecture,
             curated_oracle_sha256=curated_digest,
             declared_group_count=declared_groups,
+            runner_evaluation_run_id=runner_id,
+            runner_evaluation_started_at=runner_started,
+            runner_evaluation_finished_at=runner_finished,
         )
 
     def is_approved(self, manifest: MLModelManifest) -> bool:
