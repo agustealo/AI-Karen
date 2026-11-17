@@ -200,6 +200,8 @@ describe('Governed plugin model setup', () => {
       status: 'failed',
       progress: 0,
       job_id: 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335',
+      failure_category: 'source_access',
+      // Even malformed responses must never turn raw worker diagnostics into UI.
       error: '403 gated model access denied: /secret/model-token=PRIVATE',
     }]);
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
@@ -213,6 +215,32 @@ describe('Governed plugin model setup', () => {
     expect(retry.hasAttribute('disabled')).toBe(true);
     fireEvent.click(screen.getByRole('checkbox'));
     expect(retry.hasAttribute('disabled')).toBe(false);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['network', /backend network, proxy, TLS/],
+    ['storage', /available model storage/],
+    ['integrity', /artifact integrity/],
+    ['cancelled', /download was cancelled/],
+    ['unknown', /authenticated job details/],
+  ] as const)('renders only the scoped %s failure category', async (category, expected) => {
+    getImpl(catalog(), policy, [{
+      model_id: recommendation.model_id,
+      revision: PINNED,
+      channel_id: 'plugin_audio',
+      status: 'failed',
+      progress: 0,
+      job_id: 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335',
+      failure_category: category,
+      message: 'token=/secret/a PRIVATE',
+      error: 'token=/secret/a PRIVATE',
+    }]);
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    const guidance = await screen.findByTestId('plugin-last-download-failure');
+    expect(guidance.textContent).toMatch(expected);
+    expect(guidance.textContent).not.toContain('PRIVATE');
+    expect(guidance.textContent).not.toContain('/secret/');
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
