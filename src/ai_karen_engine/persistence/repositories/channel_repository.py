@@ -1050,6 +1050,44 @@ class SqlChannelRepository:
             revision=int(row["revision"]),
         )
 
+    async def list_whatsapp_operator_connections(
+        self, *, tenant_id: str,
+    ) -> list[dict[str, str | int | bool]]:
+        """Bounded, tenant-RLS operator inventory with zero provider secrets.
+
+        Auth and RBAC are enforced by ChannelActivationService before the host
+        may call this repository. SQL still selects only the exact tenant and
+        canonical WhatsApp installation; credential handles, phone numbers
+        and Vault contents are never fetched or serialized for the UI.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT connection_id, revision, enabled
+                    FROM public.channel_connections
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND installation_id = 'whatsapp-cloud'
+                    ORDER BY connection_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise ChannelAdmissionDenied("WhatsApp operator inventory exceeds safe limit")
+        result: list[dict[str, str | int | bool]] = []
+        for row in rows:
+            revision = row["revision"]
+            enabled = row["enabled"]
+            if type(revision) is not int or revision < 1 or type(enabled) is not bool:
+                raise ChannelAdmissionDenied("WhatsApp operator inventory invalid")
+            result.append({
+                "connection_id": str(uuid.UUID(str(row["connection_id"]))),
+                "connection_revision": revision,
+                "enabled": enabled,
+            })
+        return result
+
     async def get_connection(
         self, *, tenant_id: str, connection_id: str,
     ) -> ChannelConnection | None:
