@@ -4095,6 +4095,7 @@ class ChatRuntime:
             request,
             decision,
             plan,
+            budget_meter=meter,
         )
         return text, self._normalize_graph_meta(response_metadata, request)
 
@@ -4106,7 +4107,9 @@ class ChatRuntime:
         meter: ExecutionBudgetMeter,
         _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
-        async for chunk in get_workflow_runtime().stream(request, decision, plan):
+        async for chunk in get_workflow_runtime().stream(
+            request, decision, plan, budget_meter=meter,
+        ):
             if chunk.type == ChatStreamEventType.COMPLETE:
                 continue
             if _meta is not None:

@@ -404,8 +404,10 @@ verify that observing the screen issues no channel mutations. No route mocks
 or synthetic connection state are used.
 
 From `src/ui_launchers/Karen-AI-Theme` on an approved deployment, export
-`KAREN_BASE_URL` (exact approved HTTPS origin), `KAREN_UX_EMAIL` and
-`KAREN_UX_PASSWORD` through the operator's secure environment, then run:
+`KAREN_BASE_URL` (exact approved HTTPS origin),
+`KAREN_WHATSAPP_DEPLOYMENT_REVISION` (exact reviewed 40-character SHA),
+`KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` through the operator's secure
+environment, then run:
 
 ```bash
 KAREN_WHATSAPP_ADMIN_ACCEPTANCE_REQUIRED=true \
@@ -427,3 +429,73 @@ subscription, signed native message, identity link, ChatRuntime turn, outbound
 provider message ID or delivered/read receipt. Those require separately
 reviewed, credential-governed provider-side evidence on the exact deployed
 commit and cannot be inferred from this browser observation or green CI.
+
+
+## KWA-01C6C2A: revision-fenced real HTTPS callback challenge
+
+The opt-in `e2e/whatsapp-cloud-webhook-handshake.spec.ts` exercises Karen's
+**actual public HTTPS** `GET /api/channels/webhooks/{tenant_id}/{connection_id}`
+route with an operator-approved, already enabled tenant connection and its
+existing Vault-managed `webhook_verify_token`. It creates no new callback,
+Vault secret, channel state, runtime selection, test account, or provider
+adapter.
+
+Both live-browser suites now reuse
+`e2e/fixtures/whatsapp-acceptance-deployment.ts`: the candidate must be a
+clean HTTPS origin and its real `/api/deployment-revision` response must match
+exactly the operator-reviewed commit SHA. Mismatches, redirects and missing
+deployment proof stop acceptance. This is deployment identity checking against
+the configured target, not independent binary attestation.
+
+From `src/ui_launchers/Karen-AI-Theme`, export these using an approved
+operator secret-injection mechanism (never place tokens in CLI arguments,
+checked-in `.env` files, test reports or browser storage):
+
+- `KAREN_BASE_URL`: reviewed deployed HTTPS origin, no path or query
+- `KAREN_WHATSAPP_DEPLOYMENT_REVISION`: reviewed 40-character commit SHA
+- `KAREN_WHATSAPP_ACCEPTANCE_TENANT_ID`: actual isolated tenant UUID
+- `KAREN_WHATSAPP_ACCEPTANCE_CONNECTION_ID`: its **enabled** connection UUID
+- `KAREN_WHATSAPP_ACCEPTANCE_VERIFY_TOKEN`: the real Vault-approved callback
+  verification token associated with that connection
+
+Then execute the explicit, isolated live probe:
+
+```bash
+KAREN_WHATSAPP_WEBHOOK_HANDSHAKE_REQUIRED=true \
+npx playwright test e2e/whatsapp-cloud-webhook-handshake.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium --retries=0
+```
+
+The test makes four **read-only, unauthenticated** requests to the approved
+host: valid subscription returns HTTP 200 and the *exact numeric challenge*
+with `Cache-Control: no-store`; a well-formed but changed token, a missing
+token and an invalid mode must each return HTTP 403. Network errors are
+redacted. Traces, screenshots, video and secret-bearing test attachments are
+disabled; do not turn on verbose HTTP debug or request URL logging because
+Meta's GET verification protocol necessarily places the verify token in the
+query string. Refuse unknown or unreviewed public hosts.
+
+**Evidence boundaries and mandatory follow-up:**
+
+1. A green source CI or skipped opt-in test is **not** a live host proof. The
+   opt-in test must run against the exact approved deployed SHA, producing a
+   passing Playwright job on that deployment.
+2. A successful operator-originated host GET is **not** a verified Meta
+   subscription. Independently configure the HTTPS callback in Meta's
+   WhatsApp test app, subscribe its `messages` field, and observe an actual
+   provider-side verified subscription. Retain redacted provider confirmation
+   metadata, never a raw token or unmasked phone identifier.
+3. A Meta GET handshake is **not** signed inbound ChatRuntime success.
+   Independently observe a real provider-originated POST authenticated by
+   `X-Hub-Signature-256`, tenant/identity binding, durable inbox admission,
+   one authorized ChatRuntime turn and a provider-identified outbound send.
+4. A Meta API response saying `sent` is **not** delivered/read. Observe signed
+   provider receipts and their bounded, monotonic PostgreSQL reconciliation,
+   including replay, out-of-order and deactivation behavior.
+5. Do not publish `free_plugins/essential/whatsapp-cloud` or claim consumer
+   readiness until all operator, provider, RBAC, retention and recovery gates
+   have independent exact-deployment evidence.
+
+Never forge a Meta signature with a local test token and label that provider
+acceptance. Source-only signed fixtures remain useful security regressions,
+but do not substitute for provider traffic.

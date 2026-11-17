@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { signInApprovedKaren } from './fixtures/approved-karen-login';
+import { verifyWhatsAppAcceptanceRevision } from './fixtures/whatsapp-acceptance-deployment';
 
 /**
  * KWA-01C6C1: real signed-in operator browser acceptance.
@@ -75,6 +76,9 @@ for (const width of [390, 768, 1440]) {
       }
     });
 
+    // The local UI check must be bound to the same exact reviewed deploy
+    // as the separately observed provider-facing callback trial.
+    await verifyWhatsAppAcceptanceRevision(page.request);
     await signInApprovedKaren(page, email, password);
     const adminLink = page.getByRole('link', { name: 'Admin settings', exact: true });
     if (!(await adminLink.isVisible())) {
