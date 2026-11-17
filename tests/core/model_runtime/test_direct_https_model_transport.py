@@ -74,6 +74,11 @@ def test_direct_https_redirect_drops_source_credentials() -> None:
     assert redirected.get_header("Authorization") is None
     assert redirected.get_header("Cookie") is None
     assert "secret" not in str(redirected.headers)
+    assert not any(
+        key.casefold() in {"authorization", "cookie", "proxy-authorization"}
+        for mapping in (redirected.headers, redirected.unredirected_hdrs)
+        for key in mapping
+    )
 
 
 def test_direct_https_discovers_pinned_files_and_checks_integrity(
@@ -143,3 +148,119 @@ def test_direct_https_requires_all_curated_patterns(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(transport, "_open", only_tokenizer)
     with pytest.raises(transport.DirectHttpsDownloadError, match="Required"):
         transport._discover(MODEL, REVISION, PATTERNS, [], None)
+
+
+def test_direct_https_redirect_removes_mixed_case_proxy_credentials() -> None:
+    initial = urllib.request.Request(
+        "https://huggingface.co/kyutai/pocket-tts/resolve/abc/file",
+        headers={
+            "Proxy-authorization": "Basic leaked_proxy_secret",
+            "Authorization": "Bearer source_secret",
+            "Cookie": "session=private",
+        },
+    )
+    initial.add_unredirected_header("Proxy-Authorization", "Basic other_secret")
+    redirected = transport._PrivateRedirectHandler().redirect_request(
+        initial, None, 302, "Found", {},
+        "https://cdn-lfs.huggingface.co/signed",
+    )
+    assert redirected is not None
+    all_headers = [
+        (key.casefold(), value)
+        for mapping in (redirected.headers, redirected.unredirected_hdrs)
+        for key, value in mapping.items()
+    ]
+    assert not any(
+        name in {"proxy-authorization", "authorization", "cookie"}
+        for name, _ in all_headers
+    )
+    assert "secret" not in str(all_headers)
+
+    same_host = transport._PrivateRedirectHandler().redirect_request(
+        initial, None, 302, "Found", {},
+        "https://huggingface.co/kyutai/pocket-tts/resolve/abc/other",
+    )
+    assert same_host is not None
+    assert not any(
+        key.casefold() == "proxy-authorization"
+        for mapping in (same_host.headers, same_host.unredirected_hdrs)
+        for key in mapping
+    )
+
+
+def test_direct_https_follows_all_pinned_tree_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = f"{PREFIX}/embeddings"
+    entries = [
+        {"path": f"{prefix}/voice_{i:03d}.safetensors", "type": "file", "size": 13}
+        for i in range(70)
+    ]
+    expected_url = (
+        f"https://huggingface.co/api/models/{MODEL}/tree/{REVISION}/{prefix}"
+        "?recursive=true&expand=true"
+    )
+    next_url = expected_url + "&cursor=second"
+    visited: list[str] = []
+
+    def open_page(url: str, token: str | None, *, initial: bool):
+        assert token == "operator_token"
+        assert initial
+        visited.append(url)
+        if url == expected_url:
+            page = Response(json.dumps(entries[:50]).encode(), "application/json")
+            page.headers["Link"] = f'<{next_url}>; rel="next"'
+            return page
+        assert url == next_url
+        return Response(json.dumps(entries[50:]).encode(), "application/json")
+
+    monkeypatch.setattr(transport, "_open", open_page)
+    discovered = transport._discover(
+        MODEL, REVISION, [f"{prefix}/*.safetensors"], [], "operator_token",
+    )
+    assert len(discovered) == 70
+    assert {entry["path"] for entry in discovered} == {item["path"] for item in entries}
+    assert visited == [expected_url, next_url]
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        '<https://evil.example/api/models/kyutai/pocket-tts/tree/sha?recursive=true&expand=true&cursor=x>; rel="next"',
+        '<https://huggingface.co/api/models/other/repo/tree/sha?recursive=true&expand=true&cursor=x>; rel="next"',
+        '<https://huggingface.co/api/models/kyutai/pocket-tts/tree/sha?cursor=x>; rel="next"',
+        '<http://huggingface.co/api/models/kyutai/pocket-tts/tree/sha?recursive=true&expand=true&cursor=x>; rel="next"',
+        '<https://huggingface.co/api/models/kyutai/pocket-tts/tree/sha?recursive=true&expand=true&cursor=x>; rel="next", <https://huggingface.co/api/models/kyutai/pocket-tts/tree/sha?recursive=true&expand=true&cursor=y>; rel="next"',
+    ],
+)
+def test_direct_https_rejects_untrusted_or_ambiguous_pagination(link: str) -> None:
+    current = f"https://huggingface.co/api/models/{MODEL}/tree/sha?recursive=true&expand=true"
+    with pytest.raises(transport.DirectHttpsDownloadError):
+        transport._next_tree_url(link, current_url=current)
+
+
+def test_direct_https_rejects_incomplete_looped_page_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = f"{PREFIX}/embeddings"
+    start = (
+        f"https://huggingface.co/api/models/{MODEL}/tree/{REVISION}/{prefix}"
+        "?recursive=true&expand=true"
+    )
+    next_url = start + "&cursor=repeat"
+    seen: list[str] = []
+
+    def page(url: str, token: str | None, *, initial: bool):
+        seen.append(url)
+        response = Response(json.dumps([
+            {"path": f"{prefix}/voice.safetensors", "type": "file", "size": 13}
+        ]).encode(), "application/json")
+        response.headers["Link"] = f'<{next_url}>; rel="next"'
+        return response
+
+    monkeypatch.setattr(transport, "_open", page)
+    with pytest.raises(transport.DirectHttpsDownloadError, match="pagination loop"):
+        transport._discover(
+            MODEL, REVISION, [f"{prefix}/*.safetensors"], [], "operator_token",
+        )
+    assert seen == [start, next_url]
