@@ -45,3 +45,24 @@ different-object meters, and retains exact per-vector quota/provenance
 checks on the working Core facade. Chat System Burn already runs both
 suites. Full exact-head Main Quality, Ollama, Medusa, First-Boot and
 independent reviewer acceptance are required before merging.
+
+## P1 original-object lineage repair
+
+Independent review found that checking `meter.budget is plan.budget` alone
+did not reject a fresh `ExecutionBudgetMeter` wrapping the same original
+budget. ChatRuntime now binds the **original plan and meter object references**
+to its existing authenticated `ChatExecutionContext` on both direct and
+streaming paths before execution. Neither `dataclasses.replace` nor
+`dataclasses.asdict` copies that private request-only lineage.
+
+The Core admission validator requires the exact bound plan/meter identity.
+The existing trusted Medusa handoff compares its deserialized plan against
+the original bound plan and reuses that original object; a narrowed specialist
+plan must be individually registered against the same meter and cannot widen
+its permitted tools/plugins/agents. No second policy issuer or budget meter
+was added.
+
+Regression tests now exercise fresh meters sharing the original budget,
+copied plans, cloned contexts, exhausted quotas, and valid narrowed Medusa
+plans. A valid copied plan without explicit trusted child registration is
+never authorized.

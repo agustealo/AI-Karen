@@ -425,6 +425,92 @@ async def test_direct_model_manager_embedding_denies_foreign_original_scope_with
     assert scope.meter.external_requests == 0
 
 
+@pytest.mark.asyncio
+async def test_copied_original_plan_and_fresh_same_budget_meter_cannot_reset_quota():
+    manager = object.__new__(ModelManager)
+    calls = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: calls.append(text) or [0.6, 0.2],
+    )
+    admission = _scope(calls=1)
+    assert await manager.generate_embedding(
+        "first", execution_admission=admission,
+    ) == [0.6, 0.2]
+    assert admission.meter.model_calls == 1
+
+    copied_plan = replace(admission.plan)
+    fresh_meter_same_budget = ExecutionBudgetMeter(admission.plan.budget)
+    copied_context = replace(admission.authenticated_context)
+    for clone in (
+        replace(admission, plan=copied_plan),
+        replace(admission, meter=fresh_meter_same_budget),
+        replace(admission, plan=copied_plan, meter=fresh_meter_same_budget),
+        replace(admission, authenticated_context=copied_context),
+    ):
+        with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+            await manager.generate_embedding("forbidden", execution_admission=clone)
+
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        admission.authenticated_context.bind_runtime_model_authority(
+            copied_plan, admission.meter,
+        )
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        admission.authenticated_context.bind_runtime_model_authority(
+            admission.plan, fresh_meter_same_budget,
+        )
+    # Neither the rejected clones nor the original exhausted grant executes
+    # another encoder call, even though the replacement meter had free quota.
+    with pytest.raises(RuntimeError, match="budget_exhausted"):
+        await manager.generate_embedding(
+            "exhausted", execution_admission=admission,
+        )
+    assert calls == ["first"]
+    assert admission.meter.model_calls == 1
+    assert fresh_meter_same_budget.model_calls == 0
+
+
+def test_runtime_context_binding_is_not_serialized_or_cloned():
+    from dataclasses import asdict
+
+    admission = _scope(calls=1)
+    context = admission.authenticated_context
+    assert context.original_runtime_model_plan(admission.meter) is admission.plan
+    assert "_runtime_model_authority" not in asdict(context)
+    assert not replace(context).is_runtime_model_plan_authorized(
+        admission.plan, admission.meter,
+    )
+
+
+def test_medusa_style_child_scope_preserves_identity_and_single_meter():
+    admission = _scope(calls=1)
+    narrowed_plan = replace(
+        admission.plan,
+        allowed_tools=[],
+        allowed_plugins=[],
+        allowed_agents=[],
+    )
+    child = replace(admission, plan=narrowed_plan)
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        child._require_scope()
+    admission.authenticated_context.register_runtime_model_child_plan(
+        narrowed_plan, admission.meter,
+    )
+    child._require_scope()
+    assert child.meter is admission.meter
+    with pytest.raises(PermissionError, match="runtime_model_execution_authority_invalid"):
+        admission.authenticated_context.register_runtime_model_child_plan(
+            replace(narrowed_plan, budget=ExecutionBudget(max_model_calls=1)),
+            admission.meter,
+        )
+
+
 def test_facade_embedding_batch_consumes_one_budget_per_actual_vector(monkeypatch):
     manager, _, _ = _local_manager(monkeypatch)
     calls = []
