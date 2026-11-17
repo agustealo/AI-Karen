@@ -6,6 +6,7 @@ dedicated PostgreSQL terminal CAS proof or whole-deployment fencing.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+    PluginLifecycleApprovalScope,
     PluginLifecycleKernelObservation,
 )
 from ai_karen_engine.services.plugin_service import PluginService
@@ -171,3 +173,171 @@ def test_kernel_observation_rejects_bogus_identifiers() -> None:
             manifest_checksum="a" * 64,
             observed_state="enabled",
         )
+
+
+def _approval_scope(
+    *,
+    action: str,
+    checksum: str,
+    expected_state: str,
+) -> PluginLifecycleApprovalScope:
+    return PluginLifecycleApprovalScope(
+        installation_id="kernel-terminal",
+        action=action,
+        manifest_checksum=checksum,
+        expected_state=expected_state,
+        expected_revision=1,
+        tenant_id=str(uuid.uuid4()),
+        user_id=str(uuid.uuid4()),
+        session_id="session-1",
+        conversation_id=str(uuid.uuid4()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_kernel_prepared_transition_attests_both_states_atomically(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    operation_id = str(uuid.uuid4())
+    first = await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=operation_id
+    )
+    enable = _approval_scope(
+        action="enable", checksum=first.manifest_checksum, expected_state="disabled"
+    )
+
+    observed = await kernel.transition_prepared_lifecycle(
+        enable, operation_id=operation_id
+    )
+    assert observed == PluginLifecycleKernelObservation(
+        operation_id=operation_id,
+        installation_id="kernel-terminal",
+        manifest_checksum=first.manifest_checksum,
+        observed_state="enabled",
+    )
+    assert not (tmp_path / "kernel-terminal" / ".karen-manual-disabled").exists()
+    assert (tmp_path / "kernel-terminal" / kernel.MANUAL_ENABLED_MARKER).is_file()
+    with pytest.raises(RuntimeError, match="Kernel state or manifest changed"):
+        await kernel.transition_prepared_lifecycle(
+            enable, operation_id=str(uuid.uuid4())
+        )
+    disable = _approval_scope(
+        action="disable", checksum=first.manifest_checksum, expected_state="enabled"
+    )
+    closed = await kernel.transition_prepared_lifecycle(
+        disable, operation_id=str(uuid.uuid4())
+    )
+    assert closed.observed_state == "disabled"
+    assert (tmp_path / "kernel-terminal" / ".karen-manual-disabled").is_file()
+
+
+@pytest.mark.asyncio
+async def test_prepared_transition_refuses_stale_checksum_and_active_execution(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    operation_id = str(uuid.uuid4())
+    first = await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=operation_id
+    )
+    altered = _approval_scope(
+        action="enable", checksum="0" * 64, expected_state="disabled"
+    )
+    with pytest.raises(RuntimeError, match="Kernel state or manifest changed"):
+        await kernel.transition_prepared_lifecycle(
+            altered, operation_id=operation_id
+        )
+    assert (tmp_path / "kernel-terminal" / ".karen-manual-disabled").is_file()
+
+    valid = _approval_scope(
+        action="enable", checksum=first.manifest_checksum, expected_state="disabled"
+    )
+    kernel._active["running"] = "kernel-terminal"
+    try:
+        with pytest.raises(RuntimeError, match="active executions"):
+            await kernel.transition_prepared_lifecycle(
+                valid, operation_id=operation_id
+            )
+    finally:
+        kernel._active.pop("running")
+    assert (tmp_path / "kernel-terminal" / ".karen-manual-disabled").is_file()
+
+
+@pytest.mark.asyncio
+async def test_prepared_transition_serializes_competing_local_operations(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    observed = await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=str(uuid.uuid4())
+    )
+    scope = _approval_scope(
+        action="enable",
+        checksum=observed.manifest_checksum,
+        expected_state="disabled",
+    )
+    results = await asyncio.gather(
+        kernel.transition_prepared_lifecycle(
+            scope, operation_id=str(uuid.uuid4())
+        ),
+        kernel.transition_prepared_lifecycle(
+            scope, operation_id=str(uuid.uuid4())
+        ),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(result, PluginLifecycleKernelObservation) for result in results) == 1
+    assert sum(isinstance(result, RuntimeError) for result in results) == 1
+    assert (await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=str(uuid.uuid4())
+    )).observed_state == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_prepared_transition_does_not_return_success_after_failed_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    initial = await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=str(uuid.uuid4())
+    )
+    scope = _approval_scope(
+        action="enable", checksum=initial.manifest_checksum,
+        expected_state="disabled",
+    )
+    observe = kernel._observe_lifecycle_unlocked
+    calls = 0
+
+    def damaged_attestation(plugin_id: str, *, operation_id: str) -> PluginLifecycleKernelObservation:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("Terminal observation unavailable")
+        return observe(plugin_id, operation_id=operation_id)
+
+    monkeypatch.setattr(kernel, "_observe_lifecycle_unlocked", damaged_attestation)
+    with pytest.raises(RuntimeError, match="Terminal observation unavailable"):
+        await kernel.transition_prepared_lifecycle(
+            scope, operation_id=str(uuid.uuid4())
+        )
+    assert calls == 2
+    # The physical marker may have changed: the future host must freeze the
+    # prepared global claim as uncertain, not retry or claim terminal success.
+    assert (tmp_path / "kernel-terminal" / kernel.MANUAL_ENABLED_MARKER).is_file()
