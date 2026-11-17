@@ -930,6 +930,55 @@ class SqlChannelRepository:
             )).mappings().one_or_none()
         return self._connection_from_row(row) if row is not None else None
 
+    async def inspect_link_challenge_status(
+        self, *, tenant_id: str, user_id: str, connection_id: str,
+        challenge_id: str,
+    ) -> str | None:
+        """Inspect one caller-owned one-use proof, without exposing its secret.
+
+        A 'consumed' challenge is a historical acknowledgment of the existing
+        signed-ingress transaction, not a claim about today's active binding,
+        provider delivery, or consumer readiness. Database clock and persisted
+        revision are the exclusive authorities for other statuses.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        principal = str(uuid.UUID(user_id))
+        challenge = str(uuid.UUID(challenge_id))
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Link challenge connection is required")
+        async with async_transaction_scope(tenant_id) as session:
+            value = (await session.execute(
+                text("""
+                    SELECT CASE
+                             WHEN p.consumed_at IS NOT NULL THEN 'consumed'
+                             WHEN p.revoked_at IS NOT NULL THEN 'revoked'
+                             WHEN c.enabled = false
+                               OR c.revision <> p.connection_revision
+                               THEN 'invalidated'
+                             WHEN p.expires_at <= clock_timestamp() THEN 'expired'
+                             ELSE 'pending'
+                           END AS challenge_status
+                    FROM public.channel_link_challenges p
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = p.tenant_id
+                     AND c.connection_id = p.connection_id
+                     AND c.installation_id = 'whatsapp-cloud'
+                    WHERE p.tenant_id = CAST(:tenant AS uuid)
+                      AND p.user_id = CAST(:user AS uuid)
+                      AND p.connection_id = :connection
+                      AND p.challenge_id = CAST(:challenge AS uuid)
+                """),
+                {"tenant": tenant_id, "user": principal,
+                 "connection": connection_id, "challenge": challenge},
+            )).scalar_one_or_none()
+        if value is None:
+            return None
+        if value not in {
+            "pending", "consumed", "revoked", "expired", "invalidated",
+        }:
+            raise RuntimeError("Invalid persisted link challenge status")
+        return value
+
     async def issue_link_challenge(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         proof_digest: str, ttl_seconds: int,
