@@ -683,6 +683,32 @@ class RuntimePolicyEnforcer:
                 or constraints.get("correlation_id") != context.correlation_id
             ):
                 return False
+            # A standalone coordinator must not self-issue tool/plugin/agent
+            # grants by modifying a serialized plan before first binding.
+            # These are the *actual*, issuer-returned allowlists. Empty means
+            # deny all members of that category, never unrestricted access.
+            for name in ("allowed_tools", "allowed_plugins", "allowed_agents"):
+                requested = getattr(plan, name, None)
+                issued = constraints.get(name, [])
+                if (
+                    not isinstance(requested, (list, tuple, set))
+                    or not isinstance(issued, (list, tuple, set))
+                    or not all(isinstance(item, str) for item in requested)
+                    or not all(isinstance(item, str) for item in issued)
+                    or not set(requested).issubset(set(issued))
+                ):
+                    return False
+            if (
+                not isinstance(plan.allowed_capabilities, (list, tuple, set))
+                or not all(
+                    isinstance(item, str)
+                    for item in plan.allowed_capabilities
+                )
+                or not set(plan.allowed_capabilities).issubset(
+                    set(decision.allowed_capabilities)
+                )
+            ):
+                return False
             quota = constraints.get("max_model_calls")
             return (
                 type(quota) is int
