@@ -134,6 +134,11 @@ class TestOpenAICompatibleAdapter:
                 runtime_engine=RuntimeEngine.LMSTUDIO,
             )
             caps = adapter.discover_capabilities()
+            mock_httpx.Client.assert_called_once_with(
+                timeout=adapter.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
+            )
             assert caps.chat is True
 
     def test_check_health_healthy(self, adapter_module):
@@ -158,6 +163,11 @@ class TestOpenAICompatibleAdapter:
                 runtime_engine=RuntimeEngine.LMSTUDIO,
             )
             health = adapter.check_health()
+            mock_httpx.Client.assert_called_once_with(
+                timeout=adapter.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
+            )
             assert health == "healthy"
 
     def test_check_health_unavailable(self, adapter_module):
@@ -179,4 +189,9 @@ class TestOpenAICompatibleAdapter:
                 runtime_engine=RuntimeEngine.LMSTUDIO,
             )
             health = adapter.check_health()
+            mock_httpx.Client.assert_called_once_with(
+                timeout=adapter.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
+            )
             assert health == "unavailable"
