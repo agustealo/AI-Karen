@@ -272,6 +272,39 @@ def _parse_canonical_training_rows(
     return tuple(examples)
 
 
+def _open_anchored_nofollow_directory(root: Path) -> int:
+    """Open every ancestor from '/' through dirfd-relative nofollow opens.
+
+    Checking is_symlink() and then opening a full pathname is insufficient:
+    a hostile ancestor can be swapped between those operations. Walk an
+    absolute path by directory descriptor so *every* component is nofollow.
+    The returned fd pins the exact canonical directory opened at read time.
+    """
+    if not root.is_absolute() or any(part == ".." for part in root.parts):
+        raise DatasetImportError("Canonical dataset root must be absolute")
+    flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(root.anchor, flags)
+        for component in root.parts[1:]:
+            if component in ("", ".", ".."):
+                raise DatasetImportError("Invalid canonical root component")
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        if descriptor is None:
+            raise DatasetImportError("Canonical root was unavailable")
+        owned = descriptor
+        descriptor = None
+        return owned
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def read_tenant_sklearn_dataset_snapshot(
     *,
     principal: AuthenticatedPrincipal,
@@ -299,6 +332,8 @@ def read_tenant_sklearn_dataset_snapshot(
     claims = _snapshot_principal_claims(principal)
     if (
         not isinstance(root, Path)
+        or not root.is_absolute()
+        or any(part == ".." for part in root.parts)
         or not isinstance(version, str)
         or not _VERSION.fullmatch(version) or version in {".", ".."}
         or not isinstance(expected_sha256, str)
@@ -312,12 +347,14 @@ def read_tenant_sklearn_dataset_snapshot(
         "O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK",
     )):
         raise DatasetImportError("Nofollow storage unavailable")
+    root_fd: int | None = None
     dir_fd: int | None = None
     data_fd: int | None = None
     try:
+        root_fd = _open_anchored_nofollow_directory(root)
         dir_fd = os.open(
-            directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            | getattr(os, "O_CLOEXEC", 0),
+            directory.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            | getattr(os, "O_CLOEXEC", 0), dir_fd=root_fd,
         )
         data_fd = os.open(
             version + ".jsonl",
@@ -359,6 +396,8 @@ def read_tenant_sklearn_dataset_snapshot(
             os.close(data_fd)
         if dir_fd is not None:
             os.close(dir_fd)
+        if root_fd is not None:
+            os.close(root_fd)
     examples = _parse_canonical_training_rows(immutable_read, max_rows=max_rows)
     if principal.is_expired() or _snapshot_principal_claims(principal) != claims:
         raise DatasetImportError("Owner session changed during dataset readback")
