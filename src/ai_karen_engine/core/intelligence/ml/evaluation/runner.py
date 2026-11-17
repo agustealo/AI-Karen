@@ -14,6 +14,7 @@ from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
     EvaluationCase,
     MetricResult,
     PredictionOutcome,
+    evaluation_case_sha256,
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.corpus import CanonicalEvaluationCorpus
 from ai_karen_engine.core.intelligence.ml.evaluation.metrics import (
@@ -282,6 +283,7 @@ class BenchmarkRunner:
         return stored
 
     async def _run_case(self, predictor: Any, case: EvaluationCase) -> PredictionOutcome:
+        evaluated_case_digest = evaluation_case_sha256(case) or ""
         features = IntelligenceFeatures(
             text=case.input_text,
             **case.features,
@@ -326,6 +328,7 @@ class BenchmarkRunner:
             latency_ms=latency_ms,
             fallback_used=fallback_used,
             error=error,
+            evaluated_case_sha256=evaluated_case_digest,
         )
 
     def _is_correct(self, case: EvaluationCase, prediction: Prediction | None) -> bool:

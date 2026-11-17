@@ -1,6 +1,6 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Governed learning-admission, memory revocation and self-model foundation merged (PRs #915, #924, #930, #931, #938, #940, #946 and #951). Task-specific benchmark evidence assessment is in development. Neural training remains disabled.  
+**Status:** Governed learning-admission, memory revocation and self-model foundation merged (PRs #915, #924, #930, #931, #938, #940, #946, #951 and #953). Conditioned task-benchmark provenance and source expiry are in development. Neural training remains disabled.  
 **Research cutoff:** 2026-11-16  
 **Repository baseline audited:** `agustealo/AI-Karen` `main` at `e570d950501915a9fce9e089ac91e583a71eb80e`  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
@@ -48,6 +48,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [21 — Canonical system Persona evidence](21-canonical-persona-evidence.md) | Real built-in Persona configuration, exact claim binding, drift and limits |
 | [22 — Reviewed decision evidence](22-reviewed-decision-evidence.md) | Scoped independent decision review, no skill mastery or training grant |
 | [23 — Task-specific benchmark assessment](23-task-specific-benchmark-assessment.md) | Exact model/feature/case provenance, observed test accuracy and uncertainty |
+| [24 — Conditioned benchmark and expiry](24-conditioned-task-evidence.md) | Canonical curated oracle integrity, group limits, environment truth and required freshness |
 
 ### Machine-readable proposed contracts
 

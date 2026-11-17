@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -19,6 +21,45 @@ class EvaluationCase:
     source: str = "curated"
     dataset_version: str = "ml-eval-v1"
     features: dict[str, Any] = field(default_factory=dict)
+    # Optional curator-declared grouping. No independence claim follows from
+    # this string alone; independent grouping requires separately reviewed proof.
+    evaluation_group_id: str | None = None
+
+
+def evaluation_case_sha256(case: EvaluationCase) -> str | None:
+    """Fingerprint the EXACT evaluated input and oracle contract in one owner.
+
+    Return no attestation for unserializable/malformed cases; the benchmark
+    runner still evaluates them but cannot claim curated-oracle provenance.
+    """
+    if (
+        not isinstance(case, EvaluationCase)
+        or not isinstance(case.task, PredictionTask)
+        or not isinstance(case.case_id, str)
+        or not case.case_id
+    ):
+        return None
+    try:
+        canonical = json.dumps(
+            {
+                "case_id": case.case_id,
+                "task": case.task.value,
+                "input_text": case.input_text,
+                "expected_label": case.expected_label,
+                "expected_value": case.expected_value,
+                "tags": case.tags,
+                "difficulty": case.difficulty,
+                "source": case.source,
+                "dataset_version": case.dataset_version,
+                "features": case.features,
+                "evaluation_group_id": case.evaluation_group_id,
+            },
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (AttributeError, TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    return hashlib.sha256(canonical).hexdigest()
 
 
 @dataclass
@@ -34,6 +75,9 @@ class PredictionOutcome:
     latency_ms: float = 0.0
     fallback_used: bool = False
     error: str | None = None
+    # Hash of the *actual* EvaluationCase passed to the canonical runner;
+    # never a claim of independent oracle approval.
+    evaluated_case_sha256: str = ""
 
 
 @dataclass

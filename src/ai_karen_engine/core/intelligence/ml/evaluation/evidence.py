@@ -10,11 +10,16 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Sequence
 from uuid import uuid4
 
 from ai_karen_engine.core.intelligence.ml.contracts import MLModelManifest, ModelStatus, PredictionTask
-from ai_karen_engine.core.intelligence.ml.evaluation.contracts import BenchmarkResult
+from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
+    BenchmarkResult, EvaluationCase, PredictionOutcome,
+    evaluation_case_sha256,
+)
 from ai_karen_engine.core.intelligence.ml.promotion import (
     PromotionDecision,
     evaluate_promotion,
@@ -37,6 +42,109 @@ class BenchmarkCaseReceipt:
     case_hashes: tuple[str, ...]
     case_verdicts: tuple[tuple[str, bool], ...]
     decision: str
+    evaluated_at: datetime | None = None
+    artifact_architecture: str = ""
+    curated_oracle_sha256: str = ""
+    declared_group_count: int = 0
+
+
+def _canonical_curated_oracle_snapshot(
+    *, task: PredictionTask, dataset_version: str,
+    case_hashes: Sequence[str],
+    observations: Sequence[PredictionOutcome] | None = None,
+) -> tuple[str, int] | None:
+    """Verify exact current canonical curated expected-answer source.
+
+    This is source-integrity proof, NOT independent oracle correctness or
+    trial-group independence. No prompt, expected label or feature content
+    leaves this local verifier; only an aggregate SHA-256 is persisted.
+    """
+    from ai_karen_engine.core.intelligence.ml.evaluation.corpus import (
+        CanonicalEvaluationCorpus,
+    )
+
+    if dataset_version != CanonicalEvaluationCorpus.DATASET_VERSION:
+        return None
+    if not case_hashes or len(set(case_hashes)) != len(case_hashes):
+        return None
+    lookup: dict[str, EvaluationCase] = {}
+    for case in CanonicalEvaluationCorpus.get_cases(task=task):
+        if case.dataset_version != dataset_version:
+            continue
+        identity = hashlib.sha256(case.case_id.encode("utf-8")).hexdigest()[:24]
+        if identity in lookup:
+            return None
+        lookup[identity] = case
+    if not set(case_hashes).issubset(lookup):
+        return None
+    if observations is not None:
+        if len(observations) != len(case_hashes):
+            return None
+        # Reuse the canonical benchmark evaluator's real task-specific
+        # scoring rule. A caller-supplied 'correct=True' cannot make an
+        # incorrect prediction part of a trusted curated oracle snapshot.
+        from ai_karen_engine.core.intelligence.ml.evaluation.runner import (
+            BenchmarkRunner,
+        )
+        evaluator = BenchmarkRunner()
+        for outcome in observations:
+            identity = hashlib.sha256(
+                outcome.case_id.encode("utf-8")
+            ).hexdigest()[:24]
+            case = lookup.get(identity)
+            if (
+                case is None
+                or case.case_id != outcome.case_id
+                or case.expected_label != outcome.expected_label
+                or case.expected_value != outcome.expected_value
+                or case.task != outcome.task
+                or not outcome.evaluated_case_sha256
+                or outcome.evaluated_case_sha256 != evaluation_case_sha256(case)
+            ):
+                return None
+            try:
+                if (
+                    outcome.prediction is None
+                    or type(outcome.correct) is not bool
+                    or evaluator._is_correct(case, outcome.prediction)
+                    is not outcome.correct
+                ):
+                    return None
+            except (AttributeError, TypeError, ValueError):
+                return None
+
+    try:
+        entries: list[dict[str, object]] = []
+        declared_groups: set[str] = set()
+        for identity in sorted(case_hashes):
+            case = lookup[identity]
+            group = case.evaluation_group_id
+            if group is not None:
+                if (
+                    not isinstance(group, str)
+                    or not 1 <= len(group) <= 128
+                    or not group.isascii()
+                ):
+                    return None
+                declared_groups.add(group)
+            # The oracle uses the *actual current corpus* including input
+            # and expected truth. No external reviewer is inferred.
+            case_digest = evaluation_case_sha256(case)
+            if case_digest is None:
+                return None
+            entries.append({
+                "case_hash": identity,
+                "evaluated_case_sha256": case_digest,
+            })
+        canonical = json.dumps(
+            {"task": task.value, "dataset_version": dataset_version,
+             "cases": entries},
+            sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (AttributeError, TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    return hashlib.sha256(canonical).hexdigest(), len(declared_groups)
 
 
 class EvaluationEvidenceStore:
@@ -165,6 +273,22 @@ class EvaluationEvidenceStore:
                     key=lambda item: item["case_hash"],
                 ),
             })
+        if evidence.get("kcm_case_receipt_version") == "benchmark_cases_v1":
+            # Only source-matched canonical cases support this strictly
+            # *curated* oracle statement. Synthetic/directly supplied
+            # results still keep their old receipt semantics.
+            snapshot = _canonical_curated_oracle_snapshot(
+                task=result.task, dataset_version=result.dataset_version,
+                case_hashes=evidence["case_hashes"],
+                observations=result.outcomes,
+            )
+            if snapshot is not None:
+                evidence.update({
+                    "kcm_curated_oracle_version": "curated_corpus_v1",
+                    "curated_oracle_sha256": snapshot[0],
+                    "declared_group_count": snapshot[1],
+                    "artifact_architecture": registered.architecture,
+                })
         with self._connect() as db:
             db.execute(
                 """INSERT INTO benchmark_receipts
@@ -234,7 +358,7 @@ class EvaluationEvidenceStore:
             row = db.execute(
                 """SELECT receipt_id, model_id, model_version, purpose,
                           artifact_hash, dataset_version, decision,
-                          evidence_json FROM benchmark_receipts
+                          evidence_json, created_at FROM benchmark_receipts
                    WHERE receipt_id=? AND model_id=? AND model_version=?
                      AND purpose=? AND artifact_hash=? LIMIT 1""",
                 (
@@ -251,6 +375,38 @@ class EvaluationEvidenceStore:
             n = evidence["sample_count"]
             correct = evidence["correct_count"]
             task = PredictionTask(row["purpose"])
+            # SQLite CURRENT_TIMESTAMP is UTC, recorded by the canonical
+            # issuer. It is not a user-supplied evaluation time.
+            evaluated_at = datetime.strptime(
+                row["created_at"], "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=timezone.utc)
+            condition_version = evidence.get("kcm_curated_oracle_version")
+            curated_digest = evidence.get("curated_oracle_sha256", "")
+            declared_groups = evidence.get("declared_group_count", 0)
+            architecture = evidence.get("artifact_architecture", "")
+            if condition_version is not None:
+                if (
+                    condition_version != "curated_corpus_v1"
+                    or not isinstance(curated_digest, str)
+                    or len(curated_digest) != 64
+                    or not isinstance(declared_groups, int)
+                    or isinstance(declared_groups, bool)
+                    or not 0 <= declared_groups <= n
+                    or not isinstance(architecture, str)
+                    or architecture != registered.architecture
+                ):
+                    return None
+                comparison = _canonical_curated_oracle_snapshot(
+                    task=task, dataset_version=row["dataset_version"],
+                    case_hashes=hashes,
+                )
+                if comparison != (curated_digest, declared_groups):
+                    return None
+            elif (
+                curated_digest != "" or declared_groups != 0 or architecture != ""
+            ):
+                # A partially present conditions record is not valid.
+                return None
             if (
                 evidence.get("kcm_case_receipt_version") != "benchmark_cases_v1"
                 or evidence.get("feature_version") != registered.feature_version
@@ -297,6 +453,10 @@ class EvaluationEvidenceStore:
                 (item["case_hash"], item["correct"]) for item in verdicts
             ),
             decision=row["decision"],
+            evaluated_at=evaluated_at,
+            artifact_architecture=architecture,
+            curated_oracle_sha256=curated_digest,
+            declared_group_count=declared_groups,
         )
 
     def is_approved(self, manifest: MLModelManifest) -> bool:

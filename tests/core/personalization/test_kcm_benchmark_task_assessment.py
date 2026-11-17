@@ -22,7 +22,11 @@ from ai_karen_engine.core.intelligence.ml.durable_outcomes import (
     GovernedMLLearningEvidence,
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
-    BenchmarkResult, PredictionOutcome,
+    BenchmarkResult, EvaluationCase, PredictionOutcome,
+    evaluation_case_sha256,
+)
+from ai_karen_engine.core.intelligence.ml.evaluation.corpus import (
+    CanonicalEvaluationCorpus,
 )
 from ai_karen_engine.core.intelligence.ml.evaluation.evidence import (
     EvaluationEvidenceStore,
@@ -61,10 +65,13 @@ def model_id(tenant: str = TENANT) -> str:
 def outcome(
     case: int, model: MLModelManifest, *, correct: bool,
     prediction_feature: str | None = None,
+    oracle_case: EvaluationCase | None = None,
 ) -> PredictionOutcome:
     prediction = Prediction(
         task=TASK,
-        label="verified-expected" if correct else "different",
+        label=(
+            oracle_case.expected_label if correct else "incorrect-canonical-label"
+        ) if oracle_case else ("verified-expected" if correct else "different"),
         model_id=model.model_id,
         model_version=model.model_version,
         feature_version=prediction_feature or model.feature_version,
@@ -73,15 +80,19 @@ def outcome(
         fallback_used=False,
     )
     return PredictionOutcome(
-        case_id=f"distinct-benchmark-case-{case}",
+        case_id=oracle_case.case_id if oracle_case else f"distinct-benchmark-case-{case}",
         task=TASK,
         prediction=prediction,
-        expected_label="verified-expected",
+        expected_label=oracle_case.expected_label if oracle_case else "verified-expected",
+        expected_value=oracle_case.expected_value if oracle_case else None,
         correct=correct,
         raw_probability=0.8,
         calibrated_probability=0.8,
         latency_ms=10,
         fallback_used=False,
+        evaluated_case_sha256=(
+            evaluation_case_sha256(oracle_case) or ""
+        ) if oracle_case else "",
     )
 
 
@@ -90,6 +101,7 @@ async def fixture(
     *,
     verdicts: tuple[bool, ...] = (True, True, False),
     prediction_feature: str | None = None,
+    use_canonical_curated_oracles: bool = False,
 ):
     artifact = root / "actual-model.bin"
     artifact.write_bytes(b"trusted-model-artifact-for-scoped-tests")
@@ -106,11 +118,20 @@ async def fixture(
     )
     registry = MLModelRegistry(registry_dir=str(root))
     registry.register(manifest)
+    canonical_cases = (
+        CanonicalEvaluationCorpus.get_cases(task=TASK)[:len(verdicts)]
+        if use_canonical_curated_oracles else []
+    )
+    if use_canonical_curated_oracles:
+        assert len(canonical_cases) == len(verdicts)
     benchmark = BenchmarkResult(
         model_id=manifest.model_id,
         model_version=manifest.model_version,
         task=TASK,
-        dataset_version=DATASET,
+        dataset_version=(
+            CanonicalEvaluationCorpus.DATASET_VERSION
+            if use_canonical_curated_oracles else DATASET
+        ),
         sample_count=len(verdicts),
         metrics={},
         latency_p50_ms=10,
@@ -122,6 +143,8 @@ async def fixture(
             outcome(
                 index, manifest, correct=correct,
                 prediction_feature=prediction_feature,
+                oracle_case=canonical_cases[index]
+                    if use_canonical_curated_oracles else None,
             )
             for index, correct in enumerate(verdicts)
         ],
@@ -165,12 +188,14 @@ async def inspect(
     user: str = USER,
     min_cases: int = 1,
     max_cases: int = 30,
+    max_evidence_age_seconds: int | None = None,
 ):
     return await KcmBenchmarkTaskProjector(
         registry_dir=root,
         minimum_cases=min_cases,
         maximum_cases=max_cases,
         store=store,
+        max_evidence_age_seconds=max_evidence_age_seconds,
     ).inspect(
         principal=principal or identity(),
         tenant_id=tenant,
@@ -447,6 +472,260 @@ async def test_missing_evidence_read_does_not_create_sqlite_or_registry(tmp_path
     )
     assert missing.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
     assert not absent.exists()
+
+
+@pytest.mark.asyncio
+async def test_actual_canonical_curated_oracle_snapshot_is_verified_not_independent(tmp_path):
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, use_canonical_curated_oracles=True,
+    )
+    result = await inspect(
+        tmp_path, manifest, receipt, store,
+        max_evidence_age_seconds=120,
+    )
+    assert result.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert result.curated_oracle_source_verified is True
+    assert len(result.curated_oracle_sha256) == 64
+    assert result.declared_group_count == 0
+    assert result.evaluated_at is not None
+    assert result.expires_at is not None
+    assert result.expires_at > result.evaluated_at
+    assert result.freshness_verified is True
+    assert result.artifact_architecture == "trained"
+    assert result.independent_trial_groups_verified is False
+    assert result.production_environment_verified is False
+    assert result.general_skill_certified is False
+
+
+@pytest.mark.asyncio
+async def test_declared_correctness_not_scored_by_canonical_evaluator_is_not_oracle_proof(
+    tmp_path, monkeypatch,
+):
+    from ai_karen_engine.core.intelligence.ml.evaluation import runner as runner_module
+
+    original = runner_module.BenchmarkRunner._is_correct
+    monkeypatch.setattr(
+        runner_module.BenchmarkRunner, "_is_correct",
+        lambda self, case, prediction: False,
+    )
+    # The canonical scoring rule disagrees with the injected 'correct'
+    # flags. A durable baseline evaluation receipt is still allowed,
+    # but it cannot gain verified curated oracle provenance.
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, use_canonical_curated_oracles=True,
+    )
+    monkeypatch.setattr(runner_module.BenchmarkRunner, "_is_correct", original)
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert result.curated_oracle_source_verified is False
+    assert result.general_skill_certified is False
+
+
+@pytest.mark.asyncio
+async def test_custom_corpus_reusing_ids_with_changed_input_is_not_canonical(
+    tmp_path,
+):
+    from ai_karen_engine.core.intelligence.ml.evaluation.runner import (
+        BenchmarkRunner,
+    )
+    from ai_karen_engine.core.intelligence.ml.evaluation.contracts import (
+        BenchmarkConfig,
+    )
+    import json
+
+    manifest, _, _, _ = await fixture(tmp_path)
+    original = CanonicalEvaluationCorpus.get_cases(task=TASK)[0]
+    altered = replace(
+        original,
+        input_text=(
+            original.input_text + " Answer: " + original.expected_label
+        ),
+        features=dict(original.features),
+    )
+
+    class AlteredCorpus(CanonicalEvaluationCorpus):
+        @classmethod
+        def get_cases(cls, **kwargs):
+            return [altered]
+
+    class RealPredictor:
+        def predict(self, features):
+            return Prediction(
+                task=TASK,
+                label=original.expected_label,
+                model_id=manifest.model_id,
+                model_version=manifest.model_version,
+                feature_version=manifest.feature_version,
+                probability=0.9,
+                confidence=0.9,
+            )
+
+    outcome_result = await BenchmarkRunner(
+        corpus=AlteredCorpus(),
+    ).run(
+        RealPredictor(),
+        BenchmarkConfig(
+            model_id=manifest.model_id,
+            model_version=manifest.model_version,
+            task=TASK,
+            dataset_version=CanonicalEvaluationCorpus.DATASET_VERSION,
+        ),
+    )
+    assert outcome_result.sample_count == 1
+    assert outcome_result.outcomes[0].correct is True
+    assert outcome_result.outcomes[0].evaluated_case_sha256 == evaluation_case_sha256(altered)
+    assert evaluation_case_sha256(altered) != evaluation_case_sha256(original)
+
+    receipt = EvaluationEvidenceStore(tmp_path)._record(
+        manifest, outcome_result,
+    )
+    with sqlite3.connect(tmp_path / "benchmark_evidence.sqlite3") as db:
+        payload = json.loads(db.execute(
+            "SELECT evidence_json FROM benchmark_receipts WHERE receipt_id=?",
+            (receipt,),
+        ).fetchone()[0])
+    assert "kcm_curated_oracle_version" not in payload
+    assert "curated_oracle_sha256" not in payload
+
+
+@pytest.mark.asyncio
+async def test_canonical_oracle_edit_invalidates_existing_provenance(
+    tmp_path, monkeypatch,
+):
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, use_canonical_curated_oracles=True,
+    )
+    original = CanonicalEvaluationCorpus.get_cases(task=TASK)
+    monkeypatch.setattr(
+        CanonicalEvaluationCorpus, "get_cases",
+        classmethod(lambda cls, **kwargs: [
+            replace(original[0], expected_label="tampered-expected-oracle"),
+            *original[1:],
+        ]),
+    )
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert result.curated_oracle_source_verified is False
+    assert result.observed_fraction_correct is None
+
+
+@pytest.mark.asyncio
+async def test_canonical_curated_case_group_claim_cannot_infer_independence(
+    tmp_path, monkeypatch,
+):
+    original = CanonicalEvaluationCorpus.get_cases(task=TASK)
+    monkeypatch.setattr(
+        CanonicalEvaluationCorpus, "get_cases",
+        classmethod(lambda cls, **kwargs: [
+            replace(case, evaluation_group_id="unreviewed-group")
+            for case in original
+        ]),
+    )
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, use_canonical_curated_oracles=True,
+    )
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert result.declared_group_count == 1
+    assert result.independent_trial_groups_verified is False
+    assert result.general_skill_certified is False
+
+
+@pytest.mark.asyncio
+async def test_expired_benchmark_is_unavailable_without_fabricated_zero(tmp_path):
+    manifest, receipt, store, _ = await fixture(tmp_path)
+    with sqlite3.connect(tmp_path / "benchmark_evidence.sqlite3") as db:
+        db.execute(
+            "UPDATE benchmark_receipts SET created_at=? WHERE receipt_id=?",
+            ("2020-01-01 00:00:00", receipt),
+        )
+    result = await inspect(
+        tmp_path, manifest, receipt, store,
+        max_evidence_age_seconds=300,
+    )
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert result.observed_fraction_correct is None
+    assert "benchmark_evidence_expired" in result.reason_codes
+    assert not result.general_skill_certified
+
+
+@pytest.mark.asyncio
+async def test_future_dated_benchmark_is_not_credible(tmp_path):
+    manifest, receipt, store, _ = await fixture(tmp_path)
+    with sqlite3.connect(tmp_path / "benchmark_evidence.sqlite3") as db:
+        db.execute(
+            "UPDATE benchmark_receipts SET created_at=? WHERE receipt_id=?",
+            ("2099-01-01 00:00:00", receipt),
+        )
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+    assert "benchmark_issuer_timestamp_in_future" in result.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_canonical_default_evidence_age_is_enforced(tmp_path):
+    from ai_karen_engine.config.learning import get_learning_settings
+
+    manifest, receipt, store, _ = await fixture(tmp_path)
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert result.freshness_verified is True
+    assert result.evaluated_at is not None
+    assert result.expires_at is not None
+    assert (
+        result.expires_at - result.evaluated_at
+    ).total_seconds() == get_learning_settings().kcm_benchmark_max_evidence_age_seconds
+    assert "freshness_window_verified" in result.reason_codes
+    assert result.curated_oracle_source_verified is False
+
+
+@pytest.mark.asyncio
+async def test_curated_digest_tamper_invalidates_receipt(tmp_path):
+    manifest, receipt, store, _ = await fixture(
+        tmp_path, use_canonical_curated_oracles=True,
+    )
+    import json
+    with sqlite3.connect(tmp_path / "benchmark_evidence.sqlite3") as db:
+        payload = json.loads(db.execute(
+            "SELECT evidence_json FROM benchmark_receipts WHERE receipt_id=?",
+            (receipt,),
+        ).fetchone()[0])
+        payload["curated_oracle_sha256"] = "0" * 64
+        db.execute(
+            "UPDATE benchmark_receipts SET evidence_json=? WHERE receipt_id=?",
+            (json.dumps(payload), receipt),
+        )
+    result = await inspect(tmp_path, manifest, receipt, store)
+    assert result.health is KcmBenchmarkAssessmentHealth.UNAVAILABLE
+
+
+def test_invalid_configured_age_budget_rejected(tmp_path):
+    for value in (0, -1, True, 1.5, "3600", 31_536_001):
+        with pytest.raises(ValueError, match="age"):
+            KcmBenchmarkTaskProjector(
+                registry_dir=tmp_path,
+                minimum_cases=1, maximum_cases=10,
+                max_evidence_age_seconds=value,
+            )
+
+
+def test_central_learning_config_rejects_invalid_evidence_ttl(monkeypatch):
+    from ai_karen_engine.config.learning import LearningSettings
+
+    assert LearningSettings().kcm_benchmark_max_evidence_age_seconds == 2_592_000
+    for bad in (0, -1, 31_536_001, True, 1.5):
+        with pytest.raises(ValueError, match="evidence age"):
+            LearningSettings(kcm_benchmark_max_evidence_age_seconds=bad)
+    monkeypatch.setenv("KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS", "180")
+    settings = LearningSettings()
+    settings.apply_env_overrides()
+    assert settings.kcm_benchmark_max_evidence_age_seconds == 180
+    monkeypatch.setenv("KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS", "wrong")
+    with pytest.raises(ValueError, match="numeric"):
+        LearningSettings().apply_env_overrides()
+    monkeypatch.setenv("KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS", "0")
+    with pytest.raises(ValueError, match="evidence age"):
+        LearningSettings().apply_env_overrides()
 
 
 def test_benchmark_bounds_are_explicit_and_validated(tmp_path):
