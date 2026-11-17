@@ -541,3 +541,21 @@ def test_exact_model_lineage_rejects_overdeep_bounded_json_metadata(tmp_path):
     assert verifier.inspect_exact_model_lineage(
         principal=principal, model_id=model_id,
     ) is None
+
+
+def test_exact_model_lineage_rejects_overdeep_registry_metrics(tmp_path):
+    """A valid hashed candidate is not verified with uncopyable metrics."""
+    verifier, _, registry, principal, model_id, _, _ = (
+        _scoped_training_lineage_fixture(tmp_path)
+    )
+    manifest = registry.get(model_id)
+    nested: list = []
+    cursor = nested
+    for _ in range(2000):
+        child: list = []
+        cursor.append(child)
+        cursor = child
+    manifest.metrics["malformed_nested_value"] = nested
+    assert verifier.inspect_exact_model_lineage(
+        principal=principal, model_id=model_id,
+    ) is None
