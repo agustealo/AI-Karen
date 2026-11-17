@@ -845,3 +845,54 @@ async def test_diagnostic_digest_binds_freshness_policy_and_legacy_basis(tmp_pat
     assert not short.production_environment_verified
     assert not short.independent_trial_groups_verified
     assert not short.general_skill_certified
+
+
+@pytest.mark.asyncio
+async def test_live_canonical_runner_projection_reports_actual_freshness_basis(tmp_path):
+    """Exact registered artifact, canonical runner, SQLite and scoped outcomes."""
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    receipt_id = EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+    record_store = InMemoryOutcomeStore()
+    evaluated = benchmark.outcomes[0]
+    evidence_ref = (
+        f"benchmark:{receipt_id}:"
+        + hashlib.sha256(evaluated.case_id.encode("utf-8")).hexdigest()[:24]
+    )
+    persisted = MLOutcomeRecord(
+        outcome_id="runner-window-measured-outcome",
+        task=TASK,
+        model_id=manifest.model_id,
+        model_version=manifest.model_version,
+        feature_version=manifest.feature_version,
+        predicted_label="",
+        expected_label="",
+        correct=evaluated.correct,
+        raw_probability=0.9,
+        calibrated_probability=0.9,
+        confidence=0.9,
+        latency_ms=evaluated.latency_ms,
+        fallback_used=False,
+        calibration_error=abs(0.9 - float(evaluated.correct)),
+    )
+    await GovernedMLLearningEvidence(
+        tenant_id=TENANT, user_id=USER, store=record_store,
+    ).record_verified_batch([(persisted, "heldout_evaluation", evidence_ref)])
+    assessment = await inspect(
+        tmp_path, manifest, receipt_id, record_store,
+        max_evidence_age_seconds=300,
+    )
+    assert assessment.health is KcmBenchmarkAssessmentHealth.MEASURED
+    assert assessment.runner_execution_window_recorded is True
+    assert assessment.freshness_basis == "runner_observed_inference_end"
+    assert assessment.runner_evaluation_started_at == benchmark.evaluation_started_at
+    assert assessment.runner_evaluation_finished_at == benchmark.evaluation_finished_at
+    assert assessment.expires_at == (
+        benchmark.evaluation_finished_at + timedelta(seconds=300)
+    )
+    assert assessment.curated_oracle_source_verified is True
+    assert assessment.independent_trial_groups_verified is False
+    assert assessment.production_environment_verified is False
+    assert assessment.general_skill_certified is False
+    assert assessment.execution_authorized is False
+    assert assessment.training_authorized is False
