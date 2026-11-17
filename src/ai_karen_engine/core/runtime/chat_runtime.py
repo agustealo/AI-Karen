@@ -5657,6 +5657,14 @@ class ChatRuntime:
         else:
             return None
 
+        # The ExpressionGateway is the canonical owner of genuinely
+        # generative source identifiers. A verified provider_runtime response
+        # is model execution, but fallback_provider_runtime is not a
+        # non-fallback receipt, even with forged fallback_level metadata.
+        from ai_karen_engine.core.expression.gateway import (
+            MODEL_GENERATION_RESPONSE_SOURCES,
+        )
+
         provenance = provider_meta.get("provenance")
         provider = provider_meta.get("actual_provider")
         model = provider_meta.get("actual_model")
@@ -5670,7 +5678,8 @@ class ChatRuntime:
             and provenance.decision_id == decision.policy_decision_id
             and isinstance(correlation_id, str) and bool(correlation_id.strip())
             and provenance.correlation_id == correlation_id
-            and provider_meta.get("response_source") == "model"
+            and provider_meta.get("response_source")
+            in (MODEL_GENERATION_RESPONSE_SOURCES - {"fallback_provider_runtime"})
             and isinstance(observed_model_calls, int)
             and not isinstance(observed_model_calls, bool)
             and observed_model_calls > 0
