@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "src/ai_karen_engine/core/intelligence/ml/verification_review_evidence.py"
+      - "src/ai_karen_engine/core/intelligence/ml/evaluation/reviewed_oracle_evidence.py"
+      - "src/ai_karen_engine/core/intelligence/ml/durable_outcomes.py"
       - "src/ai_karen_engine/core/intelligence/ml/verification_review_workflow.py"
       - "src/ai_karen_engine/core/runtime/trajectory/**"
       - "src/ai_karen_engine/core/runtime/chat_runtime.py"
@@ -35,6 +37,7 @@ on:
       - "supabase/migrations/20261019020000_37_intelligence_ml_outcome_evidence.sql"
       - "tests/core/intelligence/ml/test_verification_review_receipts.py"
       - "tests/integration/test_verification_review_postgres.py"
+      - "tests/integration/test_kcm_curated_oracle_postgres.py"
       - "requirements/ci/**"
       - ".github/workflows/cognitive-review-postgres-proof.yml"
   workflow_dispatch:
@@ -54,6 +57,7 @@ jobs:
     env:
       PYTHONPATH: src:tests
       KAREN_TEST_REVIEW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_review_test
+      KAREN_TEST_ORACLE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_kcm_oracle_test
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_review_test
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +97,10 @@ jobs:
                   )
                   assert not present, "Refuse to reuse an existing review-proof database"
                   await root.execute("CREATE DATABASE karen_review_test")
+                  assert not await root.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname='karen_kcm_oracle_test'"
+                  ), "Refuse to reuse existing KCM oracle proof database"
+                  await root.execute("CREATE DATABASE karen_kcm_oracle_test")
               finally:
                   await root.close()
 
@@ -104,8 +112,10 @@ jobs:
           python -m compileall -q \
             src/ai_karen_engine/core/intelligence/ml/verification_review_evidence.py \
             src/ai_karen_engine/core/runtime/outcome/store.py \
-            tests/integration/test_verification_review_postgres.py
+            tests/integration/test_verification_review_postgres.py \
+            tests/integration/test_kcm_curated_oracle_postgres.py
           pytest tests/integration/test_verification_review_postgres.py -q --timeout=300 --tb=short
+          DATABASE_URL="$KAREN_TEST_ORACLE_DATABASE_URL" pytest tests/integration/test_kcm_curated_oracle_postgres.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_verification_review_receipts.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_verification_review_workflow.py -q --timeout=300 --tb=short
           pytest tests/api_routes/test_verification_review_api.py -q --timeout=300 --tb=short
@@ -121,5 +131,5 @@ jobs:
         if: always()
         run: |
           echo "### Real review-receipt database acceptance" >> "$GITHUB_STEP_SUMMARY"
-          echo "Dedicated database: karen_review_test. Applies canonical outcome-ledger migrations. All tenant/RLS and atomic assertions must run, not skip." >> "$GITHUB_STEP_SUMMARY"
+          echo "Dedicated disposable databases: karen_review_test and karen_kcm_oracle_test. Both apply canonical outcome-ledger migrations; independent reviewer receipt, tenant/FORCE RLS and atomic assertions must execute, not skip." >> "$GITHUB_STEP_SUMMARY"
           echo "A successful test proves persistence and scoping, not independent reviewer accuracy or causal policy benefit." >> "$GITHUB_STEP_SUMMARY"
