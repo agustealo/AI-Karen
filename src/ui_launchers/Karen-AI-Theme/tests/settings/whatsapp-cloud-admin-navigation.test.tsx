@@ -37,7 +37,7 @@ afterEach(() => {
 describe('canonical admin WhatsApp Cloud navigation', () => {
   it('reaches the existing governed operator panel from /admin settings tabs', async () => {
     render(<AdminSettingsPage />);
-    const tab = await screen.findByRole('tab', { name: 'WhatsApp Cloud', exact: true });
+    const tab = await screen.findByRole('tab', { name: 'WhatsApp Cloud' });
     expect(tab).toBeTruthy();
     expect(screen.queryByTestId('canonical-whatsapp-cloud-panel')).toBeNull();
     fireEvent.click(tab);
