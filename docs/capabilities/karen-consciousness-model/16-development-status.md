@@ -28,7 +28,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B3C3A: owner-scoped training-job to model artifact verification | [PR #973](https://github.com/agustealo/AI-Karen/pull/973), merge `c300198f1eee6b6775ed46f1eb51c51a8ba9b5c4` · [28 — Model/job provenance](28-model-training-job-lineage.md) | Merged; 11/11 exact-head checks passed; no example-inventory or benchmark-independence claim |
 | KCM-02B3C3B1: keyed sklearn fit-membership observation | [PR #981](https://github.com/agustealo/AI-Karen/pull/981), merge `c2025a5abb7d9246b9853e7f1a4989d19ef5a67d` · [29 — Sklearn fit observation](29-sklearn-fit-observation.md) | Merged; 18/18 exact-head checks passed; bounded default-off worker assertion only, no KCM training inventory |
 | KCM-02B3C3B2: owner-scoped model-job-bound fit receipt | [PR #984](https://github.com/agustealo/AI-Karen/pull/984), merge `7b1cf8d78e402fe32c14029dccd521f6aa05af7b` · [30 — Owner-scoped fit binding](30-owner-scoped-fit-artifact-binding.md) | Merged; 11/11 exact-head checks passed; no verified KCM inventory or source ancestry |
-| KCM-02B3C3B3A: frozen assessment to sklearn row alignment | [31 — Frozen assessment-to-JSONL alignment](31-frozen-assessment-to-sklearn-jsonl.md) | Candidate; read-only structural train UUID alignment and live preflight recheck only, no feature provenance or actual fit membership |
+| KCM-02B3C3B3A: frozen assessment to sklearn row alignment | [PR #987](https://github.com/agustealo/AI-Karen/pull/987), merge `26c6d76ac51a0dd69a6d5d2dfd836c698bbf322b` · [31 — Frozen assessment-to-JSONL alignment](31-frozen-assessment-to-sklearn-jsonl.md) | Merged; 9/9 exact-head checks passed; structural train UUID alignment with current rights/epoch evidence only |
+| KCM-02B3C3B3B: keyed fit-to-input commitment concordance | [32 — Fit input commitments](32-observed-fit-input-commitments.md) | Candidate; private, read-only worker fit receipt HMAC equality to a caller-supplied snapshot; no independently attested input provenance or permission |
 
 ## Configuration
 
@@ -77,13 +78,13 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Compare the frozen KCM train assessment IDs
-against canonical sklearn JSONL row IDs and refresh live rights, consent and
-deletion-epoch evidence at both read boundaries. This structural check must
-never be mistaken for independently verified source-to-feature/label
-transformation or actual observed fit membership. The next gated stage requires
-trusted immutable transformation receipts, exact imported byte identity
-and keyed observed-fit membership comparison through the owner-scoped
-model/job artifact path, plus durable revocation fences at training start and
-promotion. Training rights, model promotion, autonomous execution and
-general-skill certification remain disabled.
+**Next controlled slice:** Compare existing keyed worker-observed fit
+HMAC member/content commitments to an exact supplied input snapshot, using
+the canonical serialization and HMAC implementation. This **does not**
+authenticate snapshot provenance or prove which file was consumed during
+training. Frozen KCM train assessment-ID alignment and owner-bound model/job
+artifact receipts exist separately; the still-unbuilt higher-assurance stage
+must bind independently reviewed source-to-feature/target transformations
+to immutable bytes consumed by the actual worker, under a durable
+revocation-fenced training/promotion lease. Independent benchmark overlap
+exclusion and training authorization remain disabled.
