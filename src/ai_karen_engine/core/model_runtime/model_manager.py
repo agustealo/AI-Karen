@@ -52,12 +52,12 @@ class RuntimeSelection:
     display_name: str
     endpoint_type: ProviderEndpointType
     model: Optional[str] = None
-    runtime_engine: Optional[str] = None
     base_url: Optional[str] = None
     supports_streaming: bool = False
     supports_embeddings: bool = False
     selected_via: str = "registry"
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    runtime_engine: Optional[str] = None
 
 
 class ModelManager:
