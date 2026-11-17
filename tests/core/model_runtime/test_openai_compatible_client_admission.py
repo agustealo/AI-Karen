@@ -183,9 +183,10 @@ async def test_inference_port_cannot_turn_ungoverned_external_model_into_wire_ca
         )
     assert attempts == []
 
-    from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
+    from ai_karen_engine.core.model_runtime import llm_adapter
 
-    facade = LLMUtils()
+    monkeypatch.setattr(llm_adapter, "get_model_manager", lambda: manager)
+    facade = llm_adapter.LLMUtils()
     with pytest.raises(ProviderNotAvailable):
         await facade.generate_text_async(
             "private LLMUtils request",
