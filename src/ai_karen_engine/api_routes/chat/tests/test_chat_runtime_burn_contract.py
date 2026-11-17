@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyDecision, RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.expression.contracts import ExpressionResult
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -45,10 +48,33 @@ class _NoGateControlPlane:
 
 
 class _DecisionPipeline:
-    def __init__(self, decision: ExecutionDecision) -> None:
+    def __init__(
+        self, decision: ExecutionDecision, policy: RuntimePolicyEnforcer,
+    ) -> None:
         self._decision = decision
+        self._policy = policy
 
     async def decide(self, request: ChatExecutionRequest) -> ExecutionDecision:
+        # This burn replaces cognition but retains a genuine policy-bound
+        # principal and original issuance witness for every model execution.
+        ctx = request.context
+        decision_id = self._decision.policy_decision_id or (
+            f"policy-{ctx.correlation_id}"
+        )
+        issued = PolicyDecision(
+            decision_id=decision_id,
+            policy_version="fixture",
+            allowed=True,
+            runtime_constraints={
+                "authorized_user_id": ctx.user_id,
+                "authorized_tenant_id": ctx.tenant_id,
+                "authorized_session_id": ctx.session_id,
+                "correlation_id": ctx.correlation_id,
+                "max_model_calls": self._decision.max_model_calls,
+            },
+        )
+        self._policy._issued_model_decisions[issued.decision_id] = issued
+        self._policy.bind_chat_model_policy(context=ctx, decision=issued)
         return self._decision
 
 
@@ -88,10 +114,11 @@ def _decision(*, memory_write_allowed: bool = False) -> ExecutionDecision:
 
 
 def _runtime(decision: ExecutionDecision, gateway: _Gateway) -> ChatRuntime:
+    issuer = RuntimePolicyEnforcer()
     composition = RuntimeComposition(
         cognitive_cortex=object(),
-        runtime_policy=object(),
-        decision_pipeline=_DecisionPipeline(decision),
+        runtime_policy=issuer,
+        decision_pipeline=_DecisionPipeline(decision, issuer),
         expression_gateway=gateway,
     )
     runtime = ChatRuntime(composition=composition)

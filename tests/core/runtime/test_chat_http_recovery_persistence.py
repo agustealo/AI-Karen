@@ -7,6 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyDecision, RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -69,6 +72,21 @@ async def test_recovery_response_requires_durable_transcript(persisted):
         authorized_session_id=ctx.session_id,
         budget=ExecutionBudget(max_model_calls=2),
     )
+    issuer = RuntimePolicyEnforcer()
+    issued = PolicyDecision(
+        decision_id=plan.policy_decision_id,
+        policy_version="fixture",
+        allowed=True,
+        runtime_constraints={
+            "authorized_user_id": ctx.user_id,
+            "authorized_tenant_id": ctx.tenant_id,
+            "authorized_session_id": ctx.session_id,
+            "correlation_id": ctx.correlation_id,
+            "max_model_calls": plan.budget.max_model_calls,
+        },
+    )
+    issuer._issued_model_decisions[issued.decision_id] = issued
+    issuer.bind_chat_model_policy(context=ctx, decision=issued)
     recovered = ChatExecutionResult(
         answer="Recovered model-generated answer.",
         status=ChatExecutionStatus.DEGRADED,
