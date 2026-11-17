@@ -75,7 +75,7 @@ def _result(
         or type(getattr(connection, "revision", None)) is not int
         or getattr(connection, "revision") < 1
         or type(getattr(connection, "enabled", None)) is not bool
-        or getattr(connection, "enabled") is (stage == "provisioned" or stage == "deactivated")
+        or getattr(connection, "enabled") is not (stage == "activated")
     ):
         raise RuntimeError("WhatsApp persistence returned a mismatched connection")
     return WhatsAppOperationResult(
