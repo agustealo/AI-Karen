@@ -373,3 +373,95 @@ async def test_actual_tenant_immutable_importer_roundtrip_is_accepted(tmp_path):
         / "frozen-assessment-snapshot-v1.jsonl"
     )
     assert not other_tenant_path.exists()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+@pytest.mark.parametrize("field", ["target", "feature_version", "feature_name"])
+async def test_real_importer_preserves_unicode_line_separators_inside_records(
+    tmp_path, separator, field,
+):
+    """Only LF divides JSONL records, not Unicode separators in strings."""
+    from io import BytesIO
+
+    from ai_karen_engine.core.intelligence.ml.training.dataset_import import (
+        import_jsonl_dataset,
+        tenant_dataset_directory,
+    )
+
+    m, data, rows = fixture()
+    for row in rows:
+        if field == "feature_name":
+            row["features"] = {
+                f"confidence{separator}score": 0.5, "length": 11,
+            }
+        else:
+            row[field] = f"valid{separator}value"
+    raw = canonical_jsonl(rows)
+    root = tmp_path / "tenant-imports"
+    imported = import_jsonl_dataset(
+        source=BytesIO(raw), root=root, tenant_id=TENANT, version="unicode-v1",
+    )
+    persisted = (
+        tenant_dataset_directory(root, TENANT) / "unicode-v1.jsonl"
+    ).read_bytes()
+    assert persisted == raw
+    assert separator.encode("utf-8") in persisted
+    report = await inspect(m, data, rows, raw=persisted)
+    assert report.training_row_count == 2
+    assert report.training_jsonl_sha256 == imported["sha256"]
+    assert report.source_ancestry_verified is False
+    assert report.training_authorized is False
+
+
+@pytest.mark.asyncio
+async def test_row_budget_is_checked_before_materializing_all_jsonl_lines():
+    m, data, rows = fixture()
+    # A short repeated line is not a valid training row, but must be
+    # rejected at the caller's row budget before parsing unlimited records.
+    encoded = b"{}\n" * 100_000
+    with pytest.raises(
+        KcmSklearnAssessmentJoinError,
+        match="training_row_budget_exceeded",
+    ):
+        await inspect(m, data, rows, raw=encoded, limit=100)
+
+
+@pytest.mark.asyncio
+async def test_one_huge_jsonl_row_is_rejected_before_json_deserialization():
+    m, data, rows = fixture()
+    huge_row = b'{"target":"' + (b"x" * (1024 * 1024)) + b'"}\n'
+    with pytest.raises(
+        KcmSklearnAssessmentJoinError,
+        match="training_row_size_invalid",
+    ):
+        await inspect(m, data, rows, raw=huge_row)
+
+
+@pytest.mark.asyncio
+async def test_mutable_manifest_swap_during_async_preflight_cannot_forge_join():
+    """An awaited resolver must never switch the assessment snapshot."""
+    m, data, rows = fixture()
+    unapproved = uid(999)
+    rows[0]["example_id"] = unapproved
+    original = m["members"][0]["assessment_id"]
+
+    class SwappingResolver(Resolver):
+        async def resolve(self, **kwargs):
+            # A mutable caller-owned manifest may be altered while preflight
+            # awaits a source authority; the snapshot must remain detached.
+            if self.calls == 0:
+                m["members"][0]["assessment_id"] = unapproved
+            elif self.calls == 4:
+                m["members"][0]["assessment_id"] = original
+            return await super().resolve(**kwargs)
+
+    resolver = SwappingResolver(m)
+    with pytest.raises(
+        KcmSklearnAssessmentJoinError,
+        match="assessment_training_join_mismatch",
+    ):
+        await inspect(m, data, rows, resolver=resolver)
+    assert resolver.calls == 4
+    assert m["members"][0]["assessment_id"] == unapproved
