@@ -63,12 +63,29 @@ class _DecisionPipeline:
             decision_id=policy_id,
             policy_version="fixture",
             allowed=True,
+            allowed_capabilities=[
+                capability
+                for capability in [
+                    *self._decision.required_capabilities,
+                    *(
+                        ["memory.write"]
+                        if self._decision.memory_write_allowed
+                        else []
+                    ),
+                ]
+                if capability != "model.personal_key.execute"
+            ],
             runtime_constraints={
                 "authorized_user_id": ctx.user_id,
                 "authorized_tenant_id": ctx.tenant_id,
                 "authorized_session_id": ctx.session_id,
                 "correlation_id": ctx.correlation_id,
                 "max_model_calls": self._decision.max_model_calls,
+                "allowed_tools": list(self._decision.tool_requirements),
+                "allowed_plugins": list(self._decision.plugin_candidates),
+                "allowed_agents": list(
+                    (self._decision.policy_constraints or {}).get("allowed_agents") or []
+                ),
             },
         )
         self._policy._record_issued_model_decision(issued)
