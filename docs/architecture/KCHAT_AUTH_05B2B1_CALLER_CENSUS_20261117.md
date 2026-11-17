@@ -5,15 +5,15 @@
 ## Ownership
 
 ChatRuntime and RuntimePolicy remain the only authenticated execution-plan issuers.
-Core \`governed_model_admission.py\` remains the validator and original shared
+Core `governed_model_admission.py` remains the validator and original shared
 budget reservation authority. This candidate adds a **static audit utility only**
 and changes no model, embedding, network or plugin runtime execution behavior.
 
 ## Motivation
 
-The 05B2A migration protected \`LLMUtils\` and \`ModelManagerInferencePort\`, but
-direct \`ModelManager.generate_chat\` / \`generate_embedding\`, provider invocation
-helpers, raw local compatibility clients and old \`EmbeddingManager\` fallback
+The 05B2A migration protected `LLMUtils` and `ModelManagerInferencePort`, but
+direct `ModelManager.generate_chat` / `generate_embedding`, provider invocation
+helpers, raw local compatibility clients and old `EmbeddingManager` fallback
 APIs remain candidates for ungoverned access. Reaching directly for a global
 deny would risk breaking authorized production paths and double-charging
 ExpressionGateway/Deep Agents callbacks before their active callers are known.
@@ -22,15 +22,15 @@ ExpressionGateway/Deep Agents callbacks before their active callers are known.
 
 Run:
 
-\`\`\`bash
+```bash
 python scripts/ci/kchat_auth_05b2b_caller_census.py \
   --root src/ai_karen_engine \
   --output build/kchat-auth-05b2b-caller-census.json
-\`\`\`
+```
 
 The deterministic JSON report carries scanned-file counts, parse errors,
 candidate method/class callsites with source file, line, scope and a bounded
-receiver identifier, and boolean hints for an explicit \`execution_admission\`
+receiver identifier, and boolean hints for an explicit `execution_admission`
 or selected-model keyword. It records no prompt arguments, secrets, message
 contents or model results. Scan errors make the command fail, never a false
 clean report. Chat System Burn uploads the JSON as an artifact for review.
@@ -39,7 +39,7 @@ clean report. Chat System Burn uploads the JSON as an artifact for review.
 aliases, C-extension/SDK calls, runtime dispatch, actual transport destination
 or whether an upstream gateway already reserved the original meter. A caller
 with an admission keyword is not automatically authorized. All candidates
-remain \`unverified_candidate\` until manually classified.
+remain `unverified_candidate` until manually classified.
 
 ## Next audited code migration
 
