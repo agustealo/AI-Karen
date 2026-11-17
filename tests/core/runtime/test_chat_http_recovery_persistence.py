@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -40,6 +41,16 @@ async def test_recovery_response_requires_durable_transcript(persisted):
         conversation_id="22222222-2222-2222-2222-222222222222",
         request_id="request-a",
         correlation_id="correlation-a",
+    )
+    # Recovery is a real authenticated runtime path. The fixture must not
+    # bypass the original-principal requirement added for model admission.
+    ctx.authenticated_user = UserData(
+        user_id=ctx.user_id,
+        tenant_id=ctx.tenant_id,
+        roles=["user"],
+        permissions=[],
+        is_active=True,
+        is_verified=True,
     )
     request = ChatExecutionRequest(
         messages=[{"role": "user", "content": "Hello"}],
