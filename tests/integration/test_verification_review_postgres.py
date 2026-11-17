@@ -349,6 +349,19 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             trajectory_id="pg-review-lineage-1",
             tenant_id=tenant_a,
             user_id=subject_a,
+            request_id="pg-review-request-1",
+            correlation_id="pg-review-correlation-1",
+            session_id="pg-review-session-1",
+            conversation_id="pg-review-conversation-1",
+            policy_decision_id="pg-review-policy-1",
+            executed_topology="direct",
+            execution_status="success",
+            completed_at=datetime.now(timezone.utc),
+            actual_provider="ollama-local",
+            actual_model="installed-ci-model",
+            fallback_level=0,
+            degraded_mode=False,
+            response_source="model",
         )
         await lineage.save_async(trajectory)
         feature = FeatureSnapshot(
@@ -360,7 +373,10 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             correlation_id="pg-review-correlation-1",
             feature_version="pg-verification-features-v1",
             created_at=datetime.now(timezone.utc),
-            metadata={"snapshot_origin": "ci_decision_time"},
+            metadata={
+                "snapshot_origin": "ci_decision_time",
+                "policy_decision_id": trajectory.policy_decision_id,
+            },
         )
         await lineage.save_feature_snapshot_async(feature)
         decision = DecisionObservation(
@@ -404,6 +420,60 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             reward=0.9,
             verification_needed=True,
         )
+        # B2C3A: a persisted policy choice alone is NOT sufficient to admit
+        # reviewer reward. Verify that the *original* selected execution
+        # outcome exists before storing independent labels.
+        with pytest.raises(ValueError, match="Exactly one selected execution"):
+            await authenticated_review.submit(
+                reviewed, reviewer=reviewer,
+                correlation_id="pg-review-correlation-1",
+            )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE decision_observation_id='pg-review-decision-1'"
+            " AND source='intelligence.ml'"
+        ) == 0
+
+        await store.save_outcome_async({
+            "outcome_id": "pg-review-selected-execution-1",
+            "trajectory_id": trajectory.trajectory_id,
+            "decision_observation_id": decision.decision_observation_id,
+            "tenant_id": tenant_a,
+            "user_id": subject_a,
+            "request_id": trajectory.request_id,
+            "correlation_id": trajectory.correlation_id,
+            "session_id": trajectory.session_id,
+            "conversation_id": trajectory.conversation_id,
+            "source": "runtime.execution",
+            "status": "success",
+            "response_completed": True,
+            "persistence_success": True,
+            "fallback_count": 0,
+            "metadata": {
+                "actual_provider": trajectory.actual_provider,
+                "actual_model": trajectory.actual_model,
+                "model_calls": 1,
+                "tool_calls": 0,
+                "transcript_persistence_status": "persisted",
+                "selected_strategy_execution": {
+                    "schema_version": "selected_strategy_execution_v1",
+                    "policy_decision_id": trajectory.policy_decision_id,
+                    "policy_version": decision.behavior_policy_version,
+                    "selected_action": decision.chosen_action,
+                    "status": "selected_runtime_path_observed",
+                    "provider_receipt_observed": True,
+                    "response_completed": True,
+                    "transcript_durable": True,
+                    "actual_provider": trajectory.actual_provider,
+                    "actual_model": trajectory.actual_model,
+                    "execution_observation_only": True,
+                    "independent_verification_proven": False,
+                    "dual_action_eligibility_established": False,
+                    "randomized_selection": False,
+                    "ope_eligible": False,
+                },
+            },
+        })
         submitted = await authenticated_review.submit(
             reviewed, reviewer=reviewer,
             correlation_id="pg-review-correlation-1",
@@ -428,7 +498,7 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
         assert await raw.fetchval(
             "SELECT count(*) FROM public.outcome_records "
             "WHERE decision_observation_id='pg-review-decision-1'"
-        ) == 2
+        ) == 3
 
         # KCOG-01C0: exercise the actual ChatRuntime selection recorder
         # against the same PostgreSQL lineage schema. This is not a
