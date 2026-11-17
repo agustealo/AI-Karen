@@ -1162,3 +1162,58 @@ async def test_oracle_review_never_claims_success_without_durable_readback(tmp_p
     assert await adapter.inspect_review(
         subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_oracle_review_invalidates_when_numeric_case_revoked_during_lookup(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, source = await _actual_runner_scoped_review_fixture(tmp_path)
+    authority = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=source,
+    )
+    await authority.record_review(
+        subject=identity(), reviewer=_authorized_curated_reviewer(),
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+
+    class RevokingDuringReviewerLookup(InMemoryOutcomeStore):
+        def __init__(self):
+            super().__init__()
+            self._revoked = False
+
+        def list_scoped_outcomes_by_ids(self, tenant_id, *, user_id, source, outcome_ids):
+            if (
+                not self._revoked
+                and len(outcome_ids) == 1
+                and outcome_ids[0].startswith("kcm_curated_review_")
+            ):
+                self._revoked = True
+                surviving = [
+                    item for item in self._records
+                    if (item.get("metadata") or {}).get("schema_version")
+                    != "ml_predictor_evidence_v1"
+                ]
+                self._records = []
+                self._tenant_index = {}
+                self._trajectory_index = {}
+                for row in surviving:
+                    self.save_outcome(row)
+            return super().list_scoped_outcomes_by_ids(
+                tenant_id, user_id=user_id, source=source, outcome_ids=outcome_ids,
+            )
+
+    changed = RevokingDuringReviewerLookup()
+    for row in source._records:
+        changed.save_outcome(row)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=changed,
+    )
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
+    assert changed._revoked is True
