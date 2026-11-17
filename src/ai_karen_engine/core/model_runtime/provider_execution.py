@@ -10,6 +10,7 @@ never imports their implementations to execute a model request.
 import asyncio
 import json
 import os
+import ipaddress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.error import HTTPError, URLError
@@ -21,6 +22,7 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoin
 from ai_karen_engine.core.model_runtime.runtime_engine import (
     EndpointKind,
     EndpointProtocol,
+    Locality,
     RuntimeEngine,
 )
 
@@ -223,6 +225,61 @@ def _resolve_base_url(endpoint: ProviderEndpoint) -> str | None:
     if endpoint.base_url:
         return endpoint.base_url.rstrip("/")
     return defaults.get(endpoint.runtime_engine)
+
+
+# A configured OpenAI-compatible endpoint is not necessarily local. Use
+# the effective transport URL (including approved host environment overrides),
+# not registry defaults or self-described endpoint locality, to classify it.
+# Named Docker host bridges are trusted installation-local aliases; other DNS
+# names require RuntimePolicy external execution permission unless separately
+# admitted by a future governed destination inventory.
+_LOCAL_PROVIDER_HOSTS = frozenset({
+    "localhost", "host.docker.internal", "gateway.docker.internal",
+    "host.containers.internal",
+})
+_LOCAL_PROVIDER_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+))
+
+
+def provider_endpoint_requires_external_permission(endpoint: ProviderEndpoint) -> bool:
+    """Classify the actual model transport destination, failing closed.
+
+    Kind/locality describe configured intent; the effective URL is the wire
+    destination. An endpoint labeled local with a public/unknown host must not
+    bypass installation external opt-out or authenticated administrator RBAC.
+    Return True for unknown or malformed targets, never infer cloud permission.
+    """
+    if (
+        endpoint.kind is EndpointKind.CLOUD_PROVIDER
+        or endpoint.locality is Locality.CLOUD
+        or endpoint.runtime_engine is RuntimeEngine.REMOTE_API
+    ):
+        return True
+    try:
+        url = _resolve_base_url(endpoint)
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        if (
+            parsed is None
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            return True
+        host = parsed.hostname.rstrip(".").lower()
+        if host in _LOCAL_PROVIDER_HOSTS:
+            return False
+        address = ipaddress.ip_address(host)
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return not any(address in network for network in _LOCAL_PROVIDER_NETWORKS)
+    except (ValueError, TypeError):
+        # Unknown DNS hostnames and invalid URLs never imply local authority.
+        return True
 
 
 def _resolve_api_key(endpoint: ProviderEndpoint) -> str | None:

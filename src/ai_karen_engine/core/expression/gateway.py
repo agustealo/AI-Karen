@@ -287,6 +287,44 @@ class ExpressionGateway:
                 )
                 continue
 
+            # Installation opt-in is necessary but not sufficient when
+            # administrator authorization is required. Check the trusted
+            # original RuntimePolicy-bound callback immediately before each
+            # cloud attempt, including a late fallback. A missing, malformed,
+            # or raising callback always denies without another model call.
+            if engine_id == "cloud" and self.settings.policies.require_admin_for_external is not False:
+                permission_reason = "external_admin_permission_required"
+                try:
+                    authorized = (
+                        await task.authorize_external_engine_attempt()
+                        if task.authorize_external_engine_attempt is not None
+                        else False
+                    )
+                except Exception:
+                    authorized = False
+                    permission_reason = "external_permission_verification_failed"
+                if authorized is not True:
+                    skipped_engines.append(
+                        {"engine_id": engine_id, "reason": permission_reason}
+                    )
+                    _emit_routing_event(
+                        RoutingEvents.REJECTED,
+                        correlation_id=task.correlation_id,
+                        request_id=task.request_id,
+                        engine_id=engine_id,
+                        reason=permission_reason,
+                    )
+                    emit_expression_event(
+                        "expression.engine.policy_rejected",
+                        self._event_payload(
+                            task,
+                            engine_id=engine_id,
+                            fallback_level=level,
+                            degradation_reason=permission_reason,
+                        ),
+                    )
+                    continue
+
             if attempted_model_engines and task.reserve_additional_model_call is not None:
                 try:
                     permitted = await task.reserve_additional_model_call()

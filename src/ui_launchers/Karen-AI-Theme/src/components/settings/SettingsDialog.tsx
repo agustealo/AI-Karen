@@ -38,6 +38,7 @@ import CommsCenterPage from '@/components/comms/CommsCenterPage';
 
 import BehaviorSettings from './BehaviorSettings';
 import ChannelsSettings from './ChannelsSettings';
+import WhatsAppCloudSettings from './WhatsAppCloudSettings';
 import ModelDownloads from './ModelDownloads';
 import ModelSettings from './ModelSettings';
 import ExpressionSettings from './ExpressionSettings';
@@ -63,6 +64,7 @@ type SettingsSectionId =
   | 'notifications'
   | 'privacy'
   | 'channels'
+  | 'whatsapp-cloud'
   | 'model'
   | 'expression'
   | 'model-downloads'
@@ -220,6 +222,13 @@ export default function SettingsDialog({
         id: 'admin',
         label: 'Admin',
         sections: [
+          {
+            id: 'whatsapp-cloud',
+            label: 'WhatsApp Cloud',
+            description: 'Governed Meta WhatsApp Cloud account provisioning and local lifecycle, with explicit verification status.',
+            icon: MessagesSquare,
+            render: () => <WhatsAppCloudSettings />,
+          },
           {
             id: 'training',
             label: 'Training',

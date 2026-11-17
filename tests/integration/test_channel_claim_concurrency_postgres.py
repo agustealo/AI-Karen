@@ -179,6 +179,50 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                     yield session
 
         monkeypatch.setattr(module, "async_transaction_scope", real_scope)
+
+        # KWA-01C6B: the operator inventory must read only the scoped
+        # WhatsApp connection, never disclose its Vault handle or another
+        # tenant's account, and never infer live provider availability.
+        operator_a_id = str(uuid.uuid4())
+        operator_b_id = str(uuid.uuid4())
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id,
+                provider_account_id, credential_handle, enabled, revision)
+               VALUES ($1,$2,'whatsapp-cloud','990000000000001',
+                       'vault://tenant-a-private',false,1),
+                      ($3,$4,'whatsapp-cloud','990000000000002',
+                       'vault://tenant-b-private',true,2)""",
+            operator_a_id, tenant_a, operator_b_id, tenant_b,
+        )
+        operator_repository = SqlChannelRepository()
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(tenant_a),
+        ) == [{
+            "connection_id": operator_a_id,
+            "connection_revision": 1,
+            "enabled": False,
+        }]
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(tenant_b),
+        ) == [{
+            "connection_id": operator_b_id,
+            "connection_revision": 2,
+            "enabled": True,
+        }]
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(uuid.uuid4()),
+        ) == []
+        # Keep the existing multi-scenario test isolated. Later WhatsApp
+        # acceptance cases deliberately reuse a known Meta account identity,
+        # and PostgreSQL must continue enforcing its account uniqueness index.
+        assert await raw.execute(
+            """DELETE FROM public.channel_connections
+               WHERE (tenant_id=$1 AND connection_id=$2)
+                  OR (tenant_id=$3 AND connection_id=$4)""",
+            tenant_a, operator_a_id, tenant_b, operator_b_id,
+        ) == "DELETE 2"
+
         # KWA-01D: actual PostgreSQL row locking and durable claim uniqueness.
         # A separate connection avoids changing the existing outbox assertions.
         webhook_connection = f"telegram-lease-{uuid.uuid4().hex}"

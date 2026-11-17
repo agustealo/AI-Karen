@@ -283,6 +283,45 @@ class RuntimePolicyEnforcer:
             RuntimeLevel.EMERGENCY: [RuntimeLevel.SAFE],
         }
 
+    @staticmethod
+    def authorize_external_provider_execution(
+        *,
+        context: "ChatExecutionContext",
+        plan: AuthorizedExecutionPlan,
+        expression_policies: object,
+    ) -> bool:
+        """Verify a cloud attempt against the original authenticated chat plan.
+
+        RuntimePolicy is the only authority. This is called immediately before
+        every eligible cloud-engine attempt, including fallback, so a forged
+        request role, detached task, or revoked permission cannot act as a grant.
+        No model, endpoint, or credential selection occurs here.
+        """
+        if (
+            not plan.policy_decision_id
+            or not plan.matches_execution_scope(
+                user_id=str(context.user_id),
+                tenant_id=str(context.tenant_id),
+                session_id=context.session_id,
+            )
+            or getattr(expression_policies, "allow_external_engines", None) is not True
+        ):
+            return False
+        try:
+            principal = context.require_authenticated_user()
+        except (PermissionError, AttributeError):
+            return False
+        require_admin = getattr(expression_policies, "require_admin_for_external", None)
+        if require_admin is False:
+            return True
+        if require_admin is not True:
+            return False
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+        return get_rbac_manager().has_permission(
+            principal, Permission.ADMIN_PROVIDERS_MANAGE,
+        )
+
     async def probe_optional_verification(
         self,
         request: PolicyEvaluationRequest,

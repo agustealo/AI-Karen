@@ -11,7 +11,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from ai_karen_engine.api_routes.channels.personal_consent import _verified_actor
 from ai_karen_engine.auth.models import UserData
@@ -24,6 +24,22 @@ router = APIRouter(
     prefix="/api/channels/operator/whatsapp",
     tags=["communication-channels"],
 )
+
+
+class WhatsAppConnectionState(BaseModel):
+    """Persisted local state only, not a provider reachability attestation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: UUID
+    connection_revision: StrictInt = Field(ge=1)
+    enabled: bool
+
+
+class WhatsAppInventoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connections: list[WhatsAppConnectionState] = Field(max_length=50)
 
 
 class WhatsAppProvisionRequest(BaseModel):
@@ -88,6 +104,12 @@ def _result(
 
 
 def _translate(exc: Exception, *, operation: str) -> HTTPException:
+    if isinstance(exc, ValidationError):
+        logger.error(
+            "channel.whatsapp_operator.invalid_backend_inventory",
+            extra={"operation": operation},
+        )
+        return HTTPException(503, "WhatsApp operator inventory unavailable")
     if isinstance(exc, ChannelActivationConflict):
         return HTTPException(409, "WhatsApp connection changed; reload its revision")
     if isinstance(exc, PermissionError):
@@ -99,6 +121,28 @@ def _translate(exc: Exception, *, operation: str) -> HTTPException:
         extra={"operation": operation, "error_type": type(exc).__name__},
     )
     return HTTPException(503, "WhatsApp operator action unavailable")
+
+
+@router.get("/connections", response_model=WhatsAppInventoryResponse)
+async def list_whatsapp_connections(
+    request: Request, user: UserData = Depends(get_current_user),
+) -> WhatsAppInventoryResponse:
+    host, tenant_id, user_id = _operator(request, user)
+    session_id = str(uuid4())
+    try:
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud", action="channel.inspect",
+        )
+        connections = await host.list_whatsapp_operator_connections(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            authorized_plan=plan,
+        )
+        return WhatsAppInventoryResponse.model_validate(
+            {"connections": connections},
+        )
+    except Exception as exc:
+        raise _translate(exc, operation="inspect") from None
 
 
 @router.post("/connections", status_code=201, response_model=WhatsAppOperationResult)
@@ -181,6 +225,9 @@ async def deactivate_whatsapp_connection(
 
 
 __all__ = [
+    "WhatsAppConnectionState",
+    "WhatsAppInventoryResponse",
+    "list_whatsapp_connections",
     "WhatsAppProvisionRequest",
     "WhatsAppRevisionRequest",
     "WhatsAppOperationResult",
