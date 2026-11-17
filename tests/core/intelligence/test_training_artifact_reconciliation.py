@@ -172,6 +172,8 @@ def _scoped_training_lineage_fixture(tmp_path, *, fit_observation=False):
         (artifact / "training_consumption.json").write_bytes(receipt)
         metadata["fit_observation_sha256"] = hashlib.sha256(receipt).hexdigest()
         metadata["fit_observation_key_id"] = "test-key"
+        metadata["training_samples"] = 16
+        metadata["test_samples"] = 4
     (artifact / "training_metadata.json").write_text(
         json.dumps(metadata, sort_keys=True), encoding="utf-8",
     )
@@ -814,3 +816,36 @@ def test_fit_observation_rejects_identity_change_between_two_proofs(
         principal=principal, model_id=model_id,
     ) is None
     assert hashes == 4
+
+
+def test_fit_observation_rejects_conflicting_registry_sample_counts(
+    tmp_path, monkeypatch,
+):
+    _set_fit_observation_key(monkeypatch)
+    verifier, ledger, registry, principal, model_id, job_id, _ = (
+        _scoped_training_lineage_fixture(tmp_path, fit_observation=True)
+    )
+    assert verifier.inspect_exact_sklearn_fit_artifact(
+        principal=principal, model_id=model_id,
+    ) is not None
+    registry.get(model_id).metrics["training_samples"] = 15
+    assert verifier.inspect_exact_sklearn_fit_artifact(
+        principal=principal, model_id=model_id,
+    ) is None
+    registry.get(model_id).metrics["training_samples"] = 16
+    with ledger._connect() as db:
+        record = db.execute(
+            "SELECT body FROM training_jobs WHERE job_id = ?", (job_id,),
+        ).fetchone()
+        assert record is not None
+        import json
+
+        body = json.loads(record["body"])
+        body["metrics"]["test_samples"] = 3
+        db.execute(
+            "UPDATE training_jobs SET body = ? WHERE job_id = ?",
+            (json.dumps(body, sort_keys=True), job_id),
+        )
+    assert verifier.inspect_exact_sklearn_fit_artifact(
+        principal=principal, model_id=model_id,
+    ) is None
