@@ -129,8 +129,11 @@ invokes
 This non-mocked, read-only source check compares the Hub SDK's complete
 paginated model-language file inventory with the direct HTTPS transport's
 independently enumerated curated file inventory at the exact reviewed
-revision. The test rejects missing model/tokenizer/voice states, different
-paths, file sizes or published LFS checksums; it checks the model identity,
+revision. Before listing files, it runs Hugging Face's token-specific
+`HfApi.auth_check` against the gated model and fails closed if the account
+has not been granted access. Public file metadata alone is insufficient.
+The test rejects missing model/tokenizer/voice states, different paths,
+file sizes or published LFS checksums; it also checks the model identity,
 gated status, revision and `plugin_audio` recommendation contract. It makes
 **no** file-resolution download, model-install job, registry publication,
 inference call or browser request, and does not record tokens in logs.
