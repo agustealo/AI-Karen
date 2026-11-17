@@ -8,7 +8,6 @@ legacy Web UI service's memory-coupled message helpers.
 from __future__ import annotations
 
 import asyncio
-
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
