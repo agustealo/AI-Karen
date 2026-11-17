@@ -71,7 +71,7 @@ class _DecisionPipeline:
                 "max_model_calls": self._decision.max_model_calls,
             },
         )
-        self._policy._issued_model_decisions[issued.decision_id] = issued
+        self._policy._record_issued_model_decision(issued)
         self._policy.bind_chat_model_policy(context=ctx, decision=issued)
         return self._decision
 
