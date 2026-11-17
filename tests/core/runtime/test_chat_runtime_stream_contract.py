@@ -57,6 +57,28 @@ class _TranscriptGateway:
             persisted_messages=2,
         )
         self.calls: list[dict[str, Any]] = []
+        self.reconciliation_calls: list[dict[str, Any]] = []
+        self.reconciliation_result = TranscriptPersistenceResult(
+            status="not_found", conversation_id=CONVERSATION_ID,
+        )
+
+    async def reconcile_interrupted_turn(
+        self,
+        context: ChatExecutionContext,
+        *,
+        user_text: str,
+        assistant_text: str,
+        persona_scope_id: str | None = None,
+        run_lease=None,
+    ) -> TranscriptPersistenceResult:
+        self.reconciliation_calls.append({
+            "context": context,
+            "user_text": user_text,
+            "assistant_text": assistant_text,
+            "persona_scope_id": persona_scope_id,
+            "run_lease": run_lease,
+        })
+        return self.reconciliation_result
 
     async def load_history(
         self, context: ChatExecutionContext, *, limit: int,
@@ -1864,3 +1886,119 @@ async def test_b2c2_cancel_after_fallback_transcript_commit_preserves_completion
         "REQUEST_CANCELLED" in str(call.args)
         for call in emitted.call_args_list
     ), "post-commit cancellation must still be observable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streamed", [False, True])
+@pytest.mark.parametrize("readback_status", ["already_persisted", "unverified"])
+async def test_b2c2_cancel_during_postcommit_session_cleanup_reconciles_truth(
+    streamed: bool, readback_status: str,
+) -> None:
+    """A committed pair has no returned write receipt if cleanup is cancelled."""
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+    cleanup_entered = asyncio.Event()
+    gateway.reconciliation_result = TranscriptPersistenceResult(
+        status=readback_status,
+        conversation_id=CONVERSATION_ID,
+        user_message_id=USER_MESSAGE_ID if readback_status == "already_persisted" else None,
+        assistant_message_id=ASSISTANT_MESSAGE_ID if readback_status == "already_persisted" else None,
+    )
+
+    async def interrupted_after_commit(*args, **kwargs):
+        # Model an underlying transaction which has committed its pair,
+        # followed by cancellation while awaited session __aexit__ runs.
+        cleanup_entered.set()
+        await asyncio.Event().wait()
+
+    async def output_stream(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="Durable answer", correlation_id="corr-1",
+        )
+
+    async def consume_stream() -> None:
+        async for _ in runtime.execute_stream(request):
+            pass
+
+    with ExitStack() as patches:
+        patches.enter_context(patch.object(
+            runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_decide", new_callable=AsyncMock, return_value=decision,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_build_authorized_plan", return_value=plan,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_grounded_personal_response", return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_is_explicit_save_turn", return_value=False,
+        ))
+        direct = patches.enter_context(patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+        ))
+        direct.return_value.can_handle.return_value = False
+        if streamed:
+            patches.enter_context(patch.object(
+                runtime, "_run_simple_stream", side_effect=output_stream,
+            ))
+        else:
+            patches.enter_context(patch.object(
+                runtime, "_freeze_persona_snapshot", new_callable=AsyncMock,
+            ))
+            patches.enter_context(patch.object(
+                runtime, "_prepare_conversation_continuation", new_callable=AsyncMock,
+            ))
+            patches.enter_context(patch.object(
+                runtime, "_record_user_behavior_observation", new_callable=AsyncMock,
+            ))
+            patches.enter_context(patch.object(
+                runtime, "_run_simple", new_callable=AsyncMock,
+                return_value=("Durable answer", {
+                    "response_source": "provider_runtime",
+                    "actual_provider": "ollama-local",
+                    "actual_model": "installed-model",
+                }),
+            ))
+        transcript = patches.enter_context(patch.object(
+            runtime, "_persist_transcript", side_effect=interrupted_after_commit,
+        ))
+        outcome = patches.enter_context(patch.object(
+            runtime, "_record_execution_outcome", new_callable=AsyncMock,
+        ))
+        task = asyncio.create_task(
+            consume_stream() if streamed else runtime.execute(request),
+        )
+        try:
+            await asyncio.wait_for(cleanup_entered.wait(), timeout=5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    assert transcript.await_count == 1
+    assert len(gateway.reconciliation_calls) == 1
+    verified = gateway.reconciliation_calls[0]
+    assert verified["assistant_text"] == "Durable answer"
+    assert verified["user_text"] == "hello"
+    assert verified["context"] is request.context
+    rows = store.list_for_tenant(TENANT_ID)
+    assert len(rows) == 1
+    if readback_status == "already_persisted":
+        assert rows[0].execution_status == "success"
+        assert rows[0].actual_provider == "ollama-local"
+        assert rows[0].actual_model == "installed-model"
+        assert rows[0].error_code is None
+    else:
+        assert rows[0].execution_status not in {"success", "cancelled"}
+        assert rows[0].error_code != "CHAT_REQUEST_CANCELLED"
+    outcome.assert_not_awaited()
