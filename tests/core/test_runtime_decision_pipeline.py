@@ -87,6 +87,48 @@ def _request() -> ChatExecutionRequest:
     )
 
 
+def test_untrusted_diagnostics_analyzes_without_model_execution_authority() -> None:
+    async def run() -> None:
+        request = _request()
+        request.context.authenticated_user = None
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(
+                ExecutionDecision(
+                    topology=ExecutionTopology.DIRECT,
+                    max_model_calls=1,
+                ),
+            ),
+            policy=RuntimePolicyEnforcer(),
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        decision = await pipeline.decide(request)
+        assert decision.policy_decision_id
+        assert "_runtime_policy_issuance" not in request.context.__dict__
+
+        from ai_karen_engine.core.runtime.contracts import (
+            AuthorizedExecutionPlan, ExecutionBudget, ExecutionBudgetMeter,
+        )
+        budget = ExecutionBudget(max_model_calls=1)
+        plan = AuthorizedExecutionPlan(
+            execution_id="diagnostics-only",
+            policy_decision_id=decision.policy_decision_id,
+            authorized_user_id=request.context.user_id,
+            authorized_tenant_id=request.context.tenant_id,
+            authorized_session_id=request.context.session_id,
+            budget=budget,
+        )
+        try:
+            request.context.bind_runtime_model_authority(
+                plan, ExecutionBudgetMeter(budget),
+            )
+        except PermissionError as exc:
+            assert "authenticated_principal_required" in str(exc)
+        else:
+            raise AssertionError("diagnostics incorrectly granted execution")
+
+    asyncio.run(run())
+
+
 def test_pipeline_authorizes_reasoning_after_cortex() -> None:
     async def run() -> None:
         cognitive = ExecutionDecision(
