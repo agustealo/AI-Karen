@@ -85,7 +85,7 @@ async def test_recovery_response_requires_durable_transcript(persisted):
             "max_model_calls": plan.budget.max_model_calls,
         },
     )
-    issuer._issued_model_decisions[issued.decision_id] = issued
+    issuer._record_issued_model_decision(issued)
     issuer.bind_chat_model_policy(context=ctx, decision=issued)
     recovered = ChatExecutionResult(
         answer="Recovered model-generated answer.",
