@@ -21,9 +21,50 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const COMMAND = /^\/link [A-Za-z0-9_-]{43}$/;
 
 type IssuedChallenge = Readonly<{
+  challenge_id: string;
   command: string;
   expires_in_seconds: number;
 }>;
+
+type ChallengeStatus = Readonly<{
+  challenge_id: string;
+  status: 'pending' | 'consumed' | 'revoked' | 'expired' | 'invalidated';
+}>;
+
+function validateStatus(value: unknown, challengeId: string): ChallengeStatus {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid link challenge status');
+  }
+  const data = value as Record<string, unknown>;
+  if (
+    Object.keys(data).length !== 5 ||
+    data.challenge_id !== challengeId ||
+    data.evidence_basis !== 'host_link_challenge_ledger' ||
+    data.current_binding_verified !== false ||
+    data.delivery_verified !== false ||
+    !['pending', 'consumed', 'revoked', 'expired', 'invalidated'].includes(
+      String(data.status),
+    )
+  ) {
+    throw new Error('Unverified link challenge status');
+  }
+  return { challenge_id: challengeId, status: data.status as ChallengeStatus['status'] };
+}
+
+function statusMessage(status: ChallengeStatus['status']): string {
+  switch (status) {
+    case 'pending':
+      return 'Karen has not recorded a consumed proof. Send the command from your sender before it expires, then check again.';
+    case 'consumed':
+      return 'Karen recorded successful one-time proof consumption through signed channel ingress. This is historical evidence, not confirmation of a currently active sender binding, ChatRuntime reply or delivery.';
+    case 'revoked':
+      return 'This one-time proof was superseded or revoked. Request another command if your sender is not linked.';
+    case 'expired':
+      return 'This proof expired without recorded consumption. Request a new command to try again.';
+    case 'invalidated':
+      return 'The connection was disabled or its revision changed. Ask your operator to verify the connection before retrying.';
+  }
+}
 
 function validateChallenge(value: unknown): IssuedChallenge {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -46,6 +87,7 @@ function validateChallenge(value: unknown): IssuedChallenge {
   // The challenge ID is only for the host's durable ledger; it is not a
   // permission or a consumer-facing provider status.
   return {
+    challenge_id: entry.challenge_id,
     command: entry.command,
     expires_in_seconds: entry.expires_in_seconds,
   };
@@ -66,6 +108,9 @@ function describeFailure(error: unknown): string {
 export default function WhatsAppCloudSelfLink() {
   const [connectionId, setConnectionId] = useState('');
   const [issued, setIssued] = useState<IssuedChallenge | null>(null);
+  const [lastChallengeId, setLastChallengeId] = useState<string | null>(null);
+  const [lastStatus, setLastStatus] = useState<ChallengeStatus | null>(null);
+  const [statusPending, setStatusPending] = useState(false);
   const [pending, setPending] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +124,7 @@ export default function WhatsAppCloudSelfLink() {
     const clear = window.setTimeout(() => {
       setIssued(null);
       setCopied(false);
+      setLastStatus(null);
     }, issued.expires_in_seconds * 1000);
     return () => window.clearTimeout(clear);
   }, [issued]);
@@ -86,6 +132,9 @@ export default function WhatsAppCloudSelfLink() {
   const clearCommand = () => {
     requestEpoch.current += 1;
     setIssued(null);
+    setLastChallengeId(null);
+    setLastStatus(null);
+    setStatusPending(false);
     setCopied(false);
     setError(null);
   };
@@ -101,6 +150,9 @@ export default function WhatsAppCloudSelfLink() {
 
     const epoch = ++requestEpoch.current;
     setIssued(null);
+    setLastChallengeId(null);
+    setLastStatus(null);
+    setStatusPending(false);
     setCopied(false);
     setError(null);
     setPending(true);
@@ -110,11 +162,43 @@ export default function WhatsAppCloudSelfLink() {
         {},
       );
       const verified = validateChallenge(result);
-      if (requestEpoch.current === epoch) setIssued(verified);
+      if (requestEpoch.current === epoch) {
+        setLastChallengeId(verified.challenge_id);
+        setIssued(verified);
+      }
     } catch (failure) {
       if (requestEpoch.current === epoch) setError(describeFailure(failure));
     } finally {
       if (requestEpoch.current === epoch) setPending(false);
+    }
+  };
+
+  const inspectStatus = async () => {
+    const id = connectionId;
+    const challengeId = lastChallengeId;
+    if (statusPending || pending || !UUID.test(id) || !challengeId) return;
+    const epoch = ++requestEpoch.current;
+    setLastStatus(null);
+    setStatusPending(true);
+    setError(null);
+    try {
+      const result = await apiClient.get<unknown>(
+        `/api/channels/identity/whatsapp/connections/${id}/challenges/${challengeId}/status`,
+      );
+      const inspected = validateStatus(result, challengeId);
+      if (requestEpoch.current === epoch) {
+        setLastStatus(inspected);
+        if (inspected.status !== 'pending') {
+          // A consumed, expired, revoked or invalidated bearer proof must
+          // never remain rendered or copyable after observation.
+          setIssued(null);
+          setCopied(false);
+        }
+      }
+    } catch (failure) {
+      if (requestEpoch.current === epoch) setError(describeFailure(failure));
+    } finally {
+      if (requestEpoch.current === epoch) setStatusPending(false);
     }
   };
 
@@ -208,7 +292,32 @@ export default function WhatsAppCloudSelfLink() {
             </p>
           </div>
         )}
-        {!issued && (
+        {lastChallengeId && (
+          <div className="space-y-2 rounded-md border border-border/60 p-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={statusPending || pending}
+              onClick={() => void inspectStatus()}
+            >
+              {statusPending &&
+                <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />}
+              Check link proof status
+            </Button>
+            {lastStatus && (
+              <p role="status" className="text-xs" data-link-proof-status={lastStatus.status}>
+                {statusMessage(lastStatus.status)}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              This checks only Karen's own one-time challenge ledger. It does
+              not independently verify Meta origin, the current sender binding,
+              a ChatRuntime reply, or delivery.
+            </p>
+          </div>
+        )}
+        {!issued && !lastChallengeId && (
           <p className="text-xs text-muted-foreground">
             A new challenge replaces any previous unused challenge for this
             account and connection. No provider delivery or linked status is
