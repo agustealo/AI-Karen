@@ -675,6 +675,55 @@ async def test_allowed_zero_model_quota_preserves_tool_only_plan_without_encoder
     assert issuer_scope.meter.model_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_mutating_authorized_budget_never_widens_original_meter_quota():
+    """Copyable plan budget fields are not a second quota authorization."""
+    budget = ExecutionBudget(
+        max_model_calls=1,
+        max_external_requests=1,
+        max_tool_calls=1,
+        max_reasoning_steps=1,
+        max_input_tokens=3,
+        max_duration_ms=60_000,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    meter.start()
+    assert await meter.reserve_model_execution() is True
+    assert meter.model_calls == 1
+    assert await meter.reserve_tool_call() is True
+    assert await meter.add_input_tokens(3) is True
+
+    # An in-process consumer holding an admitted plan may mutate its
+    # dataclass, but no original reservation limit can be rewritten.
+    budget.max_model_calls = 100
+    budget.max_tool_calls = 100
+    budget.max_input_tokens = 1000
+    budget.max_duration_ms = 3_600_000
+    assert meter.budget is budget
+    assert await meter.reserve_model_execution() is False
+    assert await meter.reserve_tool_call() is False
+    assert await meter.add_input_tokens(1) is False
+    assert meter.model_calls == 1
+    assert meter.tool_calls == 1
+    assert meter.input_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_mutated_external_budget_cannot_gain_second_model_transport():
+    budget = ExecutionBudget(
+        max_model_calls=2,
+        max_external_requests=1,
+        max_duration_ms=60_000,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    assert await meter.reserve_model_execution(external=True) is True
+    budget.max_external_requests = 50
+    budget.max_model_calls = 50
+    assert await meter.reserve_model_execution(external=True) is False
+    assert meter.model_calls == 1
+    assert meter.external_requests == 1
+
+
 def test_runtime_context_binding_is_not_serialized_or_cloned():
     from dataclasses import asdict
 
