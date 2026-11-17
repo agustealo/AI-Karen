@@ -258,7 +258,7 @@ async def test_environment_proxy_variables_never_route_the_model_stream(monkeypa
             text=(
                 _chunk("Verified local output")
                 + _chunk(None, finish="stop")
-                + "data: [DONE]\\n\\n"
+                + "data: [DONE]\n\n"
             ),
             headers={"content-type": "text/event-stream"},
         )
