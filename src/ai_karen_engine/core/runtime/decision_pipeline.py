@@ -98,7 +98,9 @@ class RuntimeDecisionPipeline:
         # Only the actual issuer-returned, authorized PolicyDecision can pin
         # execution provenance to the original authenticated request context.
         # This witness is never included in ExecutionDecision metadata.
-        if policy.allowed:
+        if policy.allowed and request.context.authenticated_user is not None:
+            # A non-executing diagnostics probe has no authenticated ingress
+            # principal and cannot mint model execution authority.
             self._policy.bind_chat_model_policy(
                 context=request.context,
                 decision=policy,
