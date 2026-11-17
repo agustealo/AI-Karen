@@ -27,7 +27,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B3C2B: append-only original-reviewer withdrawal and revocation-aware reads | [PR #968](https://github.com/agustealo/AI-Karen/pull/968), merge `24621fccd0f7d5b065408f406ecc0f82d02d8573` · [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Merged; 25/25 exact-head checks passed; no administrative override or training permission |
 | KCM-02B3C3A: owner-scoped training-job to model artifact verification | [PR #973](https://github.com/agustealo/AI-Karen/pull/973), merge `c300198f1eee6b6775ed46f1eb51c51a8ba9b5c4` · [28 — Model/job provenance](28-model-training-job-lineage.md) | Merged; 11/11 exact-head checks passed; no example-inventory or benchmark-independence claim |
 | KCM-02B3C3B1: keyed sklearn fit-membership observation | [PR #981](https://github.com/agustealo/AI-Karen/pull/981), merge `c2025a5abb7d9246b9853e7f1a4989d19ef5a67d` · [29 — Sklearn fit observation](29-sklearn-fit-observation.md) | Merged; 18/18 exact-head checks passed; bounded default-off worker assertion only, no KCM training inventory |
-| KCM-02B3C3B2: owner-scoped model-job-bound fit receipt | [30 — Owner-scoped fit binding](30-owner-scoped-fit-artifact-binding.md) | Open PR slice; read-only keyed receipt, exact job and artifact hash link; source ancestry, revocation clearance and disjointness unverified |
+| KCM-02B3C3B2: owner-scoped model-job-bound fit receipt | [PR #984](https://github.com/agustealo/AI-Karen/pull/984), merge `7b1cf8d78e402fe32c14029dccd521f6aa05af7b` · [30 — Owner-scoped fit binding](30-owner-scoped-fit-artifact-binding.md) | Merged; 11/11 exact-head checks passed; no verified KCM inventory or source ancestry |
+| KCM-02B3C3B3A: frozen assessment to sklearn row alignment | [31 — Frozen assessment-to-JSONL alignment](31-frozen-assessment-to-sklearn-jsonl.md) | Candidate; read-only structural train UUID alignment and live preflight recheck only, no feature provenance or actual fit membership |
 
 ## Configuration
 
@@ -76,13 +77,13 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Bind the already-observed private sklearn fit
-receipt to one authenticated owner, actual succeeded training job, registered
-model and verified artifact hash. Reuse the canonical `TrainingArtifactReconciler`
-instead of introducing a second store. This still cannot certify KCM training
-inventory: the sklearn `example_id` has no independently enforced mapping
-to the KCM frozen assessment/source manifest, and training-start/promote
-revocation fences remain missing. Build that mapping and live consent/rights/
-deletion-epoch checks next, then independently prove benchmark overlap
-exclusion. Training rights, promotion, autonomous execution and general-skill
-certification all remain disabled.
+**Next controlled slice:** Compare the frozen KCM train assessment IDs
+against canonical sklearn JSONL row IDs and refresh live rights, consent and
+deletion-epoch evidence at both read boundaries. This structural check must
+never be mistaken for independently verified source-to-feature/label
+transformation or actual observed fit membership. The next gated stage requires
+trusted immutable transformation receipts, exact imported byte identity
+and keyed observed-fit membership comparison through the owner-scoped
+model/job artifact path, plus durable revocation fences at training start and
+promotion. Training rights, model promotion, autonomous execution and
+general-skill certification remain disabled.
