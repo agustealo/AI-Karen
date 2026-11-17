@@ -46,8 +46,17 @@ from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
 from ai_karen_engine.core.runtime.trajectory.store import PostgresTrajectoryStore
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext,
+    ChatExecutionRequest,
+)
 from ai_karen_engine.core.runtime.policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
-from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    ExecutionBudget,
+    ExecutionBudgetMeter,
+    ExecutionTopology,
+)
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.outcome.store import (
     OutcomeStoreError,
@@ -405,6 +414,83 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
         assert planned.action_probabilities == {}
         assert planned.ope_ineligible_reason == "missing_propensity"
         assert "verification_policy_snapshot" not in planned.metadata
+
+        # KCOG-01C1B2C2: an interrupted selected path uses the *same*
+        # PostgresTrajectoryStore and tenant RLS as frozen runtime decisions.
+        # It cannot create a successful assistant outcome or reviewer label.
+        cancel_ctx = ChatExecutionContext(
+            user_id=subject_a,
+            tenant_id=tenant_a,
+            session_id="pg-cancelled-session",
+            conversation_id="pg-cancelled-conversation",
+            request_id="pg-cancelled-request",
+            correlation_id="pg-cancelled-correlation",
+        )
+        cancel_request = ChatExecutionRequest(
+            messages=[{"role": "user", "content": "Do not persist partial output"}],
+            context=cancel_ctx,
+            preferred_provider="ollama",
+            preferred_model="installed-model",
+        )
+        cancel_plan = AuthorizedExecutionPlan(
+            execution_id="pg-cancelled-execution",
+            policy_decision_id="pg-cancelled-policy",
+            authorized_user_id=subject_a,
+            authorized_tenant_id=tenant_a,
+            authorized_session_id=cancel_ctx.session_id,
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=["verification"],
+            budget=ExecutionBudget(max_model_calls=2, max_reasoning_steps=4),
+        )
+        cancel_decision = ExecutionDecision(
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=["verification"],
+            policy_decision_id=cancel_plan.policy_decision_id,
+            policy_version="pg-v1",
+        )
+        cancel_traj = ExecutionTrajectory(
+            trajectory_id="pg-cancelled-trajectory",
+            request_id=cancel_ctx.request_id,
+            correlation_id=cancel_ctx.correlation_id,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+            session_id=cancel_ctx.session_id,
+            conversation_id=cancel_ctx.conversation_id,
+        )
+        cancel_meter = ExecutionBudgetMeter(cancel_plan.budget)
+        cancel_meter.start()
+        await runtime._record_cancelled_trajectory(
+            cancel_traj,
+            cancel_decision,
+            cancel_request,
+            cancel_plan,
+            cancel_meter,
+            1.0,
+        )
+        persisted_cancel = await asyncio.to_thread(
+            PostgresTrajectoryStore().get,
+            cancel_traj.trajectory_id,
+            tenant_id=tenant_a,
+        )
+        assert persisted_cancel is not None
+        assert persisted_cancel.execution_status == "cancelled"
+        assert persisted_cancel.error_code == "CHAT_REQUEST_CANCELLED"
+        assert persisted_cancel.policy_decision_id == cancel_plan.policy_decision_id
+        assert persisted_cancel.user_id == subject_a
+        assert persisted_cancel.actual_provider is None
+        assert persisted_cancel.actual_model is None
+        assert persisted_cancel.response_source is None
+        assert persisted_cancel.completed_at is not None
+        assert await asyncio.to_thread(
+            PostgresTrajectoryStore().get,
+            cancel_traj.trajectory_id,
+            tenant_id=tenant_b,
+        ) is None
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE trajectory_id=$1",
+            cancel_traj.trajectory_id,
+        ) == 0
         with pytest.raises(ValueError, match="not verification-OPE eligible"):
             await authenticated_review.submit(
                 ReviewJudgement(
