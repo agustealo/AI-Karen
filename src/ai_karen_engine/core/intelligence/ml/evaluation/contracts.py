@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -123,6 +124,10 @@ class BenchmarkResult:
     fallback_count: int
     abstention_count: int
     outcomes: list[PredictionOutcome] = field(default_factory=list)
+    # Observed by the canonical runner; these are not off-host signed attestations.
+    evaluation_run_id: str = ""
+    evaluation_started_at: datetime | None = None
+    evaluation_finished_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
