@@ -24,7 +24,7 @@ from ai_karen_engine.core.runtime.contracts import (
 )
 
 
-def _request(*, authenticated: bool = True):
+def _request(*, authenticated: bool = True, shared: bool = True):
     budget = ExecutionBudget(max_model_calls=2, max_duration_ms=30000)
     plan = AuthorizedExecutionPlan(
         execution_id="request-a",
@@ -56,7 +56,7 @@ def _request(*, authenticated: bool = True):
             if authenticated else None
         ),
     )
-    if authenticated:
+    if authenticated and shared:
         context.bind_runtime_model_authority(plan, meter)
     runtime_request = RuntimeRequest(
         query="Research safely",
@@ -67,7 +67,7 @@ def _request(*, authenticated: bool = True):
         context={
             "execution_context": context,
         },
-        runtime_budget_meter=meter,
+        runtime_budget_meter=meter if shared else None,
         authorized_plan=asdict(plan),
         execution_requirements={
             "request_id": "request-a",
@@ -135,6 +135,26 @@ async def test_medusa_refuses_invalid_shared_meter_before_any_planning(invalid):
     with pytest.raises(PermissionError, match="medusa_shared_budget_authority_invalid"):
         await coordinator._handle_request(request)
     planner.create_plan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_standalone_authenticated_medusa_binds_own_real_meter_once():
+    request, _, _, context = _request(shared=False)
+    planner = SimpleNamespace(
+        create_plan=AsyncMock(side_effect=RuntimeError("planner_sentinel")),
+    )
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.planner = planner
+    coordinator.registry = SimpleNamespace()
+    with pytest.raises(RuntimeError, match="planner_sentinel"):
+        await coordinator._handle_request(request)
+    planner.create_plan.assert_awaited_once()
+    reconstructed_plan = planner.create_plan.await_args.kwargs["authorized_plan"]
+    bound_plan, bound_meter = context.__dict__["_runtime_model_authority"]
+    assert reconstructed_plan is bound_plan
+    assert bound_meter.budget is reconstructed_plan.budget
+    assert context.original_runtime_model_plan(bound_meter) is bound_plan
+    assert bound_meter.model_calls == 0
 
 
 @pytest.mark.asyncio
