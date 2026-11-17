@@ -110,7 +110,11 @@ def test_plugin_store_is_thin_and_does_not_fabricate_capabilities() -> None:
 
     assert "metadata_items = await plugin_service.list_plugins()" in source
     assert "await plugin_service.get_plugin_info(plugin_id)" in source
-    assert "await plugin_service.enable_plugin(request.plugin_id)" in source
+    # A local-catalog Install request used to call raw kernel enable.
+    # Admin permission alone is not an action-bound human approval.
+    assert "await plugin_service.enable_plugin(request.plugin_id)" not in source
+    assert '"reason": "lifecycle_approval_required"' in source
+    assert "status.HTTP_409_CONFLICT" in source
     assert "status.HTTP_501_NOT_IMPLEMENTED" in source
     assert "durable_plugin_rating_store_not_configured" in source
     assert "canonical_update_feed_not_configured" in source
