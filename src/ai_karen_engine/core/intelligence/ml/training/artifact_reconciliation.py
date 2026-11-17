@@ -331,6 +331,11 @@ class TrainingArtifactReconciler:
         )
         if before is None:
             return None
+        trusted_claims = (
+            principal.tenant_id, principal.user_id, principal.session_id,
+            tuple(principal.roles), tuple(principal.permissions),
+            principal.expires_at,
+        )
 
         try:
             authority = get_learning_settings().get_kcm_sklearn_fit_observation_key()
@@ -451,7 +456,14 @@ class TrainingArtifactReconciler:
             before.training_job_id, tenant_id=before.tenant_id,
             user_id=before.user_id,
         )
-        if current != manifest or reread != record or principal.is_expired():
+        if (
+            current != manifest or reread != record or principal.is_expired()
+            or trusted_claims != (
+                principal.tenant_id, principal.user_id, principal.session_id,
+                tuple(principal.roles), tuple(principal.permissions),
+                principal.expires_at,
+            )
+        ):
             return None
 
         logger.info(
@@ -464,7 +476,11 @@ class TrainingArtifactReconciler:
                 "training_example_inventory_verified": False,
             },
         )
-        if principal.is_expired():
+        if principal.is_expired() or trusted_claims != (
+            principal.tenant_id, principal.user_id, principal.session_id,
+            tuple(principal.roles), tuple(principal.permissions),
+            principal.expires_at,
+        ):
             return None
         return ScopedSklearnFitArtifactObservation(
             tenant_id=before.tenant_id, user_id=before.user_id,
