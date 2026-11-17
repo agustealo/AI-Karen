@@ -38,7 +38,8 @@ logger = logging.getLogger(__name__)
 
 
 def _trusted_chat_execution_context(
-    request: RuntimeRequest, plan: AuthorizedExecutionPlan,
+    request: RuntimeRequest,
+    plan: AuthorizedExecutionPlan,
 ) -> Any | None:
     """Admit original authenticated ingress scope, never agent metadata roles."""
     from ...core.runtime.chat_runtime_contract import ChatExecutionContext
@@ -630,7 +631,8 @@ class MedusaCoordinator:
             ),
             budget_meter=meter,
             authenticated_chat_context=_trusted_chat_execution_context(
-                request, specialist_plan,
+                request,
+                specialist_plan,
             ),
             event_emitter=emitter,
         )
