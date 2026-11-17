@@ -152,23 +152,32 @@ async def _prepare_disposable_database(raw: asyncpg.Connection) -> None:
     for name in _MIGRATIONS:
         sql = (_ROOT / "supabase" / "migrations" / name).read_text()
         await raw.execute(sql)
-    state = await raw.fetchrow(
-        """SELECT relrowsecurity, relforcerowsecurity
-           FROM pg_class WHERE oid='public.outcome_records'::regclass"""
-    )
-    assert state is not None
-    assert state["relrowsecurity"] and state["relforcerowsecurity"]
+    for table_name in ("outcome_records", "execution_trajectories"):
+        state = await raw.fetchrow(
+            """SELECT relrowsecurity, relforcerowsecurity
+               FROM pg_class WHERE oid=to_regclass($1)""",
+            f"public.{table_name}",
+        )
+        assert state is not None
+        assert state["relrowsecurity"] and state["relforcerowsecurity"]
     policy = await raw.fetchval(
         """SELECT count(*) FROM pg_policies
            WHERE schemaname='public' AND tablename='outcome_records'
              AND policyname='outcome_records_tenant_scope'"""
     )
     assert policy == 1
+    trajectory_policy = await raw.fetchval(
+        """SELECT count(*) FROM pg_policies
+           WHERE schemaname='public' AND tablename='execution_trajectories'
+             AND policyname='execution_trajectories_tenant_scope'"""
+    )
+    assert trajectory_policy == 1
     await raw.execute(
         """
         CREATE ROLE karen_review_ci_reader NOLOGIN;
         GRANT USAGE ON SCHEMA public TO karen_review_ci_reader;
         GRANT SELECT, INSERT ON public.outcome_records TO karen_review_ci_reader;
+        GRANT SELECT, INSERT ON public.execution_trajectories TO karen_review_ci_reader;
         """
     )
 
@@ -214,6 +223,49 @@ async def _assert_rls_is_real(
 
 
 @pytest.mark.asyncio
+async def _assert_cancelled_trajectory_rls_is_real(
+    raw: asyncpg.Connection,
+    *,
+    tenant_a: str,
+    tenant_b: str,
+    trajectory_id: str,
+    subject_id: str,
+) -> None:
+    """Verify database FORCE RLS, not merely application's tenant predicates."""
+    async with raw.transaction():
+        await raw.execute("SET LOCAL ROLE karen_review_ci_reader")
+        await raw.execute(
+            "SELECT set_config('app.current_tenant_id', $1, true)",
+            tenant_b,
+        )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.execution_trajectories "
+            "WHERE trajectory_id=$1",
+            trajectory_id,
+        ) == 0
+        # The same non-bypass reader has INSERT grants. Only the canonical
+        # RLS WITH CHECK may reject writing another tenant's execution.
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            async with raw.transaction():
+                await raw.execute(
+                    """INSERT INTO public.execution_trajectories
+                       (trajectory_id, tenant_id, user_id, started_at, payload)
+                       VALUES ($1, $2, $3, now(), '{}'::jsonb)""",
+                    "pg-rls-forbidden-cross-tenant-cancel",
+                    uuid.UUID(tenant_a),
+                    uuid.UUID(subject_id),
+                )
+        await raw.execute(
+            "SELECT set_config('app.current_tenant_id', $1, true)",
+            tenant_a,
+        )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.execution_trajectories "
+            "WHERE trajectory_id=$1",
+            trajectory_id,
+        ) == 1
+
+
 async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -> None:
     dsn = _disposable_dsn()
     # This test may only initialize a *new* disposable database.
@@ -491,6 +543,13 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             "WHERE trajectory_id=$1",
             cancel_traj.trajectory_id,
         ) == 0
+        await _assert_cancelled_trajectory_rls_is_real(
+            raw,
+            tenant_a=tenant_a,
+            tenant_b=tenant_b,
+            trajectory_id=cancel_traj.trajectory_id,
+            subject_id=subject_a,
+        )
         with pytest.raises(ValueError, match="not verification-OPE eligible"):
             await authenticated_review.submit(
                 ReviewJudgement(
