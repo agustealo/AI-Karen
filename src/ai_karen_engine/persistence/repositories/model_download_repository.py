@@ -467,7 +467,7 @@ class ModelDownloadRepository:
             result = await session.execute(
                 text("""
                     SELECT job_id, model_id, revision, channel_id, status,
-                           tenant_id, license_accepted, trust_remote_code,
+                           download_method, tenant_id, license_accepted, trust_remote_code,
                            install_path
                     FROM public.model_download_jobs
                     WHERE tenant_id = :tenant_id
@@ -501,7 +501,7 @@ class ModelDownloadRepository:
             result = await session.execute(
                 text(f"""
                     SELECT job_id, model_id, revision, channel_id, status,
-                           progress, created_at, updated_at,
+                           download_method, progress, created_at, updated_at,
                            {_OWNED_FAILURE_CATEGORY_SQL}
                     FROM public.model_download_jobs
                     WHERE tenant_id = :tenant_id AND requested_by = :user_id
@@ -521,7 +521,7 @@ class ModelDownloadRepository:
             result = await session.execute(
                 text(f"""
                     SELECT job_id, model_id, revision, channel_id, status,
-                           progress, created_at, updated_at,
+                           download_method, progress, created_at, updated_at,
                            {_OWNED_FAILURE_CATEGORY_SQL}
                     FROM public.model_download_jobs
                     WHERE job_id = :job_id AND tenant_id = :tenant_id
