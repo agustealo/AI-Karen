@@ -470,20 +470,33 @@ def parse_plugin_inspection_request(query: str) -> Optional[PluginInspectionRequ
     return None
 
 
+def _plugin_inspection_decision(
+    request: PluginInspectionRequest, *, confidence: float
+) -> CapabilityDecision:
+    """Return a single read-only admission contract for plugin preflight."""
+    route = CAPABILITY_ROUTES["plugin.inspect"]
+    return CapabilityDecision(
+        intent="plugin.inspect",
+        subtype=request.operation,
+        confidence=confidence,
+        requires_tool=True,
+        requires_live_data=True,
+        capability=str(route["required_capability"]),
+        allow_llm_only=False,
+        requires_chat_capable_model=False,
+    )
+
+
 def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
     plugin_request = parse_plugin_inspection_request(query)
-    if plugin_request is not None:
-        route = CAPABILITY_ROUTES["plugin.inspect"]
-        return CapabilityDecision(
-            intent="plugin.inspect",
-            subtype=plugin_request.operation,
-            confidence=confidence,
-            requires_tool=True,
-            requires_live_data=True,
-            capability=str(route["required_capability"]),
-            allow_llm_only=False,
-            requires_chat_capable_model=False,
-        )
+    # Explicit catalog discovery, use and lifecycle requests must outrank
+    # unanchored generic search/weather patterns, but CORTEX grants no action.
+    explicit_plugin = plugin_request is not None and (
+        plugin_request.operation in {"list", "discover", "use", "manage"}
+        or re.search(r"\b(?:plugins?|integrations?)\b", query, re.IGNORECASE)
+    )
+    if explicit_plugin and plugin_request is not None:
+        return _plugin_inspection_decision(plugin_request, confidence=confidence)
     # Normalize surface spelling for matching only. Keep the original request
     # untouched for tool parameters, provenance and conversational evidence.
     # Common apostrophe omissions must not convert live-information questions
@@ -540,6 +553,11 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
                     else []
                 ),
             )
+
+    # Generic "set up" wording is a lower-priority plugin fallback.
+    # Registered automation, timer, time, and weather intents win first.
+    if plugin_request is not None:
+        return _plugin_inspection_decision(plugin_request, confidence=confidence)
 
     # Detect broad conversational subtypes
     subtype = None
