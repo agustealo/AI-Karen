@@ -117,6 +117,12 @@ def _require_lifecycle_scope(
     scope: Optional[PluginLifecycleApprovalScope],
 ) -> None:
     """Reject untrusted or unscoped lifecycle approvals before SQL writes."""
+    if (
+        isinstance(decision.intent, str)
+        and decision.intent.startswith("plugin.lifecycle.")
+        and decision.intent not in _LIFECYCLE_INTENTS
+    ):
+        raise ApprovalScopeError("Unsupported plugin lifecycle approval action")
     if decision.intent not in _LIFECYCLE_INTENTS:
         if scope is not None:
             raise ApprovalScopeError("Lifecycle scope does not match the policy intent")
@@ -298,7 +304,7 @@ class ApprovalService:
                 f"Approval cannot resume from status {record['status']}"
             )
 
-        if record.get("intent") in _LIFECYCLE_INTENTS:
+        if str(record.get("intent") or "").startswith("plugin.lifecycle."):
             # Generic resume cannot reconstruct an independently verified
             # current manifest/revision: never replay a stored lifecycle plan.
             raise ApprovalStateError(
