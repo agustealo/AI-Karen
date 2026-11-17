@@ -7,10 +7,11 @@ ChannelHostServices, ChannelActivationService and Identity Vault own execution.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from ai_karen_engine.api_routes.channels.personal_consent import _verified_actor
@@ -49,6 +50,44 @@ class WhatsAppProvisionRequest(BaseModel):
 
     provider_account_id: str = Field(min_length=1, max_length=32, pattern=r"^[0-9]{1,32}$")
     credential_handle: str = Field(min_length=1, max_length=256)
+
+
+class WhatsAppTrialInspectionRequest(BaseModel):
+    """Provider inbound ID arrives in JSON, never a URL or log line."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    external_event_id: str = Field(
+        min_length=7, max_length=256,
+        pattern=r"^wamid\.[A-Za-z0-9._+=/-]{1,250}$",
+    )
+
+
+class WhatsAppTrialEvidenceResponse(BaseModel):
+    """Historical host-persisted facts, never independent Meta certification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_revision: StrictInt = Field(ge=1)
+    current_connection_revision: StrictInt = Field(ge=1)
+    connection_enabled: bool
+    inbox_id: UUID
+    correlation_id: UUID
+    inbox_status: Literal["pending", "processing", "completed", "failed"]
+    binding_currently_active: bool
+    outbound_delivery_id: UUID | None = None
+    outbound_status: Literal[
+        "accepted", "sent", "delivered", "read", "failed", "unknown"
+    ] | None = None
+    outbound_provider_message_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$",
+    )
+    provider_receipt_states: tuple[
+        Literal["sent", "delivered", "read", "failed"], ...
+    ] = ()
+    evidence_basis: Literal["host_persisted_lineage_only"] = "host_persisted_lineage_only"
+    meta_origin_independently_verified: Literal[False] = False
+    consumer_certified: Literal[False] = False
 
 
 class WhatsAppRevisionRequest(BaseModel):
@@ -143,6 +182,42 @@ async def list_whatsapp_connections(
         )
     except Exception as exc:
         raise _translate(exc, operation="inspect") from None
+
+
+@router.post(
+    "/connections/{connection_id}/trial-evidence",
+    response_model=WhatsAppTrialEvidenceResponse,
+)
+async def inspect_whatsapp_trial_evidence(
+    connection_id: UUID,
+    payload: WhatsAppTrialInspectionRequest,
+    request: Request,
+    response: Response,
+    user: UserData = Depends(get_current_user),
+) -> WhatsAppTrialEvidenceResponse:
+    """Read one verified host ledger chain; never perform an outbound action."""
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    host, tenant_id, user_id = _operator(request, user)
+    session_id = str(uuid4())
+    try:
+        plan = await host.activation.issue_action_plan(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud", action="channel.inspect",
+        )
+        trial = await host.inspect_whatsapp_trial_evidence(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            connection_id=str(connection_id),
+            external_event_id=payload.external_event_id,
+            authorized_plan=plan,
+        )
+        if trial is None:
+            raise HTTPException(404, "No persisted WhatsApp trial evidence")
+        return WhatsAppTrialEvidenceResponse.model_validate(asdict(trial))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _translate(exc, operation="trial_inspection") from None
 
 
 @router.post("/connections", status_code=201, response_model=WhatsAppOperationResult)
