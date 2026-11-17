@@ -286,10 +286,25 @@ class GovernedCuratedOracleReviewEvidence:
         """Write a distinct reviewer acknowledgment, never an approval to act."""
         self._require_subject(subject)
         self._require_reviewer(reviewer)
+        # AuthenticatedPrincipal is mutable. Freeze the exact trusted claims
+        # that authorized this issuance, and reject any change after awaits.
+        reviewer_authority = (
+            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
+            tuple(reviewer.roles), tuple(reviewer.permissions),
+            reviewer.expires_at,
+        )
         snapshot = self._snapshot(model_id=model_id, receipt_id=receipt_id)
         if snapshot is None:
             raise OutcomeStoreError("Current canonical oracle cohort unavailable")
         await self._require_measured(subject=subject, snapshot=snapshot)
+        self._require_subject(subject)
+        self._require_reviewer(reviewer)
+        if (
+            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
+            tuple(reviewer.roles), tuple(reviewer.permissions),
+            reviewer.expires_at,
+        ) != reviewer_authority:
+            raise PermissionError("Reviewer authority changed during verification")
         if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
             raise OutcomeStoreError("Oracle cohort drifted during outcome verification")
         now = datetime.now(timezone.utc)
@@ -311,12 +326,28 @@ class GovernedCuratedOracleReviewEvidence:
             },
         }
         await self._store.save_unique_outcome_async(outcome)
+        self._require_subject(subject)
+        self._require_reviewer(reviewer)
+        if (
+            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
+            tuple(reviewer.roles), tuple(reviewer.permissions),
+            reviewer.expires_at,
+        ) != reviewer_authority:
+            raise PermissionError("Reviewer authority changed during persistence")
         # A write adapter may acknowledge without durably persisting.
         # Prove the exact original receipt can actually be read back before
         # reporting a completed reviewer acknowledgment.
         persisted = await self.inspect_review(
             subject=subject, model_id=model_id, receipt_id=receipt_id,
         )
+        self._require_subject(subject)
+        self._require_reviewer(reviewer)
+        if (
+            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
+            tuple(reviewer.roles), tuple(reviewer.permissions),
+            reviewer.expires_at,
+        ) != reviewer_authority:
+            raise PermissionError("Reviewer authority changed during readback")
         if (
             persisted is None
             or persisted.reviewer_user_id != reviewer.user_id

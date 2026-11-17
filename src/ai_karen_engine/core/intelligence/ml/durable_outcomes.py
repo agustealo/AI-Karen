@@ -194,10 +194,12 @@ class GovernedMLLearningEvidence:
         """
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
             raise ValueError("ML outcome read limit must be 1-1000")
+        # Apply the bound AFTER selecting numeric predictor evidence.
+        # Reviewer receipts share the ML ledger but must not displace one
+        # required case from the cohort under a full-sized bounded read.
         records = await asyncio.to_thread(
-            self.store.list_for_tenant,
-            self.tenant_id, limit=limit, user_id=self.user_id,
-            source="intelligence.ml",
+            self.store.list_scoped_ml_predictor_outcomes,
+            self.tenant_id, user_id=self.user_id, limit=limit,
         )
         restored: list[MLOutcomeRecord] = []
         seen: set[str] = set()
