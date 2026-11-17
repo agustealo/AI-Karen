@@ -143,6 +143,9 @@ async def test_valid_original_shared_budget_reaches_existing_planner_without_res
     )
     coordinator = object.__new__(MedusaCoordinator)
     coordinator.planner = planner
+    # The valid path reaches the real coordinator's planner call, which
+    # explicitly receives the canonical registry. Provide that dependency.
+    coordinator.registry = SimpleNamespace()
     with pytest.raises(RuntimeError, match="planner_sentinel"):
         await coordinator._handle_request(request)
     planner.create_plan.assert_awaited_once()
