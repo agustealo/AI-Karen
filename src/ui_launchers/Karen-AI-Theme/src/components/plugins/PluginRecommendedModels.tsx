@@ -56,6 +56,8 @@ type DownloadJob = {
   channel_id: string;
   status: string;
   progress: number;
+  message?: string | null;
+  error?: string | null;
   requested_by?: string | null;
 };
 type DownloadReceipt = { job_id: string; status: string };
@@ -69,6 +71,24 @@ function normalizedProgress(value: unknown): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   return Math.min(100, Math.max(0, numeric > 1 ? numeric : numeric * 100));
+}
+
+/** Show a bounded operator next step, never raw worker exceptions or paths. */
+function downloadFailureGuidance(job: DownloadJob): string {
+  const cause = `${job.error ?? ""} ${job.message ?? ""}`.toLowerCase().slice(0, 1200);
+  if (/401|403|gated|unauthoriz|access.denied|permission.denied|license/.test(cause)) {
+    return "Model source access was denied. Confirm your Hugging Face account has accepted the gated model terms and Karen’s backend has approved source access, then retry.";
+  }
+  if (/network|offline|connection|timed.out|timeout|dns|ssl|tls|proxy|http.5[0-9][0-9]/.test(cause)) {
+    return "The model worker could not reach or verify its source. Check backend network, proxy, TLS and source availability before retrying.";
+  }
+  if (/disk|storage|no.space|quota/.test(cause)) {
+    return "The model worker reported a storage limit. Check available model storage and worker quota before retrying.";
+  }
+  if (/checksum|digest|revision|integrity|hash.mismatch/.test(cause)) {
+    return "Model revision or artifact integrity could not be verified. Do not use the partial download; inspect Models & Runtime before retrying.";
+  }
+  return "Check the authenticated job details in Models & Runtime before retrying. A failed download is never a ready model.";
 }
 
 function isModelRecommendation(value: unknown): value is ModelRecommendation {
@@ -184,7 +204,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           setNotice("Model download completed. Refresh Voice Studio to verify that the runtime can load it.");
         } else if (updated.status === "failed" || updated.status === "cancelled") {
           setNotice(null);
-          setProblem("Model download did not complete. Check Models & Runtime for job details.");
+          setProblem(`Model download did not complete. ${downloadFailureGuidance(updated)}`);
         }
       }).catch(() => {
         if (!cancelled) setProblem("Download progress could not be verified. Check Models & Runtime.");
@@ -327,6 +347,12 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
             : jobs.find((job) => job.model_id === item.model_id &&
               job.revision === revision && job.channel_id === item.channel_id &&
               ACTIVE.has(job.status));
+        const lastFailedJob = jobs.find((job) =>
+          job.model_id === item.model_id &&
+          job.revision === revision &&
+          job.channel_id === item.channel_id &&
+          (job.status === "failed" || job.status === "cancelled"),
+        );
         const verified = item.metadata_verified === true &&
           item.verification_state === "verified" &&
           typeof revision === "string" && IMMUTABLE_REVISION.test(revision);
@@ -366,7 +392,15 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
               <>
                 {!verified && (
                   <p role="alert" className="text-xs text-destructive">
-                    Source revision or access terms could not be verified. Refresh when the model source is reachable.
+                    {item.verification_error ||
+                      "Source revision or access terms could not be verified. Refresh when the model source is reachable."}
+                  </p>
+                )}
+                {lastFailedJob && (
+                  <p role="status" className="text-xs text-destructive"
+                    data-testid="plugin-last-download-failure">
+                    Previous attempt: {lastFailedJob.status}. {downloadFailureGuidance(lastFailedJob)}
+                    {" "}A new attempt requires fresh explicit model-license acceptance.
                   </p>
                 )}
                 {blocked && (
