@@ -108,6 +108,65 @@ function isModelRecommendation(value: unknown): value is ModelRecommendation {
        item.include_patterns.every((pattern) => typeof pattern === "string")));
 }
 
+
+/** Keep browser and terminal requests on exactly the same backend API contract. */
+function validatedDownloadBody(item: ModelRecommendation, revision: string) {
+  return {
+    model_id: item.model_id,
+    revision,
+    channel_id: item.channel_id,
+    include_patterns: item.include_patterns ?? [],
+    exclude_patterns: [],
+    trust_remote_code: false,
+    accept_license: true,
+  };
+}
+
+function queuedDownloadBody(item: ModelRecommendation, revision: string) {
+  return {
+    ...validatedDownloadBody(item, revision),
+    revision: null,
+    validated_revision: revision,
+    pin: true,
+  };
+}
+
+function shellLiteral(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Terminal alternative to clicking Download: same authorized worker.
+ * Never embed authentication material or invent installed model state.
+ */
+function governedCurlCommand(item: ModelRecommendation, revision: string): string {
+  const post = (route: string, body: object) => [
+    'curl --fail-with-body --silent --show-error --request POST',
+    '--header "Authorization: Bearer ${KAREN_ACCESS_TOKEN}"',
+    '--header "Content-Type: application/json"',
+    '--data-binary ' + shellLiteral(JSON.stringify(body)),
+    '"${KAREN_BASE_URL%/}' + route + '"',
+  ].join(' ');
+  return [
+    '# Run in a trusted admin terminal after accepting upstream terms.',
+    '# Both methods queue the same Karen worker; this does not import files manually.',
+    'set -euo pipefail',
+    ': "${KAREN_BASE_URL:?Set the approved HTTPS Karen API origin}"',
+    ': "${KAREN_ACCESS_TOKEN:?Set a short-lived authorized Karen admin bearer token}"',
+    'case "${KAREN_BASE_URL}" in https://*) ;; *) echo "HTTPS origin required" >&2; exit 1 ;; esac',
+    'command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }',
+    'validation="$(' + post('/api/models/download/validate', validatedDownloadBody(item, revision)) + ')"',
+    'printf "%s\\n" "$validation" | jq -e --arg model ' +
+      shellLiteral(item.model_id) + ' --arg revision ' + shellLiteral(revision) +
+      ' --arg channel ' + shellLiteral(item.channel_id) +
+      ' \'.allowed == true and .model_id == $model and .channel_id == $channel and .metadata.resolved_revision == $revision\' >/dev/null' +
+      ' || { echo "Source validation denied; no download queued" >&2; exit 1; }',
+    post('/api/models/download', queuedDownloadBody(item, revision)) + ' | jq -e \'{job_id, status}\'',
+    'unset KAREN_ACCESS_TOKEN',
+    '# Check the authenticated job in Models & Runtime; queued is never ready.',
+  ].join('\n');
+}
+
 /** Mount only on explicit plugin-model management, never across the plugin catalog. */
 export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const { user, isAdmin } = useAuth();
@@ -256,13 +315,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       // them. Never queue a moving branch head or permit remote-code execution.
       const validation = await apiClient.post<DownloadValidation>(
         "/api/models/download/validate", {
-          model_id: item.model_id,
-          revision,
-          channel_id: item.channel_id,
-          include_patterns: item.include_patterns ?? [],
-          exclude_patterns: [],
-          trust_remote_code: false,
-          accept_license: true,
+          ...validatedDownloadBody(item, revision),
         },
       );
       if (!validation.allowed || validation.model_id !== item.model_id ||
@@ -273,15 +326,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
 
       const receipt = await apiClient.post<DownloadReceipt>(
         "/api/models/download", {
-          model_id: item.model_id,
-          revision: null,
-          validated_revision: revision,
-          channel_id: item.channel_id,
-          include_patterns: item.include_patterns ?? [],
-          exclude_patterns: [],
-          trust_remote_code: false,
-          accept_license: true,
-          pin: true,
+          ...queuedDownloadBody(item, revision),
         },
       );
       if (!JOB_ID.test(receipt.job_id) || !ACTIVE.has(receipt.status)) {
@@ -454,6 +499,29 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                     <Download className="mr-1 h-4 w-4" aria-hidden="true" />}
                   {busyId === item.id ? "Validating & queueing…" : "Download recommended model"}
                 </Button>
+                {verified && !blocked && !item.installed && (
+                  <details className="space-y-2 rounded-md border p-2 text-xs"
+                    data-testid="plugin-model-curl-option">
+                    <summary className="cursor-pointer font-medium">
+                      Use curl from an admin terminal
+                    </summary>
+                    <p className="mt-2 text-muted-foreground">
+                      An alternative way to request the same authenticated, audited download.
+                      Requires an approved HTTPS Karen API origin, a permitted admin bearer
+                      token and jq. No token is copied or stored by the plugin.
+                    </p>
+                    {accepted[acceptanceKey] === true && revision ? (
+                      <pre data-testid="plugin-model-curl-command"
+                        className="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted p-2 select-text">
+                        {governedCurlCommand(item, revision)}
+                      </pre>
+                    ) : (
+                      <p className="mt-2 text-muted-foreground" role="note">
+                        Review and accept the model license above before using the terminal command.
+                      </p>
+                    )}
+                  </details>
+                )}
               </>
             )}
           </div>
