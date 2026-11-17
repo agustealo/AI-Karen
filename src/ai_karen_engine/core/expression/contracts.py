@@ -29,6 +29,12 @@ class ExpressionTask:
     reserve_additional_model_call: Callable[[], Awaitable[bool]] | None = field(
         default=None, repr=False, compare=False,
     )
+    # RuntimePolicy-bound external provider approval is never serialized or
+    # accepted from request metadata. Missing approval is denied when the
+    # installation requires privileged external execution.
+    authorize_external_engine_attempt: Callable[[], Awaitable[bool]] | None = field(
+        default=None, repr=False, compare=False,
+    )
     # Tracked by the canonical gateway to prohibit switching models after a
     # partial response has already been made visible to the consumer.
     stream_started: bool = field(default=False, repr=False, compare=False)
