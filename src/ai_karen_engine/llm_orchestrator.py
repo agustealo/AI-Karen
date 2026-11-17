@@ -601,10 +601,9 @@ class LLMOrchestrator:
             # Ensure minimum models are available for health probes before returning
             self._ensure_minimum_models_registered()
             
-            # Provider warmup can load local model runtimes and pin the
-            # interpreter long enough to make the API stop answering health
-            # checks. Keep it opt-in; chat runtime fallback is owned by the
-            # provider router and should not depend on legacy warmup.
+            # Optional registry discovery is not an execution grant. No
+            # model generation, embeddings, or provider warm_cache calls are
+            # allowed before an authenticated RuntimePolicy plan and budget.
             if os.getenv("KARI_ENABLE_PROVIDER_PRELOAD", "").lower() in {
                 "1",
                 "true",
@@ -618,7 +617,7 @@ class LLMOrchestrator:
                 )
                 preload_thread.start()
             else:
-                logger.info("Legacy provider preload disabled")
+                logger.info("Legacy provider registry preload disabled")
             
             self._initialized = True
 
@@ -653,7 +652,7 @@ class LLMOrchestrator:
             logger.error(f"Background preloading failed: {e}")
 
     def _preload_providers(self) -> None:
-        """Initialize providers at startup and warm their caches."""
+        """Register providers without triggering ungoverned model execution."""
         from ai_karen_engine.integrations.provider_registry import (
             ModelInfo as ProviderModelInfo,
             get_provider_registry,
@@ -671,11 +670,10 @@ class LLMOrchestrator:
             elif info.default_model:
                 default_models = [m for m in models if m.name == info.default_model]
                 if default_models:
-                    # Avoid registering and warming an entire cloud catalog at startup.
+                    # Avoid registering an entire cloud catalog at startup.
                     # One representative model per provider is enough for health and routing bootstrap.
                     models = default_models
 
-            warm_provider = self._should_warm_provider(provider_name)
             for m in models:
                 try:
                     provider = registry.get_provider(provider_name, model=m.name)
@@ -696,12 +694,13 @@ class LLMOrchestrator:
                         capabilities,
                         **register_kwargs,
                     )
-                    latency = self._warm_model(model_id, provider) if warm_provider else None
-                    if latency is not None:
-                        info = self.registry._models.get(model_id)
-                        if info:
-                            info.warmed = True
-                            info.record_latency(latency)
+                    # Registration does not imply a successful warm-up or
+                    # provider attempt. RuntimePolicy and the original shared
+                    # meter own any actual generation or embedding execution.
+                    logger.debug(
+                        "Provider registered without model inference",
+                        extra={"provider_id": model_id, "warmed": False},
+                    )
                 except Exception as e:  # pragma: no cover - warmup is best effort
                     logger.warning(f"Provider preload failed for {provider_name}:{m.name}: {e}")
 
@@ -752,32 +751,6 @@ class LLMOrchestrator:
                     existing.status = ModelStatus.ACTIVE
                     existing.tags = list({*existing.tags, "fallback", "offline"})
             return
-
-        latency = self._warm_model(fallback_model_id, fallback_provider)
-        if latency is not None:
-            info = self.registry._models.get(fallback_model_id)
-            if info:
-                info.warmed = True
-                info.record_latency(latency)
-
-    def _should_warm_provider(self, provider_name: str) -> bool:
-        """Warm only cheap/local providers by default.
-
-        Cloud providers often trigger expensive network calls and large model
-        catalog initialization during startup, which can interfere with active
-        requests and exhaust memory on constrained dev hosts.
-        """
-        if os.getenv("KARI_WARM_CLOUD_PROVIDERS", "").lower() in {"1", "true", "yes", "on"}:
-            return True
-
-        localish_providers = {
-            "fallback",
-            "local",
-            "local_gguf",
-            "transformers",
-            "huggingface-local",
-        }
-        return provider_name.lower() in localish_providers
 
     def _ensure_minimum_models_registered(self) -> None:
         """Synchronously ensure the registry is never empty during routing."""
@@ -990,44 +963,6 @@ class LLMOrchestrator:
                 
         except Exception as e:
             logger.warning(f"Failed to register local models: {e}")
-
-    def _warm_model(self, model_id: str, provider: Any) -> Optional[float]:
-        """Warm a model and return latency in seconds if successful."""
-        start = time.time()
-        try:
-            # Skip warming if the model seems unhealthy or already warmed
-            info = self.registry._models.get(model_id)
-            if info and (info.warmed or info.status != ModelStatus.ACTIVE):
-                return None
-
-            if hasattr(provider, "warm_cache"):
-                # Use a timeout if supported, otherwise just call it
-                provider.warm_cache()
-            else:  # Fallback minimal generation
-                # We use a very small max_tokens to minimize impact
-                # In production, we might want to skip this if it causes hangs
-                try:
-                    # Try to call generate_text with a timeout if it's a wrapper
-                    # Local providers may block; keep warmup best-effort.
-                    from ai_karen_engine.core.model_runtime.model_manager import (
-                        ModelManager,
-                    )
-
-                    ModelManager.invoke_provider_sync(
-                        provider,
-                        "hello",
-                        max_tokens=1,
-                    )
-                except Exception as e:
-                    logger.debug(f"Minimal generation warmup failed for {model_id}: {e}")
-                    return None
-            
-            latency = time.time() - start
-            logger.info(f"Warmed {model_id} in {latency:.3f}s")
-            return latency
-        except Exception as e:
-            logger.warning(f"Warmup failed for {model_id}: {e}")
-            return None
 
     def _track_latency(self, model_id: str, latency: float) -> None:
         info = self.registry._models.get(model_id)
