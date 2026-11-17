@@ -535,14 +535,17 @@ async def test_lifecycle_approval_is_revision_manifest_action_and_actor_bound(
                 request, _lifecycle_decision(), lifecycle_scope=changed,
             )
     assert repo.records[pending["approval_id"]]["status"] == "approved"
-    assert await service.authorize_or_request(
-        request, _lifecycle_decision(), lifecycle_scope=scope,
-    ) is None
-    assert repo.records[pending["approval_id"]]["status"] == "consumed"
-    with pytest.raises(ApprovalStateError, match="already been consumed"):
+    # Even a correctly bound and explicitly approved receipt cannot yet
+    # authorize kernel execution: the durable global revision fence is pending.
+    with pytest.raises(ApprovalStateError, match="revision-fenced"):
         await service.authorize_or_request(
             request, _lifecycle_decision(), lifecycle_scope=scope,
         )
+    with pytest.raises(ApprovalStateError, match="revision-fenced"):
+        await service.consume_for_request(
+            pending["approval_id"], request=request, lifecycle_scope=scope,
+        )
+    assert repo.records[pending["approval_id"]]["status"] == "approved"
 
 
 @pytest.mark.asyncio
