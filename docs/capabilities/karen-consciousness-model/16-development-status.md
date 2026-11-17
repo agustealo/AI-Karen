@@ -20,7 +20,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02A: canonical evidence-gated SelfModel projection | [PR #940](https://github.com/agustealo/AI-Karen/pull/940), merge `edc5ce785f25f6727a6c96ab13890aaad26ca44d` | Merged; 8/8 exact-head checks passed |
 | KCM-02B1: current built-in Persona configuration and exact claim bindings | [PR #946](https://github.com/agustealo/AI-Karen/pull/946), merge `b10e27d030c4ab35438af9917b6521371fcbfd41` | Merged; 8/8 exact-head checks passed |
 | KCM-02B2: scoped independently reviewed verification-policy decision evidence | [PR #951](https://github.com/agustealo/AI-Karen/pull/951), merge `c8544ef54afbebfd8ed99bccbbf76c8527ec1b67` | Merged; 8/8 exact-head checks passed |
-| KCM-02B3A: exact ML task benchmark artifact and evaluated case projection | [23 — Task benchmark assessment](23-task-specific-benchmark-assessment.md) | Development; descriptive evidence only, not skill certification |
+| KCM-02B3A: exact ML task benchmark artifact and evaluated case projection | [PR #953](https://github.com/agustealo/AI-Karen/pull/953), merge `7abce8006c973906ba3e90aa3b4915cfb8550a2a` | Merged; 11/11 exact-head checks passed |
+| KCM-02B3B: conditioned curated-oracle source and assessment expiry | [24 — Task conditions and expiry](24-conditioned-task-evidence.md) | Development; source-integrity and freshness only, no certified independence or general skill |
 
 ## Configuration
 
@@ -33,6 +34,7 @@ The single source of learning configuration is
 | `KCM_TRAINING_MIN_QUALITY` | `0.82` | Experimental overall quality floor |
 | `KCM_TRAINING_MIN_CORRECTNESS` | `0.90` | Experimental verified-target correctness floor |
 | `KCM_TRAINING_MIN_PROVENANCE` | `0.80` | Experimental provenance floor |
+| `KCM_BENCHMARK_MAX_EVIDENCE_AGE_SECONDS` | `2592000` (30 days) | Read-only benchmark evidence expiry; range 1..31536000 |
 
 Neither these settings nor a successful evidence inspection can trigger model
 training, model installation, parameter updates or checkpoint promotion.
@@ -68,9 +70,10 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Verify KCM-02B3A's exact benchmark receipt,
-model/feature/case join and conservative interval against canonical evaluated
-outcomes. KCM-02B3B must independently certify task families, real environment
-conditions, accuracy oracles, reviewer authority and recency before any
-proficiency tier is exposed. Training rights, checkpoint ancestry and
-transactional model start/promotion fencing remain separately blocked.
+**Next controlled slice:** Prove KCM-02B3B canonical curated-oracle
+source fingerprints and mandated evidence expiration against existing
+benchmark, registry and OutcomeStore contracts. Independent task-family
+approval, reviewer-attested held-out oracles and live runtime environment
+attestation are NOT established by those source checks and remain gated
+behind a separate KCM-02B3C authority. Training rights, checkpoint ancestry
+and transactional model start/promotion fencing remain separately blocked.
