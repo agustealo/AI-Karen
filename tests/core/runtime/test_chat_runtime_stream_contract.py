@@ -21,12 +21,16 @@ from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     TranscriptPersistenceResult,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.trajectory.contracts import ExecutionTrajectory
+from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
+from ai_karen_engine.core.runtime.trajectory.store import InMemoryTrajectoryStore
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     ApprovalRequiredResponse,
 )
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
+    ExecutionBudgetMeter,
     ExecutionTopology,
 )
 
@@ -1100,3 +1104,182 @@ async def test_kcon765_failed_stream_does_not_invent_first_content_or_presentati
     assert receipt["request_to_first_presentation_ms"] is None
     assert receipt["latency_ms"] >= 0
     assert gateway.calls == []
+
+
+# KCOG-01C1B2C2: cancellation is terminal evidence, never a model outcome.
+# The ordinary run coordinator remains the authority for request-stop races.
+
+
+def _b2c2_store(runtime: ChatRuntime) -> InMemoryTrajectoryStore:
+    store = InMemoryTrajectoryStore()
+    runtime._trajectory_recorder = TrajectoryRecorder(store=store)
+    return store
+
+
+@pytest.mark.asyncio
+async def test_b2c2_midstream_cancel_records_scoped_terminal_without_reply() -> None:
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+
+    async def partial_then_cancel(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="unfinished output", correlation_id="corr-1",
+        )
+        raise asyncio.CancelledError()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_run_simple_stream", side_effect=partial_then_cancel):
+                    with patch.object(runtime, "_persist_memory", new_callable=AsyncMock) as memory:
+                        with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                            with pytest.raises(asyncio.CancelledError):
+                                async for _ in runtime.execute_stream(request):
+                                    pass
+
+    records = store.list_for_tenant(TENANT_ID)
+    assert len(records) == 1
+    record = records[0]
+    assert record.execution_status == "cancelled"
+    assert record.error_code == "CHAT_REQUEST_CANCELLED"
+    assert record.completed_at is not None
+    assert record.policy_decision_id == decision.policy_decision_id
+    assert record.request_id == request.context.request_id
+    assert record.correlation_id == request.context.correlation_id
+    assert record.user_id == USER_ID
+    assert record.actual_provider is None
+    assert record.actual_model is None
+    assert record.response_source is None
+    assert record.degraded_mode is True
+    assert record.degradation_reason == "request_cancelled"
+    assert store.get(record.trajectory_id, tenant_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb") is None
+    assert gateway.calls == []
+    memory.assert_not_awaited()
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_stream_close_is_cancelled_not_committed() -> None:
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+
+    async def stream_then_more(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="partial", correlation_id="corr-1",
+        )
+        await asyncio.Event().wait()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_run_simple_stream", side_effect=stream_then_more):
+                    with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                        stream = runtime.execute_stream(request)
+                        assert (await anext(stream)).type == ChatStreamEventType.STATUS
+                        assert (await anext(stream)).type == ChatStreamEventType.CONTENT
+                        await stream.aclose()
+
+    records = store.list_for_tenant(TENANT_ID)
+    assert len(records) == 1
+    assert records[0].execution_status == "cancelled"
+    assert records[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert records[0].actual_provider is None
+    assert gateway.calls == []
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_cancelled_trajectory_scope_drift_and_write_failure_fail_closed() -> None:
+    runtime, _ = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+
+    def trajectory(*, tenant_id: str = TENANT_ID, id_suffix: str) -> ExecutionTrajectory:
+        return ExecutionTrajectory(
+            trajectory_id=f"traj_cancel_{id_suffix}",
+            request_id=request.context.request_id,
+            correlation_id=request.context.correlation_id,
+            tenant_id=tenant_id,
+            user_id=request.context.user_id,
+            session_id=request.context.session_id,
+            conversation_id=request.context.conversation_id,
+        )
+
+    wrong = trajectory(tenant_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", id_suffix="wrong")
+    await runtime._record_cancelled_trajectory(
+        wrong, decision, request, plan, meter, 1.0,
+    )
+    assert wrong.execution_status is None
+    assert store.list_for_tenant(wrong.tenant_id) == []
+
+    matching = trajectory(id_suffix="valid")
+    await runtime._record_cancelled_trajectory(
+        matching, decision, request, plan, meter, 1.0,
+    )
+    assert matching.execution_status == "cancelled"
+    assert store.get(matching.trajectory_id, tenant_id=TENANT_ID) is matching
+
+    class RejectingStore(InMemoryTrajectoryStore):
+        def save(self, trajectory: ExecutionTrajectory) -> None:
+            raise RuntimeError("test-only storage failure")
+
+    rejecting = RejectingStore()
+    runtime._trajectory_recorder = TrajectoryRecorder(store=rejecting)
+    another = trajectory(id_suffix="failed")
+    await runtime._record_cancelled_trajectory(
+        another, decision, request, plan, meter, 1.0,
+    )
+    assert another.execution_status == "cancelled"
+    assert rejecting.get(another.trajectory_id, tenant_id=TENANT_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_b2c2_nonstream_cancel_does_not_trigger_fallback_or_saved_answer() -> None:
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+
+    async def cancelled_generation(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_freeze_persona_snapshot", new_callable=AsyncMock):
+            with patch.object(runtime, "_prepare_conversation_continuation", new_callable=AsyncMock):
+                with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+                    with patch.object(runtime, "_record_user_behavior_observation", new_callable=AsyncMock):
+                        with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                            with patch.object(runtime, "_grounded_personal_response", return_value=None):
+                                with patch.object(runtime, "_is_explicit_save_turn", return_value=False):
+                                    with patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor") as direct:
+                                        direct.return_value.can_handle.return_value = False
+                                        with patch.object(runtime, "_run_simple", side_effect=cancelled_generation):
+                                            with patch.object(runtime, "_persist_transcript", new_callable=AsyncMock) as persist:
+                                                with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                                                    with pytest.raises(asyncio.CancelledError):
+                                                        await runtime.execute(request)
+    records = store.list_for_tenant(TENANT_ID)
+    assert len(records) == 1
+    assert records[0].execution_status == "cancelled"
+    assert records[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert records[0].actual_model is None
+    assert gateway.calls == []
+    persist.assert_not_awaited()
+    outcome.assert_not_awaited()
