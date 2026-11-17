@@ -698,11 +698,16 @@ class LLMOrchestrator:
                     # provider attempt. RuntimePolicy and the original shared
                     # meter own any actual generation or embedding execution.
                     logger.debug(
-                        "Provider registered without model inference",
-                        extra={"provider_id": model_id, "warmed": False},
+                        "Provider registered without explicit model warm-up",
+                        extra={"provider_id": model_id},
                     )
-                except Exception as e:  # pragma: no cover - warmup is best effort
-                    logger.warning(f"Provider preload failed for {provider_name}:{m.name}: {e}")
+                except Exception as exc:  # pragma: no cover - optional registry discovery
+                    logger.warning(
+                        "Provider registration failed for %s:%s: %s",
+                        provider_name,
+                        m.name,
+                        exc,
+                    )
 
         # Register local models as fallback
         self._register_local_models()
