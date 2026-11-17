@@ -349,14 +349,14 @@ class ModelDownloadRepository:
                 job_id, model_id, revision, channel_id, storage_key, status,
                 progress, message, error, result, requested_by, tenant_id, trust_remote_code,
                 license_accepted, include_patterns, exclude_patterns, pin,
-                force_redownload, pause_requested, cancel_requested, warnings,
+                force_redownload, download_method, pause_requested, cancel_requested, warnings,
                 detected_runtime, detected_modality, install_path, max_attempts
             ) VALUES (
                 :job_id, :model_id, :revision, :channel_id, :storage_key, 'queued',
                 :progress, :message, :error, CAST(:result AS jsonb), :requested_by,
                 :tenant_id, :trust_remote_code, :license_accepted,
                 CAST(:include_patterns AS jsonb), CAST(:exclude_patterns AS jsonb),
-                :pin, :force_redownload, false, false, CAST(:warnings AS jsonb),
+                :pin, :force_redownload, :download_method, false, false, CAST(:warnings AS jsonb),
                 :detected_runtime, :detected_modality, :install_path, :max_attempts
             )
             RETURNING *
@@ -380,6 +380,7 @@ class ModelDownloadRepository:
             "exclude_patterns": _json(payload.get("exclude_patterns")),
             "pin": bool(payload.get("pin", False)),
             "force_redownload": bool(payload.get("force_redownload", False)),
+            "download_method": str(payload.get("download_method") or "hf_hub"),
             "warnings": _json(list(payload.get("warnings") or [])),
             "detected_runtime": payload.get("detected_runtime"),
             "detected_modality": payload.get("detected_modality"),
