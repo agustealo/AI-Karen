@@ -1,6 +1,6 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Governed learning-admission, memory revocation and self-model foundations merged. KCM benchmark provenance, task conditioning and runner-time freshness are merged through PR #961. Scoped curated-oracle reviewer acknowledgment is in review in PR #963; independently verified ground truth, held-out task-group separation, production environment certification and neural training remain disabled.  
+**Status:** Governed learning-admission, memory revocation and self-model foundations merged. KCM benchmark provenance, task conditioning and runner-time freshness are merged through PR #961. Scoped curated-oracle reviewer acknowledgment is merged in PR #963. Reviewer withdrawal is under review in PR #968; independently verified ground truth, held-out task-group separation, production environment certification and neural training remain disabled.  
 **Research cutoff:** 2026-11-16  
 **Repository baseline audited:** `agustealo/AI-Karen` `main` at `69d62965550f79f964cc9850283dfcb868cc1f4f` (PR #963 reviewed against this baseline)  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
@@ -51,6 +51,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [24 — Conditioned benchmark and expiry](24-conditioned-task-evidence.md) | Canonical curated oracle integrity, group limits, environment truth and required freshness |
 | [25 — Runner observation and evidence age](25-run-observation-and-freshness.md) | Runner-observed inference window, receipt replay fencing, freshness-bound diagnostics |
 | [26 — Reviewed oracle observations](26-reviewed-curated-oracle-observations.md) | Tenant-scoped authorized reviewer acknowledgment, exact source snapshot, no independent group certification |
+| [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Append-only reviewer withdrawal and revocation-aware task evidence without permission grants |
 
 ### Machine-readable proposed contracts
 
