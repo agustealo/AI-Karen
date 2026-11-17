@@ -294,6 +294,14 @@ jobs:
             tests/core/runtime/test_reasoning_provider_synthesis.py \
             -q --timeout=300 --tb=short
 
+      - name: Prove KCOG-01C1B2C2 actual async cancellation and terminal trajectory truth
+        if: ${{ always() }}
+        run: |
+          pytest \
+            tests/core/runtime/test_chat_runtime_stream_contract.py \
+            tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py \
+            -q --timeout=300 --tb=short
+
       - name: Compile KCOG cognitive-state and policy boundary
         if: ${{ always() }}
         run: |
