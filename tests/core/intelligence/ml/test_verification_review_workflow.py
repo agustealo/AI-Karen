@@ -22,6 +22,7 @@ from ai_karen_engine.core.runtime.outcome.store import (
     InMemoryOutcomeStore,
     OutcomeStoreError,
 )
+from ai_karen_engine.core.runtime.trajectory.contracts import ExecutionTrajectory
 from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     DecisionObservation,
     FeatureSnapshot,
@@ -89,7 +90,10 @@ def lineage(*, tenant=TENANT, subject=SUBJECT, index=1):
         correlation_id=f"corr-{index}",
         feature_version="features-v1",
         created_at=datetime.now(timezone.utc),
-        metadata={"prompt": "NEVER_PERSIST_PROMPT"},
+        metadata={
+            "prompt": "NEVER_PERSIST_PROMPT",
+            "policy_decision_id": f"runtime-policy-{index}",
+        },
     )
     return recorded, features
 
@@ -101,7 +105,69 @@ def case(*, recorded=None, features=None):
     decisions = InMemoryTrajectoryStore()
     decisions.save_feature_snapshot(snapshot)
     decisions.save_decision_observation(stored)
+    # This fixture models a genuinely completed selected strategy. Review
+    # admission must read these *independently stored* runtime observations
+    # rather than derive them from the externally supplied review judgement.
+    trajectory = ExecutionTrajectory(
+        trajectory_id=stored.trajectory_id,
+        tenant_id=TENANT,
+        user_id=SUBJECT,
+        request_id=snapshot.request_id,
+        correlation_id=snapshot.correlation_id,
+        session_id="review-session",
+        conversation_id="review-conversation",
+        executed_topology="direct",
+        policy_decision_id=f"runtime-policy-1",
+        execution_status="success",
+        completed_at=datetime.now(timezone.utc),
+        actual_provider="ollama-local",
+        actual_model="measured-installed-model",
+        fallback_level=0,
+        degraded_mode=False,
+        response_source="model",
+    )
+    decisions.save(trajectory)
     receipts = InMemoryOutcomeStore()
+    receipts.save_outcome({
+        "outcome_id": "test-runtime-selected-1",
+        "source": "runtime.execution",
+        "trajectory_id": trajectory.trajectory_id,
+        "decision_observation_id": stored.decision_observation_id,
+        "tenant_id": TENANT,
+        "user_id": SUBJECT,
+        "request_id": snapshot.request_id,
+        "correlation_id": snapshot.correlation_id,
+        "session_id": trajectory.session_id,
+        "conversation_id": trajectory.conversation_id,
+        "status": "success",
+        "response_completed": True,
+        "persistence_success": True,
+        "fallback_count": 0,
+        "metadata": {
+            "transcript_persistence_status": "persisted",
+            "actual_provider": trajectory.actual_provider,
+            "actual_model": trajectory.actual_model,
+            "model_calls": 1,
+            "tool_calls": 0,
+            "selected_strategy_execution": {
+                "schema_version": "selected_strategy_execution_v1",
+                "selected_action": "respond_direct",
+                "policy_decision_id": trajectory.policy_decision_id,
+                "policy_version": "v2",
+                "status": "selected_runtime_path_observed",
+                "provider_receipt_observed": True,
+                "response_completed": True,
+                "transcript_durable": True,
+                "actual_provider": trajectory.actual_provider,
+                "actual_model": trajectory.actual_model,
+                "execution_observation_only": True,
+                "independent_verification_proven": False,
+                "dual_action_eligibility_established": False,
+                "randomized_selection": False,
+                "ope_eligible": False,
+            },
+        },
+    })
     handler = VerificationReviewWorkflow(
         lineage_store=decisions, outcome_store=receipts,
     )
