@@ -761,9 +761,19 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
                 ),
                 reviewer=reviewer,
             )
+        # B2C3B adds one real `runtime.execution` row for the already
+        # persisted chosen strategy. It still must add ZERO independently
+        # reviewed quality labels or OPE reward receipts.
         assert await raw.fetchval(
             """SELECT count(*) FROM public.outcome_records
-               WHERE decision_observation_id=$1""",
+               WHERE decision_observation_id=$1
+                 AND source='runtime.execution'""",
+            planned.decision_observation_id,
+        ) == 1
+        assert await raw.fetchval(
+            """SELECT count(*) FROM public.outcome_records
+               WHERE decision_observation_id=$1
+                 AND source='intelligence.ml'""",
             planned.decision_observation_id,
         ) == 0
 
