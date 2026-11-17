@@ -192,6 +192,45 @@ describe('Governed plugin model setup', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
+  it('shows actionable, redacted failure guidance from a scoped model worker receipt', async () => {
+    getImpl(catalog(), policy, [{
+      model_id: recommendation.model_id,
+      revision: PINNED,
+      channel_id: 'plugin_audio',
+      status: 'failed',
+      progress: 0,
+      job_id: 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335',
+      error: '403 gated model access denied: /secret/model-token=PRIVATE',
+    }]);
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    const guidance = screen.getByTestId('plugin-last-download-failure');
+    expect(guidance.textContent).toContain('Hugging Face');
+    expect(guidance.textContent).toContain('fresh explicit model-license acceptance');
+    expect(guidance.textContent).not.toContain('PRIVATE');
+    expect(guidance.textContent).not.toContain('/secret/');
+    const retry = screen.getByRole('button', { name: 'Download recommended model' });
+    expect(retry.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(retry.hasAttribute('disabled')).toBe(false);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('uses the canonical redacted source verification message on failed metadata checks', async () => {
+    getImpl(catalog({
+      metadata_verified: false,
+      verification_state: 'unavailable',
+      resolved_revision: null,
+      verification_error: 'Model source rejected access. Check Hugging Face credentials and repository permissions.',
+    }));
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    expect(screen.getByText(/Model source rejected access/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download recommended model' })
+      .hasAttribute('disabled')).toBe(true);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('blocks a second queue if a matching model is already running', async () => {
     getImpl(catalog(), policy, [{
       model_id: recommendation.model_id,
