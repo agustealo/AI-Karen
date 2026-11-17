@@ -2884,6 +2884,21 @@ class ChatRuntime:
             return None
         return raw
 
+    def _external_engine_attempt_guard(
+        self,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+    ):
+        """Bind every cloud attempt to RuntimePolicy and the original principal."""
+        async def _authorize() -> bool:
+            return self._composition.runtime_policy.authorize_external_provider_execution(
+                context=request.context,
+                plan=plan,
+                expression_policies=self._composition.expression_gateway.settings.policies,
+            )
+
+        return _authorize
+
     def _build_authorized_plan(
         self, request: ChatExecutionRequest, decision: ExecutionDecision
     ) -> AuthorizedExecutionPlan:
@@ -3543,6 +3558,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "surface_layout_plan"},
             reserve_additional_model_call=meter.consume_model_call,
+            authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
             generated = await self._composition.expression_gateway.generate(task)
@@ -3754,6 +3770,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "grounded_search", "evidence_count": len(sources)},
             reserve_additional_model_call=meter.consume_model_call,
+            authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
             result = (
@@ -3873,6 +3890,7 @@ class ChatRuntime:
             },
             token_sink=token_sink,
             reserve_additional_model_call=meter.consume_model_call,
+            authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
 
         self._emitter.emit(
@@ -4077,6 +4095,7 @@ class ChatRuntime:
             request,
             decision,
             plan,
+            budget_meter=meter,
         )
         return text, self._normalize_graph_meta(response_metadata, request)
 
@@ -4088,7 +4107,9 @@ class ChatRuntime:
         meter: ExecutionBudgetMeter,
         _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
-        async for chunk in get_workflow_runtime().stream(request, decision, plan):
+        async for chunk in get_workflow_runtime().stream(
+            request, decision, plan, budget_meter=meter,
+        ):
             if chunk.type == ChatStreamEventType.COMPLETE:
                 continue
             if _meta is not None:
