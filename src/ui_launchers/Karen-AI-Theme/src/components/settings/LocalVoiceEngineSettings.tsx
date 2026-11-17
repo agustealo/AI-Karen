@@ -334,7 +334,7 @@ export default function LocalVoiceEngineSettings({ engineFilter }: { engineFilte
             <div className="space-y-2">
               <Label htmlFor="karen-local-engine">Speech output source</Label>
               {engineFilter ? (
-                <div className="rounded-lg border bg-muted/20 px-3 py-2 text-sm" data-testid="pocket-tts-engine-scope">
+                <div id="karen-local-engine" role="status" className="rounded-lg border bg-muted/20 px-3 py-2 text-sm" data-testid="pocket-tts-engine-scope">
                   Pocket TTS · governed local CPU synthesis
                 </div>
               ) : <Select value={engineId === BROWSER || selectedEngine ? engineId : "_missing_saved_"}
