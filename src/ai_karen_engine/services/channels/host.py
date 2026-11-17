@@ -243,6 +243,30 @@ class ChannelHostServices:
             )
         return evidence
 
+    async def list_whatsapp_self_link_connections(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> list[dict[str, str | int]]:
+        """Read enabled tenant connections after the existing channel.link gate."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.link", plan=authorized_plan,
+        )
+        rows = await self.repository.list_whatsapp_self_link_connections(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        logger.info(
+            "channel.identity.self_link_connections_listed",
+            extra={
+                "tenant_id": tenant_id, "user_id": user_id,
+                "connection_count": len(rows),
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            },
+        )
+        return rows
+
     async def inspect_whatsapp_self_link_status(
         self, *, tenant_id: str, user_id: str, session_id: str,
         connection_id: str, challenge_id: str,
