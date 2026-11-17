@@ -204,6 +204,42 @@ async def test_empty_root_allowlists_reject_serialized_handoff_widening():
 
 
 @pytest.mark.asyncio
+async def test_mutated_original_empty_root_permissions_cannot_authorize_handoff():
+    # The root object remains the same, but its grants cannot gain tools,
+    # plugins or agents after policy admission.
+    for attribute, value in (
+        ("allowed_tools", "unapproved-tool"),
+        ("allowed_plugins", "unapproved-plugin"),
+        ("allowed_agents", "unapproved-agent"),
+    ):
+        request, root, meter, context = _request(allowed_agents=[])
+        getattr(root, attribute).append(value)
+        request.authorized_plan = asdict(root)
+        planner = SimpleNamespace(create_plan=AsyncMock())
+        coordinator = object.__new__(MedusaCoordinator)
+        coordinator.planner = planner
+        with pytest.raises(
+            PermissionError, match="medusa_shared_budget_authority_invalid",
+        ):
+            await coordinator._handle_request(request)
+        planner.create_plan.assert_not_awaited()
+        assert context.original_runtime_model_plan(meter) is None
+        assert meter.model_calls == 0
+
+
+def test_mutated_authorized_child_cannot_execute_new_permissions():
+    _request_value, root, meter, context = _request(
+        allowed_agents=["researcher"],
+    )
+    child = replace(root, allowed_agents=[])
+    context.register_runtime_model_child_plan(child, meter)
+    assert context.is_runtime_model_plan_authorized(child, meter)
+    child.allowed_agents.append("unapproved-agent")
+    assert not context.is_runtime_model_plan_authorized(child, meter)
+    assert context.original_runtime_model_plan(meter) is root
+
+
+@pytest.mark.asyncio
 async def test_shared_medusa_restricts_serialized_handoff_to_one_specialist():
     request, root, meter, context = _request(
         allowed_agents=["analyst", "researcher"],

@@ -731,6 +731,34 @@ async def test_mutated_external_budget_cannot_gain_second_model_transport():
     assert meter.external_requests == 1
 
 
+def test_original_meter_snapshot_must_match_policy_at_first_bind():
+    # The rejected prebind replay captured three model calls while the live
+    # budget was reduced to one before issuer/model authority binding.
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        _scope(calls=1, meter_model_calls=3)
+    admitted = _scope(calls=1)
+    admitted._require_scope()
+    assert admitted.meter.model_calls == 0
+
+
+def test_postbind_mutations_of_root_model_permissions_fail_closed():
+    scope = _scope(calls=1)
+    scope._require_scope()
+    scope.plan.allowed_tools.append("unapproved-tool")
+    with pytest.raises(PermissionError, match="scope_or_budget_invalid"):
+        scope._require_scope()
+    scope.plan.allowed_tools.clear()
+    scope._require_scope()
+    scope.plan.provider_constraints["eligible_providers"] = ["outside"]
+    with pytest.raises(PermissionError, match="scope_or_budget_invalid"):
+        scope._require_scope()
+    scope.plan.provider_constraints.clear()
+    scope._require_scope()
+    assert scope.meter.model_calls == 0
+
+
 def test_runtime_context_binding_is_not_serialized_or_cloned():
     from dataclasses import asdict
 
