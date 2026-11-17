@@ -29,6 +29,15 @@ the plugin's enabled state, or establish actual audio playback. A model can
 be queued only after a verified source revision and explicit license assent;
 a completed receipt still requires actual VoiceRuntime load/voice discovery.
 
+Download failure troubleshooting uses a small `failure_category` from the
+canonical PostgreSQL owner-scoped job query. The projection classifies
+`source_access`, `network`, `storage`, `integrity`, `cancelled` and
+`unknown`; it never returns the stored worker error, job message, model
+path or lease credentials. A real disposable PostgreSQL CI test verifies
+both read endpoints, status-specific classification and tenant/user
+isolation. The consumer panel shows a bounded remedy only from this
+backend category. Unknown and unverified failures remain fail-closed.
+
 The new workspace and Docker profile have **source-level acceptance pending
 on PR #978**. Do not mark hardware or end-user release GO until actual
 licensed model download/installation, native model import/load, authorized
