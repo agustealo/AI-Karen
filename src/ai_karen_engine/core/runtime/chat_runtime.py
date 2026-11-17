@@ -5695,6 +5695,9 @@ class ChatRuntime:
                 and provider_meta.get("reasoning_generation_mode")
                 == "model_after_authorized_reasoning"
                 and provider_meta.get("reasoning_model_calls") == 0
+                # Report actual core verifier execution, not merely that
+                # CORTEX requested a verification mode.
+                and provider_meta.get("verification_strategy_executed") is True
                 and provider_meta.get("reasoning_model_attribution_status")
                 == "not_executed"
                 and isinstance(provider_meta.get("reasoning_steps"), int)
