@@ -164,7 +164,11 @@ async def test_inference_port_cannot_turn_ungoverned_external_model_into_wire_ca
             record_failure=lambda: None,
         ),
     )
-    monkeypatch.setattr(manager, "_record_provider_result", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        manager,
+        "_record_provider_result",
+        lambda *args, **kwargs: None,
+    )
     monkeypatch.setattr(manager_module, "get_model_manager", lambda: manager)
 
     with pytest.raises(
