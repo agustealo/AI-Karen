@@ -60,6 +60,40 @@ model access, the actual completed model job, native CPU import/load, a
 non-silent authentic WAV and audible browser playback. Source CI and build
 configuration alone cannot certify this.
 
+## Two supported model installation entry points
+
+Pocket TTS model installation offers **two operator choices** inside the
+host-owned **Plugins → Pocket TTS → Model installation** panel:
+
+1. **Download recommended model** validates a verified immutable revision,
+   records fresh explicit license acceptance, and enqueues the canonical
+   authenticated model download job.
+2. **Use curl from an admin terminal** displays a revision- and
+   model-specific Bash command after the same explicit license review. The
+   command calls Karen's existing authenticated
+   \`POST /api/models/download/validate\`, checks \`allowed=true\` and exact
+   model/channel/revision with \`jq\`, then calls
+   \`POST /api/models/download\` to enqueue the **same** durable model worker.
+   The display never includes an admin access token. It requires \`jq\`,
+   \`curl\`, \`KAREN_BASE_URL\` with an approved HTTPS origin and
+   \`KAREN_ACCESS_TOKEN\` for a permitted admin. Supply credentials only in
+   an approved local shell/secret injector, never in source control or logs.
+
+Both paths share one model registry, tenant-scoped job ownership, download
+policy, source license/metadata verification, immutable revision, staging
+and crash-safe publication. The terminal method is **not a second installer**,
+and returning a queued job ID does not indicate successful download,
+installation, tenant-eligible load or voice readiness. Check authenticated
+job status in **Models & Runtime**, then verify live Voice Studio playback.
+
+If an operator instead uses direct Hugging Face
+\`curl -H "Authorization: Bearer ..."\` against the upstream gated repository,
+the fetched bytes are **external acquisition only**. They must not be copied
+over a canonical installed snapshot or marked completed manually. Karen has
+no approved offline-artifact import path in this slice; use one of the two
+supported job-queue methods for registered model installation. Gated source
+terms must still be accepted by the matching Hugging Face account.
+
 ## Security and behavior
 
 No remote config, downloaded conditioning audio, custom reference upload,
