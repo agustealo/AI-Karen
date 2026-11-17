@@ -325,3 +325,87 @@ async def test_durable_outcome_does_not_claim_missing_provider_receipt() -> None
     assert evidence["provider_receipt_observed"] is False
     assert evidence["actual_provider"] is None
     assert evidence["ope_eligible"] is False
+
+
+@pytest.mark.parametrize("verification", [False, True])
+@pytest.mark.parametrize(
+    ("field", "value", "typed"),
+    [
+        ("fallback_level", 1, True),
+        ("degradation_reason", "provider_changed", True),
+        ("requested_provider", "unauthorized-provider", False),
+        ("requested_model", "unselected-model", False),
+        ("used_fallback", True, False),
+        ("generation_error", True, False),
+    ],
+)
+def test_b2c1_contradictory_provider_or_fallback_evidence_is_unverified(
+    verification: bool, field: str, value: object, typed: bool,
+) -> None:
+    """Neither a typed receipt nor metadata may hide actual execution drift."""
+    receipt = _receipt(verification=verification)
+    if typed:
+        receipt["provenance"] = replace(receipt["provenance"], **{field: value})
+    else:
+        receipt[field] = value
+    observed = _inspect(verification=verification, receipt=receipt)
+    assert observed is not None
+    assert observed["status"] == "unverified"
+    assert observed["provider_receipt_observed"] is False
+    assert observed["actual_provider"] is None
+    assert observed["actual_model"] is None
+    assert "model_generation_receipt_unverified" in observed["reason_codes"]
+    assert observed["independent_verification_proven"] is False
+    assert observed["ope_eligible"] is False
+
+
+@pytest.mark.parametrize("verification", [False, True])
+def test_b2c1_cancelled_or_incomplete_execution_never_becomes_observed(
+    verification: bool,
+) -> None:
+    observed = _inspect(
+        verification=verification, success=False, complete=False,
+        transcript_status="skipped",
+    )
+    assert observed is not None
+    assert observed["status"] == "unverified"
+    assert "response_execution_incomplete" in observed["reason_codes"]
+    assert "transcript_persistence_unverified" in observed["reason_codes"]
+    assert observed["dual_action_eligibility_established"] is False
+    assert observed["ope_eligible"] is False
+
+
+@pytest.mark.parametrize("verification", [False, True])
+def test_b2c1_canonical_requested_provider_alias_is_not_provider_drift(
+    verification: bool,
+) -> None:
+    """A real configured Ollama request may resolve to the registry's ID."""
+    receipt = _receipt(verification=verification)
+    receipt["requested_provider"] = "ollama"
+    receipt["actual_provider"] = "ollama-local"
+    receipt["provenance"] = replace(
+        receipt["provenance"], provider="ollama-local",
+    )
+    observed = _inspect(verification=verification, receipt=receipt)
+    assert observed is not None
+    assert observed["status"] == "selected_runtime_path_observed"
+    assert observed["provider_receipt_observed"] is True
+    assert observed["actual_provider"] == "ollama-local"
+    assert observed["ope_eligible"] is False
+
+
+@pytest.mark.parametrize("verification", [False, True])
+def test_b2c1_registry_does_not_collapse_unrelated_provider_drift(
+    verification: bool,
+) -> None:
+    receipt = _receipt(verification=verification)
+    receipt["requested_provider"] = "lmstudio"
+    receipt["actual_provider"] = "ollama-local"
+    receipt["provenance"] = replace(
+        receipt["provenance"], provider="ollama-local",
+    )
+    observed = _inspect(verification=verification, receipt=receipt)
+    assert observed is not None
+    assert observed["status"] == "unverified"
+    assert observed["provider_receipt_observed"] is False
+    assert observed["ope_eligible"] is False
