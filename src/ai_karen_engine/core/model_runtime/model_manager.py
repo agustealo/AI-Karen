@@ -16,11 +16,17 @@ from typing import Any, AsyncIterator, Dict, Iterable, Iterator, List, Mapping, 
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
+from ai_karen_engine.core.model_runtime.governed_model_admission import (
+    GovernedToolModelAdmission,
+)
 from ai_karen_engine.core.model_runtime.openai_compatible_client import (
     OpenAICompatibleRuntimeClient,
 )
 from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
-from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
+from ai_karen_engine.core.model_runtime.provider_execution import (
+    ProviderExecutionResult,
+    provider_endpoint_requires_external_permission,
+)
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpoint,
     ProviderEndpointType,
@@ -270,8 +276,14 @@ class ModelManager:
         context: Optional[Dict[str, Any]] = None,
         stream: bool = False,
         return_receipt: bool = False,
+        execution_admission: GovernedToolModelAdmission | None = None,
         **kwargs: Any,
     ) -> Any:
+        if execution_admission is not None:
+            if not isinstance(execution_admission, GovernedToolModelAdmission):
+                raise PermissionError("governed_model_transport_admission_required")
+            # No provider discovery or local model warm on a forged session.
+            execution_admission._require_scope()
         if type(return_receipt) is not bool or (return_receipt and stream):
             raise ProviderNotAvailable("model_execution_receipt_mode_invalid")
         selection = self.select_provider("chat_completion", context=context, stream=stream)
@@ -286,14 +298,31 @@ class ModelManager:
             raise ProviderNotAvailable("requested_model_not_registry_eligible")
 
         prompt = self._messages_to_prompt(messages)
-        provider = self.resolve_runtime(selection)
-
         if not self._provider_is_healthy(selection.provider_id):
             raise ProviderNotAvailable(f"Provider unhealthy: {selection.provider_id}")
 
         breaker = self._get_breaker(selection.provider_id)
         if not breaker.allow_request():
             raise ProviderNotAvailable(f"Circuit breaker open: {selection.provider_id}")
+
+        # For governed calls, reserve the original request's budget only after
+        # the exact canonical endpoint is identified, before model warm or HTTP.
+        if execution_admission is not None:
+            endpoint = self._resolve_endpoint(selection.provider_id)
+            if endpoint is None:
+                raise ProviderNotAvailable("governed_model_endpoint_unavailable")
+            if endpoint.endpoint_type != selection.endpoint_type:
+                raise ProviderNotAvailable("governed_model_selection_registry_drift")
+            # Unscoped compatibility client must remain local-only. Authorized
+            # external execution uses the separately governed canonical
+            # provider executor, never an HTTP allow flag on this raw shim.
+            if (
+                provider_endpoint_requires_external_permission(endpoint)
+                and endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE
+            ):
+                raise ProviderNotAvailable("governed_external_compatibility_requires_canonical_transport")
+            await execution_admission.reserve_transport(endpoint, model=selection.model)
+        provider = self.resolve_runtime(selection)
 
         start = time.perf_counter()
         try:
@@ -367,10 +396,22 @@ class ModelManager:
             logger.exception("Primary provider %s failed", selection.provider_id)
             raise
 
-    async def generate_embedding(self, text: str, **kwargs: Any) -> List[float]:
+    async def generate_embedding(
+        self,
+        text: str,
+        *,
+        execution_admission: GovernedToolModelAdmission | None = None,
+        **kwargs: Any,
+    ) -> List[float]:
         """Return only an actual model embedding, never synthetic data."""
         if kwargs:
             raise ProviderNotAvailable("embedding_execution_options_unsupported")
+        if execution_admission is not None:
+            if not isinstance(execution_admission, GovernedToolModelAdmission):
+                raise PermissionError("governed_model_transport_admission_required")
+            await execution_admission.reserve_local_embedding(
+                model=self.embedding_manager.model_name,
+            )
         return await asyncio.to_thread(self.embedding_manager.embed_authoritative, text)
 
     @classmethod
