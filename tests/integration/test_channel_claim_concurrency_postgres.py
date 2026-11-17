@@ -179,6 +179,41 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                     yield session
 
         monkeypatch.setattr(module, "async_transaction_scope", real_scope)
+
+        # KWA-01C6B: the operator inventory must read only the scoped
+        # WhatsApp connection, never disclose its Vault handle or another
+        # tenant's account, and never infer live provider availability.
+        operator_a_id = str(uuid.uuid4())
+        operator_b_id = str(uuid.uuid4())
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id,
+                provider_account_id, credential_handle, enabled, revision)
+               VALUES ($1,$2,'whatsapp-cloud','30987654321',
+                       'vault://tenant-a-private',false,1),
+                      ($3,$4,'whatsapp-cloud','30987654322',
+                       'vault://tenant-b-private',true,2)""",
+            operator_a_id, tenant_a, operator_b_id, tenant_b,
+        )
+        operator_repository = SqlChannelRepository()
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(tenant_a),
+        ) == [{
+            "connection_id": operator_a_id,
+            "connection_revision": 1,
+            "enabled": False,
+        }]
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(tenant_b),
+        ) == [{
+            "connection_id": operator_b_id,
+            "connection_revision": 2,
+            "enabled": True,
+        }]
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(uuid.uuid4()),
+        ) == []
+
         # KWA-01D: actual PostgreSQL row locking and durable claim uniqueness.
         # A separate connection avoids changing the existing outbox assertions.
         webhook_connection = f"telegram-lease-{uuid.uuid4().hex}"
