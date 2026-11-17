@@ -401,14 +401,13 @@ the UI distinguishes locally enabled connections from provider health, and
 verify that observing the screen issues no channel mutations. No route mocks
 or synthetic connection state are used.
 
-From `src/ui_launchers/Karen-AI-Theme` on an approved deployment, run:
+From `src/ui_launchers/Karen-AI-Theme` on an approved deployment, export
+`KAREN_BASE_URL` (exact approved HTTPS origin), `KAREN_UX_EMAIL` and
+`KAREN_UX_PASSWORD` through the operator's secure environment, then run:
 
 ```bash
-KAREN_WHATSAPP_ADMIN_ACCEPTANCE_REQUIRED=true \\
-KAREN_BASE_URL="$KAREN_BASE_URL" \\
-KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \\
-KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \\
-npx playwright test e2e/whatsapp-cloud-admin-acceptance.spec.ts \\
+KAREN_WHATSAPP_ADMIN_ACCEPTANCE_REQUIRED=true \
+npx playwright test e2e/whatsapp-cloud-admin-acceptance.spec.ts \
   --config=e2e/playwright.config.ts --project=chromium --retries=0
 ```
 
