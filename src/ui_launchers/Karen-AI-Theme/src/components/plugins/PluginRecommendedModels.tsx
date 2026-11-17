@@ -56,6 +56,8 @@ type DownloadJob = {
   channel_id: string;
   status: string;
   progress: number;
+  // This comes from the canonical owned SQL projection, never raw worker errors.
+  failure_category?: "source_access" | "network" | "storage" | "integrity" | "cancelled" | "unknown" | null;
   requested_by?: string | null;
 };
 type DownloadReceipt = { job_id: string; status: string };
@@ -69,6 +71,24 @@ function normalizedProgress(value: unknown): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   return Math.min(100, Math.max(0, numeric > 1 ? numeric : numeric * 100));
+}
+
+/** Only the owner-scoped server category may choose an operator action. */
+function downloadFailureGuidance(job: DownloadJob): string {
+  switch (job.failure_category) {
+    case "source_access":
+      return "Model source access was denied. Confirm your Hugging Face account has accepted the gated model terms and Karen’s backend has approved source access, then retry.";
+    case "network":
+      return "The model worker could not reach or verify its source. Check backend network, proxy, TLS and source availability before retrying.";
+    case "storage":
+      return "The model worker reported a storage limit. Check available model storage and worker quota before retrying.";
+    case "integrity":
+      return "Model revision or artifact integrity could not be verified. Do not use the partial download; inspect Models & Runtime before retrying.";
+    case "cancelled":
+      return "The download was cancelled. Start a new download only after checking the reason in Models & Runtime.";
+    default:
+      return "Check the authenticated job details in Models & Runtime before retrying. A failed download is never a ready model.";
+  }
 }
 
 function isModelRecommendation(value: unknown): value is ModelRecommendation {
@@ -125,19 +145,33 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           nextJobs?.scope !== "authenticated_user" || !Array.isArray(nextJobs.jobs)) {
         throw new Error("model_setup_contract_invalid");
       }
-      setItems(recommended.recommendations.filter((item) =>
+      const eligible = recommended.recommendations.filter((item) =>
         item.app_consumers.includes(pluginId),
-      ));
+      );
+      setItems(eligible);
       setPolicy(nextPolicy);
       setChannels(channelResponse.channels);
       setJobs(nextJobs.jobs);
+      // An owned active job must remain tracked after navigation or a reload.
+      // Match only the current plugin's backend-verified immutable revision.
+      const resumed = nextJobs.jobs.find((job) =>
+        JOB_ID.test(job.job_id) &&
+        ACTIVE.has(job.status) &&
+        eligible.some((item) =>
+          item.model_id === job.model_id &&
+          item.channel_id === job.channel_id &&
+          item.resolved_revision === job.revision &&
+          typeof item.resolved_revision === "string" &&
+          IMMUTABLE_REVISION.test(item.resolved_revision),
+        ),
+      ) ?? null;
       setTrackedJob((current) => {
-        if (!current) return null;
+        if (!current) return resumed;
         const latest = nextJobs.jobs.find((job) => job.job_id === current.job_id);
         return latest &&
           latest.model_id === current.model_id &&
           latest.revision === current.revision &&
-          latest.channel_id === current.channel_id ? latest : current;
+          latest.channel_id === current.channel_id ? latest : resumed;
       });
       // License acceptance must be fresh for the backend-verified revision.
       setAccepted({});
@@ -158,7 +192,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
     return () => { epoch.current += 1; };
   }, [canManage, refresh]);
 
-  // Poll only the operator's newly queued job, not all recommendations.
+  // Poll one verified owned active job, including across navigation and reloads.
   useEffect(() => {
     if (!trackedJob || !ACTIVE.has(trackedJob.status)) return;
     let cancelled = false;
@@ -184,7 +218,10 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           setNotice("Model download completed. Refresh Voice Studio to verify that the runtime can load it.");
         } else if (updated.status === "failed" || updated.status === "cancelled") {
           setNotice(null);
-          setProblem("Model download did not complete. Check Models & Runtime for job details.");
+          // Failed/cancelled attempts never carry a reusable license grant.
+          // The operator must actively review and accept the current revision.
+          setAccepted({});
+          setProblem(`Model download did not complete. ${downloadFailureGuidance(updated)}`);
         }
       }).catch(() => {
         if (!cancelled) setProblem("Download progress could not be verified. Check Models & Runtime.");
@@ -327,6 +364,12 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
             : jobs.find((job) => job.model_id === item.model_id &&
               job.revision === revision && job.channel_id === item.channel_id &&
               ACTIVE.has(job.status));
+        const lastFailedJob = jobs.find((job) =>
+          job.model_id === item.model_id &&
+          job.revision === revision &&
+          job.channel_id === item.channel_id &&
+          (job.status === "failed" || job.status === "cancelled"),
+        );
         const verified = item.metadata_verified === true &&
           item.verification_state === "verified" &&
           typeof revision === "string" && IMMUTABLE_REVISION.test(revision);
@@ -366,7 +409,15 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
               <>
                 {!verified && (
                   <p role="alert" className="text-xs text-destructive">
-                    Source revision or access terms could not be verified. Refresh when the model source is reachable.
+                    {item.verification_error ||
+                      "Source revision or access terms could not be verified. Refresh when the model source is reachable."}
+                  </p>
+                )}
+                {lastFailedJob && (
+                  <p role="status" className="text-xs text-destructive"
+                    data-testid="plugin-last-download-failure">
+                    Previous attempt: {lastFailedJob.status}. {downloadFailureGuidance(lastFailedJob)}
+                    {" "}A new attempt requires fresh explicit model-license acceptance.
                   </p>
                 )}
                 {blocked && (

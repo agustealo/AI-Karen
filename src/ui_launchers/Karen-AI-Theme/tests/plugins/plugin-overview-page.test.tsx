@@ -101,7 +101,7 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
     expect(screen.queryByText('enabled (discovered)')).toBeNull();
 
     // Headless plugin should not be marked as regular missing UI
-    expect(screen.getByText('not required (backend-only)')).toBeTruthy();
+    expect(screen.getByText('Host-owned user workspace (no separate plugin bundle)')).toBeTruthy();
 
     // The Disable button must be present
     const disableButton = screen.getByRole('button', { name: 'Disable' });
@@ -118,11 +118,19 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
   it('opens the existing host-owned Voice Studio for backend-only synthesis plugins', () => {
     const openVoiceStudio = vi.fn();
     render(<PluginOverviewPage onOpenVoiceStudio={openVoiceStudio} />);
-    expect(screen.getByText('not required (backend-only)')).toBeTruthy();
-    expect(screen.getByText(/Speech controls belong to Karen/)).toBeTruthy();
+    expect(screen.getByText('Host-owned user workspace (no separate plugin bundle)')).toBeTruthy();
+    expect(screen.getByText(/Pocket TTS has its own user workspace/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Install UI' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open Voice Studio for Pocket TTS' }));
     expect(openVoiceStudio).toHaveBeenCalledOnce();
+  });
+
+  it('opens Pocket TTS from the plugin category without adding a fake frontend install', () => {
+    const openPocketTts = vi.fn();
+    render(<PluginOverviewPage onOpenPocketTts={openPocketTts} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Pocket TTS workspace' }));
+    expect(openPocketTts).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', { name: 'Install UI' })).toBeNull();
   });
 
   it('does not invent a Voice Studio action when the backend declares no synthesis modality', () => {

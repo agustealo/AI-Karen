@@ -44,6 +44,26 @@ def test_individual_job_contract_requires_sql_ownership_and_uniform_not_found():
         assert forbidden not in query
 
 
+
+def test_owned_failure_diagnostic_is_shared_bounded_sql_and_not_raw_error():
+    source = REPOSITORY.read_text(encoding="utf-8")
+    assert source.count("{_OWNED_FAILURE_CATEGORY_SQL}") == 2
+    assert "_OWNED_FAILURE_CATEGORY_SQL = " in source
+    for category in ("source_access", "network", "storage", "integrity", "unknown", "cancelled"):
+        assert f"'{category}'" in source
+    # Both methods must select a server-derived category without selecting
+    # worker errors, messages, paths, or other private metadata.
+    for method in ("list_owned_jobs", "get_owned_job"):
+        query = source.split(f"async def {method}(", 1)[1].split(
+            "    async def ", 1
+        )[0]
+        assert "{_OWNED_FAILURE_CATEGORY_SQL}" in query
+        assert "SELECT job_id, model_id, revision, channel_id, status," in query
+        assert "progress, created_at, updated_at," in query
+        for forbidden in ("SELECT *", "error, ", "message, ", "install_path", "lease_token"):
+            assert forbidden not in query
+
+
 def test_owned_control_is_sql_atomic_and_preserves_existing_state_guards():
     source = REPOSITORY.read_text(encoding="utf-8")
     for action in ("cancel_job", "pause_job", "resume_job"):

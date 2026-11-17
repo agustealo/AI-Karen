@@ -133,6 +133,7 @@ jobs:
             tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
             tests/core/model_runtime/test_plugin_model_recommendation_tenant_truth.py \
             tests/integration/test_model_download_requested_state_leases.py \
+            tests/integration/test_model_download_owned_failure_categories.py \
             tests/integration/test_model_download_target_exclusivity.py \
             tests/integration/test_model_download_publication_recovery.py \
             tests/architecture/test_model_download_publication_recovery_authority.py
@@ -155,6 +156,7 @@ jobs:
             tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
             tests/core/model_runtime/test_plugin_model_recommendation_tenant_truth.py \
             tests/integration/test_model_download_requested_state_leases.py \
+            tests/integration/test_model_download_owned_failure_categories.py \
             tests/integration/test_model_download_target_exclusivity.py \
             tests/integration/test_model_download_publication_recovery.py \
             tests/architecture/test_model_download_durable_worker_authority.py \
@@ -191,6 +193,9 @@ jobs:
 
       - name: Prove requested-state lease accounting in PostgreSQL
         run: pytest tests/integration/test_model_download_requested_state_leases.py -q
+
+      - name: Prove private failure categories in owned PostgreSQL job receipts
+        run: pytest tests/integration/test_model_download_owned_failure_categories.py -q
 
       - name: Prove install-target exclusivity in PostgreSQL
         run: pytest tests/integration/test_model_download_target_exclusivity.py -q

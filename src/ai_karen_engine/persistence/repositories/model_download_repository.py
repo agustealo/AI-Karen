@@ -17,6 +17,33 @@ from ai_karen_engine.persistence.postgres.transactions import async_transaction_
 _MODEL_DOWNLOAD_CLAIM_LOCK = 0x4B4152454E4D444C
 _MODEL_DOWNLOAD_IMPORT_LOCK = 0x4B4152454E4D494D
 
+# The owned-job API may disclose a bounded retry category, never the stored
+# worker exception: it can contain filesystem paths, credential fragments, or
+# model-source URLs. Keep both owned queries on this same SQL projection.
+_OWNED_FAILURE_CATEGORY_SQL = """
+    CASE
+        WHEN status = 'cancelled' THEN 'cancelled'
+        WHEN status != 'failed' THEN NULL
+        WHEN error ILIKE ANY (ARRAY[
+            '%401%', '%403%', '%gated%', '%access denied%',
+            '%permission denied%', '%unauthorized%', '%licen%'
+        ]) THEN 'source_access'
+        WHEN error ILIKE ANY (ARRAY[
+            '%network%', '%offline%', '%connection%', '%timed out%',
+            '%timeout%', '%dns%', '%ssl%', '%tls%', '%proxy%',
+            '%rate limit%', '%429%', '%http 5__%'
+        ]) THEN 'network'
+        WHEN error ILIKE ANY (ARRAY[
+            '%no space%', '%disk full%', '%storage%', '%quota exceeded%'
+        ]) THEN 'storage'
+        WHEN error ILIKE ANY (ARRAY[
+            '%checksum%', '%digest%', '%revision%', '%integrity%',
+            '%hash mismatch%', '%corrupt%'
+        ]) THEN 'integrity'
+        ELSE 'unknown'
+    END AS failure_category
+"""
+
 
 def _json(value: Any) -> Optional[str]:
     return None if value is None else json.dumps(value, separators=(",", ":"), default=str)
@@ -471,9 +498,10 @@ class ModelDownloadRepository:
             raise ValueError("limit must be between 1 and 200")
         async with async_transaction_scope() as session:
             result = await session.execute(
-                text("""
+                text(f"""
                     SELECT job_id, model_id, revision, channel_id, status,
-                           progress, created_at, updated_at
+                           progress, created_at, updated_at,
+                           {_OWNED_FAILURE_CATEGORY_SQL}
                     FROM public.model_download_jobs
                     WHERE tenant_id = :tenant_id AND requested_by = :user_id
                     ORDER BY created_at DESC LIMIT :limit
@@ -490,9 +518,10 @@ class ModelDownloadRepository:
             raise PermissionError("verified_model_download_owner_required")
         async with async_transaction_scope() as session:
             result = await session.execute(
-                text("""
+                text(f"""
                     SELECT job_id, model_id, revision, channel_id, status,
-                           progress, created_at, updated_at
+                           progress, created_at, updated_at,
+                           {_OWNED_FAILURE_CATEGORY_SQL}
                     FROM public.model_download_jobs
                     WHERE job_id = :job_id AND tenant_id = :tenant_id
                       AND requested_by = :user_id

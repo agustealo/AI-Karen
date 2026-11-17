@@ -45,6 +45,8 @@ interface PluginDetailsModalProps {
   onDisable?: () => void;
   /** Optional host-owned voice panel navigation for backend-declared TTS plugins. */
   onOpenVoiceStudio?: () => void;
+  /** Host-owned plugin workspace, never an independently loaded plugin UI. */
+  onOpenPocketTts?: () => void;
 }
 
 type ExternalLinkConfig = {
@@ -195,6 +197,7 @@ export function PluginDetailsModal({
   onEnable,
   onDisable,
   onOpenVoiceStudio,
+  onOpenPocketTts,
 }: PluginDetailsModalProps) {
   // All React hooks must be called unconditionally at the top level
   const [showSettings, setShowSettings] = useState(false);
@@ -517,6 +520,13 @@ export function PluginDetailsModal({
                   aria-expanded={showModelSetup}
                   onClick={() => setShowModelSetup((visible) => !visible)}>
                   {showModelSetup ? 'Hide model setup' : 'Download recommended model'}
+                </Button>
+              )}
+              {onOpenPocketTts && !loading && (
+                <Button type="button" variant="default"
+                  aria-label="Open Pocket TTS workspace"
+                  onClick={onOpenPocketTts}>
+                  Open Pocket TTS
                 </Button>
               )}
               {onOpenVoiceStudio && !loading && (

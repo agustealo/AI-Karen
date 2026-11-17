@@ -9,6 +9,41 @@
 > without linking its exact code revision, real runtime log/artifact and observed
 > outcome. Source-level mocked WAV tests are not evidence of real audio.
 
+## Pocket TTS consumer workspace and optional runtime profile (PR #978)
+
+A first-class **Plugins → Pocket TTS** sidebar workspace now offers an
+authenticated user-facing model setup and verified voice lab, rather than
+leaving all controls inside general administrative plugin management.
+Download setup reuses Karen's existing authenticated model worker, immutable
+revision/license acceptance and owned-job status. Voice selection, synthesis
+preview, Stop and persisted Read aloud preferences reuse VoiceRuntime and
+LocalVoiceEngineSettings, with a Pocket-only filter that forbids silent
+fallback to browser speech or another local TTS engine.
+
+The opt-in Docker CPU profile `API_BUILD_TARGET=runtime-pocket-tts` inherits
+the canonical CPU image and installs the pinned `pocket-tts==4.0.1` Python
+package from `requirements/pocket-tts.txt`. It verifies a real package
+import and `pip check` at build time; the default API image is unaffected.
+This **does not** ship licensed weights, defeat upstream gated access, alter
+the plugin's enabled state, or establish actual audio playback. A model can
+be queued only after a verified source revision and explicit license assent;
+a completed receipt still requires actual VoiceRuntime load/voice discovery.
+
+Download failure troubleshooting uses a small `failure_category` from the
+canonical PostgreSQL owner-scoped job query. The projection classifies
+`source_access`, `network`, `storage`, `integrity`, `cancelled` and
+`unknown`; it never returns the stored worker error, job message, model
+path or lease credentials. A real disposable PostgreSQL CI test verifies
+both read endpoints, status-specific classification and tenant/user
+isolation. The consumer panel shows a bounded remedy only from this
+backend category. Unknown and unverified failures remain fail-closed.
+
+The new workspace and Docker profile have **source-level acceptance pending
+on PR #978**. Do not mark hardware or end-user release GO until actual
+licensed model download/installation, native model import/load, authorized
+voice catalog, non-silent WAV synthesis, user audible playback, and CPU/RAM
+observations are captured on Karen's supported target machine.
+
 ## Milestones and truth table
 
 | Gate | Evidence | State |

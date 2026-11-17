@@ -12,9 +12,13 @@ accept the gated Hugging Face model terms and verify approved speaker states.
 
 ## Installation and operation
 
-1. Install the exact optional Python dependency in an approved operator
-   environment, with CPU-compatible PyTorch. Do not allow automatic pip
-   installation from plugin execution.
+1. Use the opt-in trusted CPU API image profile `API_BUILD_TARGET=runtime-pocket-tts`
+   when building Karen's existing Docker Compose service. This inherits Karen's
+   verified CPU PyTorch image and installs `pocket-tts==4.0.1` from
+   `requirements/pocket-tts.txt`, followed by `pip check` and a real import
+   check. The default `runtime` image remains unchanged. On a bare-metal host,
+   install the same pinned requirements using your approved deployment process.
+   No plugin request may run pip or download its own runtime.
 2. Use Karen's **existing** Model Downloads flow to install
    \`kyutai/pocket-tts\` at the pinned revision in \`model_spec.json\` using
    channel \`plugin_audio\`. The model is gated and may require Hugging Face
@@ -31,6 +35,30 @@ accept the gated Hugging Face model terms and verify approved speaker states.
    is selected by the authenticated route path, not a JSON parameter. The
    request passes canonical PluginService, RuntimePolicy, Kernel, RBAC and
    tenant readiness before the plugin runs.
+
+## First-class consumer interface
+
+The authenticated application sidebar now contains **Plugins → Pocket TTS**,
+with a standalone workspace for model installation, verified voices, preview,
+Stop and the user's persisted Read aloud preference. The Pocket workspace
+reuses `PluginRecommendedModels` and `LocalVoiceEngineSettings` owned by
+Karen's host. This is a **host-provided presentation**, not an independently
+installable frontend bundle, and the plugin manifest correctly retains
+`provides_ui: false`.
+
+Ordinary authenticated users can select and preview authorized installed
+voices. Only a permitted administrator can accept gated model terms and queue
+a licensed download through the existing worker. A failed download is visible
+with redacted recovery guidance, not silently retried or treated as ready.
+Engine readiness must be verified by `GET /api/voice/engines` after the
+worker's completed installation; actual sample synthesis and playback
+establish the next level of readiness. If Pocket is missing, no browser or
+alternate-engine fallback is substituted inside its workspace.
+
+**Target deployment still needs independent operator proof:** approved gated
+model access, the actual completed model job, native CPU import/load, a
+non-silent authentic WAV and audible browser playback. Source CI and build
+configuration alone cannot certify this.
 
 ## Security and behavior
 
