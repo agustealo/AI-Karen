@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import ipaddress
+import socket
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.error import HTTPError, URLError
@@ -174,7 +175,18 @@ def _open_provider_request(request: Request, timeout: float):
     try:
         destination = ipaddress.ip_address(parsed.hostname)
     except ValueError:
-        destination = None
+        # libc's IPv4 parser accepts noncanonical numeric aliases that
+        # ipaddress rejects (decimal dword, hexadecimal and octal forms).
+        # urllib's resolver can send those directly to metadata addresses.
+        # Reject every such alias before constructing an HTTP opener, even
+        # for otherwise authorized external provider execution. inet_aton
+        # parses numeric IPv4 only; it performs no DNS lookup.
+        try:
+            socket.inet_aton(parsed.hostname)
+        except OSError:
+            destination = None
+        else:
+            raise ProviderExecutionError("provider_destination_not_allowed")
     if isinstance(destination, ipaddress.IPv6Address) and destination.ipv4_mapped:
         destination = destination.ipv4_mapped
     if destination is not None and (

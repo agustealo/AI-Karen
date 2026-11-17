@@ -215,6 +215,11 @@ async def test_local_endpoint_keeps_local_first_without_cloud_auth_callback():
     [
         "http://169.254.169.254/latest/meta-data",
         "http://169.254.170.2/credentials",
+        "http://2852039166/latest/meta-data",
+        "http://0xa9fea9fe/latest/meta-data",
+        "http://0251.0376.0251.0376/latest/meta-data",
+        "http://0xa9.0xfe.0xa9.0xfe/latest/meta-data",
+        "http://0/latest/meta-data",
         "http://[fe80::1]:11434/v1",
         "http://[::ffff:169.254.169.254]/latest/meta-data",
         "http://0.0.0.0:11434/v1",
