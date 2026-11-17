@@ -354,3 +354,124 @@ def test_review_input_requires_bounded_independent_labels():
     ):
         with pytest.raises(ValueError):
             mutation.validate()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("execution_status", "cancelled"),
+        ("execution_status", "failure"),
+        ("execution_status", None),
+        ("completed_at", None),
+        ("tenant_id", OTHER_TENANT),
+        ("user_id", OTHER_USER),
+        ("request_id", "unrelated-request"),
+        ("correlation_id", "unrelated-correlation"),
+        ("policy_decision_id", "unrelated-policy"),
+        ("error_code", "CHAT_REQUEST_CANCELLED"),
+        ("actual_provider", None),
+        ("actual_model", None),
+        ("degraded_mode", True),
+        ("degraded_mode", None),
+        ("fallback_level", 1),
+        ("fallback_level", None),
+        ("executed_topology", "reasoning"),
+    ],
+)
+async def test_b2c3a_reviewer_refuses_unverified_or_incomplete_execution_trajectory(
+    field, value,
+):
+    handler, judgement, receipts, observed, lineage_store = case()
+    trajectory = lineage_store.get(observed.trajectory_id, tenant_id=TENANT)
+    assert trajectory is not None
+    setattr(trajectory, field, value)
+    with pytest.raises(ValueError, match="Completed selected runtime trajectory"):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata_path,value",
+    [
+        (("status",), "failure"),
+        (("response_completed",), False),
+        (("persistence_success",), False),
+        (("fallback_count",), 1),
+        (("user_id",), OTHER_USER),
+        (("tenant_id",), OTHER_TENANT),
+        (("request_id",), "unrelated-request"),
+        (("correlation_id",), "unrelated-correlation"),
+        (("session_id",), "other-session"),
+        (("conversation_id",), "other-conversation"),
+        (("decision_observation_id",), "other-decision"),
+        (("metadata", "transcript_persistence_status"), "failed"),
+        (("metadata", "actual_provider"), "invented"),
+        (("metadata", "actual_model"), "invented"),
+        (("metadata", "model_calls"), 0),
+        (("metadata", "tool_calls"), 1),
+        (("metadata", "selected_strategy_execution", "schema_version"), "other"),
+        (("metadata", "selected_strategy_execution", "selected_action"), "verify_then_respond"),
+        (("metadata", "selected_strategy_execution", "policy_decision_id"), "other"),
+        (("metadata", "selected_strategy_execution", "policy_version"), "other"),
+        (("metadata", "selected_strategy_execution", "status"), "unverified"),
+        (("metadata", "selected_strategy_execution", "provider_receipt_observed"), False),
+        (("metadata", "selected_strategy_execution", "transcript_durable"), False),
+        (("metadata", "selected_strategy_execution", "response_completed"), False),
+        (("metadata", "selected_strategy_execution", "actual_provider"), "invented"),
+        (("metadata", "selected_strategy_execution", "actual_model"), "invented"),
+        (("metadata", "selected_strategy_execution", "independent_verification_proven"), True),
+        (("metadata", "selected_strategy_execution", "ope_eligible"), True),
+        (("metadata", "selected_strategy_execution", "randomized_selection"), True),
+    ],
+)
+async def test_b2c3a_reviewer_refuses_forged_execution_outcome_receipts(
+    metadata_path, value,
+):
+    handler, judgement, receipts, _, _ = case()
+    observed = receipts._records[0]  # In-memory test fixture only.
+    target = observed
+    for part in metadata_path[:-1]:
+        target = target[part]
+    target[metadata_path[-1]] = value
+    with pytest.raises(ValueError, match="(selected execution receipt|Exactly one selected execution)"):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["missing_trajectory", "missing_receipt", "duplicate_receipt", "missing_policy_bind"])
+async def test_b2c3a_review_requires_unique_real_scoped_runtime_evidence(scenario):
+    handler, judgement, receipts, recorded, decisions = case()
+    if scenario == "missing_trajectory":
+        decisions._records.clear()
+    elif scenario == "missing_receipt":
+        receipts._records.clear()
+    elif scenario == "duplicate_receipt":
+        receipts.save_outcome({
+            **receipts._records[0],
+            "outcome_id": "different-outcome-id",
+        })
+    else:
+        feature = decisions.get_feature_snapshot(
+            recorded.feature_snapshot_id, tenant_id=TENANT,
+        )
+        assert feature is not None
+        feature.metadata.pop("policy_decision_id")
+    with pytest.raises(ValueError):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+@pytest.mark.asyncio
+async def test_b2c3a_selected_execution_readback_storage_error_cannot_create_label():
+    handler, judgement, receipts, _, _ = case()
+
+    def unavailable(*args, **kwargs):
+        raise OutcomeStoreError("readback backend unavailable")
+
+    receipts.get_for_trajectory = unavailable
+    with pytest.raises(OutcomeStoreError):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
