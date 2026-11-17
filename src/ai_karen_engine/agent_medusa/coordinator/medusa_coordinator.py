@@ -269,6 +269,17 @@ class MedusaCoordinator:
             meter = shared_meter
         else:
             meter = ExecutionBudgetMeter(authorized_plan.budget)
+            # Standalone Medusa reuses its existing policy-scoped plan and
+            # authenticated request, without borrowing ChatRuntime's meter.
+            trusted_context = _trusted_chat_execution_context(
+                request,
+                authorized_plan,
+            )
+            if trusted_context is not None:
+                trusted_context.bind_runtime_model_authority(
+                    authorized_plan,
+                    meter,
+                )
 
         requirements = ExecutionRequirements(**request.execution_requirements)
 
@@ -557,19 +568,19 @@ class MedusaCoordinator:
             allowed_plugins=list(step.required_plugins),
             allowed_agents=[step.agent_specialist],
         )
-        if request.runtime_budget_meter is not None:
-            trusted_context = _trusted_chat_execution_context(
-                request,
-                specialist_plan,
-            )
-            if trusted_context is None:
-                raise PermissionError("medusa_shared_budget_authority_invalid")
-            # Medusa registers only this narrowed plan identity with the
-            # same original meter, never a copied meter or wider grant.
+        trusted_context = _trusted_chat_execution_context(
+            request,
+            specialist_plan,
+        )
+        if trusted_context is not None:
+            # Both shared and standalone Medusa register only this narrowed
+            # specialist against the same original bound meter.
             trusted_context.register_runtime_model_child_plan(
                 specialist_plan,
                 meter,
             )
+        elif request.runtime_budget_meter is not None:
+            raise PermissionError("medusa_shared_budget_authority_invalid")
         # Preserve the typed advisory only when it came through the
         # authenticated Runtime and matches the exact Medusa scope. A
         # standalone Medusa caller cannot inject arbitrary learning ranks.
