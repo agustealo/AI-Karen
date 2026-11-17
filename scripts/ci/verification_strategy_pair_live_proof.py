@@ -141,25 +141,34 @@ def require_gateway_receipt(
     source = metadata.get("response_source")
     provider = metadata.get("actual_provider")
     model = metadata.get("actual_model")
-    if not (
-        isinstance(text, str) and bool(text.strip())
-        and isinstance(provenance, ResponseProvenance)
-        and provenance.response_source == ResponseSource.MODEL
-        and provenance.decision_id == decision.policy_decision_id
-        and provenance.correlation_id == request.context.correlation_id
-        and provenance.provider == provider
-        and provenance.model == model
-        and source == "model"
-        and provider in {"ollama", "ollama-local"}
-        and model == expected_model
-        and request.preferred_model == expected_model
-        and request.preferred_provider in {"ollama", "ollama-local"}
-        and metadata.get("fallback_level") == 0
-        and metadata.get("degraded_mode") is False
-        and meter.model_calls == 1
-        and not meter.exhausted
+    if not isinstance(text, str) or not text.strip():
+        raise LiveStrategyProofError("gateway_response_missing")
+    if (
+        not isinstance(provenance, ResponseProvenance)
+        or provenance.response_source != ResponseSource.MODEL
     ):
-        raise LiveStrategyProofError("gateway_generation_receipt_missing_or_degraded")
+        raise LiveStrategyProofError("gateway_provenance_unverified")
+    if (
+        provenance.decision_id != decision.policy_decision_id
+        or provenance.correlation_id != request.context.correlation_id
+    ):
+        raise LiveStrategyProofError("gateway_policy_or_correlation_mismatch")
+    if provider not in {"ollama", "ollama-local"}:
+        raise LiveStrategyProofError("gateway_provider_unexpected")
+    if (
+        model != expected_model
+        or request.preferred_model != expected_model
+        or request.preferred_provider not in {"ollama", "ollama-local"}
+    ):
+        raise LiveStrategyProofError("gateway_selected_model_mismatch")
+    if provenance.provider != provider or provenance.model != model:
+        raise LiveStrategyProofError("gateway_provenance_identity_mismatch")
+    if source != "model":
+        raise LiveStrategyProofError("gateway_response_source_unverified")
+    if metadata.get("fallback_level") != 0 or metadata.get("degraded_mode") is not False:
+        raise LiveStrategyProofError("gateway_degraded_or_fallback")
+    if meter.model_calls != 1 or meter.exhausted:
+        raise LiveStrategyProofError("gateway_model_budget_mismatch")
     if verification:
         if not (
             metadata.get("reasoning_generation_mode")
@@ -300,15 +309,24 @@ async def run_pair(
             )
         duration_ms = (time.perf_counter() - started) * 1000.0
 
-        require_gateway_receipt(
-            metadata=metadata,
-            text=text,
-            decision=decision,
-            request=request,
-            meter=meter,
-            expected_model=model,
-            verification=action == "verify_then_respond",
-        )
+        try:
+            require_gateway_receipt(
+                metadata=metadata,
+                text=text,
+                decision=decision,
+                request=request,
+                meter=meter,
+                expected_model=model,
+                verification=action == "verify_then_respond",
+            )
+        except LiveStrategyProofError as exc:
+            # No input text or identifiers enter this fixed stage label.
+            stage = (
+                "stream_verification" if stream
+                else "reasoned_response" if action == "verify_then_respond"
+                else "direct_response"
+            )
+            raise LiveStrategyProofError(f"{stage}:{exc}") from None
 
         # B2B1 cannot label an acceptance run with no canonical transcript
         # as "selected_runtime_path_observed". Retain this negative proof.
@@ -395,19 +413,36 @@ def main() -> int:
             "isolated_ci_approval_or_identity_missing",
             "policy_scope_or_reasoning_authorization_denied",
             "canonical_execution_plan_not_equivalent",
-            "gateway_generation_receipt_missing_or_degraded",
+            "gateway_response_missing",
+            "gateway_provenance_unverified",
+            "gateway_policy_or_correlation_mismatch",
+            "gateway_provider_unexpected",
+            "gateway_selected_model_mismatch",
+            "gateway_provenance_identity_mismatch",
+            "gateway_response_source_unverified",
+            "gateway_degraded_or_fallback",
+            "gateway_model_budget_mismatch",
             "verifier_execution_receipt_missing",
             "direct_path_executed_unrequested_reasoning",
             "nonpersisted_strategy_receipt_was_promoted",
             "independent_strategy_execution_not_equivalent",
         })
-        code = str(exc) if isinstance(exc, LiveStrategyProofError) else ""
+        reported = str(exc) if isinstance(exc, LiveStrategyProofError) else ""
+        parts = reported.split(":", 1)
+        stage = (
+            parts[0]
+            if len(parts) == 2
+            and parts[0] in {"direct_response", "reasoned_response", "stream_verification"}
+            else "unclassified"
+        )
+        code = parts[-1] if parts[-1] in public_codes else "unclassified"
         print(
             json.dumps(
                 {
                     "status": "failed",
                     "error_type": type(exc).__name__,
-                    "error_code": code if code in public_codes else "unclassified",
+                    "error_code": code,
+                    "execution_stage": stage,
                 },
                 sort_keys=True,
             ),
