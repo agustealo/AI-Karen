@@ -228,10 +228,11 @@ def test_oversized_supplied_content_rejected_before_hmac_serialization(
     def disallow_hmac_serialization(*args, **kwargs):
         raise AssertionError("unbounded input reached HMAC serialization")
 
+    baseline_receipt = seal()
     monkeypatch.setattr(
         consumption_evidence, "_members", disallow_hmac_serialization,
     )
-    assert inspect(encoded=seal(), examples=source) is None
+    assert inspect(encoded=baseline_receipt, examples=source) is None
 
 
 def test_aggregate_snapshot_budget_enforced_before_commitment_build(
