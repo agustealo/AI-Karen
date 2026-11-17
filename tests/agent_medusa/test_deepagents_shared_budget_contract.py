@@ -27,7 +27,10 @@ from ai_karen_engine.core.runtime.contracts import (
 )
 
 
-def _request(*, authenticated: bool = True, shared: bool = True):
+def _request(
+    *, authenticated: bool = True, shared: bool = True,
+    allowed_agents: list[str] | None = None,
+):
     budget = ExecutionBudget(max_model_calls=2, max_duration_ms=30000)
     plan = AuthorizedExecutionPlan(
         execution_id="request-a",
@@ -36,7 +39,9 @@ def _request(*, authenticated: bool = True, shared: bool = True):
         authorized_tenant_id="tenant-a",
         authorized_session_id="session-a",
         topology=ExecutionTopology.MULTI_AGENT,
-        allowed_agents=["researcher"],
+        allowed_agents=(
+            list(allowed_agents) if allowed_agents is not None else ["researcher"]
+        ),
         budget=budget,
     )
     meter = ExecutionBudgetMeter(budget)
@@ -159,6 +164,43 @@ async def test_medusa_refuses_invalid_shared_meter_before_any_planning(invalid):
     with pytest.raises(PermissionError, match="medusa_shared_budget_authority_invalid"):
         await coordinator._handle_request(request)
     planner.create_plan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shared_medusa_restricts_serialized_handoff_to_one_specialist():
+    request, root, meter, context = _request(
+        allowed_agents=["analyst", "researcher"],
+    )
+    request.authorized_plan = asdict(replace(root, allowed_agents=["analyst"]))
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace()
+    coordinator.planner = SimpleNamespace(
+        create_plan=AsyncMock(side_effect=RuntimeError("planner_sentinel")),
+    )
+    with pytest.raises(RuntimeError, match="planner_sentinel"):
+        await coordinator._handle_request(request)
+    narrowed = coordinator.planner.create_plan.await_args.kwargs["authorized_plan"]
+    assert narrowed is not root
+    assert narrowed.allowed_agents == ["analyst"]
+    assert narrowed.budget is root.budget
+    assert narrowed.budget is meter.budget
+    assert context.is_runtime_model_plan_authorized(narrowed, meter)
+    assert context.original_runtime_model_plan(meter) is root
+
+
+@pytest.mark.asyncio
+async def test_shared_medusa_rejects_widened_specialist_handoff():
+    request, _root, meter, context = _request(allowed_agents=["analyst"])
+    request.authorized_plan["allowed_agents"] = ["analyst", "unapproved"]
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.planner = SimpleNamespace(create_plan=AsyncMock())
+    with pytest.raises(
+        PermissionError, match="medusa_shared_budget_authority_invalid",
+    ):
+        await coordinator._handle_request(request)
+    coordinator.planner.create_plan.assert_not_awaited()
+    assert context.original_runtime_model_plan(meter) is not None
+    assert meter.model_calls == 0
 
 
 @pytest.mark.asyncio
