@@ -25,7 +25,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961), merge `69d62965550f79f964cc9850283dfcb868cc1f4f` · [25 — Runner observation](25-run-observation-and-freshness.md) | Merged; 18/18 exact-head checks passed; runner observation is not signed production attestation |
 | KCM-02B3C2A: owner-scoped curated-oracle reviewer observation | [PR #963](https://github.com/agustealo/AI-Karen/pull/963), merge `25ee6b58a38e4f49049db201072f1a588cf77705` · [26 — Reviewer observations](26-reviewed-curated-oracle-observations.md) | Merged; 24/24 exact-head checks passed, no independent group/ground truth/execution claim |
 | KCM-02B3C2B: append-only original-reviewer withdrawal and revocation-aware reads | [PR #968](https://github.com/agustealo/AI-Karen/pull/968), merge `24621fccd0f7d5b065408f406ecc0f82d02d8573` · [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Merged; 25/25 exact-head checks passed; no administrative override or training permission |
-| KCM-02B3C3A: owner-scoped training-job to model artifact verification | [PR #973](https://github.com/agustealo/AI-Karen/pull/973) · [28 — Model/job provenance](28-model-training-job-lineage.md) | Draft; exact-head tests in progress. Training sample inventory and held-out disjointness remain unverified |
+| KCM-02B3C3A: owner-scoped training-job to model artifact verification | [PR #973](https://github.com/agustealo/AI-Karen/pull/973), merge `c300198f1eee6b6775ed46f1eb51c51a8ba9b5c4` · [28 — Model/job provenance](28-model-training-job-lineage.md) | Merged; 11/11 exact-head checks passed; no example-inventory or benchmark-independence claim |
+| KCM-02B3C3B1: keyed sklearn fit-membership observation | [29 — Sklearn fit observation](29-sklearn-fit-observation.md) | Proposed PR slice; bounded default-off worker assertion only. Actual source ancestry and independent KCM inventory remain unverified |
 
 ## Configuration
 
@@ -74,13 +75,12 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Verify exact owner-scoped successful training job,
-current registered model and hashed artifact metadata through canonical
-`TrainingJobLedger`, `MLModelRegistry` and `TrainingArtifactReconciler`.
-This only proves model/job linkage, never the actual training-example set,
-training/evaluation disjointness, independent oracle labels or production
-runtime readiness. The next separate gate must bind a frozen training
-inventory to that exact model, then compare content/source ancestry against
-held-out benchmark cases with revocation-checked independent review.
-Training rights, promotion, autonomous execution and general-skill
-certification all remain disabled.
+**Next controlled slice:** Capture the actual sklearn `model.fit` row
+partition with an optional, keyed, privacy-preserving worker assertion. Reuse
+the canonical training executor, job ledger, registry and reconciliation path.
+The first observation remains **unverified KCM training inventory** because
+source ancestry, ownership evidence, deletion epochs and independent worker
+attestation are not yet joined to it. Follow with full governed source and
+benchmark overlap verification, then other engine-specific consumption
+boundaries. Training rights, promotion, autonomous execution and general-skill
+certification remain disabled.
