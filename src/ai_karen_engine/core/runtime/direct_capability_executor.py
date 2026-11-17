@@ -12,6 +12,9 @@ from ai_karen_engine.core.cortex.routing_intents import (
     parse_plugin_inspection_request,
 )
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.plugin_management_contract import (
+    validate_plugin_management_preflight,
+)
 from ai_karen_engine.core.runtime.contracts import (
     ActionExecutionGate,
     AuthorizedExecutionPlan,
@@ -79,6 +82,28 @@ class DirectCapabilityResult:
             )
             if self.payload.get(key) is not None
         }
+        if (
+            self.source_id == "plugin.inspect"
+            and self.payload.get("requested_operation") == "manage"
+        ):
+            # Never persist the entire plugin catalog as a mutation receipt.
+            # A bounded validated status may be replayed after durable run
+            # attestation; unsupported management verbs remain text-only.
+            preflight = validate_plugin_management_preflight(
+                self.payload.get("plugin_management_preflight")
+            )
+            presentation_payload = (
+                {
+                    "status": "found",
+                    "plugin_management_preflight": preflight,
+                    "requested_action_executed": False,
+                    "next_action": preflight["next_action"],
+                }
+                if preflight is not None
+                and self.payload.get("status") == "found"
+                and self.payload.get("requested_action_executed") is False
+                else {}
+            )
         payload_metadata = self.payload.get("metadata")
         payload_metadata = (
             payload_metadata if isinstance(payload_metadata, dict) else {}
