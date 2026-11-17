@@ -441,6 +441,41 @@ presentation, permission denial, unknown envelopes, forgery attempts and the
 absence of execution claims. CI runs the standard frontend Vitest and TS
 checks; no second settings or action owner is introduced.
 
+## Application-global lifecycle claim ledger (KPLUG-CONV-02C2)
+
+A backend-only, global PostgreSQL revision row now provides a **claim
+reservation boundary**, separate from the tenant-scoped approval records.
+`extension_lifecycle_revisions` stores the last host-observed PluginKernel
+manifest checksum, state and revision. `extension_lifecycle_operations`
+records the approval, tenant, actor, action, expected revision, correlation
+identity and **prepared**/unknown status without plugin settings or secrets.
+
+`PluginLifecycleLedger.initialize_observation` must be called only by a
+trusted kernel owner after independently observing the installed manifest
+and state. It never overwrites a conflicting existing row. The authorization
+path uses the exact approved action payload, checks the expected revision
+and manifest digest, and atomically consumes the one-shot approval with
+a globally exclusive claim. The transaction rolls back entirely if the
+receipt write fails. A claimed or unknown row remains unresolved until a
+separate verified reconciliation. The ledger has no API route or plugin
+execution method and cannot emit a success receipt.
+
+**Status:** claim schema/repository and a disposable real PostgreSQL proof
+are implemented in KPLUG-CONV-02C2. Physical PluginKernel mutation,
+cross-worker execution admission/fencing, fresh RuntimePolicy grant,
+recovery and verified completed receipt are **not yet implemented**.
+Existing admin API mutations must be incorporated into the global fence
+before claiming installation-wide concurrency safety. Do not expose
+a consumer chat confirmation control at this stage.
+
+Proof:
+`tests/integration/test_plugin_lifecycle_ledger_postgres.py` runs in
+Plugin Backend against `/karen_plugin_lifecycle_test`, using a restricted
+database role, two tenants with competing claims, exact approval matching,
+rollback on failed insert, uncertain-outcome retention and direct client
+read denial. This is not a substitute for a kernel mutation integration
+test or a verified post-restart recovery test.
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and
