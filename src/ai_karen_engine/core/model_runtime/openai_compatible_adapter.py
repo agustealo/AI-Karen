@@ -66,7 +66,11 @@ class OpenAICompatibleAdapter:
         try:
             import httpx
 
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(
+                timeout=self.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
+            ) as client:
                 models_url = self.base_url.rstrip("/") + "/models"
                 resp = client.get(models_url)
                 if resp.status_code == 200:
@@ -91,7 +95,11 @@ class OpenAICompatibleAdapter:
         try:
             import httpx
 
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(
+                timeout=self.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
+            ) as client:
                 health_url = self.base_url.rstrip("/") + "/health"
                 resp = client.get(health_url)
                 if resp.status_code == 200:
