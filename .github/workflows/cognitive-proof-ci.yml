@@ -290,6 +290,8 @@ jobs:
           python -m py_compile scripts/ci/verification_strategy_pair_live_proof.py
           pytest tests/core/runtime/test_verification_strategy_pair_live_proof.py \
             tests/core/runtime/test_selected_strategy_execution_evidence.py \
+            tests/core/runtime/test_reasoning_model_attribution_truth.py \
+            tests/core/runtime/test_reasoning_provider_synthesis.py \
             -q --timeout=300 --tb=short
 
       - name: Compile KCOG cognitive-state and policy boundary
