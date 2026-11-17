@@ -33,7 +33,9 @@ USER = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 
-def _request(text: str, *, authenticated: bool = True) -> ChatExecutionRequest:
+def _request(
+    text: str, *, authenticated: bool = True, roles: list[str] | None = None,
+) -> ChatExecutionRequest:
     return ChatExecutionRequest(
         messages=[{"role": "user", "content": text}],
         context=ChatExecutionContext(
@@ -42,9 +44,9 @@ def _request(text: str, *, authenticated: bool = True) -> ChatExecutionRequest:
             session_id="plugin-session",
             request_id="plugin-request",
             correlation_id="plugin-correlation",
-            roles=["user"],
+            roles=roles or ["user"],
             authenticated_user=(
-                UserData(user_id=USER, tenant_id=TENANT, roles=["user"])
+                UserData(user_id=USER, tenant_id=TENANT, roles=roles or ["user"])
                 if authenticated else None
             ),
         ),
@@ -100,6 +102,10 @@ def _catalog():
     service._get_kernel = lambda: SimpleNamespace(
         get_channel_activation_manifest=lambda plugin_id: (
             telegram if plugin_id == "telegram-bot" else None
+        ),
+        get_record=lambda plugin_id: next(
+            (record for record in service.list_plugins.return_value
+             if record["manifest"].name == plugin_id), None,
         ),
     )
     service._execution_configuration_readiness = AsyncMock(return_value=None)
@@ -340,7 +346,10 @@ async def test_every_plugin_action_first_inspects_without_executing(phrase, expe
             plan=plan, meter=_meter(plan),
         )
     assert result.success and result.source == "plugin_catalog"
-    assert "has NOT been performed" in result.text
+    assert (
+        "has NOT been performed" in result.text
+        or "No action was performed" in result.text
+    )
     assert result.payload["requested_action"] == expected_action
     assert result.payload["requested_action_executed"] is False
     assert result.payload["requires_fresh_action_authorization"] is True
@@ -724,3 +733,155 @@ async def test_denied_channel_owner_status_does_not_expose_private_reason():
 def test_channel_host_binding_refuses_untrusted_plugin_provided_host():
     with pytest.raises(TypeError):
         DirectCapabilityExecutor().bind_channel_host(SimpleNamespace())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action,role,status", [
+    ("disable", "admin", "needs_explicit_confirmation"),
+    ("enable", "admin", "already_satisfied"),
+    ("disable", "user", "permission_denied"),
+    ("install", "admin", "unsupported_action"),
+    ("uninstall", "admin", "unsupported_action"),
+])
+async def test_global_plugin_management_preflight_requires_exact_admin_permission(
+    action, role, status,
+):
+    from ai_karen_engine.auth.rbac_middleware import Permission
+
+    service = _catalog()
+    service.enable_plugin = AsyncMock()
+    service.disable_plugin = AsyncMock()
+    principal = UserData(user_id=USER, tenant_id=TENANT, roles=[role])
+    gate = SimpleNamespace(
+        has_permission=lambda user, permission: (
+            role == "admin" and permission is Permission.ADMIN_PLUGINS_MANAGE
+            and user is principal
+        ),
+    )
+    with patch(
+        "ai_karen_engine.auth.rbac_middleware.get_rbac_manager",
+        return_value=gate,
+    ):
+        plan = await service.preview_conversational_management(
+            plugin_id="timezone-clock", action=action, principal=principal,
+        )
+    assert plan["status"] == status
+    assert plan["operation_scope"] == "application_global"
+    assert plan["required_permission"] == Permission.ADMIN_PLUGINS_MANAGE.value
+    assert plan["approval_granted"] is False
+    assert plan["mutation_performed"] is False
+    assert plan["action_receipt"] is None
+    if status == "needs_explicit_confirmation":
+        assert plan["permission_verified"] is True
+        assert plan["next_action"] == "plugin.open_admin_management"
+        assert plan["confirmation_channel"] == "authenticated_plugin_management_ui"
+    service.enable_plugin.assert_not_awaited()
+    service.disable_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_channel_lifecycle_cannot_use_generic_plugin_management():
+    service = _catalog()
+    service.enable_plugin = AsyncMock()
+    service.disable_plugin = AsyncMock()
+    principal = UserData(user_id=USER, tenant_id=TENANT, roles=["admin"])
+    with patch(
+        "ai_karen_engine.auth.rbac_middleware.get_rbac_manager",
+    ) as rbac:
+        plan = await service.preview_conversational_management(
+            plugin_id="telegram-bot", action="enable", principal=principal,
+        )
+    assert plan["status"] == "delegated_to_channel_host"
+    assert plan["next_action"] == "channel.inspect_and_request_operator_authorization"
+    assert plan["mutation_performed"] is False
+    rbac.assert_not_called()
+    service.enable_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_management_preflight_fails_closed_for_unverified_or_forged_principal():
+    service = _catalog()
+    for principal in (
+        UserData(user_id="", tenant_id=TENANT, roles=["admin"]),
+        UserData(user_id=USER, tenant_id="", roles=["admin"]),
+        UserData(user_id=USER, tenant_id=TENANT, roles=["admin"], is_verified=False),
+        UserData(user_id=USER, tenant_id=TENANT, roles=["admin"], is_active=False),
+        {"user_id": USER, "tenant_id": TENANT, "roles": ["admin"]},
+    ):
+        with pytest.raises(PermissionError):
+            await service.preview_conversational_management(
+                plugin_id="timezone-clock", action="disable",
+                principal=principal,
+            )
+
+
+@pytest.mark.asyncio
+async def test_admin_conversational_manage_returns_actionable_preview_without_mutation():
+    from ai_karen_engine.auth.rbac_middleware import Permission
+
+    service = _catalog()
+    service.disable_plugin = AsyncMock()
+    request = _request("Disable my Timezone Clock plugin", roles=["admin"])
+    plan = _plan()
+    with (
+        patch(
+            "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+            return_value=service,
+        ),
+        patch(
+            "ai_karen_engine.auth.rbac_middleware.get_rbac_manager",
+            return_value=SimpleNamespace(
+                has_permission=lambda user, perm: (
+                    perm is Permission.ADMIN_PLUGINS_MANAGE
+                    and "admin" in user.roles
+                ),
+            ),
+        ),
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=request,
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success and result.source == "plugin_catalog"
+    assert "authenticated Plugins & Tools management" in result.text
+    assert "did not perform" in result.text
+    assert result.payload["requested_action_executed"] is False
+    assert result.payload["next_action"] == "plugin.open_admin_management"
+    preview = result.payload["plugin_management_preflight"]
+    assert preview["status"] == "needs_explicit_confirmation"
+    assert preview["permission_verified"] is True
+    assert preview["approval_granted"] is False
+    assert preview["action_receipt"] is None
+    assert result.normalized_metadata()["structured_content"]["plugin_management_preflight"] == preview
+    service.disable_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_manage_does_not_surface_confirmation_action():
+    from ai_karen_engine.auth.rbac_middleware import Permission
+
+    service = _catalog()
+    plan = _plan()
+    with (
+        patch(
+            "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+            return_value=service,
+        ),
+        patch(
+            "ai_karen_engine.auth.rbac_middleware.get_rbac_manager",
+            return_value=SimpleNamespace(
+                has_permission=lambda user, perm: False,
+            ),
+        ),
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=_request("Disable my Timezone Clock plugin"),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=plan, meter=_meter(plan),
+        )
+    assert result.success
+    assert "not authorized" in result.text
+    assert result.payload["requested_action_executed"] is False
+    assert result.payload["plugin_management_preflight"]["status"] == "permission_denied"
+    assert result.payload["next_action"] is None
