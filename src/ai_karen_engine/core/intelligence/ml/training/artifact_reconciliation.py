@@ -97,7 +97,11 @@ class TrainingArtifactReconciler:
         # Registry.get returns the mutable object stored in its registry.
         # Take an independent full snapshot, including nested metric maps,
         # before any filesystem read or hash can overlap an in-place edit.
-        manifest = deepcopy(original)
+        try:
+            manifest = deepcopy(original)
+        except (RecursionError, TypeError, ValueError):
+            # Untrusted persisted manifest metrics may also be overnested.
+            return None
         metrics = manifest.metrics
         if not isinstance(metrics, dict):
             return None
@@ -200,7 +204,10 @@ class TrainingArtifactReconciler:
         # during hashing would escape the final drift check.
         if not self.registry.validate_artifact(manifest):
             return None
-        current = deepcopy(self.registry.get(model_id))
+        try:
+            current = deepcopy(self.registry.get(model_id))
+        except (RecursionError, TypeError, ValueError):
+            return None
         replay = self.ledger.get(job_id, tenant_id=tenant, user_id=owner)
         if (
             principal.is_expired()
