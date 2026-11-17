@@ -278,3 +278,28 @@ async def test_live_runner_fails_closed_without_explicit_isolated_ci_enable(
             tenant_id="tenant",
             model="not-actually-installed",
         )
+
+
+@pytest.mark.parametrize("verification", [False, True])
+@pytest.mark.parametrize(
+    ("field", "value", "typed"),
+    [
+        ("fallback_level", 1, True),
+        ("degradation_reason", "provider_changed", True),
+        ("used_fallback", True, False),
+        ("generation_error", True, False),
+    ],
+)
+def test_b2c1_live_receipt_rejects_hidden_fallback_provenance(
+    verification: bool, field: str, value: object, typed: bool,
+) -> None:
+    payload = _observed(verification=verification)
+    if typed:
+        provenance = payload["metadata"]["provenance"]
+        payload["metadata"]["provenance"] = replace(
+            provenance, **{field: value},
+        )
+    else:
+        payload["metadata"][field] = value
+    with pytest.raises(LiveStrategyProofError, match="gateway_degraded_or_fallback"):
+        require_gateway_receipt(**payload)
