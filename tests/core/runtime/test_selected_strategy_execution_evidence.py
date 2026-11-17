@@ -103,6 +103,19 @@ def _inspect(
 
 
 @pytest.mark.parametrize("verification", [False, True])
+def test_selected_path_accepts_genuine_provider_runtime_source(
+    verification: bool,
+) -> None:
+    receipt = _receipt(verification=verification)
+    receipt["response_source"] = "provider_runtime"
+    observed = _inspect(verification=verification, receipt=receipt)
+    assert observed is not None
+    assert observed["status"] == "selected_runtime_path_observed"
+    assert observed["provider_receipt_observed"] is True
+    assert observed["ope_eligible"] is False
+
+
+@pytest.mark.parametrize("verification", [False, True])
 def test_only_chosen_runtime_path_can_be_observed(verification: bool) -> None:
     observed = _inspect(verification=verification)
     assert observed is not None
@@ -135,6 +148,8 @@ def test_only_chosen_runtime_path_can_be_observed(verification: bool) -> None:
         ("actual_provider", "forged-provider"),
         ("actual_model", "forged-model"),
         ("response_source", "reasoning"),
+        ("response_source", "fallback_provider_runtime"),
+        ("response_source", "model_unavailable"),
         ("fallback_level", 1),
         ("degraded_mode", True),
     ],
