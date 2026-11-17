@@ -111,6 +111,7 @@ def test_rebinding_base_url_to_external_is_checked_on_each_attempt(
         client.generate_text("confidential")
     assert calls == []
 
+
 @pytest.mark.asyncio
 async def test_inference_port_cannot_turn_ungoverned_external_model_into_wire_call(
     monkeypatch: pytest.MonkeyPatch,
