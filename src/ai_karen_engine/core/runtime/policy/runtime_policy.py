@@ -643,7 +643,7 @@ class RuntimePolicyEnforcer:
             quota = constraints.get("max_model_calls")
             return (
                 type(quota) is int
-                and quota > 0
+                and quota >= 0
                 and 0 <= plan.budget.max_model_calls <= quota
             )
 
