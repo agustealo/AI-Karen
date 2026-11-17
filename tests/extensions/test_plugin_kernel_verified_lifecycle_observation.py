@@ -180,13 +180,15 @@ def _approval_scope(
     action: str,
     checksum: str,
     expected_state: str,
+    revision: int = 1,
+    installation_id: str = "kernel-terminal",
 ) -> PluginLifecycleApprovalScope:
     return PluginLifecycleApprovalScope(
-        installation_id="kernel-terminal",
+        installation_id=installation_id,
         action=action,
         manifest_checksum=checksum,
         expected_state=expected_state,
-        expected_revision=1,
+        expected_revision=revision,
         tenant_id=str(uuid.uuid4()),
         user_id=str(uuid.uuid4()),
         session_id="session-1",
@@ -227,7 +229,10 @@ async def test_kernel_prepared_transition_attests_both_states_atomically(
             enable, operation_id=str(uuid.uuid4())
         )
     disable = _approval_scope(
-        action="disable", checksum=first.manifest_checksum, expected_state="enabled"
+        action="disable",
+        checksum=first.manifest_checksum,
+        expected_state="enabled",
+        revision=2,
     )
     closed = await kernel.transition_prepared_lifecycle(
         disable, operation_id=str(uuid.uuid4())
@@ -270,6 +275,33 @@ async def test_prepared_transition_refuses_stale_checksum_and_active_execution(
     finally:
         kernel._active.pop("running")
     assert (tmp_path / "kernel-terminal" / ".karen-manual-disabled").is_file()
+
+
+
+@pytest.mark.asyncio
+async def test_prepared_transition_rejects_voice_and_unvalidated_scope(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path, plugin_id="voice-terminal", voice_modality=True)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    with pytest.raises(TypeError, match="Validated lifecycle approval scope"):
+        await kernel.transition_prepared_lifecycle(
+            {"action": "enable"}, operation_id=str(uuid.uuid4())
+        )
+    voice_scope = _approval_scope(
+        installation_id="voice-terminal",
+        action="enable",
+        checksum="a" * 64,
+        expected_state="disabled",
+    )
+    with pytest.raises(RuntimeError, match="Specialized plugin lifecycle authority"):
+        await kernel.transition_prepared_lifecycle(
+            voice_scope, operation_id=str(uuid.uuid4())
+        )
+    assert (tmp_path / "voice-terminal" / ".karen-manual-disabled").is_file()
 
 
 @pytest.mark.asyncio
