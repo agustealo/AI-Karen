@@ -455,3 +455,111 @@ checks; no second settings or action owner is introduced.
 
 **Release rule:** Plugin lifecycle success and channel operational delivery
 are different statuses. Both require evidence; neither may be simulated.
+
+## Approved conversational lifecycle execution (KPLUG-CONV-02C)
+
+**Implementation status: not yet available.** The merged #960 read-only
+preflight and #964 verified consumer panel are not approval or mutation paths.
+Do not expose a chat Enable/Disable confirmation control until all the
+following backend and replay evidence exists. This is a provider-neutral
+system behavior, not a Telegram implementation.
+
+### Authority and existing entry points
+
+| Responsibility | Reuse; do not clone |
+| --- | --- |
+| Generic plugin target/intent | CORTEX and ChatRuntime's existing `plugin.inspect` discovery |
+| Authenticated execution identity | `ChatExecutionContext.require_authenticated_user()` |
+| Scope/permission/action eligibility | `RuntimePolicyEnforcer`, `ActionExecutionGate`, `ADMIN_PLUGINS_MANAGE` RBAC |
+| Human confirmation and single-use approval | `ApprovalService` / `SqlApprovalRepository` |
+| Canonical lifecycle state and physical mutation | `PluginService` -> `PluginKernel` |
+| Receipt/audit | Existing runtime audit and tenant-scoped PostgreSQL persistence |
+| Consumer presentation/history | Verified AG-UI event projection and canonical CopilotKit assistant slot |
+
+The existing plugin management HTTP endpoints are permission-guarded, but
+`PluginService.enable_plugin` and `disable_plugin` delegate directly to the
+kernel. **Never call them from ChatRuntime based on a natural-language request,
+preflight, UI value, or unchecked approval ID.** Introduce a narrow governed
+management operation in the existing service owner; do not create a second
+execution manager, public mutation endpoint, or browser-side authorization.
+
+### Exact approved-action identity
+
+The trusted backend must bind approval and subsequent execution to one
+immutable, validated management plan containing at least:
+
+- Canonical `installation_id` and explicit `enable` or `disable` action.
+- Manifest digest/provenance, expected lifecycle state, and authoritative
+  **durable monotonic lifecycle revision** at preflight.
+- Authenticated actor, tenant, session, conversation, policy decision,
+  required permission, request/correlation IDs, expiry, and single-use
+  idempotency/approval identifiers.
+- The effective installation scope is application-global. Tenant isolation
+  protects approvals and audit, but a tenant-scoped lock alone does not
+  serialize a global plugin state mutation.
+
+The current `ApprovalService.request_fingerprint` covers normalized chat
+messages and identity, **not installation state or lifecycle revision**.
+Extend the existing approval model/repository to bind this typed action
+rather than assuming a chat fingerprint implies stable plugin state. Ensure
+an approval is not a bearer capability: its stored receipt must be re-read
+in the authenticated caller scope. A pending or rejected receipt is not an
+execution grant, and an approved receipt is not sufficient without fresh
+RuntimePolicy authorization.
+
+### Mutation and concurrency fence
+
+One canonical kernel mutation primitive must re-read the installed manifest,
+trust/quarantine flags, dependencies, active-execution state, lifecycle state
+and revision **inside the same guarded transition**. Only an exact expected
+revision and action permit the transition. The current
+`PluginKernel._state_lock` is process-local; it does not establish a durable
+cross-worker fence. Use an existing canonical, strongly consistent repository
+and appropriate global lock/compare-and-swap before claiming cross-process
+safety. If deployment topology cannot guarantee that ordering, fail closed.
+ChannelHost and VoiceRuntime remain exclusively responsible for channel and
+voice lifecycle, even for administrators.
+
+Persist intent/claim before the mutation and a terminal authoritative outcome
+afterward. Uncertain state, an expired claim, a commit failure, or an
+interrupted write must **not** become 'enabled' or 'disabled' by inference,
+nor trigger a blind retry. Reconciliation should inspect the actual kernel
+state and durable revision. An approval is single-use even when the outcome
+is failed or unknown; retries require a new scoped authorization or a
+separately verified idempotent recovery contract.
+
+### Result and UI contract
+
+Use a separate bounded, server-verified lifecycle result envelope instead of
+reinterpreting `karen.plugin_management_preflight.v1`. Approved-pending,
+denied, stale/conflict, failed, unknown and verified-completed are distinct.
+A completed success must carry a persisted receipt with the actual action,
+installation, actor scope, approval/policy IDs, prior/next revision,
+correlation ID, kernel outcome and proof of current state. No secrets,
+credentials, raw plugin arguments or arbitrary plugin-supplied fields may be
+projected. Saved history is an observation at execution time and cannot be
+replayed as a fresh action or current plugin state.
+
+### Release proof (must be exact-head and non-mock where specified)
+
+1. Current administrator has a verified, explicitly confirmed target/action;
+   approval and fresh policy are checked and consumed once.
+2. Ordinary user, unverified principal, forged UI approval, wrong tenant or
+   session, revoked admin role, expired/rejected approval and replay all fail
+   without mutation.
+3. Manifest/provenance/state/revision drift, independent concurrent
+   enable/disable attempts, active executions and enabled dependents fail
+   closed; enforce the global fence across multiple workers with real
+   PostgreSQL-backed state.
+4. Crash/timeout/persistence error produces an honest failed/unknown receipt;
+   no false success and no automatic duplicate write.
+5. Channel and voice management cannot go through generic plugin lifecycle;
+   read-only inspection and existing direct plugin read actions still work.
+6. CopilotKit live/history and legacy renderer reject forged mutation claims,
+   handle denial/unknown states, and navigate only via allowed next actions.
+7. Main Quality, Plugin Backend, Plugin Frontend, Plugin Security, production
+   first-boot and the dedicated real-PostgreSQL concurrency/replay suites pass
+   on the exact PR head before enabling chat mutation UI.
+
+**Do not declare KPLUG-CONV-02C complete from this architecture contract.**
+Release requires implementation and observed evidence for the entire chain.
