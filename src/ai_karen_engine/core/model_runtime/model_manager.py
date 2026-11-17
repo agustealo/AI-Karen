@@ -304,16 +304,28 @@ class ModelManager:
             # Reading a shared client's mutable "model" after await races
             # concurrent calls and can attach another request's identity.
             observed_model = None
-            if return_receipt and isinstance(provider, OpenAICompatibleRuntimeClient):
-                response, observed_model = await asyncio.to_thread(
-                    provider.generate_text_with_model, prompt, **kwargs
+            if return_receipt:
+                from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+                    TransformersRuntime,
                 )
-                if (
-                    not isinstance(observed_model, str)
-                    or not observed_model.strip()
-                    or observed_model.lower() == "auto"
-                ):
-                    raise ProviderNotAvailable("compatibility_execution_model_unobserved")
+
+                if isinstance(provider, (OpenAICompatibleRuntimeClient, TransformersRuntime)):
+                    response, observed_model = await asyncio.to_thread(
+                        provider.generate_text_with_model, prompt, **kwargs
+                    )
+                    if (
+                        not isinstance(observed_model, str)
+                        or not observed_model.strip()
+                        or observed_model.lower() == "auto"
+                    ):
+                        denial = (
+                            "compatibility_execution_model_unobserved"
+                            if isinstance(provider, OpenAICompatibleRuntimeClient)
+                            else "native_execution_model_unobserved"
+                        )
+                        raise ProviderNotAvailable(denial)
+                else:
+                    raise ProviderNotAvailable("model_execution_provenance_unsupported")
             else:
                 response = await self.invoke_provider(provider, prompt, **kwargs)
             if (

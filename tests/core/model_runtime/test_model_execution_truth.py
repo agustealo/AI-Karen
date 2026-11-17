@@ -97,10 +97,16 @@ async def test_manager_receipt_records_only_actual_selection(monkeypatch) -> Non
         return selection
 
     monkeypatch.setattr(manager, "select_provider", select)
-    monkeypatch.setattr(
-        manager, "resolve_runtime",
-        lambda _: SimpleNamespace(model="registered-model", generate_text=lambda prompt: "output"),
+    runtime = OpenAICompatibleRuntimeClient(
+        model="registered-model",
+        base_url="http://127.0.0.1:11434/v1",
+        provider_name="selected-provider",
     )
+    monkeypatch.setattr(
+        runtime, "generate_text_with_model",
+        lambda prompt, **kw: ("output", "registered-model"),
+    )
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: runtime)
     monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
     monkeypatch.setattr(
         manager, "_get_breaker",
@@ -339,6 +345,108 @@ async def test_concurrent_auto_model_receipts_never_cross_attribute(monkeypatch)
         ("output-B", "model-B", "ollama"),
     ]
     assert client.model == "auto"
+
+
+def test_native_generation_reports_its_loaded_model_at_execution() -> None:
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+        TransformersRuntime,
+    )
+
+    class Pipeline:
+        tokenizer = SimpleNamespace(eos_token_id=0)
+
+        def __call__(self, prompt, **kwargs):
+            return [{"generated_text": prompt + " authentic completion"}]
+
+    native = object.__new__(TransformersRuntime)
+    native._transformers_available = True
+    native._pipeline = Pipeline()
+    native._generation_lock = threading.RLock()
+    native.model_path = "gpt2"
+    assert native.generate_text_with_model("prompt") == ("authentic completion", "gpt2")
+    assert native.generate("prompt") == "authentic completion"
+
+
+@pytest.mark.asyncio
+async def test_native_model_fallback_drift_is_denied_before_receipt(monkeypatch) -> None:
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+        TransformersRuntime,
+    )
+
+    manager = object.__new__(ModelManager)
+    selection = RuntimeSelection(
+        provider_id="builtin_transformers",
+        display_name="Transformers",
+        endpoint_type=ProviderEndpointType.BUILTIN_TRANSFORMERS,
+        model="approved-local-model",
+        runtime_engine="transformers",
+    )
+    runtime = object.__new__(TransformersRuntime)
+    monkeypatch.setattr(
+        runtime, "generate_text_with_model",
+        lambda prompt, **kwargs: ("generated text", "gpt2"),
+    )
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: runtime)
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    monkeypatch.setattr(
+        manager, "_get_breaker",
+        lambda _: SimpleNamespace(
+            allow_request=lambda: True,
+            record_success=lambda: None,
+            record_failure=lambda: None,
+        ),
+    )
+    recorded = []
+    monkeypatch.setattr(
+        manager, "_record_provider_result",
+        lambda provider, success, *args, **kwargs: recorded.append(success),
+    )
+    with pytest.raises(ProviderNotAvailable, match="executed_model_registry_identity_drift"):
+        await manager.generate_chat(
+            [{"role": "user", "content": "private prompt"}],
+            return_receipt=True,
+        )
+    assert recorded == [False]
+
+
+@pytest.mark.asyncio
+async def test_auto_native_receipt_uses_observed_model_not_auto(monkeypatch) -> None:
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+        TransformersRuntime,
+    )
+
+    manager = object.__new__(ModelManager)
+    selection = RuntimeSelection(
+        provider_id="builtin_transformers",
+        display_name="Transformers",
+        endpoint_type=ProviderEndpointType.BUILTIN_TRANSFORMERS,
+        model="auto",
+        runtime_engine="transformers",
+    )
+    runtime = object.__new__(TransformersRuntime)
+    monkeypatch.setattr(
+        runtime, "generate_text_with_model",
+        lambda prompt, **kwargs: ("actual text", "gpt2"),
+    )
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: runtime)
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    monkeypatch.setattr(
+        manager, "_get_breaker",
+        lambda _: SimpleNamespace(
+            allow_request=lambda: True,
+            record_success=lambda: None,
+            record_failure=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(manager, "_record_provider_result", lambda *a, **kw: None)
+    receipt = await manager.generate_chat(
+        [{"role": "user", "content": "hello"}], return_receipt=True,
+    )
+    assert receipt.text == "actual text"
+    assert receipt.model == "gpt2"
+    assert receipt.runtime_engine == "transformers"
 
 
 def test_real_only_embedding_refuses_missing_model() -> None:
