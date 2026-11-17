@@ -38,7 +38,7 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
-    PolicyDecision, RuntimePolicyEnforcer,
+    PolicyDecision, PolicyEvaluationRequest, RuntimePolicyEnforcer,
 )
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
@@ -571,6 +571,86 @@ async def test_original_policy_issuer_must_reject_fresh_execution_id_replay():
     assert original.meter.model_calls == 1
     assert fresh_meter.model_calls == 0
     assert invoked == ["admitted"]
+
+
+@pytest.mark.asyncio
+async def test_real_runtime_policy_evaluation_is_required_before_any_initial_model_bind():
+    """A policy identifier or a value-equal copy cannot issue model quota."""
+    issuer = RuntimePolicyEnforcer()
+    scope = PolicyEvaluationRequest(
+        user_id="issued-user",
+        tenant_id="issued-tenant",
+        session_id="issued-session",
+        correlation_id=f"issued-correlation-{uuid4().hex}",
+        max_model_calls=1,
+        action="general_assist",
+        requested_capabilities=[],
+    )
+    original_decision = await issuer.evaluate(scope)
+    assert original_decision.allowed
+    assert issuer._issued_model_decisions.get(original_decision.decision_id) is (
+        original_decision
+    )
+
+    context = ChatExecutionContext(
+        user_id=scope.user_id,
+        tenant_id=scope.tenant_id,
+        session_id=scope.session_id,
+        request_id=f"issued-request-{uuid4().hex}",
+        correlation_id=scope.correlation_id,
+        authenticated_user=UserData(
+            user_id=scope.user_id,
+            tenant_id=scope.tenant_id,
+            roles=["user"],
+            permissions=[],
+            is_active=True,
+            is_verified=True,
+        ),
+    )
+    budget = ExecutionBudget(max_model_calls=1)
+    plan = AuthorizedExecutionPlan(
+        execution_id=f"exec-{context.request_id}",
+        policy_decision_id=original_decision.decision_id,
+        authorized_user_id=context.user_id,
+        authorized_tenant_id=context.tenant_id,
+        authorized_session_id=context.session_id,
+        budget=budget,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        context.bind_runtime_model_authority(plan, meter)
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(
+            context=context,
+            decision=replace(original_decision),
+        )
+
+    issuer.bind_chat_model_policy(context=context, decision=original_decision)
+    context.bind_runtime_model_authority(plan, meter)
+    assert context.original_runtime_model_plan(meter) is plan
+
+    copied_budget = replace(budget)
+    copied_plan = replace(
+        plan, execution_id=f"forged-{uuid4().hex}", budget=copied_budget,
+    )
+    cloned_context = replace(context)
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(
+            context=cloned_context, decision=original_decision,
+        )
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        cloned_context.bind_runtime_model_authority(
+            copied_plan, ExecutionBudgetMeter(copied_budget),
+        )
+    assert context.original_runtime_model_plan(meter) is plan
 
 
 def test_runtime_context_binding_is_not_serialized_or_cloned():
