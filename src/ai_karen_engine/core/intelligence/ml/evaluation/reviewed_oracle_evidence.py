@@ -397,6 +397,15 @@ class GovernedCuratedOracleReviewEvidence:
             or reviewed_at < snapshot.runner_finished_at
         ):
             return None
+        # The review-receipt await may have overlapped with deletion or
+        # revocation of an original numeric benchmark outcome. Re-verify the
+        # canonical owner-scoped full cohort before returning a live result.
+        try:
+            await self._require_measured(subject=subject, snapshot=snapshot)
+        except OutcomeStoreError:
+            return None
+        if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
+            return None
         return ReviewedOracleObservation(
             tenant_id=self._tenant,
             user_id=self._user,
