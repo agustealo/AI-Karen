@@ -1,0 +1,4 @@
+# Optional CPU voice-runtime image profile: PROFILE=runtime-pocket-tts.
+# The governed model-download worker owns licensed weights separately.
+# Keep this runtime package in lockstep with pocket-tts/model_spec.json.
+pocket-tts==4.0.1
