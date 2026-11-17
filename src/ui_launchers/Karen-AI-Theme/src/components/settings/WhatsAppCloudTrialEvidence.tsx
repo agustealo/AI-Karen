@@ -105,7 +105,7 @@ export default function WhatsAppCloudTrialEvidence({
   const [error, setError] = useState<string | null>(null);
 
   const inspect = async () => {
-    if (pending || !UUID.test(connectionId) || !INBOUND_ID.test(eventId)) return;
+    if (pending) return; // The button blocks invalid input; the host revalidates every field.
     setPending(true);
     setError(null);
     setEvidence(null);
@@ -131,8 +131,12 @@ export default function WhatsAppCloudTrialEvidence({
         Karen reads only its own tenant-scoped inbox, ChatRuntime outbox and
         signed-status ledger. This does not independently authenticate Meta origin.
       </p>
-      <div className="space-y-2">
-        <Label htmlFor={`whatsapp-trial-${connectionId}`}>Inbound WhatsApp message ID</Label>
+      <form className="space-y-3" onSubmit={(event) => {
+        event.preventDefault();
+        void inspect();
+      }}>
+        <div className="space-y-2">
+          <Label htmlFor={`whatsapp-trial-${connectionId}`}>Inbound WhatsApp message ID</Label>
         <Input id={`whatsapp-trial-${connectionId}`}
           autoComplete="off" spellCheck={false} maxLength={256}
           placeholder="wamid."
@@ -145,13 +149,13 @@ export default function WhatsAppCloudTrialEvidence({
           disabled={pending}
         />
       </div>
-      <Button type="button" size="sm" variant="outline"
-        disabled={pending || !INBOUND_ID.test(eventId)}
-        onClick={() => void inspect()}>
-        {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> :
-          <Search className="mr-2 h-4 w-4" aria-hidden="true" />}
-        Inspect persisted evidence
-      </Button>
+        <Button type="submit" size="sm" variant="outline"
+          disabled={pending || !UUID.test(connectionId) || !INBOUND_ID.test(eventId)}>
+          {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> :
+            <Search className="mr-2 h-4 w-4" aria-hidden="true" />}
+          Inspect persisted evidence
+        </Button>
+      </form>
       {error && (
         <Alert role="alert" variant="destructive">
           <AlertCircle className="h-4 w-4" aria-hidden="true" />
