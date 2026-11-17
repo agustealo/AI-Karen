@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import uuid
+from dataclasses import replace
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -23,11 +24,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
     PluginLifecycleApprovalScope,
+    PluginLifecycleKernelObservation,
 )
+from ai_karen_engine.services.plugin_service import PluginService
 from ai_karen_engine.persistence.repositories import plugin_lifecycle_repository as ledger_module
 from ai_karen_engine.persistence.repositories.plugin_lifecycle_repository import (
     PluginLifecycleApprovalRejected,
     PluginLifecycleLedger,
+    PluginLifecycleLedgerError,
+    PluginLifecycleOperationNotFound,
     PluginLifecycleRevisionConflict,
 )
 
@@ -56,6 +61,7 @@ def _scope(
 @pytest.mark.asyncio
 async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     dsn = os.getenv("PLUGIN_LIFECYCLE_TEST_DATABASE_URL")
     if not dsn:
@@ -99,6 +105,19 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 / "supabase/migrations/20261117010000_60_plugin_global_lifecycle_revision.sql"
             ).read_text(encoding="utf-8")
         )
+        await raw.execute(
+            (
+                Path(__file__).resolve().parents[2]
+                / "supabase/migrations/20261117020000_61_plugin_global_lifecycle_terminal_status.sql"
+            ).read_text(encoding="utf-8")
+        )
+        status_max_length = await raw.fetchval(
+            "SELECT character_maximum_length FROM information_schema.columns "
+            "WHERE table_schema = 'public' "
+            "AND table_name = 'extension_lifecycle_operations' "
+            "AND column_name = 'status'"
+        )
+        assert status_max_length >= len("verified_committed")
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{backend_role}"')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{client_role}"')
         await raw.execute(
@@ -276,6 +295,200 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 request_id="changed", correlation_id="changed",
             )
         assert (await ledger.read_observation(second.installation_id))["disposition"] == "ready"
+
+        # KPLUG-CONV-02C3: actual canonical kernel transition and typed
+        # postcondition, not a model/chat-supplied completion assertion.
+        package = tmp_path / "terminal-demo"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "handler.py").write_text(
+            "class MainExtension:\n    pass\n", encoding="utf-8"
+        )
+        (package / "plugin_manifest.json").write_text(
+            json.dumps({
+                "name": "terminal-demo",
+                "version": "1.0.0",
+                "display_name": "Terminal Proof Plugin",
+                "description": "Disposable kernel integration fixture",
+                "author": "KAREN",
+                "license": "MIT",
+                "category": "test",
+                "entrypoint": "handler:MainExtension",
+                "rbac": {"default_enabled": False},
+            }),
+            encoding="utf-8",
+        )
+        (package / ".karen-manual-disabled").write_text(
+            "Plugin disabled explicitly; requires enable\n", encoding="utf-8"
+        )
+        service = PluginService(tmp_path, tmp_path)
+        await service.initialize()
+        kernel = service.kernel
+        assert kernel is not None
+        observed_before = kernel.get_record("terminal-demo")
+        assert observed_before is not None
+        assert observed_before["status"] == "disabled"
+        # C2 approvals use the loader-selected manifest SHA-256, NOT the
+        # catalog's legacy MD5 directory fingerprint.
+        preflight_evidence = await kernel.observe_lifecycle_for_finalization(
+            "terminal-demo", operation_id=str(uuid.uuid4()),
+        )
+        checksum = preflight_evidence.manifest_checksum
+        assert len(checksum) == 64
+        assert checksum != str(observed_before["checksum"])
+
+        enable_scope = PluginLifecycleApprovalScope(
+            installation_id="terminal-demo",
+            action="enable",
+            manifest_checksum=checksum,
+            expected_state="disabled",
+            expected_revision=1,
+            tenant_id=str(tenant_a),
+            user_id=str(actor_a),
+            session_id="session-1",
+            conversation_id=str(uuid.UUID("22222222-2222-2222-2222-222222222222")),
+        )
+        await ledger.initialize_observation(
+            installation_id="terminal-demo",
+            manifest_checksum=checksum,
+            observed_state="disabled",
+        )
+        enable_approval = await approve(enable_scope)
+        enable_claim = await ledger.reserve_approved(
+            approval_id=enable_approval,
+            scope=enable_scope,
+            request_id="kernel-proof",
+            correlation_id="kernel-correlation",
+        )
+        # A prepared claim alone cannot mint a final receipt.
+        with pytest.raises(TypeError, match="Trusted kernel"):
+            await ledger.complete_verified(
+                operation_id=enable_claim["operation_id"],
+                tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+                observation={"observed_state": "enabled"},
+            )
+        await service.enable_plugin("terminal-demo")
+        observation = await kernel.observe_lifecycle_for_finalization(
+            "terminal-demo", operation_id=enable_claim["operation_id"],
+        )
+        assert isinstance(observation, PluginLifecycleKernelObservation)
+        assert observation.observed_state == "enabled"
+        assert observation.manifest_checksum == checksum
+
+        for altered in (
+            replace(observation, operation_id=str(uuid.uuid4())),
+            replace(observation, manifest_checksum="b" * 64),
+            replace(observation, observed_state="disabled"),
+        ):
+            with pytest.raises(PluginLifecycleRevisionConflict):
+                await ledger.complete_verified(
+                    operation_id=enable_claim["operation_id"],
+                    tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+                    observation=altered,
+                )
+        with pytest.raises(PluginLifecycleOperationNotFound):
+            await ledger.complete_verified(
+                operation_id=enable_claim["operation_id"],
+                tenant_id=str(tenant_b), actor_user_id=str(actor_b),
+                observation=observation,
+            )
+        assert (await ledger.read_observation("terminal-demo"))["disposition"] == "unresolved"
+
+        # Fail specifically AFTER the revision CAS, when writing the
+        # operation's terminal receipt. SELECT FOR UPDATE retains its ordinary
+        # privilege, so this tests actual two-row transaction rollback.
+        await raw.execute("""
+            CREATE FUNCTION public.kplug_ci_reject_terminal_receipt()
+            RETURNS trigger LANGUAGE plpgsql AS $kplug$
+            BEGIN
+                RAISE EXCEPTION 'kplug test-only terminal write rejection';
+            END
+            $kplug$;
+            CREATE TRIGGER kplug_ci_reject_terminal_receipt
+            BEFORE UPDATE OF status ON public.extension_lifecycle_operations
+            FOR EACH ROW
+            WHEN (NEW.status = 'verified_committed')
+            EXECUTE FUNCTION public.kplug_ci_reject_terminal_receipt();
+        """)
+        try:
+            with pytest.raises(Exception, match="kplug test-only terminal"):
+                await ledger.complete_verified(
+                    operation_id=enable_claim["operation_id"],
+                    tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+                    observation=observation,
+                )
+        finally:
+            await raw.execute("""
+                DROP TRIGGER kplug_ci_reject_terminal_receipt
+                    ON public.extension_lifecycle_operations;
+                DROP FUNCTION public.kplug_ci_reject_terminal_receipt();
+            """)
+        staged = await ledger.read_observation("terminal-demo")
+        assert staged["disposition"] == "unresolved"
+        assert staged["revision"] == 1
+        assert staged["observed_state"] == "disabled"
+        assert (await ledger.read_operation(
+            operation_id=enable_claim["operation_id"],
+            tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+        ))["status"] == "prepared"
+
+        # Competing processes/sessions race for one prepared receipt.
+        # Exactly one global CAS may commit, with no duplicate revision.
+        completion_attempts = await asyncio.gather(
+            ledger.complete_verified(
+                operation_id=enable_claim["operation_id"],
+                tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+                observation=observation,
+            ),
+            ledger.complete_verified(
+                operation_id=enable_claim["operation_id"],
+                tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+                observation=observation,
+            ),
+            return_exceptions=True,
+        )
+        committed_rows = [
+            result for result in completion_attempts if isinstance(result, dict)
+        ]
+        denied_rows = [
+            result for result in completion_attempts
+            if isinstance(result, PluginLifecycleOperationNotFound)
+        ]
+        assert len(committed_rows) == len(denied_rows) == 1
+        committed = committed_rows[0]
+        assert committed["status"] == "verified_committed"
+        assert committed["prior_revision"] == 1
+        assert committed["next_revision"] == 2
+        assert committed["verification_source"] == "plugin_kernel"
+        finalized = await ledger.read_observation("terminal-demo")
+        assert finalized["disposition"] == "ready"
+        assert finalized["active_operation_id"] is None
+        assert finalized["observed_state"] == "enabled"
+        assert finalized["revision"] == 2
+        with pytest.raises(PluginLifecycleOperationNotFound):
+            await ledger.complete_verified(
+                operation_id=enable_claim["operation_id"],
+                tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+                observation=observation,
+            )
+        with pytest.raises(PluginLifecycleLedgerError):
+            await ledger.mark_unknown(
+                operation_id=enable_claim["operation_id"],
+                tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+            )
+        # Unknown is not rehabilitated merely because a later snapshot
+        # matches its target, even when submitted by a privileged host.
+        with pytest.raises(PluginLifecycleOperationNotFound):
+            await ledger.complete_verified(
+                operation_id=claim["operation_id"],
+                tenant_id=winner_tenant, actor_user_id=winner_actor,
+                observation=PluginLifecycleKernelObservation(
+                    operation_id=claim["operation_id"],
+                    installation_id=claim["installation_id"],
+                    manifest_checksum=claim["manifest_checksum"],
+                    observed_state=claim["target_state"],
+                ),
+            )
 
         # A client with no host privilege must never read global revisions
         # or operation receipts directly, even though the tables exist.

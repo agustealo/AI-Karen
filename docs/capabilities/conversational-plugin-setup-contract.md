@@ -461,12 +461,13 @@ separate verified reconciliation. The ledger has no API route or plugin
 execution method and cannot emit a success receipt.
 
 **Status:** claim schema/repository and a disposable real PostgreSQL proof
-are implemented in KPLUG-CONV-02C2. Physical PluginKernel mutation,
-cross-worker execution admission/fencing, fresh RuntimePolicy grant,
-recovery and verified completed receipt are **not yet implemented**.
-Existing admin API mutations must be incorporated into the global fence
-before claiming installation-wide concurrency safety. Do not expose
-a consumer chat confirmation control at this stage.
+are implemented in KPLUG-CONV-02C2. A backend-only, kernel-observed terminal
+CAS and replay/rollback tests are introduced in KPLUG-CONV-02C3A below.
+The governed execution entrypoint, cross-worker physical execution fencing,
+fresh RuntimePolicy grant, unknown-outcome reconciliation, and chat-safe
+completion projection are **not yet available**. Existing admin API mutations
+must enter the same global fence before claiming installation-wide concurrency
+safety. Do not expose a consumer chat confirmation control at this stage.
 
 Proof:
 `tests/integration/test_plugin_lifecycle_ledger_postgres.py` runs in
@@ -475,6 +476,61 @@ database role, two tenants with competing claims, exact approval matching,
 rollback on failed insert, uncertain-outcome retention and direct client
 read denial. This is not a substitute for a kernel mutation integration
 test or a verified post-restart recovery test.
+
+## Kernel-observed terminal ledger CAS (KPLUG-CONV-02C3A)
+
+The canonical `PluginKernel.observe_lifecycle_for_finalization` now reads a
+registered, validated generic plugin's actual runtime state and explicit
+durable enable/disable markers **under its existing state lock**. It rejects
+unavailable/quarantined/untrusted installations, active executions, unfinished
+retirement, missing or symlinked lifecycle markers and specialized voice or
+communication-channel plugins. The typed
+`PluginLifecycleKernelObservation` binds the operation, installation, catalog
+checksum and observed state. The durable checksum is SHA-256 over
+the loader-selected canonical manifest bytes, **not** the catalog's legacy
+MD5 directory fingerprint and not user-provided metadata. The state markers
+are checked separately and do not alter that manifest digest. It is a
+host-internal observation, **not** a permission, approval or transferrable
+execution grant.
+
+The forward-only migration
+`20261117020000_61_plugin_global_lifecycle_terminal_status.sql` widens
+`extension_lifecycle_operations.status` from 16 to 24 characters because
+the predeclared `verified_committed` state needs 18. It does not convert
+old prepared or unknown operations, relax the status check constraint, or
+grant clients table access.
+
+The existing `PluginLifecycleLedger.complete_verified` accepts only a
+prepared operation in the exact authenticated tenant and actor scope.
+It locks the claimed operation and transactionally (1) checks that the kernel
+observation matches the reserved action's target state and checksum,
+(2) advances the **application-global** revision by exactly one while
+releasing its specific claim, and (3) records `verified_committed` on the
+same operation. A mismatch, unknown/cancelled/stale/replayed claim, wrong
+actor, SQL error or failed receipt update rolls back the entire terminal
+transaction. No preflight, prepared claim or in-memory success can alone
+produce a committed receipt. The existing `mark_unknown` remains permanent
+and unresolved; uncertain mutations are not implicitly retried or restored.
+
+**Scope and deliberate limitation:** This backend completion primitive is not
+connected to a chat mutation endpoint or exposed to the consumer UI. Current
+`PluginService.enable_plugin`/`disable_plugin` and other admin entrypoints
+have not yet been migrated to one global execution gate, and the PluginKernel
+lock is process-local. Therefore this slice **does not establish safe
+cross-worker physical mutation, host-wide recovery, or live chat enable/disable
+readiness**. A host-observed local state cannot authorize chat execution.
+KPLUG-CONV-02C3B must govern *every* physical mutation path before the
+completion primitive is used to claim a production-safe lifecycle change.
+
+**Proof:** `tests/extensions/test_plugin_kernel_verified_lifecycle_observation.py`
+exercises real local kernel state/marker transitions and fail-closed modality
+and active-execution cases. The existing
+`tests/integration/test_plugin_lifecycle_ledger_postgres.py` includes a
+real kernel transition followed by restricted-role PostgreSQL finalization,
+tampered operation/checksum/state rejection, wrong-tenant denial, transaction
+rollback on receipt write failure, monotonic revision and replay/unknown
+refusal. Plugin Backend runs both on exact-head CI. These tests do not by
+themselves certify a multi-worker production transition.
 
 ## Execution slices (do not duplicate owners)
 
