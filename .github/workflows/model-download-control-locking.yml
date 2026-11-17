@@ -103,7 +103,7 @@ jobs:
           pytest tests/integration/test_recommended_model_live_source.py -q
 
       - name: Verify real licensed Pocket SDK/HTTPS file inventory when explicitly requested
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_pocket_manifest }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.verify_pocket_manifest }}
         timeout-minutes: 8
         env:
           KAREN_LIVE_MODEL_SOURCE_PROOF: "1"
