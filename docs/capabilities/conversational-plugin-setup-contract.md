@@ -362,6 +362,44 @@ projection, and host-binding regressions are in the existing
 tests/core/runtime/test_conversational_plugin_inspection.py suite, explicitly
 executed by both Main Quality and Plugin Backend.
 
+## Global plugin lifecycle preflight (KPLUG-CONV-02A)
+
+An authenticated message such as "Enable my X plugin" or "Disable my X
+plugin" is an intent to change **application-global** plugin state, not a
+tenant-local preference or an automatic execution grant.
+
+CORTEX continues to route these requests to read-only plugin.inspect. For a
+uniquely resolved manifest, the existing PluginService performs an additional
+read-only lifecycle preview using the authenticated UserData and the same
+ADMIN_PLUGINS_MANAGE permission used by the canonical plugin management API.
+No role from user chat prose, model output, manifest tags or a frontend
+checkbox may authorize this operation.
+
+The preview explicitly distinguishes unsupported commands, invalid
+installations, unavailable lifecycle states, absent permissions, already
+satisfied state, and **needs_explicit_confirmation**. A confirmation-required
+result identifies the already-existing authenticated Plugins & Tools
+management surface as the separate place to finish a change. It does not
+claim a currently working conversational confirmation endpoint or grant
+RuntimePolicy permission by returning that hint.
+
+Voice engines and communication-channel installations are delegated to the
+existing VoiceRuntime and ChannelHost authorities. The global generic plugin
+enable/disable path must not be used to activate a channel or substitute a
+separate provider control plane.
+
+The preview contains only installation ID, requested action, required
+permission, global scope, current lifecycle state, static next-action hints
+and denial/confirmation status. Every response sets approval_granted=false,
+mutation_performed=false and action_receipt=null. It cannot be used as an
+executable token or replayed approval. A later mutation must be newly
+authorized, confirmed and audited through the canonical management owner.
+
+The preflight and negative tests run in
+tests/core/runtime/test_conversational_plugin_inspection.py, already invoked
+directly by Main Quality and Plugin Backend.
+
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and
