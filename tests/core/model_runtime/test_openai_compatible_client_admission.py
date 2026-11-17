@@ -175,10 +175,7 @@ async def test_inference_port_cannot_turn_ungoverned_external_model_into_wire_ca
     )
     monkeypatch.setattr(manager_module, "get_model_manager", lambda: manager)
 
-    with pytest.raises(
-        ProviderNotAvailable,
-        match="ungoverned_external_compatibility_transport_denied",
-    ):
+    with pytest.raises(PermissionError, match="governed_model_transport_admission_required"):
         await ModelManagerInferencePort().generate(
             InferenceRequest(
                 messages=[{"role": "user", "content": "private prompt"}],
@@ -191,11 +188,11 @@ async def test_inference_port_cannot_turn_ungoverned_external_model_into_wire_ca
 
     monkeypatch.setattr(llm_adapter, "get_model_manager", lambda: manager)
     facade = llm_adapter.LLMUtils()
-    with pytest.raises(ProviderNotAvailable):
+    with pytest.raises(PermissionError, match="governed_model_transport_admission_required"):
         await facade.generate_text_async(
             "private LLMUtils request",
             provider="ollama-local",
         )
-    with pytest.raises(EmbeddingFailed):
+    with pytest.raises(PermissionError, match="governed_model_transport_admission_required"):
         facade.embed("private LLMUtils embedding", provider="ollama-local")
     assert attempts == []
