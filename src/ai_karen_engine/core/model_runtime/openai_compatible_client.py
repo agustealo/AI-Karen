@@ -111,7 +111,12 @@ class OpenAICompatibleRuntimeClient:
         if not text:
             raise GenerationFailed(f"{self.provider_name} returned empty text")
         observed_model = body.get("model")
-        return text, str(observed_model).strip() if observed_model is not None else None
+        return (
+            text,
+            observed_model.strip()
+            if isinstance(observed_model, str) and observed_model.strip()
+            else None,
+        )
 
     def generate_text(self, prompt: str, **kwargs: Any) -> str:
         text, _ = self.generate_text_with_model(prompt, **kwargs)

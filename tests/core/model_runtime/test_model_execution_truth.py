@@ -228,6 +228,54 @@ async def test_port_denies_legacy_unattributed_response(monkeypatch) -> None:
 
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unobserved_model", [None, "", " ", 42, "auto"])
+async def test_compatibility_receipt_refuses_missing_model_identity(
+    monkeypatch, unobserved_model,
+) -> None:
+    manager = object.__new__(ModelManager)
+    selection = RuntimeSelection(
+        provider_id="ollama-local", display_name="Ollama",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        model="registered-model", runtime_engine="ollama",
+    )
+    runtime = OpenAICompatibleRuntimeClient(
+        model="registered-model",
+        base_url="http://127.0.0.1:11434/v1",
+        provider_name="ollama-local",
+    )
+    monkeypatch.setattr(
+        runtime, "_request",
+        lambda path, payload: {
+            "model": unobserved_model,
+            "choices": [{"message": {"content": "response without model receipt"}}],
+        },
+    )
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: runtime)
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    monkeypatch.setattr(
+        manager, "_get_breaker",
+        lambda _: SimpleNamespace(
+            allow_request=lambda: True,
+            record_success=lambda: None,
+            record_failure=lambda: None,
+        ),
+    )
+    recorded = []
+    monkeypatch.setattr(
+        manager, "_record_provider_result",
+        lambda provider_id, success, *a, **kw: recorded.append(success),
+    )
+    with pytest.raises(ProviderNotAvailable, match="compatibility_execution_model_unobserved"):
+        await manager.generate_chat(
+            [{"role": "user", "content": "private prompt"}], return_receipt=True,
+        )
+    assert recorded == [False]
+    # Legacy text-only compatibility API is not an audited execution receipt.
+    assert runtime.generate_text("legacy prompt") == "response without model receipt"
+
+
 def test_compatible_client_keeps_configured_default_separate_from_response(monkeypatch) -> None:
     client = OpenAICompatibleRuntimeClient(
         model="auto", base_url="http://127.0.0.1:11434/v1", provider_name="local",

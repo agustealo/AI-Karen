@@ -308,6 +308,12 @@ class ModelManager:
                 response, observed_model = await asyncio.to_thread(
                     provider.generate_text_with_model, prompt, **kwargs
                 )
+                if (
+                    not isinstance(observed_model, str)
+                    or not observed_model.strip()
+                    or observed_model.lower() == "auto"
+                ):
+                    raise ProviderNotAvailable("compatibility_execution_model_unobserved")
             else:
                 response = await self.invoke_provider(provider, prompt, **kwargs)
             if (
