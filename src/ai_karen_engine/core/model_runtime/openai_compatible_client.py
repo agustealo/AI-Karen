@@ -12,12 +12,12 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
-from ai_karen_engine.core.model_runtime.provider_execution import _open_provider_request
 from ai_karen_engine.core.model_runtime.provider_contracts import (
     EmbeddingFailed,
     GenerationFailed,
     ProviderNotAvailable,
 )
+from ai_karen_engine.core.model_runtime.provider_execution import _open_provider_request
 
 
 class OpenAICompatibleRuntimeClient:
