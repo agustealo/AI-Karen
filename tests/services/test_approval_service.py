@@ -14,6 +14,7 @@ from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
     RiskLevel,
 )
+from ai_karen_engine.core.runtime.plugin_lifecycle_approval import PluginLifecycleApprovalScope
 from ai_karen_engine.services.approvals import (
     ApprovalNotFoundError,
     ApprovalScopeError,
@@ -464,11 +465,7 @@ def _lifecycle_scope(
     checksum: str = "a" * 64,
     action: str = "disable",
     state: str = "enabled",
-) -> "PluginLifecycleApprovalScope":
-    from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
-        PluginLifecycleApprovalScope,
-    )
-
+) -> PluginLifecycleApprovalScope:
     return PluginLifecycleApprovalScope(
         installation_id="timezone-clock",
         action=action,
