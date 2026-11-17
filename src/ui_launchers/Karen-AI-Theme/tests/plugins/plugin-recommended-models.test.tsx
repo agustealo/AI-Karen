@@ -231,6 +231,57 @@ describe('Governed plugin model setup', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
+  it('resumes polling an already-running owned Pocket job after navigation', async () => {
+    const jobId = 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335';
+    getImpl(catalog(), policy, [{
+      model_id: recommendation.model_id,
+      revision: PINNED,
+      channel_id: 'plugin_audio',
+      status: 'running',
+      progress: 38,
+      job_id: jobId,
+    }]);
+
+    const nativeTimeout = window.setTimeout.bind(window);
+    const pollRef: { current: (() => void) | null } = { current: null };
+    const timeoutSpy = vi.spyOn(window, 'setTimeout').mockImplementation(
+      (handler, delay, ...args) => {
+        if (delay === 4000 && typeof handler === 'function') {
+          pollRef.current = () => handler(...args);
+          return 123 as unknown as ReturnType<typeof setTimeout>;
+        }
+        return nativeTimeout(handler, delay, ...args) as unknown as ReturnType<typeof setTimeout>;
+      },
+    );
+    const previousGet = mocks.get.getMockImplementation();
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === `/api/runtime/model-library/my-downloads/${jobId}`) {
+        return {
+          job_id: jobId, model_id: recommendation.model_id,
+          revision: PINNED, channel_id: 'plugin_audio',
+          status: 'completed', progress: 1,
+        };
+      }
+      return previousGet?.(url);
+    });
+    try {
+      render(<PluginRecommendedModels pluginId="pocket-tts" />);
+      await screen.findByText(/Download job: running/);
+      await waitFor(() => expect(pollRef.current).not.toBeNull());
+      await act(async () => { pollRef.current?.(); await Promise.resolve(); });
+      await waitFor(() => expect(mocks.get).toHaveBeenCalledWith(
+        `/api/runtime/model-library/my-downloads/${jobId}`,
+      ));
+      expect(screen.getByText(/Model download completed/)).toBeTruthy();
+      expect(screen.queryByText(/Download job: running/)).toBeNull();
+      // This only confirms the worker receipt, never a selectable TTS engine.
+      expect(screen.queryByText(/Pocket voice ready/)).toBeNull();
+      expect(mocks.post).not.toHaveBeenCalled();
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it('blocks a second queue if a matching model is already running', async () => {
     getImpl(catalog(), policy, [{
       model_id: recommendation.model_id,
@@ -292,10 +343,13 @@ describe('Governed plugin model setup', () => {
           `/api/runtime/model-library/my-downloads/${jobId}`,
         );
         const retry = screen.getByRole('button', { name: 'Download recommended model' });
-        expect(retry.hasAttribute('disabled')).toBe(false);
+        expect(retry.hasAttribute('disabled')).toBe(true);
         expect(screen.getByText(/Model download did not complete/)).toBeTruthy();
         expect(screen.queryByText(/download job is queued/)).toBeNull();
 
+        // A failed/cancelled job cannot reuse the previous license checkbox.
+        fireEvent.click(screen.getByRole('checkbox'));
+        expect(retry.hasAttribute('disabled')).toBe(false);
         fireEvent.click(retry);
         await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(4));
       } finally {
