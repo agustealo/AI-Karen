@@ -98,3 +98,28 @@ excerpts, malformed booleans, wrong source type, unapproved IDs, failed
 attempts and a valid separately admitted tool. RuntimePolicy and the
 DirectCapabilityExecutor still own authorization and execution; the
 synthesis gate only verifies their receipts before making content model-visible.
+
+## KCHAT-POLICY-03: Prevent external engine opt-out bypass
+
+The gateway previously treated an enabled `cloud` engine as executable
+even when its independent `allow_external_engines` policy was false. This
+could occur with an explicitly selected remote provider, an active cloud
+engine, or a configured fallback engine. Provider-selection policy checks
+were insufficient because the gateway also directly appended the active
+engine and fallback order, regardless of the policy decision.
+
+The canonical `ExpressionGateway` now denies an eligible-looking cloud
+engine **before engine instantiation, fallback-budget reservation, or
+network execution** if external execution is disabled. It emits a bounded
+`external_engines_forbidden` rejection receipt. A disabled engine does
+not consume an additional model call. Configured local providers may
+continue only under their existing independent engine and RuntimePolicy
+admission rules.
+
+Adversarial test cases cover an enabled cloud engine selected explicitly
+and the same cloud endpoint inserted in the fallback chain, verifying
+zero cloud-engine invocation and correct shared budget accounting. Tests
+which intentionally exercise authorized cloud fallback now explicitly
+enable the external-engine policy rather than relying on implicit
+configuration. No user request or persisted UI preference can override
+the installation-level external-execution policy.
