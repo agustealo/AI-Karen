@@ -429,6 +429,19 @@ class TrainingArtifactReconciler:
         )
         if observed is None or observed.evidence_sha256 != digest:
             return None
+        # Executor-reported sample counts are weaker evidence than a keyed
+        # fit-member receipt, but contradictory canonical counts still mean
+        # the job/model/receipt relationship cannot be accepted.
+        if any(
+            type(snapshot.get(field)) is not int
+            or snapshot[field] != expected
+            for snapshot in (metrics, job_metrics, artifact_meta)
+            for field, expected in (
+                ("training_samples", observed.train_count),
+                ("test_samples", observed.holdout_count),
+            )
+        ):
+            return None
 
         # The observation was read after the first model/job verification.
         # Perform another complete hash-and-ledger reconciliation afterward.
