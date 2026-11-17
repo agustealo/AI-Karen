@@ -150,6 +150,7 @@ class ModelDownloadJob:
     exclude_patterns: Optional[list[str]] = None
     pin: bool = False
     force_redownload: bool = False
+    download_method: str = "hf_hub"
     pause_requested: bool = False
     cancel_requested: bool = False
     warnings: list[str] = field(default_factory=list)
@@ -785,6 +786,17 @@ class ModelDownloadControlService:
                     "block_new_downloads": self._policy.block_new_downloads,
                 },
             )
+        download_method = str(request.get("download_method") or "hf_hub").strip()
+        if download_method not in {"hf_hub", "direct_https"}:
+            raise ModelOrchestratorError(E_INVALID, "Unsupported model download method")
+        if download_method == "direct_https":
+            # Direct transfer is allowed only for exact reviewed source revisions
+            # and explicit file selection. This does not relax license validation.
+            reviewed = str(request.get("validated_revision") or "").strip()
+            if not re.fullmatch(r"[a-fA-F0-9]{40}", reviewed):
+                raise ModelOrchestratorError(E_VERIFY, "Direct HTTPS requires a pinned reviewed revision")
+            if not request.get("include_patterns"):
+                raise ModelOrchestratorError(E_VERIFY, "Direct HTTPS requires explicit curated file patterns")
         model_id = str(request.get("model_id") or "").strip()
         revision = request.get("revision")
         reviewed_revision = str(
@@ -846,6 +858,7 @@ class ModelDownloadControlService:
             exclude_patterns=list(request.get("exclude_patterns") or []) or None,
             pin=bool(request.get("pin", False)),
             force_redownload=bool(request.get("force_redownload", False)),
+            download_method=download_method,
             detected_runtime=validation.detected_runtime,
             detected_modality=validation.detected_modality,
             install_path=str(install_path),
@@ -989,6 +1002,7 @@ class ModelDownloadControlService:
             exclude_patterns=claim.get("exclude_patterns"),
             pin=bool(claim.get("pin", False)),
             force_redownload=bool(claim.get("force_redownload", False)),
+            download_method=str(claim.get("download_method") or "hf_hub"),
             storage_key=claim.get("storage_key"),
         )
         started = time.perf_counter()
@@ -1019,6 +1033,7 @@ class ModelDownloadControlService:
             "files_downloaded": result.files_downloaded,
             "duration_seconds": max(result.duration_seconds, time.perf_counter() - started),
             "status": result.status,
+            "download_method": request.download_method,
         }
 
         journal: Optional[ModelDownloadPublicationJournal] = None
