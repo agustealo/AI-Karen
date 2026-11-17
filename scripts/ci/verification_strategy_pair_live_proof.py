@@ -59,7 +59,7 @@ class MeasuredPath:
     reasoning_steps: int
     duration_ms: float
     reasoning_status: str
-    native_stream_path: bool
+    stream_execution_path: bool
 
     def public_result(self) -> dict[str, Any]:
         # Do not emit prompt text, identity, correlation/policy IDs, tokens,
@@ -69,7 +69,7 @@ class MeasuredPath:
             "model_calls": self.model_calls,
             "reasoning_steps": self.reasoning_steps,
             "reasoning_status": self.reasoning_status,
-            "native_stream_path": self.native_stream_path,
+            "stream_execution_path": self.stream_execution_path,
             "duration_ms": round(self.duration_ms, 2),
         }
 
@@ -346,7 +346,7 @@ async def run_pair(
                     str(metadata["reasoning_status"])
                     if action == "verify_then_respond" else "not_applicable"
                 ),
-                native_stream_path=stream,
+                stream_execution_path=stream,
             )
         )
 
