@@ -83,6 +83,7 @@ class DownloadRequest:
     exclude_patterns: Optional[List[str]] = None
     pin: bool = False
     force_redownload: bool = False
+    download_method: str = "hf_hub"
     storage_key: Optional[str] = None
 
 
@@ -634,40 +635,76 @@ class ModelOrchestratorService:
         except OSError as exc:
             raise ModelOrchestratorError(E_DISK, "Failed to create model install directory", {"path": str(install_path), "error": str(exc)}) from exc
 
+        if req.download_method not in {"hf_hub", "direct_https"}:
+            raise ModelOrchestratorError(E_INVALID, "Unknown model download method")
+        token = (
+            os.getenv("HF_TOKEN", "").strip()
+            or os.getenv("HUGGINGFACE_API_KEY", "").strip()
+            or os.getenv("HUGGING_FACE_HUB_TOKEN", "").strip()
+            or None
+        )
         try:
-            # Real download path: Hugging Face snapshot
-            from huggingface_hub import snapshot_download
+            if req.download_method == "hf_hub":
+                from huggingface_hub import snapshot_download
 
-            token = (
-                os.getenv("HF_TOKEN", "").strip()
-                or os.getenv("HUGGINGFACE_API_KEY", "").strip()
-                or os.getenv("HUGGING_FACE_HUB_TOKEN", "").strip()
-                or None
-            )
-            await asyncio.to_thread(
-                snapshot_download,
-                repo_id=req.model_id,
-                repo_type="model",
-                revision=req.revision,
-                local_dir=str(install_path),
-                local_dir_use_symlinks=False,
-                allow_patterns=req.include_patterns,
-                ignore_patterns=req.exclude_patterns,
-                force_download=req.force_redownload,
-                token=token,
-            )
+                await asyncio.to_thread(
+                    snapshot_download,
+                    repo_id=req.model_id,
+                    repo_type="model",
+                    revision=req.revision,
+                    local_dir=str(install_path),
+                    local_dir_use_symlinks=False,
+                    allow_patterns=req.include_patterns,
+                    ignore_patterns=req.exclude_patterns,
+                    force_download=req.force_redownload,
+                    token=token,
+                )
+            else:
+                from ai_karen_engine.core.model_runtime.management.direct_https_model_transport import (
+                    download_direct_https,
+                )
+
+                await asyncio.to_thread(
+                    download_direct_https,
+                    model_id=req.model_id,
+                    revision=revision,
+                    directory=install_path,
+                    include_patterns=req.include_patterns,
+                    exclude_patterns=req.exclude_patterns,
+                    token=token,
+                )
         except ImportError as exc:
             raise ModelOrchestratorError(
-                E_COMPAT,
-                "huggingface_hub is required for model download operations",
-                {"missing_dependency": "huggingface_hub"},
+                E_COMPAT, "Required model transfer dependency is unavailable",
+                {"error_type": type(exc).__name__},
             ) from exc
         except Exception as exc:
-            raise ModelOrchestratorError(
-                E_NET,
-                f"Failed to download model {req.model_id}",
-                {"model_id": req.model_id, "revision": req.revision, "error": str(exc)},
-            ) from exc
+            # Never place URL bodies, bearer credentials or signed CDN URLs in
+            # durable job errors. Source failures remain an honest failed job.
+            from ai_karen_engine.core.model_runtime.management.direct_https_model_transport import (
+                DirectHttpsDownloadError,
+            )
+
+            details = {
+                "model_id": req.model_id, "revision": req.revision,
+                "download_method": req.download_method,
+                "error_type": type(exc).__name__,
+            }
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            safe_reason = str(exc) if isinstance(exc, DirectHttpsDownloadError) else ""
+            if status in {401, 403} or "access denied" in safe_reason:
+                code = E_PERM
+                message = "Model source access denied; verify gated terms and host credentials"
+            elif "checksum" in safe_reason or "size mismatch" in safe_reason:
+                code = E_VERIFY
+                message = "Model artifact integrity verification failed"
+            elif status == 429:
+                code = E_NET
+                message = "Model source rate limit reached"
+            else:
+                code = E_NET
+                message = "Model transfer network unavailable or source rejected"
+            raise ModelOrchestratorError(code, message, details) from None
 
         await asyncio.to_thread(self._reject_snapshot_symlinks, install_path)
         if req.storage_key == "spacy":
@@ -715,9 +752,9 @@ class ModelOrchestratorService:
             )
         except Exception as exc:
             logger.warning(
-                "Remote model metadata refresh failed after download for %s: %s",
+                "Remote model metadata refresh failed model_id=%s error_type=%s",
                 req.model_id,
-                exc,
+                type(exc).__name__,
             )
 
         entry = {
@@ -728,6 +765,7 @@ class ModelOrchestratorService:
             "revision": revision,
             "install_path": str(install_path),
             "files": files,
+            "download_method": req.download_method,
             "total_size": total_size,
             "pinned": bool(req.pin),
             "last_modified": datetime.now(timezone.utc).isoformat(),
