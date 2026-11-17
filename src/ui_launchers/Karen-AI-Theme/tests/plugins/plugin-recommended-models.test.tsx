@@ -141,6 +141,43 @@ describe('Governed plugin model setup', () => {
     expect(await screen.findByText(/download job is queued/)).toBeTruthy();
   });
 
+  it('offers a curl alternative without issuing a browser download or bypassing fresh terms', async () => {
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+
+    expect(screen.getByText('Use curl from an admin terminal')).toBeTruthy();
+    expect(screen.queryByTestId('plugin-model-curl-command')).toBeNull();
+    expect(screen.getByText(/Review and accept the model license above/)).toBeTruthy();
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    const command = screen.getByTestId('plugin-model-curl-command').textContent || '';
+    expect(command).toContain('curl --fail-with-body');
+    expect(command).toContain('KAREN_ACCESS_TOKEN');
+    expect(command).toContain('https://');
+    expect(command).toContain('/api/models/download/validate');
+    expect(command).toContain('/api/models/download');
+    expect(command).toContain(PINNED);
+    expect(command).toContain('kyutai/pocket-tts');
+    expect(command).toContain('plugin_audio');
+    expect(command).toContain('resolved_revision');
+    expect(command).toContain('jq -e');
+    expect(command).not.toContain('token=hf_');
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.queryByTestId('plugin-model-curl-command')).toBeNull();
+  });
+
+  it('withholds curl commands when source revision or channel cannot be verified', async () => {
+    getImpl(catalog({ metadata_verified: false, verification_state: 'unavailable', resolved_revision: 'main' }));
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    expect(screen.queryByTestId('plugin-model-curl-option')).toBeNull();
+    expect(screen.queryByTestId('plugin-model-curl-command')).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('keeps the download blocked when the actual audio channel is disabled', async () => {
     getImpl(catalog(), policy, [], {
       channels: [{ id: 'plugin_audio', admin_only: false, effective_enabled: false }],
