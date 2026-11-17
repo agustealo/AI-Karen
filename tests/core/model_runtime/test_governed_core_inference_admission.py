@@ -504,6 +504,52 @@ async def test_copied_original_plan_and_fresh_same_budget_meter_cannot_reset_quo
     assert fresh_meter_same_budget.model_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_original_policy_issuer_must_reject_fresh_execution_id_replay():
+    """Regression proof: a new string ID is not a RuntimePolicy authorization."""
+    manager = object.__new__(ModelManager)
+    invoked = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: invoked.append(text) or [0.7],
+    )
+    original = _scope(calls=1)
+    assert await manager.generate_embedding(
+        "admitted", execution_admission=original,
+    ) == [0.7]
+    assert original.meter.model_calls == 1
+
+    # The caller holds the exhausted admission but has no newly issued
+    # RuntimePolicy decision. Renaming an execution is not a new grant.
+    copied_budget = replace(original.plan.budget)
+    forged_plan = replace(
+        original.plan,
+        budget=copied_budget,
+        execution_id=f"{original.plan.execution_id}-self-issued",
+    )
+    forged_context = replace(original.authenticated_context)
+    fresh_meter = ExecutionBudgetMeter(copied_budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        forged_context.bind_runtime_model_authority(forged_plan, fresh_meter)
+    forged = replace(
+        original,
+        plan=forged_plan,
+        meter=fresh_meter,
+        authenticated_context=forged_context,
+    )
+    with pytest.raises(
+        PermissionError, match="governed_model_scope_or_budget_invalid",
+    ):
+        await manager.generate_embedding("unauthorized", execution_admission=forged)
+    assert original.meter.model_calls == 1
+    assert fresh_meter.model_calls == 0
+    assert invoked == ["admitted"]
+
+
 def test_runtime_context_binding_is_not_serialized_or_cloned():
     from dataclasses import asdict
 
