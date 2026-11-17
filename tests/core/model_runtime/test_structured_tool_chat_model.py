@@ -11,6 +11,8 @@ pytest.importorskip("langchain_core")
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpoint, ProviderEndpointType,
 )
@@ -48,6 +50,22 @@ def model():
     )
     meter = ExecutionBudgetMeter(budget)
     meter.start()
+    principal = UserData(
+        user_id="u-1",
+        tenant_id="t-1",
+        roles=["user"],
+        permissions=[],
+        is_active=True,
+        is_verified=True,
+    )
+    authenticated_context = ChatExecutionContext(
+        user_id="u-1",
+        tenant_id="t-1",
+        session_id="s-1",
+        request_id="run-1",
+        correlation_id="corr-1",
+        authenticated_user=principal,
+    )
     return KarenGovernedChatModel(
         endpoint=endpoint(),
         selected_model="model-with-tools",
@@ -55,6 +73,7 @@ def model():
             plan=plan, meter=meter, user_id="u-1", tenant_id="t-1",
             session_id="s-1", policy_decision_id="policy-1",
             request_id="run-1", correlation_id="corr-1",
+            authenticated_context=authenticated_context,
         ),
     )
 
@@ -95,6 +114,61 @@ async def test_langchain_model_round_trips_real_tool_call(monkeypatch):
     assert result.response_metadata["actual_provider"] == "ollama-local"
     assert execute.await_args.kwargs["model"] == "model-with-tools"
     assert execute.await_args.kwargs["tools"] == wrapped.tool_schemas
+
+
+@pytest.mark.parametrize(
+    "restriction",
+    [{"model": "model-with-tools"}, {"allowed_models": ["model-with-tools"]}],
+)
+@pytest.mark.asyncio
+async def test_restricted_structured_model_uses_selected_identity_and_one_meter_call(
+    monkeypatch, restriction,
+):
+    execute = AsyncMock(
+        return_value=StructuredChatResult(
+            message={"content": "approved tool model response", "tool_calls": []},
+            provider_id="ollama-local",
+            model="model-with-tools",
+            runtime_engine="ollama",
+            finish_reason="stop",
+            usage={"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+        )
+    )
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.structured_tool_chat_model."
+        "execute_structured_provider_endpoint",
+        execute,
+    )
+    wrapped = model()
+    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    response = await wrapped.ainvoke([HumanMessage(content="Authorized tools")])
+    assert response.content == "approved tool model response"
+    assert response.response_metadata["actual_model"] == "model-with-tools"
+    assert execute.await_args.kwargs["model"] == "model-with-tools"
+    assert execute.await_count == 1
+    assert wrapped.execution_admission.meter.model_calls == 1
+
+
+@pytest.mark.parametrize(
+    "restriction",
+    [{"model": "unapproved-model"}, {"allowed_models": ["unapproved-model"]}],
+)
+@pytest.mark.asyncio
+async def test_restricted_structured_model_rejects_disallowed_identity_before_wire(
+    monkeypatch, restriction,
+):
+    execute = AsyncMock()
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.structured_tool_chat_model."
+        "execute_structured_provider_endpoint",
+        execute,
+    )
+    wrapped = model()
+    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    with pytest.raises(PermissionError, match="governed_model_identity_not_authorized"):
+        await wrapped.ainvoke([HumanMessage(content="Unapproved tools")])
+    execute.assert_not_awaited()
+    assert wrapped.execution_admission.meter.model_calls == 0
 
 
 def test_message_converter_preserves_tool_call_pairing():

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 """Core-owned inference port shared by reasoning, recall, and memory services."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Protocol, Sequence, runtime_checkable
 
 from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
 from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 
 
@@ -17,6 +18,9 @@ class InferenceRequest:
     max_tokens: int = 512
     temperature: float = 0.2
     metadata: Mapping[str, Any] | None = None
+    execution_admission: GovernedToolModelAdmission | None = field(
+        default=None, repr=False, compare=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,9 @@ class ModelManagerInferencePort:
     async def generate(self, request: InferenceRequest) -> InferenceResponse:
         from ai_karen_engine.core.model_runtime.model_manager import get_model_manager
 
+        if not isinstance(request.execution_admission, GovernedToolModelAdmission):
+            raise PermissionError("governed_model_transport_admission_required")
+        request.execution_admission._require_scope()
         manager = get_model_manager()
         context: Dict[str, Any] = {}
         if request.preferred_provider:
@@ -49,6 +56,7 @@ class ModelManagerInferencePort:
             model=request.preferred_model,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
+            execution_admission=request.execution_admission,
             return_receipt=True,
         )
         if not isinstance(response, ProviderExecutionResult):

@@ -24,6 +24,48 @@ from ai_karen_engine.core.model_runtime.openai_compatible_client import OpenAICo
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint, ProviderEndpointType
 
 
+def _test_governed_admission():
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudget, ExecutionBudgetMeter
+
+    budget = ExecutionBudget(max_model_calls=2, max_duration_ms=60000)
+    plan = AuthorizedExecutionPlan(
+        execution_id="test-exec",
+        policy_decision_id="test-policy",
+        authorized_user_id="test-user",
+        authorized_tenant_id="test-tenant",
+        authorized_session_id="test-session",
+        budget=budget,
+    )
+    return GovernedToolModelAdmission(
+        plan=plan,
+        meter=ExecutionBudgetMeter(budget),
+        user_id="test-user",
+        tenant_id="test-tenant",
+        session_id="test-session",
+        policy_decision_id="test-policy",
+        request_id="test-request",
+        correlation_id="test-correlation",
+        authenticated_context=ChatExecutionContext(
+            user_id="test-user",
+            tenant_id="test-tenant",
+            session_id="test-session",
+            request_id="test-request",
+            correlation_id="test-correlation",
+            authenticated_user=UserData(
+                user_id="test-user",
+                tenant_id="test-tenant",
+                roles=["user"],
+                permissions=[],
+                is_active=True,
+                is_verified=True,
+            ),
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_sync_generation_runs_in_worker_thread() -> None:
     loop_thread = threading.get_ident()
@@ -236,7 +278,10 @@ async def test_port_uses_execution_receipt_without_second_selection(monkeypatch)
     )
     monkeypatch.setattr(manager_module, "get_model_manager", lambda: manager)
     result = await ModelManagerInferencePort().generate(
-        InferenceRequest(messages=[{"role": "user", "content": "hello"}])
+        InferenceRequest(
+            messages=[{"role": "user", "content": "hello"}],
+            execution_admission=_test_governed_admission(),
+        )
     )
     assert result.text == "actual output"
     assert result.provider == "actually-used"
@@ -259,7 +304,10 @@ async def test_port_denies_legacy_unattributed_response(monkeypatch) -> None:
     )
     with pytest.raises(ProviderNotAvailable, match="inference_execution_provenance_unavailable"):
         await ModelManagerInferencePort().generate(
-            InferenceRequest(messages=[{"role": "user", "content": "hello"}])
+            InferenceRequest(
+                messages=[{"role": "user", "content": "hello"}],
+                execution_admission=_test_governed_admission(),
+            )
         )
 
 

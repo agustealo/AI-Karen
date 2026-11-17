@@ -149,5 +149,10 @@ async def test_valid_original_shared_budget_reaches_existing_planner_without_res
     with pytest.raises(RuntimeError, match="planner_sentinel"):
         await coordinator._handle_request(request)
     planner.create_plan.assert_awaited_once()
+    # The planner/specialists must see the original Runtime budget object,
+    # not an equal deserialized copy that fails shared-meter identity checks.
+    handed_plan = planner.create_plan.await_args.kwargs["authorized_plan"]
+    assert handed_plan.budget is meter.budget
+    assert planner.create_plan.await_args.kwargs["budget"] is meter.budget
     assert request.runtime_budget_meter is meter
     assert meter.model_calls == 1
