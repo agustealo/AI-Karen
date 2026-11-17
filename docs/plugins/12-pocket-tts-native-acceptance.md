@@ -115,6 +115,38 @@ Pocket download or audible voice trial.
 | Ollama Settings Live E2E | [44165311265](https://github.com/agustealo/AI-Karen/actions/runs/44165311265) | success |
 | Production First-Boot Smoke | [44165311278](https://github.com/agustealo/AI-Karen/actions/runs/44165311278) | success |
 
+### Opt-in live upstream manifest parity (unverified until executed)
+
+The existing `Model Download Durable Worker Gate` now exposes the manually
+dispatched `verify_pocket_manifest` boolean. An authorized operator must
+first accept Hugging Face's gated upstream model terms for the exact account,
+then provide a protected GitHub Actions secret named
+`KAREN_POCKET_HF_TOKEN`. With explicit dispatch opt-in, the workflow
+invokes
+`test_pocket_tts_live_pinned_manifest_matches_both_transports` from the
+**existing** `tests/integration/test_recommended_model_live_source.py`.
+
+This non-mocked, read-only source check compares the Hub SDK's complete
+paginated model-language file inventory with the direct HTTPS transport's
+independently enumerated curated file inventory at the exact reviewed
+revision. Before listing files, it runs Hugging Face's token-specific
+`HfApi.auth_check` against the gated model and fails closed if the account
+has not been granted access. Public file metadata alone is insufficient.
+The test rejects missing model/tokenizer/voice states, different paths,
+file sizes or published LFS checksums; it also checks the model identity,
+gated status, revision and `plugin_audio` recommendation contract. It makes
+**no** file-resolution download, model-install job, registry publication,
+inference call or browser request, and does not record tokens in logs.
+An unset token or denied upstream terms fails the explicit source check
+closed. Ordinary CI does not run this live trial and may not count a skip
+as proof.
+
+**Current evidence:** implemented but no authenticated live manifest trial
+has been observed. Passing this check would prove source listing parity only.
+Actual authorized installs using **both** selectable methods, full artifact
+integrity, native load, genuine audio and audible browser playback remain
+independent, mandatory release gates.
+
 ### Observed beta API deployment gap
 
 A read-only check of the existing `ai-karen-beta-api` Render service on

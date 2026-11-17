@@ -191,3 +191,19 @@ post-evaluation decision mutation, mutable root grant escalation, serialized
 Medusa handoff escalation and child-plan mutation. No new policy owner, quota
 meter or independent provider router is introduced. Full exact-head release
 gates and independent P1/P2 review remain mandatory.
+
+### Initial plan cannot mint permissions before binding
+
+RuntimePolicy verifies the first `AuthorizedExecutionPlan` against the
+original evaluator-issued `PolicyDecision`, **before** accepting it as the
+model-authority root. Plan tool, plugin, agent and capability lists must
+be subsets of the issuer's permitted lists. Missing and empty action
+lists authorize no delegated actions. Caller-supplied serialized Medusa
+plans and mutated prebinding plans cannot invent grant members, even
+when the authenticated subject and quota otherwise match. This
+prebinding check complements the immutable root/child grant snapshots
+taken during binding and is proved against a real policy evaluation.
+
+The independent code-review service reached its account usage limit;
+it has not approved this new revision. Exact-head CI and fresh
+independent security sign-off are still prerequisites to merging.
