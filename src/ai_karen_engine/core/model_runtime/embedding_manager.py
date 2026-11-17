@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import math
 import os
 import time
 from collections import deque
@@ -12,6 +13,7 @@ import numpy as np
 from functools import lru_cache
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import EmbeddingFailed
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -609,6 +611,35 @@ class EmbeddingManager:
             "lru_current_size": cache_info.currsize,
             "lru_max_size": cache_info.maxsize,
         }
+
+    def embed_authoritative(self, text: str) -> List[float]:
+        """Real-model-only embedding for canonical execution; never lexical/zero fallback."""
+        if not isinstance(text, str) or not text.strip():
+            raise EmbeddingFailed("embedding_input_required")
+        if not self.model_loaded or self.model is None:
+            raise EmbeddingFailed("embedding_model_unavailable")
+        try:
+            vector = self._get_cached_embedding(text.strip())
+            if (
+                not isinstance(vector, list)
+                or not vector
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in vector
+                )
+            ):
+                raise EmbeddingFailed("embedding_model_vector_invalid")
+            return vector
+        except EmbeddingFailed:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "model_embedding_execution_failed",
+                extra={"error_type": type(exc).__name__},
+            )
+            raise EmbeddingFailed("embedding_model_execution_failed") from None
 
     def embed(self, text: str) -> List[float]:
         """Synchronous wrapper for get_embedding (for compatibility with SR engine)."""

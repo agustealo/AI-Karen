@@ -58,6 +58,16 @@ class RuntimeSelection:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ModelExecutionReceipt:
+    """Observed result of one actual model attempt, not an authorization grant."""
+
+    response: Any
+    provider_id: str
+    model: Optional[str]
+    runtime_engine: Optional[str]
+
+
 class ModelManager:
     """Single source of truth for provider selection and model execution."""
 
@@ -76,6 +86,7 @@ class ModelManager:
         self.embedding_manager = embedding_manager or EmbeddingManager()
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self._runtime_cache: Dict[str, Any] = {}
+        self._runtime_cache_endpoints: Dict[str, ProviderEndpoint] = {}
 
     def select_provider(
         self,
@@ -182,14 +193,24 @@ class ModelManager:
             raise ProviderNotAvailable(
                 f"Provider endpoint not found: {selection.provider_id}"
             )
-        if endpoint.endpoint_type != selection.endpoint_type:
-            raise ProviderNotAvailable(
-                "Runtime selection endpoint type no longer matches provider registry"
-            )
+        if (
+            not endpoint.enabled
+            or endpoint.endpoint_type != selection.endpoint_type
+            or endpoint.base_url != selection.base_url
+            or endpoint.default_model != selection.model
+        ):
+            raise ProviderNotAvailable("runtime_selection_registry_drift")
+        # Provider IDs alone cannot keep a stale endpoint/model runtime alive.
+        # Credential-env clients are cheap to reconstruct on key rotation.
+        if endpoint.api_key_env:
+            self._runtime_cache.pop(selection.provider_id, None)
+            self._runtime_cache_endpoints.pop(selection.provider_id, None)
+            return self._build_runtime(endpoint)
         runtime = self._runtime_cache.get(selection.provider_id)
-        if runtime is None:
+        if runtime is None or self._runtime_cache_endpoints.get(selection.provider_id) != endpoint:
             runtime = self._build_runtime(endpoint)
             self._runtime_cache[selection.provider_id] = runtime
+            self._runtime_cache_endpoints[selection.provider_id] = endpoint
         return runtime
 
     def _normalize_capability(
@@ -251,11 +272,21 @@ class ModelManager:
         messages: List[Dict[str, Any]],
         context: Optional[Dict[str, Any]] = None,
         stream: bool = False,
+        return_receipt: bool = False,
         **kwargs: Any,
     ) -> Any:
+        if type(return_receipt) is not bool or (return_receipt and stream):
+            raise ProviderNotAvailable("model_execution_receipt_mode_invalid")
         selection = self.select_provider("chat_completion", context=context, stream=stream)
         if not selection:
             raise ProviderNotAvailable("No capable model provider is available")
+
+        requested_model = kwargs.get("model")
+        if requested_model not in (None, "") and (
+            not isinstance(requested_model, str)
+            or requested_model != selection.model
+        ):
+            raise ProviderNotAvailable("requested_model_not_registry_eligible")
 
         prompt = self._messages_to_prompt(messages)
         provider = self.resolve_runtime(selection)
@@ -274,6 +305,19 @@ class ModelManager:
             response = await self.invoke_provider(provider, prompt, **kwargs)
             self._record_provider_result(selection.provider_id, True, start)
             breaker.record_success()
+            if return_receipt:
+                observed = getattr(provider, "model", None)
+                actual_model = (
+                    str(observed).strip()
+                    if isinstance(observed, str) and observed.strip() not in {"", "auto"}
+                    else selection.model if selection.model not in {None, "auto"} else None
+                )
+                return ModelExecutionReceipt(
+                    response=response,
+                    provider_id=selection.provider_id,
+                    model=actual_model,
+                    runtime_engine=selection.endpoint_type.value,
+                )
             return response
         except Exception as exc:
             self._record_provider_result(
@@ -287,11 +331,10 @@ class ModelManager:
             raise
 
     async def generate_embedding(self, text: str, **kwargs: Any) -> List[float]:
-        try:
-            return await asyncio.to_thread(self.embedding_manager.embed, text)
-        except Exception as exc:
-            logger.warning("Embedding manager failed, using deterministic fallback: %s", exc)
-            return self._deterministic_embedding(text)
+        """Return only an actual model embedding, never synthetic data."""
+        if kwargs:
+            raise ProviderNotAvailable("embedding_execution_options_unsupported")
+        return await asyncio.to_thread(self.embedding_manager.embed_authoritative, text)
 
     @classmethod
     async def invoke_provider(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:
@@ -299,10 +342,13 @@ class ModelManager:
             method = getattr(provider, method_name, None)
             if not callable(method):
                 continue
-            result = method(prompt, **kwargs)
+            if inspect.iscoroutinefunction(method):
+                result = await method(prompt, **kwargs)
+            else:
+                result = await asyncio.to_thread(method, prompt, **kwargs)
             if inspect.isawaitable(result):
                 return await result
-            return await asyncio.to_thread(lambda: result)
+            return result
         raise AttributeError("Provider does not expose a supported generation method")
 
     @classmethod
@@ -370,10 +416,13 @@ class ModelManager:
             method = getattr(provider, method_name, None)
             if not callable(method):
                 continue
-            result = method(text, **kwargs)
+            if inspect.iscoroutinefunction(method):
+                result = await method(text, **kwargs)
+            else:
+                result = await asyncio.to_thread(method, text, **kwargs)
             if inspect.isawaitable(result):
                 return await result
-            return await asyncio.to_thread(lambda: result)
+            return result
         raise AttributeError("Provider does not expose an embedding method")
 
     # Private compatibility alias. New specialist Runtime code should use
@@ -452,12 +501,6 @@ class ModelManager:
                 parts.append(f"{role}: {content}")
         return "\n".join(parts).strip()
 
-    def _deterministic_embedding(self, text: str, dimensions: int = 16) -> List[float]:
-        import hashlib
-        digest = hashlib.sha256((text or "").encode("utf-8")).digest()
-        return [((digest[index % len(digest)] / 255.0) * 2.0 - 1.0) for index in range(dimensions)]
-
-
 _model_manager: Optional[ModelManager] = None
 
 
@@ -474,4 +517,7 @@ def initialize_model_manager() -> ModelManager:
     return _model_manager
 
 
-__all__ = ["ModelManager", "RuntimeSelection", "get_model_manager", "initialize_model_manager"]
+__all__ = [
+    "ModelExecutionReceipt", "ModelManager", "RuntimeSelection",
+    "get_model_manager", "initialize_model_manager",
+]

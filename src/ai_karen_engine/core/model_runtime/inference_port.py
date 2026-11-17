@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Protocol, Sequence, runtime_checkable
 
 from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+from ai_karen_engine.core.model_runtime.model_manager import ModelExecutionReceipt
 
 
 @dataclass(frozen=True)
@@ -48,16 +49,21 @@ class ModelManagerInferencePort:
             model=request.preferred_model,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
+            return_receipt=True,
         )
-        text = str(response or "").strip()
+        if not isinstance(response, ModelExecutionReceipt):
+            raise ProviderNotAvailable("inference_execution_provenance_unavailable")
+        text = str(response.response or "").strip()
         if not text:
             raise ProviderNotAvailable("Inference port returned empty model output")
-        selection = manager.select_provider("chat_completion", context=context)
         return InferenceResponse(
             text=text,
-            provider=selection.provider_id if selection else None,
-            model=request.preferred_model or (selection.model if selection else None),
-            metadata=dict(request.metadata or {}),
+            provider=response.provider_id,
+            model=response.model,
+            metadata={
+                **dict(request.metadata or {}),
+                "runtime_engine": response.runtime_engine,
+            },
         )
 
 
