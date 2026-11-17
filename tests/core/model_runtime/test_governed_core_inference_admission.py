@@ -102,7 +102,7 @@ def _scope(
     # These tests exercise admission using an original issuer-returned
     # decision object. Policy evaluation itself has separate real-policy
     # integration coverage, never a production test-mode bypass.
-    issuer._issued_model_decisions[issued_decision.decision_id] = issued_decision
+    issuer._record_issued_model_decision(issued_decision)
     issuer.bind_chat_model_policy(
         context=context, decision=issued_decision,
     )
