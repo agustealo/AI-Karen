@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { ApiError, apiClient } from '@/lib/api';
 
 const INBOUND_ID = /^wamid\.[A-Za-z0-9._+=/-]{1,250}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DIGEST = /^[0-9a-f]{64}$/;
 const INBOX_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
 const OUTBOX_STATES = new Set(['accepted', 'sent', 'delivered', 'read', 'failed', 'unknown']);
