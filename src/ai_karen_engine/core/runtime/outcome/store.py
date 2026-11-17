@@ -529,6 +529,72 @@ class PostgresOutcomeStore(OutcomeStore):
             raise OutcomeStoreError("KCM reviewer receipt timestamps disagree")
 
     @staticmethod
+    def _validate_curated_oracle_withdrawal(
+        payload: dict[str, Any], metadata: dict[str, Any],
+    ) -> None:
+        """Strict restrictive reviewer withdrawal in the canonical ML ledger.
+
+        Only the evaluation review authority may issue a withdrawal. The store
+        checks the exact redacted shape, review reference and timestamp; it
+        never grants authority from an outcome row.
+        """
+        required = {
+            "schema_version", "receipt_id", "model_id",
+            "reviewer_user_id", "review_confirmed_outcome_id",
+            "review_snapshot_sha256", "revoked_at",
+            "reason_code", "review_withdrawn",
+        }
+        identifier = payload.get("outcome_id")
+        reviewer = metadata.get("reviewer_user_id")
+        digest = metadata.get("review_snapshot_sha256")
+        confirmation = metadata.get("review_confirmed_outcome_id")
+        receipt_id = metadata.get("receipt_id")
+        if (
+            set(metadata) != required
+            or not isinstance(payload.get("user_id"), str)
+            or not payload["user_id"].strip()
+            or not isinstance(reviewer, str) or not reviewer.strip()
+            or reviewer == payload["user_id"]
+            or not isinstance(identifier, str)
+            or not identifier.startswith("kcm_curated_withdrawal_")
+            or len(identifier) != len("kcm_curated_withdrawal_") + 64
+            or any(ch not in "0123456789abcdef"
+                   for ch in identifier[len("kcm_curated_withdrawal_"):])
+            or not isinstance(confirmation, str)
+            or not confirmation.startswith("kcm_curated_review_")
+            or len(confirmation) != len("kcm_curated_review_") + 64
+            or any(ch not in "0123456789abcdef"
+                   for ch in confirmation[len("kcm_curated_review_"):])
+            or not isinstance(receipt_id, str)
+            or len(receipt_id) != 32
+            or any(ch not in "0123456789abcdef" for ch in receipt_id)
+            or not isinstance(metadata.get("model_id"), str)
+            or not 1 <= len(metadata["model_id"]) <= 256
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)
+            or metadata.get("reason_code") != "reviewer_withdrawal"
+            or metadata.get("review_withdrawn") is not True
+            or not isinstance(payload.get("recorded_at"), str)
+            or not isinstance(metadata.get("revoked_at"), str)
+        ):
+            raise OutcomeStoreError("Malformed KCM oracle review withdrawal")
+        try:
+            revoked = datetime.fromisoformat(
+                metadata["revoked_at"].replace("Z", "+00:00")
+            )
+            recorded = datetime.fromisoformat(
+                payload["recorded_at"].replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError) as exc:
+            raise OutcomeStoreError("Malformed KCM withdrawal timestamp") from exc
+        if (
+            revoked.utcoffset() is None
+            or recorded.utcoffset() is None
+            or revoked.astimezone(timezone.utc) != recorded.astimezone(timezone.utc)
+        ):
+            raise OutcomeStoreError("KCM withdrawal timestamps disagree")
+
+    @staticmethod
     def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
         tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
@@ -550,6 +616,15 @@ class PostgresOutcomeStore(OutcomeStore):
                 == "kcm_curated_oracle_reviewer_observation_v1"
             ):
                 PostgresOutcomeStore._validate_curated_oracle_review(
+                    payload, metadata,
+                )
+                return tenant_id, source
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("schema_version")
+                == "kcm_curated_oracle_reviewer_withdrawal_v1"
+            ):
+                PostgresOutcomeStore._validate_curated_oracle_withdrawal(
                     payload, metadata,
                 )
                 return tenant_id, source
