@@ -60,6 +60,7 @@ describe('WhatsApp Cloud operator trial evidence', () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
     expect(apiClient.post).not.toHaveBeenCalled();
     enterEvent();
+    expect((button as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button);
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(
       ENDPOINT, { external_event_id: EVENT },
