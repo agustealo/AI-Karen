@@ -169,11 +169,26 @@ def _open_provider_request(request: Request, timeout: float):
     # instance metadata or interface-local addresses. Reject these wire targets
     # even for an otherwise authorized external provider attempt. This is an
     # IP-literal guard; DNS resolution and socket pinning require separate proof.
-    parsed = urlsplit(request.full_url)
-    if not parsed.hostname:
-        raise ProviderExecutionError("provider_destination_invalid")
+    # urllib.Request decodes percent-escaped authority text when setting
+    # request.host, while urlsplit(request.full_url).hostname leaves it encoded.
+    # Never classify one host and connect to another. Reject encoded
+    # authorities and mismatched Request hosts before opener construction.
     try:
-        destination = ipaddress.ip_address(parsed.hostname)
+        parsed = urlsplit(request.full_url)
+        parsed_hostname = parsed.hostname
+    except ValueError:
+        raise ProviderExecutionError("provider_destination_not_allowed") from None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed_hostname
+        or "%" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or request.host.lower() != parsed.netloc.lower()
+    ):
+        raise ProviderExecutionError("provider_destination_not_allowed")
+    try:
+        destination = ipaddress.ip_address(parsed_hostname)
     except ValueError:
         # libc's IPv4 parser accepts noncanonical numeric aliases that
         # ipaddress rejects (decimal dword, hexadecimal and octal forms).

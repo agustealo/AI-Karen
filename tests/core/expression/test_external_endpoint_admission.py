@@ -220,6 +220,12 @@ async def test_local_endpoint_keeps_local_first_without_cloud_auth_callback():
         "http://0251.0376.0251.0376/latest/meta-data",
         "http://0xa9.0xfe.0xa9.0xfe/latest/meta-data",
         "http://0/latest/meta-data",
+        # urllib decodes these authority escapes when constructing Request.host.
+        # Both the raw hostname and the eventual wire destination must be safe.
+        "http://%31%36%39.254.169.254/latest/meta-data",
+        "http://169.254.%31%36%39.254/latest/meta-data",
+        "http://%30xa9fea9fe/latest/meta-data",
+        "http://%31%32%37.0.0.1:11434/v1",
         "http://[fe80::1]:11434/v1",
         "http://[::ffff:169.254.169.254]/latest/meta-data",
         "http://0.0.0.0:11434/v1",
@@ -246,6 +252,42 @@ def test_canonical_wire_rejects_metadata_link_local_and_nonunicast_literals(
             Request(url, method="GET"), timeout=1.0
         )
     assert opened == []
+
+
+def test_canonical_wire_rejects_mutated_request_host_before_open(monkeypatch):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    called = []
+
+    def forbidden_opener(*_args, **_kwargs):
+        called.append(True)
+        raise AssertionError("Mismatched request host reached opener")
+
+    monkeypatch.setattr(provider_execution, "build_opener", forbidden_opener)
+    request = Request("http://127.0.0.1:11434/v1/models", method="GET")
+    request.host = "169.254.169.254"
+    with pytest.raises(
+        provider_execution.ProviderExecutionError,
+        match="provider_destination_not_allowed",
+    ):
+        provider_execution._open_provider_request(request, timeout=1.0)
+    assert called == []
+
+
+def test_canonical_wire_preserves_percent_encoded_path(monkeypatch):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    def local_opener(*handlers):
+        return SimpleNamespace(
+            open=lambda request, timeout: (request.full_url, timeout)
+        )
+
+    monkeypatch.setattr(provider_execution, "build_opener", local_opener)
+    response = provider_execution._open_provider_request(
+        Request("http://127.0.0.1:11434/v1/models/%31", method="GET"),
+        timeout=1.0,
+    )
+    assert response == ("http://127.0.0.1:11434/v1/models/%31", 1.0)
 
 
 def test_canonical_wire_preserves_loopback_openers(monkeypatch):
