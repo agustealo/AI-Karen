@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import uuid
+
 import pytest
 
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.contracts import ActionExecutionGate
+from ai_karen_engine.core.runtime.plugin_lifecycle_approval import PluginLifecycleApprovalScope
 from ai_karen_engine.core.runtime.policy import (
     PolicyEvaluationRequest,
     RuntimePolicyEnforcer,
@@ -54,3 +61,122 @@ async def test_unknown_lifecycle_verb_is_not_an_authority_escape() -> None:
     )
     assert not decision.allowed
     assert not decision.allowed_capabilities
+
+
+
+def _approved_lifecycle_context():
+    tenant = str(uuid.uuid4())
+    actor = str(uuid.uuid4())
+    conversation = str(uuid.uuid4())
+    user = UserData(user_id=actor, tenant_id=tenant, roles=["admin"])
+    context = ChatExecutionContext(
+        user_id=actor, tenant_id=tenant, session_id="session-1",
+        conversation_id=conversation, request_id="request-1",
+        correlation_id="correlation-1", authenticated_user=user,
+    )
+    scope = PluginLifecycleApprovalScope(
+        installation_id="timezone-clock", action="disable",
+        manifest_checksum="a" * 64, expected_state="enabled",
+        expected_revision=2, tenant_id=tenant, user_id=actor,
+        session_id="session-1", conversation_id=conversation,
+    )
+    approval = {
+        "approval_id": str(uuid.uuid4()),
+        "tenant_id": tenant,
+        "user_id": actor,
+        "conversation_id": conversation,
+        "decided_by": actor,
+        "status": "approved",
+        "risk_level": "high",
+        "intent": "plugin.lifecycle.disable",
+        "policy_decision_id": "original-policy-1",
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
+        "request_payload": {"plugin_lifecycle_scope": scope.to_record()},
+    }
+    return context, scope, approval
+
+
+@pytest.mark.asyncio
+async def test_trusted_lifecycle_policy_is_exact_actor_approval_and_revision_bound() -> None:
+    context, scope, approval = _approved_lifecycle_context()
+    policy = RuntimePolicyEnforcer()
+    params = {
+        "context": context,
+        "scope": scope,
+        "approval": approval,
+        "observed_state": "enabled",
+        "manifest_checksum": scope.manifest_checksum,
+        "revision": 2,
+        "disposition": "ready",
+    }
+    allowed = await policy.authorize_approved_plugin_lifecycle(**params)
+    assert allowed.allowed is True
+    assert allowed.requires_human_gate is True
+    assert allowed.allowed_capabilities == ["plugin.lifecycle.disable"]
+    plan = allowed.to_authorized_plan()
+    assert plan.matches_execution_scope(
+        user_id=scope.user_id, tenant_id=scope.tenant_id,
+        session_id=scope.session_id,
+    )
+    assert await ActionExecutionGate.authorize(
+        plan, "plugin.lifecycle.disable"
+    )
+    assert not await ActionExecutionGate.authorize(
+        plan, "plugin.lifecycle.enable"
+    )
+
+    for changed in (
+        {"revision": 3},
+        {"observed_state": "disabled"},
+        {"manifest_checksum": "b" * 64},
+        {"disposition": "unresolved"},
+        {"approval": {**approval, "status": "consumed"}},
+        {"approval": {**approval, "decided_by": None}},
+        {"approval": {**approval, "intent": "plugin.lifecycle.enable"}},
+        {"approval": {**approval, "request_payload": {}}},
+        {"approval": {
+            **approval,
+            "expires_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+        }},
+    ):
+        denied = await policy.authorize_approved_plugin_lifecycle(
+            **{**params, **changed}
+        )
+        assert denied.allowed is False
+        assert denied.allowed_capabilities == []
+        assert not await ActionExecutionGate.authorize(
+            denied.to_authorized_plan(), "plugin.lifecycle.disable"
+        )
+
+
+@pytest.mark.asyncio
+async def test_trusted_lifecycle_policy_ignores_untrusted_role_and_identity_claims() -> None:
+    context, scope, approval = _approved_lifecycle_context()
+    policy = RuntimePolicyEnforcer()
+    params = {
+        "context": context,
+        "scope": scope,
+        "approval": approval,
+        "observed_state": "enabled",
+        "manifest_checksum": scope.manifest_checksum,
+        "revision": 2,
+        "disposition": "ready",
+    }
+    context.authenticated_user = None
+    context.roles = ["admin"]
+    context.permissions = ["admin.plugins:manage"]
+    denied = await policy.authorize_approved_plugin_lifecycle(**params)
+    assert denied.allowed is False
+
+    context.authenticated_user = UserData(
+        user_id=scope.user_id, tenant_id=scope.tenant_id, roles=["user"]
+    )
+    denied = await policy.authorize_approved_plugin_lifecycle(**params)
+    assert denied.allowed is False
+
+    context.authenticated_user = UserData(
+        user_id=scope.user_id, tenant_id=scope.tenant_id, roles=["admin"]
+    )
+    context.session_id = "different-session"
+    denied = await policy.authorize_approved_plugin_lifecycle(**params)
+    assert denied.allowed is False

@@ -294,6 +294,21 @@ jobs:
             tests/core/runtime/test_reasoning_provider_synthesis.py \
             -q --timeout=300 --tb=short
 
+      - name: Prove KCOG-01C1B2C2 actual async cancellation and terminal trajectory truth
+        if: ${{ always() }}
+        run: |
+          # This lightweight job does not launch PostgreSQL. Run the B2C2
+          # cancellation cases here and the complete pre-existing stream
+          # suite in Chat System Burn. Real RLS is proven separately.
+          pytest tests/core/runtime/test_chat_runtime_stream_contract.py \
+            -k b2c2 -q --timeout=300 --tb=short
+          pytest tests/core/runtime/test_conversation_runtime_gateway.py \
+            -k b2c2 -q --timeout=300 --tb=short
+          pytest tests/api_routes/test_chat_run_atomic_transcript.py \
+            -k b2c2 -q --timeout=300 --tb=short
+          pytest tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py \
+            -q --timeout=300 --tb=short
+
       - name: Compile KCOG cognitive-state and policy boundary
         if: ${{ always() }}
         run: |

@@ -46,8 +46,17 @@ from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
 from ai_karen_engine.core.runtime.trajectory.store import PostgresTrajectoryStore
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionContext,
+    ChatExecutionRequest,
+)
 from ai_karen_engine.core.runtime.policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
-from ai_karen_engine.core.runtime.contracts import ExecutionTopology
+from ai_karen_engine.core.runtime.contracts import (
+    AuthorizedExecutionPlan,
+    ExecutionBudget,
+    ExecutionBudgetMeter,
+    ExecutionTopology,
+)
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.outcome.store import (
     OutcomeStoreError,
@@ -143,23 +152,32 @@ async def _prepare_disposable_database(raw: asyncpg.Connection) -> None:
     for name in _MIGRATIONS:
         sql = (_ROOT / "supabase" / "migrations" / name).read_text()
         await raw.execute(sql)
-    state = await raw.fetchrow(
-        """SELECT relrowsecurity, relforcerowsecurity
-           FROM pg_class WHERE oid='public.outcome_records'::regclass"""
-    )
-    assert state is not None
-    assert state["relrowsecurity"] and state["relforcerowsecurity"]
+    for table_name in ("outcome_records", "execution_trajectories"):
+        state = await raw.fetchrow(
+            """SELECT relrowsecurity, relforcerowsecurity
+               FROM pg_class WHERE oid=to_regclass($1)""",
+            f"public.{table_name}",
+        )
+        assert state is not None
+        assert state["relrowsecurity"] and state["relforcerowsecurity"]
     policy = await raw.fetchval(
         """SELECT count(*) FROM pg_policies
            WHERE schemaname='public' AND tablename='outcome_records'
              AND policyname='outcome_records_tenant_scope'"""
     )
     assert policy == 1
+    trajectory_policy = await raw.fetchval(
+        """SELECT count(*) FROM pg_policies
+           WHERE schemaname='public' AND tablename='execution_trajectories'
+             AND policyname='execution_trajectories_tenant_scope'"""
+    )
+    assert trajectory_policy == 1
     await raw.execute(
         """
         CREATE ROLE karen_review_ci_reader NOLOGIN;
         GRANT USAGE ON SCHEMA public TO karen_review_ci_reader;
         GRANT SELECT, INSERT ON public.outcome_records TO karen_review_ci_reader;
+        GRANT SELECT, INSERT ON public.execution_trajectories TO karen_review_ci_reader;
         """
     )
 
@@ -205,6 +223,49 @@ async def _assert_rls_is_real(
 
 
 @pytest.mark.asyncio
+async def _assert_cancelled_trajectory_rls_is_real(
+    raw: asyncpg.Connection,
+    *,
+    tenant_a: str,
+    tenant_b: str,
+    trajectory_id: str,
+    subject_id: str,
+) -> None:
+    """Verify database FORCE RLS, not merely application's tenant predicates."""
+    async with raw.transaction():
+        await raw.execute("SET LOCAL ROLE karen_review_ci_reader")
+        await raw.execute(
+            "SELECT set_config('app.current_tenant_id', $1, true)",
+            tenant_b,
+        )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.execution_trajectories "
+            "WHERE trajectory_id=$1",
+            trajectory_id,
+        ) == 0
+        # The same non-bypass reader has INSERT grants. Only the canonical
+        # RLS WITH CHECK may reject writing another tenant's execution.
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            async with raw.transaction():
+                await raw.execute(
+                    """INSERT INTO public.execution_trajectories
+                       (trajectory_id, tenant_id, user_id, started_at, payload)
+                       VALUES ($1, $2, $3, now(), '{}'::jsonb)""",
+                    "pg-rls-forbidden-cross-tenant-cancel",
+                    uuid.UUID(tenant_a),
+                    uuid.UUID(subject_id),
+                )
+        await raw.execute(
+            "SELECT set_config('app.current_tenant_id', $1, true)",
+            tenant_a,
+        )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.execution_trajectories "
+            "WHERE trajectory_id=$1",
+            trajectory_id,
+        ) == 1
+
+
 async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -> None:
     dsn = _disposable_dsn()
     # This test may only initialize a *new* disposable database.
@@ -405,6 +466,90 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
         assert planned.action_probabilities == {}
         assert planned.ope_ineligible_reason == "missing_propensity"
         assert "verification_policy_snapshot" not in planned.metadata
+
+        # KCOG-01C1B2C2: an interrupted selected path uses the *same*
+        # PostgresTrajectoryStore and tenant RLS as frozen runtime decisions.
+        # It cannot create a successful assistant outcome or reviewer label.
+        cancel_ctx = ChatExecutionContext(
+            user_id=subject_a,
+            tenant_id=tenant_a,
+            session_id="pg-cancelled-session",
+            conversation_id="pg-cancelled-conversation",
+            request_id="pg-cancelled-request",
+            correlation_id="pg-cancelled-correlation",
+        )
+        cancel_request = ChatExecutionRequest(
+            messages=[{"role": "user", "content": "Do not persist partial output"}],
+            context=cancel_ctx,
+            preferred_provider="ollama",
+            preferred_model="installed-model",
+        )
+        cancel_plan = AuthorizedExecutionPlan(
+            execution_id="pg-cancelled-execution",
+            policy_decision_id="pg-cancelled-policy",
+            authorized_user_id=subject_a,
+            authorized_tenant_id=tenant_a,
+            authorized_session_id=cancel_ctx.session_id,
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=["verification"],
+            budget=ExecutionBudget(max_model_calls=2, max_reasoning_steps=4),
+        )
+        cancel_decision = ExecutionDecision(
+            topology=ExecutionTopology.REASONING,
+            reasoning_modes=["verification"],
+            policy_decision_id=cancel_plan.policy_decision_id,
+            policy_version="pg-v1",
+        )
+        cancel_traj = ExecutionTrajectory(
+            trajectory_id="pg-cancelled-trajectory",
+            request_id=cancel_ctx.request_id,
+            correlation_id=cancel_ctx.correlation_id,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+            session_id=cancel_ctx.session_id,
+            conversation_id=cancel_ctx.conversation_id,
+        )
+        cancel_meter = ExecutionBudgetMeter(cancel_plan.budget)
+        cancel_meter.start()
+        await runtime._record_cancelled_trajectory(
+            cancel_traj,
+            cancel_decision,
+            cancel_request,
+            cancel_plan,
+            cancel_meter,
+            1.0,
+        )
+        persisted_cancel = await asyncio.to_thread(
+            PostgresTrajectoryStore().get,
+            cancel_traj.trajectory_id,
+            tenant_id=tenant_a,
+        )
+        assert persisted_cancel is not None
+        assert persisted_cancel.execution_status == "cancelled"
+        assert persisted_cancel.error_code == "CHAT_REQUEST_CANCELLED"
+        assert persisted_cancel.policy_decision_id == cancel_plan.policy_decision_id
+        assert persisted_cancel.user_id == subject_a
+        assert persisted_cancel.actual_provider is None
+        assert persisted_cancel.actual_model is None
+        assert persisted_cancel.response_source is None
+        assert persisted_cancel.completed_at is not None
+        assert await asyncio.to_thread(
+            PostgresTrajectoryStore().get,
+            cancel_traj.trajectory_id,
+            tenant_id=tenant_b,
+        ) is None
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE trajectory_id=$1",
+            cancel_traj.trajectory_id,
+        ) == 0
+        await _assert_cancelled_trajectory_rls_is_real(
+            raw,
+            tenant_a=tenant_a,
+            tenant_b=tenant_b,
+            trajectory_id=cancel_traj.trajectory_id,
+            subject_id=subject_a,
+        )
         with pytest.raises(ValueError, match="not verification-OPE eligible"):
             await authenticated_review.submit(
                 ReviewJudgement(

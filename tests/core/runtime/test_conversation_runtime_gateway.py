@@ -1171,3 +1171,84 @@ async def test_provider_response_metadata_cannot_inject_persona_binding():
     )
     assert persisted.status == "persisted"
     assert all("persona_scope_id" not in m.metadata for m in repository.messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("read_success", "read_data", "expected_status"),
+    [
+        (True, True, "already_persisted"),
+        (True, False, "not_found"),
+        (False, None, "unverified"),
+    ],
+)
+async def test_b2c2_interrupted_write_reconciliation_reads_owned_exact_pair(
+    read_success: bool, read_data: Optional[bool], expected_status: str,
+) -> None:
+    from ai_karen_engine.auth.models import UserData
+
+    class ReadbackRepository(_Repository):
+        read_parameters: Optional[dict] = None
+
+        async def read_committed_turn(self, **kwargs) -> RepositoryResult[bool]:
+            self.read_parameters = kwargs
+            return RepositoryResult(
+                success=read_success, data=read_data,
+                error=None if read_success else "read_unavailable",
+            )
+
+    tenant_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user_id = "11111111-1111-1111-1111-111111111111"
+    conversation_id = "22222222-2222-2222-2222-222222222222"
+    context = ChatExecutionContext(
+        tenant_id=tenant_id, user_id=user_id, conversation_id=conversation_id,
+        request_id="req-1", correlation_id="corr-1", session_id="session-1",
+        authenticated_user=UserData(user_id=user_id, tenant_id=tenant_id),
+    )
+    repository = ReadbackRepository()
+    gateway = ConversationRuntimeGateway(repository=repository)
+    receipt = await gateway.reconcile_interrupted_turn(
+        context, user_text="hello", assistant_text="saved answer",
+    )
+    assert receipt.status == expected_status
+    assert receipt.success == (expected_status == "already_persisted")
+    params = repository.read_parameters
+    assert params is not None
+    assert params["tenant_id"] == tenant_id
+    assert params["user_id"] == user_id
+    assert params["conversation_id"] == conversation_id
+    assert params["request_id"] == "req-1"
+    assert params["correlation_id"] == "corr-1"
+    assert params["session_id"] == "session-1"
+    assert params["user_message_id"] == gateway._message_id(
+        context=context, conversation_id=conversation_id, role="user",
+    )
+    assert params["assistant_message_id"] == gateway._message_id(
+        context=context, conversation_id=conversation_id, role="assistant",
+    )
+
+
+@pytest.mark.asyncio
+async def test_b2c2_reconciliation_rejects_mismatched_authenticated_scope() -> None:
+    from ai_karen_engine.auth.models import UserData
+
+    class NeverReadRepository(_Repository):
+        async def read_committed_turn(self, **kwargs):
+            pytest.fail("Unauthenticated scope must not reach transcript storage")
+
+    context = ChatExecutionContext(
+        tenant_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        user_id="11111111-1111-1111-1111-111111111111",
+        conversation_id="22222222-2222-2222-2222-222222222222",
+        session_id="session-1", request_id="req-1", correlation_id="corr-1",
+        authenticated_user=UserData(
+            user_id="11111111-1111-1111-1111-111111111111",
+            tenant_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ),
+    )
+    gateway = ConversationRuntimeGateway(repository=NeverReadRepository())
+    result = await gateway.reconcile_interrupted_turn(
+        context, user_text="hello", assistant_text="saved answer",
+    )
+    assert result.status == "unverified"
+    assert result.reason == "scope_or_identity_unverified"
