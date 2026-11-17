@@ -60,6 +60,7 @@ async def test_verified_layout_uses_existing_component_without_exposing_measurem
     assert len(gateway.tasks) == 1
     assert gateway.tasks[0].metadata["execution_mode"] == "surface_layout_plan"
     assert gateway.tasks[0].reserve_additional_model_call is not None
+    assert callable(gateway.tasks[0].authorize_external_engine_attempt)
     assert gateway.tasks[0].reserve_additional_model_call.__self__.calls == 1
     assert "10:15 AM" not in str(gateway.tasks[0].messages)
 
