@@ -139,6 +139,14 @@ describe('Plugin Store to governed Voice Studio navigation', () => {
     expect(state.getPlugin).toHaveBeenCalledWith('pocket-tts');
   });
 
+  it("opens the exact Pocket TTS user workspace from verified plugin-store details", () => {
+    render(<PluginStorePage />);
+    fireEvent.click(screen.getByRole("button", { name: "Open plugin details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Pocket TTS workspace" }));
+    expect(state.push).toHaveBeenCalledExactlyOnceWith("/dashboard?view=pocket-tts");
+    expect(state.clearSelectedPlugin).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['no TTS declaration', false, false, null],
     ['catalog is loading', true, true, null],
@@ -154,6 +162,7 @@ describe('Plugin Store to governed Voice Studio navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open plugin details' }));
 
     expect(screen.queryByRole('button', { name: /Open Voice Studio/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Open Pocket TTS/ })).toBeNull();
     expect(state.push).not.toHaveBeenCalled();
   });
 
