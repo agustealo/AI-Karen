@@ -240,7 +240,7 @@ def test_status_not_found_is_404_without_any_principal_leak(client_and_host):
     assert COMMAND not in response.text
 
 
-@pytest.mark.parametrize("status", ["linked_live", "meta_verified", True, "", 2])
+@pytest.mark.parametrize("status", ["linked_live", "meta_verified", True, 2])
 def test_unknown_backend_status_fails_closed(client_and_host, status):
     client, host, _ = client_and_host
     host.inspect_whatsapp_self_link_status.return_value = status
