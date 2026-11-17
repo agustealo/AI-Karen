@@ -2,7 +2,7 @@
 
 **Status:** stacked source candidate; release CI, merge, and target-host egress remain unverified.  
 **Date:** 2026-11-17  
-**Depends on:** merged #970 (Deep Agents budget), #977 (canonical no-proxy egress) and draft #979 (independent compatibility no-proxy/redirect).
+**Depends on:** merged #970 (Deep Agents budget), #977 (canonical no-proxy egress) and #979 (independent compatibility no-proxy/redirect).
 
 ## Confirmed raw execution paths
 
@@ -15,7 +15,7 @@
 
 The canonical shared destination classifier also excludes IPv4 `169.254.0.0/16` and IPv6 `fe80::/10` from the trusted local-model set. The old classifier silently allowed cloud instance-metadata and interface-local targets as local traffic. IPv4-mapped IPv6 addresses are normalized before this decision. Existing loopback, Docker bridge aliases and RFC1918/ULA model-serving addresses retain their configured local-first behavior. The metadata/link-local policy is enforced for both compatibility and governed ExpressionGateway admission; tests cover both paths.
 
-The compatibility client cannot validate a `ChatExecutionContext`, an exact `AuthorizedExecutionPlan`, or a shared `ExecutionBudgetMeter`. Therefore it may not emit **nonlocal** inference or embedding HTTP at all. Before constructing a `Request`, and again for health probes, the raw compatibility transport asks the **existing canonical** `provider_endpoint_requires_external_permission()` classifier to evaluate its current actual URL. Cloud/unknown/invalid destinations fail closed with `ungoverned_external_compatibility_transport_denied`. A local-looking provider ID cannot override the check; mutating `base_url` is evaluated per attempt. No new provider registry, RuntimePolicy service, network-locality rules, budget, fallback or global urllib state is introduced.
+The compatibility client cannot validate a `ChatExecutionContext`, an exact `AuthorizedExecutionPlan`, or a shared `ExecutionBudgetMeter`. Therefore it may not emit **nonlocal** inference or embedding HTTP at all. Before constructing a `Request`, and again for health probes, the raw compatibility transport asks the **existing canonical** `provider_endpoint_requires_external_permission()` classifier to evaluate its current actual URL. Cloud/unknown/invalid destinations fail closed with `ungoverned_external_compatibility_transport_denied`. A local-looking provider ID cannot override the check; mutating `base_url` is evaluated per attempt. No duplicate provider registry, RuntimePolicy service, network-locality classifier, budget, fallback or global urllib state is introduced.
 
 The already-governed ChatRuntime/ExpressionGateway and Deep Agents transports continue to own explicitly authorized external model execution. This shim **does not** issue new external permissions or claim support for authorized external calls through this legacy interface.
 
@@ -27,7 +27,7 @@ The already-governed ChatRuntime/ExpressionGateway and Deep Agents transports co
 
 - This is **not** KCHAT-AUTH-05 complete. Local compatibility inference still lacks request-bound RuntimePolicy and actual `ExecutionBudgetMeter` reservation; the `LLMUtils` and raw-port APIs must be migrated to the canonical governed runtime before full admission certification.
 - Raw transport still constructs a second OpenAI-compatible HTTP request/response path. Consolidation and correct model attribution/receipts remain necessary.
-- Registry model/endpoint eligibility, dynamic DNS resolution and rebinding, DNS-to-IP pinning, link-local/metadata IP handling, socket/NAT capture, external-proxy policy, direct SDK clients, and external discovery probes remain separate risk gates.
+- Registry model/endpoint eligibility, dynamic DNS resolution and rebinding, DNS-to-IP pinning, socket/NAT capture, external-proxy policy, direct SDK clients, and external discovery probes remain separate risk gates. The link-local address exclusion is source-tested but not yet proved by target-host packet capture.
 - No consumer-ready local model run, post-merge CI, production-packet capture or billed-cloud-provider proof is claimed.
 
 ## Next work
