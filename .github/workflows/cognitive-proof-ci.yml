@@ -21,6 +21,8 @@ on:
       - 'src/ai_karen_engine/core/runtime/decision_pipeline.py'
       - 'src/ai_karen_engine/core/runtime/reasoning_bridge.py'
       - 'tests/core/runtime/test_verification_alternative_readiness.py'
+      - 'tests/core/runtime/test_verification_strategy_pair_live_proof.py'
+      - 'scripts/ci/verification_strategy_pair_live_proof.py'
       - 'tests/core/runtime/test_selected_strategy_execution_evidence.py'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'tests/core/test_runtime_reasoning_policy.py'
@@ -62,6 +64,8 @@ on:
       - 'src/ai_karen_engine/core/runtime/decision_pipeline.py'
       - 'src/ai_karen_engine/core/runtime/reasoning_bridge.py'
       - 'tests/core/runtime/test_verification_alternative_readiness.py'
+      - 'tests/core/runtime/test_verification_strategy_pair_live_proof.py'
+      - 'scripts/ci/verification_strategy_pair_live_proof.py'
       - 'tests/core/runtime/test_selected_strategy_execution_evidence.py'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'tests/core/test_runtime_reasoning_policy.py'
@@ -278,6 +282,16 @@ jobs:
             tests/core/runtime/test_selected_strategy_execution_evidence.py \
             tests/core/runtime/test_reasoning_provider_synthesis.py \
             tests/core/runtime/test_outcome_store_contract.py \
+            -q --timeout=300 --tb=short
+
+      - name: Prove KCOG-01C1B2B2 isolated dual-plan scope, budget and real-receipt requirements
+        if: ${{ always() }}
+        run: |
+          python -m py_compile scripts/ci/verification_strategy_pair_live_proof.py
+          pytest tests/core/runtime/test_verification_strategy_pair_live_proof.py \
+            tests/core/runtime/test_selected_strategy_execution_evidence.py \
+            tests/core/runtime/test_reasoning_model_attribution_truth.py \
+            tests/core/runtime/test_reasoning_provider_synthesis.py \
             -q --timeout=300 --tb=short
 
       - name: Compile KCOG cognitive-state and policy boundary
