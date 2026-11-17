@@ -24,7 +24,7 @@ from ai_karen_engine.config.channels import ChannelHostSettings
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.persistence.repositories.channel_repository import SqlChannelRepository
-from ai_karen_engine.services.channels.activation import ChannelActivationService
+from ai_karen_engine.services.channels.activation import ChannelActivationConflict, ChannelActivationService
 from ai_karen_engine.services.channels.credentials import ChannelVaultSecretResolver
 from ai_karen_engine.services.channels.ingress import ChannelIngressService
 from ai_karen_engine.services.channels.execution import ChannelExecutionService
@@ -173,6 +173,97 @@ class ChannelHostServices:
             connection=connection, verify_token=verify_token,
         )
         return verified is True
+
+    async def _whatsapp_operator_adapter(self):
+        """Resolve the only installed WhatsApp transport, never a caller adapter.
+
+        This checks local installation authority; account identity and Vault
+        entitlement remain owned by ChannelActivationService and the adapter.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("WhatsApp operator host unavailable")
+        installation_id = "whatsapp-cloud"
+        adapter = self._installed.get(installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(installation_id) is None
+            or not self.kernel.is_canonical_channel_adapter(installation_id, adapter)
+        ):
+            raise PermissionError("Canonical WhatsApp transport unavailable")
+        return adapter
+
+    async def provision_whatsapp_connection(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        provider_account_id: str, credential_handle: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ):
+        """Persist a disabled tenant account; never imply Meta activation."""
+        await self._whatsapp_operator_adapter()
+        return await self.activation.provision(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            provider_account_id=provider_account_id,
+            credential_handle=credential_handle,
+            authorized_plan=authorized_plan,
+        )
+
+    async def activate_whatsapp_connection(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ):
+        """Activate only the exact disabled revision after live Graph phone proof.
+
+        Provider subscription, signed callback and delivery are separate proofs.
+        """
+        adapter = await self._whatsapp_operator_adapter()
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Expected WhatsApp connection revision required")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "whatsapp-cloud"
+        ):
+            raise PermissionError("WhatsApp connection unavailable for activation")
+        if connection.enabled or connection.revision != expected_revision:
+            raise ChannelActivationConflict("WhatsApp connection revision changed")
+        return await self.activation.activate(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan, adapter=adapter,
+            settings={"private_text_only": True},
+            expected_revision=expected_revision,
+        )
+
+    async def deactivate_whatsapp_connection(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ):
+        """Disable durably before stopping transport, with an exact revision."""
+        adapter = await self._whatsapp_operator_adapter()
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Expected WhatsApp connection revision required")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "whatsapp-cloud"
+        ):
+            raise PermissionError("WhatsApp connection unavailable for deactivation")
+        if not connection.enabled or connection.revision != expected_revision:
+            raise ChannelActivationConflict("WhatsApp connection revision changed")
+        return await self.activation.deactivate(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan, adapter=adapter,
+            expected_revision=expected_revision,
+        )
 
     async def activate_telegram_connection(
         self, *, tenant_id: str, connection_id: str, user_id: str,

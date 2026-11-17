@@ -295,3 +295,48 @@ This verifies PostgreSQL concurrency and archival idempotence under the
 existing 64 KiB / 100-event contract, **not** callback throughput,
 live Meta signature interoperability, provider latency SLOs or approval to
 release the WhatsApp transport.
+
+
+## KWA-01C6A: authenticated operator connection lifecycle
+
+The canonical FastAPI router registry now exposes three authenticated,
+tenant-scoped operator actions for the **preinstalled** `whatsapp-cloud` adapter:
+
+- `POST /api/channels/operator/whatsapp/connections` accepts a Meta numeric
+  phone-number ID and an opaque tenant Vault credential handle, not raw
+  credentials. It mints a fresh `channel.provision` plan through
+  `ChannelActivationService.issue_action_plan`, reuses the host's Vault
+  reference authorizer, and persists a **disabled** revision-1 connection.
+- `POST /api/channels/operator/whatsapp/connections/{connection_uuid}/activate`
+  accepts only `expected_revision`. The host resolves the canonical installed
+  adapter, verifies tenant/installation/revision, and delegates to the existing
+  `ChannelActivationService.activate`. The transport must complete its
+  read-only Meta Graph phone identity probe before the transaction can mark
+  the connection enabled. A stale revision is not silently upgraded.
+- `POST /api/channels/operator/whatsapp/connections/{connection_uuid}/deactivate`
+  accepts only `expected_revision`. The existing service durably revokes the
+  connection before asking the adapter to stop, retaining status-only evidence
+  eligibility for previously finalized sends.
+
+The API never accepts user IDs, tenant IDs, roles, signed policy plans,
+adapter selection, Graph URLs, secrets or raw provider tokens from callers.
+The signed-in user comes from the established session dependency;
+`issue_action_plan` verifies live roles and RuntimePolicy, and
+`ActionExecutionGate` remains in the existing lifecycle owner. Requests with
+unknown fields, forged grant objects, stale revisions or mismatched tenant
+identity fail closed, with redacted error responses.
+
+Results expose the persisted connection revision and exact stage. Only a
+successful activation may report `provider_phone_verified=true` because the
+actual adapter probes Meta before the activation CAS. Every response keeps
+`webhook_subscription_verified`, `signed_inbound_verified` and
+`delivery_verified` false. These remain **separate, live provider acceptance
+gates**. No provider test number, webhook or end-user chat is created by the
+API itself; no new worker, installer, credential store or generic plugin
+executor is introduced.
+
+**Source proof:** `pytest -q tests/extensions/test_whatsapp_operator_api.py
+tests/extensions/test_channel_activation_service.py` and the exact-head
+Plugin Backend, Plugin Security Reports, Main Quality and relevant production
+boot gates. A signed-in operator UI and actual Meta sandbox transcript are
+still necessary for consumer-ready shipping.
