@@ -18,6 +18,7 @@ const preflight = (overrides: Record<string, unknown> = {}) => ({
   mutation_performed: false,
   action_receipt: null,
   status: 'needs_explicit_confirmation',
+  current_state: 'enabled',
   next_action: 'plugin.open_admin_management',
   confirmation_channel: 'authenticated_plugin_management_ui',
   ...overrides,
