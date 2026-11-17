@@ -60,39 +60,38 @@ model access, the actual completed model job, native CPU import/load, a
 non-silent authentic WAV and audible browser playback. Source CI and build
 configuration alone cannot certify this.
 
-## Two supported model installation entry points
+## Download method selection
 
-Pocket TTS model installation offers **two operator choices** inside the
-host-owned **Plugins → Pocket TTS → Model installation** panel:
+Karen provides two model-file transfer methods in the same existing
+**Plugins → Pocket TTS → Model installation** workflow:
 
-1. **Download recommended model** validates a verified immutable revision,
-   records fresh explicit license acceptance, and enqueues the canonical
-   authenticated model download job.
-2. **Use curl from an admin terminal** displays a revision- and
-   model-specific Bash command after the same explicit license review. The
-   command calls Karen's existing authenticated
-   \`POST /api/models/download/validate\`, checks \`allowed=true\` and exact
-   model/channel/revision with \`jq\`, then calls
-   \`POST /api/models/download\` to enqueue the **same** durable model worker.
-   The display never includes an admin access token. It requires \`jq\`,
-   \`curl\`, \`KAREN_BASE_URL\` with an approved HTTPS origin and
-   \`KAREN_ACCESS_TOKEN\` for a permitted admin. Supply credentials only in
-   an approved local shell/secret injector, never in source control or logs.
+- **Hugging Face Hub SDK** (default): \`snapshot_download()\` uses the trusted
+  host's Hugging Face token and reviewed revision.
+- **Direct HTTPS**: transfer model assets by direct authenticated HTTPS
+  \`/resolve/<sha>/<path>\` requests without calling the \`huggingface_hub\`
+  Python SDK for file transfer. The backend discovers the immutable repository
+  file selection over HTTPS and enforces bounded file count, size, optional
+  repository LFS SHA-256 checks, strict redirects, and staging isolation.
 
-Both paths share one model registry, tenant-scoped job ownership, download
-policy, source license/metadata verification, immutable revision, staging
-and crash-safe publication. The terminal method is **not a second installer**,
-and returning a queued job ID does not indicate successful download,
-installation, tenant-eligible load or voice readiness. Check authenticated
-job status in **Models & Runtime**, then verify live Voice Studio playback.
+Both methods are selected from a backend-advertised list. Both use the *same*
+admin authorization, explicit model-license acceptance, immutable revision,
+approved include patterns, persisted tenant/owner-scoped job, audited worker
+lease, staging, atomic publication/compensation and model registry. Model
+sources remain host-only; neither UI nor Pocket plugin sees credentials.
+Source-side gated access still requires a Hugging Face account that accepted
+the upstream conditions and a working host \`HF_TOKEN\` (or approved equivalent).
+**Direct HTTPS does not circumvent gated repositories.**
 
-If an operator instead uses direct Hugging Face
-\`curl -H "Authorization: Bearer ..."\` against the upstream gated repository,
-the fetched bytes are **external acquisition only**. They must not be copied
-over a canonical installed snapshot or marked completed manually. Karen has
-no approved offline-artifact import path in this slice; use one of the two
-supported job-queue methods for registered model installation. Gated source
-terms must still be accepted by the matching Hugging Face account.
+One job has one persisted \`download_method\` (\`hf_hub\` or \`direct_https\`).
+The worker never changes methods automatically after an error or retry.
+Direct HTTPS requires a full reviewed 40-character revision and explicit
+file patterns; it fails closed for unpinned or unbounded downloads.
+
+The API may still use the existing Hugging Face metadata lookup to verify
+license and revision before queueing. The direct method removes the SDK from
+the *file transfer path*, not from the canonical access-verification boundary.
+A download marked \`completed\` is still not voice-readiness proof: test native
+load, genuine WAV output and browser playback separately.
 
 ## Security and behavior
 
