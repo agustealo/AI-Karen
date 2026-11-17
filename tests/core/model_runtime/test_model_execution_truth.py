@@ -29,9 +29,10 @@ def _test_governed_admission():
     from ai_karen_engine.auth.models import UserData
     from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
-from ai_karen_engine.core.runtime.policy.runtime_policy import (
-    PolicyDecision, RuntimePolicyEnforcer,
-)
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyDecision,
+        RuntimePolicyEnforcer,
+    )
     from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudget, ExecutionBudgetMeter
 
     budget = ExecutionBudget(max_model_calls=2, max_duration_ms=60000)

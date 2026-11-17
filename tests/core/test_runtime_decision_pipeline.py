@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.config.runtime import FeatureFlags, RuntimeSettings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -74,6 +75,14 @@ def _request() -> ChatExecutionRequest:
             tenant_id="tenant-1",
             session_id="session-1",
             permissions=[],
+            authenticated_user=UserData(
+                user_id="user-1",
+                tenant_id="tenant-1",
+                roles=["user"],
+                permissions=[],
+                is_active=True,
+                is_verified=True,
+            ),
         ),
     )
 
