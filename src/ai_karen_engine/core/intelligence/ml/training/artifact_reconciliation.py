@@ -6,8 +6,11 @@ auto-retries a run whose side effects may have occurred.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import os
+import stat
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 from ai_karen_engine.config.config_manager import get_ml_registry_dir
+from ai_karen_engine.config.learning import get_learning_settings
+from ai_karen_engine.core.intelligence.ml.training.consumption_evidence import (
+    inspect_sklearn_fit_observation,
+)
 from ai_karen_engine.core.intelligence.ml.registry import MLModelRegistry
 from ai_karen_engine.core.intelligence.ml.training.job_ledger import TrainingJobLedger
 from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
@@ -43,6 +50,65 @@ class ScopedTrainingArtifactLineage:
     execution_authorized: bool = False
     general_skill_certified: bool = False
 
+
+
+@dataclass(frozen=True, slots=True)
+class ScopedSklearnFitArtifactObservation:
+    """Keyed worker fit receipt bound to one owner, job and model artifact.
+
+    This is NOT independently attested training inventory or source ancestry.
+    """
+
+    tenant_id: str
+    user_id: str
+    model_id: str
+    model_version: str
+    training_job_id: str
+    training_dataset_version: str
+    artifact_sha256: str
+    fit_observation_sha256: str
+    fit_observation_key_id: str
+    train_count: int
+    holdout_count: int
+    verified_at: datetime
+    model_training_job_link_verified: bool = True
+    fit_observation_artifact_bound: bool = True
+    worker_observation_integrity_verified: bool = True
+    source_ancestry_verified: bool = False
+    independent_fit_verified: bool = False
+    training_example_inventory_verified: bool = False
+    training_evaluation_disjointness_verified: bool = False
+    independent_oracle_verified: bool = False
+    training_authorized: bool = False
+    execution_authorized: bool = False
+    general_skill_certified: bool = False
+
+
+def _bounded_artifact_read(path: Path, *, limit: int) -> bytes | None:
+    """Read only ordinary artifact files, without following the final symlink.
+
+    Keep the descriptor bounded even if the file changes between stat/read.
+    This utility does not grant filesystem authority or deserialize models.
+    """
+    if limit < 1:
+        return None
+    fd = -1
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        flags |= getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(path, flags)
+        mode = os.fstat(fd)
+        if not stat.S_ISREG(mode.st_mode) or not 0 < mode.st_size <= limit:
+            return None
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            data = handle.read(limit + 1)
+        return data if 0 < len(data) <= limit else None
+    except (OSError, ValueError, TypeError):
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 class TrainingArtifactReconciler:
@@ -249,6 +315,219 @@ class TrainingArtifactReconciler:
             training_job_id=job_id,
             training_dataset_version=manifest.training_dataset_version,
             artifact_sha256=manifest.artifact_hash,
+            verified_at=datetime.now(timezone.utc),
+        )
+
+    def inspect_exact_sklearn_fit_artifact(
+        self, *, principal: AuthenticatedPrincipal, model_id: str,
+    ) -> ScopedSklearnFitArtifactObservation | None:
+        """Bind one keyed fit receipt to the exact owner-scoped model/job.
+
+        The canonical ledger, registry and artifact hash remain authoritative.
+        No raw membership is disclosed, no data rights/ancestry are inferred,
+        and a missing/rotated host key never produces positive evidence.
+        """
+        before = self.inspect_exact_model_lineage(
+            principal=principal, model_id=model_id,
+        )
+        if before is None:
+            return None
+        trusted_claims = (
+            principal.tenant_id, principal.user_id, principal.session_id,
+            tuple(principal.roles), tuple(principal.permissions),
+            principal.expires_at,
+        )
+
+        try:
+            authority = get_learning_settings().get_kcm_sklearn_fit_observation_key()
+        except ValueError:
+            logger.warning("ml.fit_observation.key_unavailable")
+            return None
+        if authority is None:
+            return None
+        key_id, key = authority
+
+        def observation_key_still_authorized() -> bool:
+            # The host may rotate, remove or disable this key while the two
+            # potentially slow artifact hashes run. Never trust a stale key.
+            try:
+                refreshed = (
+                    get_learning_settings().get_kcm_sklearn_fit_observation_key()
+                )
+            except (ValueError, TypeError):
+                return False
+            return bool(
+                isinstance(refreshed, tuple)
+                and len(refreshed) == 2
+                and isinstance(refreshed[0], str)
+                and isinstance(refreshed[1], bytes)
+                and hmac.compare_digest(refreshed[0], key_id)
+                and hmac.compare_digest(refreshed[1], key)
+            )
+
+        try:
+            manifest = deepcopy(self.registry.get(model_id))
+        except (RecursionError, TypeError, ValueError):
+            return None
+        if manifest is None or manifest.model_id != model_id:
+            return None
+        metrics = manifest.metrics
+        record = self.ledger.get(
+            before.training_job_id, tenant_id=before.tenant_id,
+            user_id=before.user_id,
+        )
+        if not isinstance(metrics, dict) or not isinstance(record, dict):
+            return None
+        job = record.get("job")
+        if not isinstance(job, dict) or not isinstance(job.get("metrics"), dict):
+            return None
+        job_metrics = job["metrics"]
+        digest = metrics.get("fit_observation_sha256")
+        if (
+            record.get("status") != "SUCCEEDED"
+            or job.get("base_model") != "sklearn"
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)
+            or metrics.get("fit_observation_key_id") != key_id
+            or job_metrics.get("fit_observation_sha256") != digest
+            or job_metrics.get("fit_observation_key_id") != key_id
+            or manifest.artifact_hash != before.artifact_sha256
+            or manifest.model_version != before.model_version
+            or manifest.training_dataset_version != before.training_dataset_version
+        ):
+            return None
+
+        try:
+            root = self.registry_root.resolve(strict=True)
+            artifact = Path(manifest.artifact_path).resolve(strict=True)
+            if (
+                not artifact.is_relative_to(root)
+                or not artifact.is_dir()
+                or artifact != Path(job["artifact_path"]).resolve(strict=True)
+            ):
+                return None
+            # The first exact-lineage proof rejects symlinked artifact members.
+            # Recheck the two files here, and open with O_NOFOLLOW where present.
+            metadata_file = artifact / "training_metadata.json"
+            receipt_file = artifact / "training_consumption.json"
+            if metadata_file.is_symlink() or receipt_file.is_symlink():
+                return None
+            raw_meta = _bounded_artifact_read(
+                metadata_file, limit=1024 * 1024,
+            )
+            raw_receipt = _bounded_artifact_read(
+                receipt_file, limit=4 * 1024 * 1024,
+            )
+            if raw_meta is None or raw_receipt is None:
+                return None
+            artifact_meta = json.loads(raw_meta.decode("utf-8"))
+        except (OSError, ValueError, UnicodeError, TypeError, RecursionError):
+            return None
+        if not isinstance(artifact_meta, dict):
+            return None
+        if any(
+            artifact_meta.get(field) != expected
+            for field, expected in (
+                ("training_job_id", before.training_job_id),
+                ("model_id", before.model_id),
+                ("model_version", before.model_version),
+                ("dataset_version", before.training_dataset_version),
+                ("fit_observation_sha256", digest),
+                ("fit_observation_key_id", key_id),
+            )
+        ):
+            return None
+        if hashlib.sha256(raw_receipt).hexdigest() != digest:
+            return None
+        observed = inspect_sklearn_fit_observation(
+            raw_receipt, tenant_id=before.tenant_id,
+            job_id=before.training_job_id, model_id=before.model_id,
+            model_version=before.model_version,
+            dataset_version=before.training_dataset_version,
+            key_id=key_id, key=key,
+        )
+        if observed is None or observed.evidence_sha256 != digest:
+            return None
+        # Executor-reported sample counts are weaker evidence than a keyed
+        # fit-member receipt, but contradictory canonical counts still mean
+        # the job/model/receipt relationship cannot be accepted.
+        if any(
+            type(snapshot.get(field)) is not int
+            or snapshot[field] != expected
+            for snapshot in (metrics, job_metrics, artifact_meta)
+            for field, expected in (
+                ("training_samples", observed.train_count),
+                ("test_samples", observed.holdout_count),
+            )
+        ):
+            return None
+
+        # The observation was read after the first model/job verification.
+        # Perform another complete hash-and-ledger reconciliation afterward.
+        after = self.inspect_exact_model_lineage(
+            principal=principal, model_id=model_id,
+        )
+        if (
+            after is None
+            or (
+                before.tenant_id, before.user_id, before.model_id,
+                before.model_version, before.training_job_id,
+                before.training_dataset_version, before.artifact_sha256,
+            ) != (
+                after.tenant_id, after.user_id, after.model_id,
+                after.model_version, after.training_job_id,
+                after.training_dataset_version, after.artifact_sha256,
+            )
+        ):
+            return None
+        try:
+            current = deepcopy(self.registry.get(model_id))
+        except (RecursionError, TypeError, ValueError):
+            return None
+        reread = self.ledger.get(
+            before.training_job_id, tenant_id=before.tenant_id,
+            user_id=before.user_id,
+        )
+        if (
+            current != manifest or reread != record or principal.is_expired()
+            or not observation_key_still_authorized()
+            or trusted_claims != (
+                principal.tenant_id, principal.user_id, principal.session_id,
+                tuple(principal.roles), tuple(principal.permissions),
+                principal.expires_at,
+            )
+        ):
+            return None
+
+        logger.info(
+            "ml.fit_observation.artifact_link_verified",
+            extra={
+                "tenant_id": before.tenant_id, "user_id": before.user_id,
+                "model_id": model_id, "training_job_id": before.training_job_id,
+                "artifact_sha256": before.artifact_sha256,
+                "fit_observation_sha256": digest,
+                "training_example_inventory_verified": False,
+            },
+        )
+        if (
+            principal.is_expired()
+            or not observation_key_still_authorized()
+            or trusted_claims != (
+                principal.tenant_id, principal.user_id, principal.session_id,
+                tuple(principal.roles), tuple(principal.permissions),
+                principal.expires_at,
+            )
+        ):
+            return None
+        return ScopedSklearnFitArtifactObservation(
+            tenant_id=before.tenant_id, user_id=before.user_id,
+            model_id=model_id, model_version=before.model_version,
+            training_job_id=before.training_job_id,
+            training_dataset_version=before.training_dataset_version,
+            artifact_sha256=before.artifact_sha256,
+            fit_observation_sha256=digest, fit_observation_key_id=key_id,
+            train_count=observed.train_count,
+            holdout_count=observed.holdout_count,
             verified_at=datetime.now(timezone.utc),
         )
 

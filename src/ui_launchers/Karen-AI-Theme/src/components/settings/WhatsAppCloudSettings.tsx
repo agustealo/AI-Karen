@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
+import WhatsAppCloudTrialEvidence from './WhatsAppCloudTrialEvidence';
 
 const ENDPOINT = '/api/channels/operator/whatsapp/connections';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -349,6 +350,10 @@ export default function WhatsAppCloudSettings() {
                 )}
                 {connection.enabled ? 'Deactivate connection' : 'Activate connection'}
               </Button>
+              <WhatsAppCloudTrialEvidence
+                key={principal + ':' + connection.connection_id}
+                connectionId={connection.connection_id}
+              />
             </div>
           ))}
         </CardContent>
