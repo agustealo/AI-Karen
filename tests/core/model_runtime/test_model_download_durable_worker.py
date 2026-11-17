@@ -1237,3 +1237,68 @@ async def test_recommended_cache_only_directory_is_not_installed(
     (install_path / "config.cfg").write_text("[nlp]", encoding="utf-8")
     result = await service.get_recommendations()
     assert result["essential_installed"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["hf_hub", "direct_https"])
+async def test_transfer_method_changes_no_license_or_job_authority(
+    tmp_path: Path, method: str,
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    sha = "db04f0e653473e5c7333c69686ac92b7460b0c1d"
+    service._orchestrator.get_model_info = AsyncMock(return_value=ModelInfo(
+        model_id="kyutai/pocket-tts", owner="kyutai", repository="pocket-tts",
+        storage_key="audio", license="CC-BY-4.0", gated=True, revision=sha,
+    ))
+    request = {
+        "model_id": "kyutai/pocket-tts", "channel_id": "plugin_audio",
+        "validated_revision": sha, "include_patterns": ["model.safetensors"],
+        "accept_license": True, "download_method": method,
+        "trust_remote_code": False,
+    }
+    job = await service.start_download(
+        request, {"user_id": "admin-test", "tenant_id": "tenant-test"},
+    )
+    assert job["status"] == "queued"
+    assert job["download_method"] == method
+    assert job["license_accepted"] is True
+    assert job["revision"] == sha
+    assert job["channel_id"] == "plugin_audio"
+    assert job["requested_by"] == "admin-test"
+    assert job["tenant_id"] == "tenant-test"
+    assert job["trust_remote_code"] is False
+    assert repository.jobs[job["job_id"]]["download_method"] == method
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"download_method": "unsafe_shell"},
+        {"download_method": "direct_https", "validated_revision": "main"},
+        {"download_method": "direct_https", "include_patterns": []},
+        {"download_method": "direct_https", "accept_license": False},
+    ],
+)
+async def test_direct_transport_cannot_skip_review_or_source_license(
+    tmp_path: Path, overrides: dict[str, object],
+) -> None:
+    repository = FakeModelDownloadRepository()
+    service = _service(tmp_path, repository)
+    sha = "db04f0e653473e5c7333c69686ac92b7460b0c1d"
+    service._orchestrator.get_model_info = AsyncMock(return_value=ModelInfo(
+        model_id="kyutai/pocket-tts", owner="kyutai", repository="pocket-tts",
+        storage_key="audio", license="CC-BY-4.0", gated=True, revision=sha,
+    ))
+    request: dict[str, object] = {
+        "model_id": "kyutai/pocket-tts", "channel_id": "plugin_audio",
+        "validated_revision": sha, "include_patterns": ["model.safetensors"],
+        "accept_license": True, "download_method": "direct_https",
+    }
+    request.update(overrides)
+    with pytest.raises(ModelOrchestratorError):
+        await service.start_download(
+            request, {"user_id": "admin-test", "tenant_id": "tenant-test"},
+        )
+    assert repository.jobs == {}
