@@ -24,6 +24,7 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B3B: conditioned curated-oracle source and assessment expiry | [PR #956](https://github.com/agustealo/AI-Karen/pull/956), merge `a1188e594201e0713cc6a16833a5acc1f4ae40ae` | Merged; 19/19 exact-head checks passed; source integrity and issuer freshness only |
 | KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961), merge `69d62965550f79f964cc9850283dfcb868cc1f4f` · [25 — Runner observation](25-run-observation-and-freshness.md) | Merged; 18/18 exact-head checks passed; runner observation is not signed production attestation |
 | KCM-02B3C2A: owner-scoped curated-oracle reviewer observation | [PR #963](https://github.com/agustealo/AI-Karen/pull/963) · [26 — Reviewer observations](26-reviewed-curated-oracle-observations.md) | In review; acknowledgment only, no independently verified groups/ground truth/execution |
+| KCM-02B3C2B: append-only original-reviewer withdrawal and revocation-aware reads | [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Stacked development; no administrative override or training permission |
 
 ## Configuration
 
