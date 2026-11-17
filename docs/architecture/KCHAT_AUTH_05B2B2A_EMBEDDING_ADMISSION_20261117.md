@@ -109,3 +109,30 @@ principal, authorize arbitrary untrusted in-process Python code, migrate
 the remaining raw model invocation paths, or constitute host-level egress
 attestation. The separate mandatory governed chat-generation and fallback
 migration remains open.
+
+### Compatibility checks after independent reviewer findings
+
+The decision pipeline may still return **non-executing diagnostic policy
+analysis** without an authenticated principal, but it never attaches model
+execution provenance in that case. A real execution requires the ingress
+principal again at initial plan/meter binding.
+
+An authorized policy with `max_model_calls=0` may bind a tool-only plan.
+The shared meter still denies every model attempt and no inference is
+fabricated. No permission or quota is inferred from the mere existence
+of a RuntimePolicy ID.
+
+Shared-budget Medusa can accept a *narrowed* serialized derivative, but
+only when the sole differences from the original in-process policy plan
+are the tool/plugin/agent allowlists. All other fields are compared
+against the original by dataclass-normalized value. The narrowed
+derivative is explicitly registered with the **original** meter; it never
+recreates a second quota. Each downstream specialist is restricted
+against the actual handoff-narrowed allowlists as well as the root,
+preventing widened sibling permissions. Unchanged handoffs still
+recover the exact root plan object.
+
+Targeted regressions cover these three cases, an attempted widened
+serialized handoff, a truly evaluated RuntimePolicy decision, and
+copied-plan/budget/context replay. Exact-head CI, independent review and
+post-merge acceptance remain required; no release claim is made here.
