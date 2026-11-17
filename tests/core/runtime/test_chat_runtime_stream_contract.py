@@ -12,6 +12,8 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
     ChatExecutionStatus,
+    ChatExecutionResult,
+    ChatRuntimeMetadata,
     PersonaExecutionSnapshot,
     ChatStreamChunk,
     ChatStreamEventType,
@@ -1472,4 +1474,159 @@ async def test_b2c2_repeated_cancel_cannot_suppress_request_cancel_event() -> No
                                         task.cancel()
                                         await asyncio.gather(task, return_exceptions=True)
     assert gateway.calls == []
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_nonstream_cancel_during_authorized_fallback_is_terminal() -> None:
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+    fallback_entered = asyncio.Event()
+
+    async def primary_failure(*args, **kwargs):
+        raise RuntimeError("primary failed")
+
+    async def blocked_fallback(*args, **kwargs):
+        fallback_entered.set()
+        await asyncio.Event().wait()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_freeze_persona_snapshot", new_callable=AsyncMock):
+            with patch.object(runtime, "_prepare_conversation_continuation", new_callable=AsyncMock):
+                with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+                    with patch.object(runtime, "_record_user_behavior_observation", new_callable=AsyncMock):
+                        with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                            with patch.object(runtime, "_grounded_personal_response", return_value=None):
+                                with patch.object(runtime, "_is_explicit_save_turn", return_value=False):
+                                    with patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor") as direct:
+                                        direct.return_value.can_handle.return_value = False
+                                        with patch.object(runtime, "_run_simple", side_effect=primary_failure):
+                                            with patch("ai_karen_engine.core.runtime.chat_runtime.build_runtime_fallback", side_effect=blocked_fallback):
+                                                with patch.object(runtime, "_persist_transcript", new_callable=AsyncMock) as persist:
+                                                    with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                                                        task = asyncio.create_task(runtime.execute(request))
+                                                        try:
+                                                            await asyncio.wait_for(fallback_entered.wait(), timeout=5)
+                                                            task.cancel()
+                                                            with pytest.raises(asyncio.CancelledError):
+                                                                await task
+                                                        finally:
+                                                            if not task.done():
+                                                                task.cancel()
+                                                                await asyncio.gather(task, return_exceptions=True)
+    rows = store.list_for_tenant(TENANT_ID)
+    assert len(rows) == 1
+    assert rows[0].execution_status == "cancelled"
+    assert rows[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert rows[0].actual_model is None
+    assert gateway.calls == []
+    persist.assert_not_awaited()
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_stream_cancel_during_authorized_fallback_is_terminal() -> None:
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+    fallback_entered = asyncio.Event()
+
+    async def primary_failure(*args, **kwargs):
+        raise RuntimeError("primary failed")
+        yield ChatStreamChunk(type="content", content="never", correlation_id="corr-1")
+
+    async def blocked_fallback(*args, **kwargs):
+        fallback_entered.set()
+        await asyncio.Event().wait()
+
+    async def consume():
+        async for _ in runtime.execute_stream(request):
+            pass
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_run_simple_stream", side_effect=primary_failure):
+                    with patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor") as direct:
+                        direct.return_value.can_handle.return_value = False
+                        with patch("ai_karen_engine.core.runtime.chat_runtime.build_runtime_fallback", side_effect=blocked_fallback):
+                            with patch.object(runtime, "_persist_transcript", new_callable=AsyncMock) as persist:
+                                with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                                    task = asyncio.create_task(consume())
+                                    try:
+                                        await asyncio.wait_for(fallback_entered.wait(), timeout=5)
+                                        task.cancel()
+                                        with pytest.raises(asyncio.CancelledError):
+                                            await task
+                                    finally:
+                                        if not task.done():
+                                            task.cancel()
+                                            await asyncio.gather(task, return_exceptions=True)
+    rows = store.list_for_tenant(TENANT_ID)
+    assert len(rows) == 1
+    assert rows[0].execution_status == "cancelled"
+    assert rows[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert rows[0].actual_provider is None
+    assert gateway.calls == []
+    persist.assert_not_awaited()
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_close_at_recovered_stream_token_does_not_commit() -> None:
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+
+    async def primary_failure(*args, **kwargs):
+        raise RuntimeError("primary failed")
+        yield ChatStreamChunk(type="content", content="never", correlation_id="corr-1")
+
+    recovered = ChatExecutionResult(
+        answer="Recovered content",
+        metadata=ChatRuntimeMetadata(
+            correlation_id=request.context.correlation_id,
+            actual_provider="ollama-local",
+            actual_model="llama3",
+            response_source="model",
+            degraded_mode=True,
+            fallback_level=1,
+        ),
+        status=ChatExecutionStatus.DEGRADED,
+    )
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_run_simple_stream", side_effect=primary_failure):
+                    with patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor") as direct:
+                        direct.return_value.can_handle.return_value = False
+                        with patch("ai_karen_engine.core.runtime.chat_runtime.build_runtime_fallback", new_callable=AsyncMock, return_value=recovered):
+                            with patch.object(runtime, "_persist_transcript", new_callable=AsyncMock) as persist:
+                                with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                                    stream = runtime.execute_stream(request)
+                                    assert (await anext(stream)).type == ChatStreamEventType.STATUS
+                                    recovered_chunk = await anext(stream)
+                                    assert recovered_chunk.type == ChatStreamEventType.CONTENT
+                                    assert recovered_chunk.content == "Recovered content"
+                                    await stream.aclose()
+    rows = store.list_for_tenant(TENANT_ID)
+    assert len(rows) == 1
+    assert rows[0].execution_status == "cancelled"
+    assert rows[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert rows[0].actual_provider is None
+    assert gateway.calls == []
+    persist.assert_not_awaited()
     outcome.assert_not_awaited()
