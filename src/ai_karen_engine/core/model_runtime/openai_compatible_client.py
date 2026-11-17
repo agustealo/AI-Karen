@@ -60,7 +60,9 @@ class OpenAICompatibleRuntimeClient:
             base_url=self.base_url,
         )
         if provider_endpoint_requires_external_permission(endpoint):
-            raise ProviderNotAvailable("ungoverned_external_compatibility_transport_denied")
+            raise ProviderNotAvailable(
+                "ungoverned_external_compatibility_transport_denied"
+            )
 
     def _request(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._require_local_compatibility_transport()
