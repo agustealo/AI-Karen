@@ -88,6 +88,7 @@ jobs:
           pytest -q \
             tests/core/expression/test_gateway_generation_integrity.py \
              tests/core/expression/test_gateway_additional_engine_budget.py \
+            tests/core/expression/test_external_endpoint_admission.py \
             tests/core/expression/test_gateway_selected_provider_precedence.py \
             tests/core/expression/test_expression_stream_fallback_integrity.py \
             tests/core/expression/test_gateway_fallbacks.py \
