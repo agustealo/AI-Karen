@@ -6,6 +6,7 @@ auto-retries a run whose side effects may have occurred.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -346,6 +347,24 @@ class TrainingArtifactReconciler:
             return None
         key_id, key = authority
 
+        def observation_key_still_authorized() -> bool:
+            # The host may rotate, remove or disable this key while the two
+            # potentially slow artifact hashes run. Never trust a stale key.
+            try:
+                refreshed = (
+                    get_learning_settings().get_kcm_sklearn_fit_observation_key()
+                )
+            except (ValueError, TypeError):
+                return False
+            return bool(
+                isinstance(refreshed, tuple)
+                and len(refreshed) == 2
+                and isinstance(refreshed[0], str)
+                and isinstance(refreshed[1], bytes)
+                and hmac.compare_digest(refreshed[0], key_id)
+                and hmac.compare_digest(refreshed[1], key)
+            )
+
         try:
             manifest = deepcopy(self.registry.get(model_id))
         except (RecursionError, TypeError, ValueError):
@@ -471,6 +490,7 @@ class TrainingArtifactReconciler:
         )
         if (
             current != manifest or reread != record or principal.is_expired()
+            or not observation_key_still_authorized()
             or trusted_claims != (
                 principal.tenant_id, principal.user_id, principal.session_id,
                 tuple(principal.roles), tuple(principal.permissions),
@@ -489,10 +509,14 @@ class TrainingArtifactReconciler:
                 "training_example_inventory_verified": False,
             },
         )
-        if principal.is_expired() or trusted_claims != (
-            principal.tenant_id, principal.user_id, principal.session_id,
-            tuple(principal.roles), tuple(principal.permissions),
-            principal.expires_at,
+        if (
+            principal.is_expired()
+            or not observation_key_still_authorized()
+            or trusted_claims != (
+                principal.tenant_id, principal.user_id, principal.session_id,
+                tuple(principal.roles), tuple(principal.permissions),
+                principal.expires_at,
+            )
         ):
             return None
         return ScopedSklearnFitArtifactObservation(
