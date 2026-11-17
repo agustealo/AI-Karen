@@ -381,6 +381,49 @@ def test_facade_sync_generation_uses_same_request_budget(monkeypatch):
     assert len(attempts) == 1
 
 
+@pytest.mark.asyncio
+async def test_direct_model_manager_embedding_denies_unauthenticated_before_encoder():
+    manager = object.__new__(ModelManager)
+    calls = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: calls.append(text) or [0.1],
+    )
+    for invalid in (None, object(), {"user_id": "user-a"}):
+        with pytest.raises(PermissionError, match="governed_model_transport_admission_required"):
+            await manager.generate_embedding("private text", execution_admission=invalid)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_direct_model_manager_embedding_denies_foreign_original_scope_without_charge():
+    manager = object.__new__(ModelManager)
+    calls = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: calls.append(text) or [0.1],
+    )
+    scope = _scope(calls=1)
+    foreign = replace(scope, tenant_id="foreign-tenant")
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        await manager.generate_embedding("private text", execution_admission=foreign)
+    alternate_meter = replace(
+        scope,
+        meter=ExecutionBudgetMeter(
+            ExecutionBudget(max_model_calls=1, max_duration_ms=60000),
+        ),
+    )
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        await manager.generate_embedding("private text", execution_admission=alternate_meter)
+    assert calls == []
+    assert scope.meter.model_calls == 0
+    assert scope.meter.external_requests == 0
+
+
 def test_facade_embedding_batch_consumes_one_budget_per_actual_vector(monkeypatch):
     manager, _, _ = _local_manager(monkeypatch)
     calls = []

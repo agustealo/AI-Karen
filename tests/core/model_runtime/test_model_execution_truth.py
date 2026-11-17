@@ -611,15 +611,25 @@ async def test_manager_embedding_uses_real_model_path_only() -> None:
         return [0.4, 0.2]
 
     manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
         embed_authoritative=real_embedding,
         embed=lambda _: (_ for _ in ()).throw(
             AssertionError("Legacy synthetic embedding path invoked")
         ),
     )
-    assert await manager.generate_embedding("sample") == [0.4, 0.2]
+    admission = _test_governed_admission()
+    assert await manager.generate_embedding(
+        "sample", execution_admission=admission
+    ) == [0.4, 0.2]
     assert calls and calls[0] != loop_thread
+    assert admission.meter.model_calls == 1
     with pytest.raises(ProviderNotAvailable, match="embedding_execution_options_unsupported"):
-        await manager.generate_embedding("sample", model="unlisted")
+        await manager.generate_embedding(
+            "sample", model="unlisted", execution_admission=admission
+        )
+    assert admission.meter.model_calls == 1
 
 
 def test_model_manager_revalidates_registry_and_refreshes_endpoint_cache() -> None:
