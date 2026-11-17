@@ -117,7 +117,8 @@ def test_pocket_optional_cpu_image_uses_pinned_native_runtime() -> None:
     image = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "FROM runtime AS runtime-pocket-tts" in image
     assert "COPY requirements/pocket-tts.txt /app/requirements/pocket-tts.txt" in image
-    assert "pip install --no-cache-dir -r /app/requirements/pocket-tts.txt" in image
+    assert "--extra-index-url https://download.pytorch.org/whl/cpu" in image
+    assert "-r /app/requirements/pocket-tts.txt" in image
     assert "python -m pip check" in image
     assert "from pocket_tts import TTSModel" in image
     assert "FROM ${PROFILE} AS app" in image
