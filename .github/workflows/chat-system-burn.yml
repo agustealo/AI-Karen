@@ -149,7 +149,8 @@ jobs:
         run: |
           pytest -q \
             tests/core/runtime/test_runtime_fallback_authority.py \
-            tests/core/runtime/test_runtime_fallback_memory.py
+            tests/core/runtime/test_runtime_fallback_memory.py \
+            tests/core/runtime/test_external_provider_rbac.py
           pytest -q tests/core/runtime/test_chat_http_recovery_persistence.py
            pytest -q tests/core/runtime/test_chat_generation_budget.py tests/core/runtime/test_ksi_surface_planning.py
 
