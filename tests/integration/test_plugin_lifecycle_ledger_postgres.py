@@ -139,7 +139,7 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
             f'GRANT SELECT, INSERT, UPDATE ON public.extension_lifecycle_operations TO "{backend_role}"'
         )
         await raw.execute(
-            f'GRANT SELECT, UPDATE ON public.runtime_approval_requests TO "{backend_role}"'
+            f'GRANT SELECT, INSERT, UPDATE ON public.runtime_approval_requests TO "{backend_role}"'
         )
         engine = create_async_engine(
             dsn.replace("postgresql://", "postgresql+asyncpg://", 1),
@@ -335,7 +335,7 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
         )
         # Two extra canonical installations exercise the actual host service
         # path against the same restricted-role PostgreSQL ledger.
-        for plugin_id in ("governed-demo", "governed-failure"):
+        for plugin_id in ("governed-demo", "governed-failure", "governed-request"):
             host_dir = tmp_path / plugin_id
             host_dir.mkdir()
             (host_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -729,6 +729,98 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 uuid.UUID(approval_id), actor_a,
             )
             return action_scope, approval_id
+
+
+        # B3B1: request human consent from actual kernel state and a durable
+        # PostgreSQL global revision; the request itself is not execution.
+        with pytest.raises(PermissionError, match="management permission"):
+            await service.prepare_lifecycle_approval(
+                context=governed_context(roles=["user"]),
+                plugin_id="governed-request", action="enable",
+            )
+        pending_consent = await service.prepare_lifecycle_approval(
+            context=governed_context(),
+            plugin_id="governed-request", action="enable",
+        )
+        assert pending_consent["status"] == "pending"
+        assert pending_consent["execution_performed"] is False
+        assert pending_consent["expected_state"] == "disabled"
+        assert pending_consent["expected_revision"] == 1
+        assert len(pending_consent["manifest_checksum"]) == 64
+        consent_id = pending_consent["approval_id"]
+        stored_consent = await approved_service.get(
+            consent_id, user=trusted_actor,
+        )
+        assert stored_consent["status"] == "pending"
+        assert stored_consent["policy_decision_id"].startswith(
+            "policy-plugin-lifecycle-preflight-"
+        )
+        assert stored_consent["request_payload"]["plugin_lifecycle_scope"][
+            "manifest_checksum"
+        ] == pending_consent["manifest_checksum"]
+        assert (tmp_path / "governed-request" / ".karen-manual-disabled").is_file()
+        preapproval_scope = PluginLifecycleApprovalScope(
+            **stored_consent["request_payload"]["plugin_lifecycle_scope"]
+        )
+        with pytest.raises(PermissionError, match="policy denied"):
+            await service.execute_approved_lifecycle(
+                context=governed_context(), scope=preapproval_scope,
+                approval_id=consent_id,
+            )
+        from ai_karen_engine.services.approvals import ApprovalNotFoundError
+        with pytest.raises(ApprovalNotFoundError):
+            await approved_service.get(
+                consent_id,
+                user=UserData(
+                    user_id=str(actor_b), tenant_id=str(tenant_b), roles=["admin"]
+                ),
+            )
+        approved_consent = await approved_service.decide(
+            consent_id, user=trusted_actor, decision="approved",
+        )
+        assert approved_consent["status"] == "approved"
+        assert approved_consent["decided_by"] == str(actor_a)
+        consent_receipt = await service.execute_approved_lifecycle(
+            context=governed_context(), scope=preapproval_scope,
+            approval_id=consent_id,
+        )
+        assert consent_receipt["status"] == "verified_committed"
+        assert consent_receipt["next_revision"] == 2
+        assert (await ledger.read_observation("governed-request"))["observed_state"] == "enabled"
+        assert (await approved_service.get(
+            consent_id, user=trusted_actor,
+        ))["status"] == "consumed"
+        with pytest.raises(PermissionError, match="policy denied"):
+            await service.execute_approved_lifecycle(
+                context=governed_context(), scope=preapproval_scope,
+                approval_id=consent_id,
+            )
+
+        # A rejected action to reverse the newly enabled plugin is not
+        # executable even though the revision and manifest are still valid.
+        reject_pending = await service.prepare_lifecycle_approval(
+            context=governed_context(),
+            plugin_id="governed-request",
+            action="disable",
+        )
+        assert reject_pending["expected_revision"] == 2
+        reject_id = reject_pending["approval_id"]
+        reject_before = await approved_service.get(
+            reject_id, user=trusted_actor,
+        )
+        reject_scope = PluginLifecycleApprovalScope(
+            **reject_before["request_payload"]["plugin_lifecycle_scope"]
+        )
+        reject_record = await approved_service.decide(
+            reject_id, user=trusted_actor, decision="rejected",
+        )
+        assert reject_record["status"] == "rejected"
+        with pytest.raises(PermissionError, match="policy denied"):
+            await service.execute_approved_lifecycle(
+                context=governed_context(), scope=reject_scope,
+                approval_id=reject_id,
+            )
+        assert (await ledger.read_observation("governed-request"))["revision"] == 2
 
         governed_scope, governed_approval = await prepare_governed("governed-demo")
         denied_user_context = governed_context(roles=["user"])
