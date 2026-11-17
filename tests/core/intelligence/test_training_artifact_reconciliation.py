@@ -525,3 +525,19 @@ def test_exact_lineage_rechecks_evidence_after_final_artifact_hash(
         principal=principal, model_id=model_id,
     ) is None
     assert verifier.registry.calls == 2
+
+
+def test_exact_model_lineage_rejects_overdeep_bounded_json_metadata(tmp_path):
+    """A small JSON payload may exceed the parser's nesting depth."""
+    verifier, _, _, principal, model_id, _, artifact = (
+        _scoped_training_lineage_fixture(tmp_path)
+    )
+    metadata_file = artifact / "training_metadata.json"
+    metadata_file.write_text(
+        "[" * 2000 + "0" + "]" * 2000, encoding="utf-8",
+    )
+    assert metadata_file.stat().st_size < 1024 * 1024
+    # Invalid metadata must fail closed before the artifact hash is consulted.
+    assert verifier.inspect_exact_model_lineage(
+        principal=principal, model_id=model_id,
+    ) is None
