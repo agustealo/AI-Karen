@@ -41,6 +41,11 @@ on:
         type: boolean
         required: true
         default: false
+      verify_pocket_manifest:
+        description: "Compare gated pinned Pocket model files via Hub SDK and direct HTTPS (no weights)"
+        type: boolean
+        required: true
+        default: false
       verify_spacy_artifacts:
         description: "Download and execute real spaCy linguistic pipeline (network required)"
         type: boolean
@@ -97,6 +102,21 @@ jobs:
           python -m pip install huggingface_hub
           pytest tests/integration/test_recommended_model_live_source.py -q
 
+      - name: Verify real licensed Pocket SDK/HTTPS file inventory when explicitly requested
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_pocket_manifest }}
+        timeout-minutes: 8
+        env:
+          KAREN_LIVE_MODEL_SOURCE_PROOF: "1"
+          KAREN_LIVE_POCKET_MANIFEST_PROOF: "1"
+          HF_TOKEN: ${{ secrets.KAREN_POCKET_HF_TOKEN }}
+        run: |
+          if [[ -z "${HF_TOKEN:-}" ]]; then
+            echo "::error::Protected KAREN_POCKET_HF_TOKEN is required for explicitly licensed source proof"
+            exit 1
+          fi
+          python -m pip install huggingface_hub
+          pytest tests/integration/test_recommended_model_live_source.py -q -k pocket_tts_live_pinned_manifest_matches_both_transports --tb=short
+
       - name: Prove real spaCy download and linguistic analysis when explicitly requested
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_spacy_artifacts }}
         timeout-minutes: 10
@@ -131,6 +151,7 @@ jobs:
             src/ai_karen_engine/server/application_runtime.py \
             tests/core/model_runtime/test_model_orchestrator_registry_durability.py \
             tests/core/model_runtime/test_direct_https_model_transport.py \
+            tests/integration/test_recommended_model_live_source.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
             tests/core/model_runtime/test_model_download_recovery_fail_closed.py \
             tests/core/model_runtime/test_plugin_model_recommendation_tenant_truth.py \
@@ -154,6 +175,7 @@ jobs:
             src/ai_karen_engine/server/application_runtime.py \
             tests/core/model_runtime/test_model_orchestrator_registry_durability.py \
             tests/core/model_runtime/test_direct_https_model_transport.py \
+            tests/integration/test_recommended_model_live_source.py \
             tests/core/model_runtime/test_model_download_durable_worker.py \
             tests/core/model_runtime/test_model_download_worker_cancellation.py \
             tests/core/model_runtime/test_model_download_publication_recovery.py \
