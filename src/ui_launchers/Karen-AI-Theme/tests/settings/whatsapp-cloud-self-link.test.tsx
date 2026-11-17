@@ -5,7 +5,7 @@ import WhatsAppCloudSelfLink from '@/components/settings/WhatsAppCloudSelfLink';
 import { apiClient, ApiError } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
-  apiClient: { post: vi.fn() },
+  apiClient: { post: vi.fn(), get: vi.fn() },
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -20,6 +20,7 @@ const OTHER = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
 const TOKEN = 'a'.repeat(43);
 const COMMAND = '/link ' + TOKEN;
 const ENDPOINT = `/api/channels/identity/whatsapp/connections/${ID}/challenge`;
+const STATUS_ENDPOINT = `/api/channels/identity/whatsapp/connections/${ID}/challenges/${challenge.challenge_id}/status`;
 const challenge = {
   challenge_id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
   command: COMMAND,
@@ -34,6 +35,13 @@ function enterConnection(value = ID) {
 
 beforeEach(() => {
   vi.mocked(apiClient.post).mockResolvedValue(challenge);
+  vi.mocked(apiClient.get).mockResolvedValue({
+    challenge_id: challenge.challenge_id,
+    status: 'pending',
+    evidence_basis: 'host_link_challenge_ledger',
+    current_binding_verified: false,
+    delivery_verified: false,
+  });
 });
 
 afterEach(() => {
@@ -139,6 +147,129 @@ describe('WhatsApp Cloud single-use consumer self-link', () => {
     );
     expect(screen.queryByText(/Secret provider token/)).toBeNull();
     expect(screen.queryByText(COMMAND)).toBeNull();
+  });
+
+  it('does not automatically check backend link status when a command is issued', async () => {
+    render(<WhatsAppCloudSelfLink />);
+    enterConnection();
+    fireEvent.click(screen.getByRole('button', { name: 'Request one-time link command' }));
+    expect(await screen.findByText(COMMAND)).toBeTruthy();
+    expect(apiClient.get).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check link proof status' }));
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith(STATUS_ENDPOINT));
+    expect(screen.getByText(/has not recorded a consumed proof/)).toBeTruthy();
+    expect(screen.getByText(/does not independently verify Meta origin/)).toBeTruthy();
+  });
+
+  it('shows only durable signed-ingress consumption, then drops the bearer secret', async () => {
+    vi.mocked(apiClient.get).mockResolvedValue({
+      challenge_id: challenge.challenge_id,
+      status: 'consumed',
+      evidence_basis: 'host_link_challenge_ledger',
+      current_binding_verified: false,
+      delivery_verified: false,
+    });
+    render(<WhatsAppCloudSelfLink />);
+    enterConnection();
+    fireEvent.click(screen.getByRole('button', { name: 'Request one-time link command' }));
+    expect(await screen.findByText(COMMAND)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Check link proof status' }));
+    expect(await screen.findByText(/successful one-time proof consumption/)).toBeTruthy();
+    expect(screen.queryByText(COMMAND)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy command' })).toBeNull();
+    expect(screen.getByText(/not confirmation of a currently active sender binding/)).toBeTruthy();
+  });
+
+  it.each(['expired', 'revoked', 'invalidated'])(
+    'removes the one-time command on %s without claiming provider success',
+    async (status) => {
+      vi.mocked(apiClient.get).mockResolvedValue({
+        challenge_id: challenge.challenge_id,
+        status,
+        evidence_basis: 'host_link_challenge_ledger',
+        current_binding_verified: false,
+        delivery_verified: false,
+      });
+      render(<WhatsAppCloudSelfLink />);
+      enterConnection();
+      fireEvent.click(screen.getByRole('button', { name: 'Request one-time link command' }));
+      expect(await screen.findByText(COMMAND)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Check link proof status' }));
+      await waitFor(() => expect(screen.queryByText(COMMAND)).toBeNull());
+      expect(screen.queryByText(/sender linked successfully/i)).toBeNull();
+      expect(screen.getByRole('status')).toBeTruthy();
+    },
+  );
+
+  it.each([
+    { challenge_id: OTHER, status: 'consumed' },
+    { challenge_id: challenge.challenge_id, status: 'meta_certified' },
+    { challenge_id: challenge.challenge_id, status: 'consumed', delivery_verified: true },
+    { challenge_id: challenge.challenge_id, status: 'pending', current_binding_verified: true },
+    { challenge_id: challenge.challenge_id, status: 'consumed', provider_message_id: 'secret' },
+  ])('refuses forged status responses and retains no false provider claim', async (override) => {
+    vi.mocked(apiClient.get).mockResolvedValue({
+      challenge_id: challenge.challenge_id,
+      status: 'pending',
+      evidence_basis: 'host_link_challenge_ledger',
+      current_binding_verified: false,
+      delivery_verified: false,
+      ...override,
+    });
+    render(<WhatsAppCloudSelfLink />);
+    enterConnection();
+    fireEvent.click(screen.getByRole('button', { name: 'Request one-time link command' }));
+    expect(await screen.findByText(COMMAND)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Check link proof status' }));
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'could not verify the identity-link request',
+    );
+    expect(screen.queryByText(/successful one-time proof consumption/)).toBeNull();
+    expect(screen.queryByText(/secret/)).toBeNull();
+  });
+
+  it('preserves only a challenge reference after the command expires', async () => {
+    const timer = vi.spyOn(window, 'setTimeout');
+    render(<WhatsAppCloudSelfLink />);
+    enterConnection();
+    fireEvent.click(screen.getByRole('button', { name: 'Request one-time link command' }));
+    expect(await screen.findByText(COMMAND)).toBeTruthy();
+    const expiration = timer.mock.calls.find((args) => args[1] === 600_000);
+    expect(expiration).toBeDefined();
+    await act(async () => {
+      const callback = expiration?.[0];
+      if (typeof callback === 'function') callback();
+    });
+    expect(screen.queryByText(COMMAND)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Check link proof status' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Check link proof status' }));
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith(STATUS_ENDPOINT));
+    timer.mockRestore();
+  });
+
+  it('discards a status response after connection change or unmount', async () => {
+    let resolve!: (value: unknown) => void;
+    vi.mocked(apiClient.get).mockImplementationOnce(
+      () => new Promise((done) => { resolve = done; }),
+    );
+    const view = render(<WhatsAppCloudSelfLink />);
+    enterConnection();
+    fireEvent.click(screen.getByRole('button', { name: 'Request one-time link command' }));
+    expect(await screen.findByText(COMMAND)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Check link proof status' }));
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(1));
+    enterConnection(OTHER);
+    resolve({
+      challenge_id: challenge.challenge_id,
+      status: 'consumed',
+      evidence_basis: 'host_link_challenge_ledger',
+      current_binding_verified: false,
+      delivery_verified: false,
+    });
+    await Promise.resolve();
+    expect(screen.queryByText(/successful one-time proof consumption/)).toBeNull();
+    view.unmount();
   });
 
   it('does not automatically copy credentials to the clipboard', async () => {
