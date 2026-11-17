@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import uuid
 from typing import Any
 
@@ -283,6 +285,90 @@ class PluginLifecycleLedger:
             # of them become visible. This is NOT a kernel execution receipt.
             return claim
 
+    @asynccontextmanager
+    async def hold_prepared_execution(
+        self,
+        *,
+        scope: PluginLifecycleApprovalScope,
+        operation_id: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Admit one globally fenced kernel mutation after a prepared claim.
+
+        The caller must also prove fresh RuntimePolicy, RBAC and human approval.
+        PostgreSQL's transaction-scoped advisory lock stays held through the
+        caller's kernel transition and terminal CAS; no lock is a grant.
+        The in_flight status is committed separately BEFORE yielding so a
+        process crash cannot roll it back to a replayable prepared state.
+        """
+        if not isinstance(scope, PluginLifecycleApprovalScope):
+            raise TypeError("Validated lifecycle approval scope required")
+        operation = _uuid(operation_id)
+        values = {
+            "operation_id": operation,
+            "installation_id": scope.installation_id,
+            "manifest_checksum": scope.manifest_checksum,
+            "expected_revision": scope.expected_revision,
+            "expected_state": scope.expected_state,
+            "target_state": "enabled" if scope.action == "enable" else "disabled",
+            "action": scope.action,
+            "tenant_id": scope.tenant_id,
+            "actor_user_id": scope.user_id,
+            "lock_namespace": "karen-plugin-global-lifecycle-v1",
+        }
+        # This transaction owns a real PostgreSQL connection throughout the
+        # physical transition. The per-process kernel lock is not sufficient.
+        async with async_transaction_scope(scope.tenant_id) as fence_session:
+            lock = await fence_session.execute(
+                text(
+                    "SELECT pg_try_advisory_xact_lock("
+                    "hashtext(:lock_namespace), hashtext(:installation_id))"
+                ),
+                values,
+            )
+            if lock.scalar_one() is not True:
+                raise PluginLifecycleRevisionConflict(
+                    "Global plugin lifecycle physical execution is already locked"
+                )
+            # A separate short transaction durably writes admission before
+            # side effects. Crashes after this point retain in_flight.
+            async with async_transaction_scope(scope.tenant_id) as admit_session:
+                updated = await admit_session.execute(
+                    text(
+                        "UPDATE public.extension_lifecycle_operations AS operation "
+                        "SET status = 'in_flight', "
+                        "execution_started_at = clock_timestamp(), "
+                        "updated_at = clock_timestamp() "
+                        "FROM public.extension_lifecycle_revisions AS revision "
+                        "WHERE operation.operation_id = CAST(:operation_id AS uuid) "
+                        "AND operation.tenant_id = CAST(:tenant_id AS uuid) "
+                        "AND operation.actor_user_id = CAST(:actor_user_id AS uuid) "
+                        "AND operation.installation_id = :installation_id "
+                        "AND operation.manifest_checksum = :manifest_checksum "
+                        "AND operation.expected_state = :expected_state "
+                        "AND operation.target_state = :target_state "
+                        "AND operation.action = :action "
+                        "AND operation.expected_revision = :expected_revision "
+                        "AND operation.status = 'prepared' "
+                        "AND revision.installation_id = operation.installation_id "
+                        "AND revision.manifest_checksum = operation.manifest_checksum "
+                        "AND revision.observed_state = operation.expected_state "
+                        "AND revision.revision = operation.expected_revision "
+                        "AND revision.disposition = 'unresolved' "
+                        "AND revision.active_operation_id = operation.operation_id "
+                        "RETURNING operation.*"
+                    ),
+                    values,
+                )
+                row = updated.mappings().one_or_none()
+                if row is None:
+                    raise PluginLifecycleRevisionConflict(
+                        "Exact prepared lifecycle claim is missing, stale or already started"
+                    )
+                admitted = _operation(row)
+            # Neither exception nor cancellation permits re-entry. An
+            # unresolved in_flight claim is intentionally not retryable.
+            yield admitted
+
     async def complete_verified(
         self,
         *,
@@ -291,7 +377,7 @@ class PluginLifecycleLedger:
         actor_user_id: str,
         observation: PluginLifecycleKernelObservation,
     ) -> dict[str, Any]:
-        """CAS a prepared operation to committed only after kernel observation.
+        """CAS an in_flight operation to committed only after kernel observation.
 
         This is backend-only terminal persistence, not a chat execution API.
         The caller must already have executed the reserved action through the
@@ -318,7 +404,7 @@ class PluginLifecycleLedger:
                     "WHERE operation_id = CAST(:operation_id AS uuid) "
                     "AND tenant_id = CAST(:tenant_id AS uuid) "
                     "AND actor_user_id = CAST(:actor_user_id AS uuid) "
-                    "AND status = 'prepared' FOR UPDATE"
+                    "AND status = 'in_flight' FOR UPDATE"
                 ),
                 values,
             )
@@ -375,7 +461,7 @@ class PluginLifecycleLedger:
                     "WHERE operation_id = CAST(:operation_id AS uuid) "
                     "AND tenant_id = CAST(:tenant_id AS uuid) "
                     "AND actor_user_id = CAST(:actor_user_id AS uuid) "
-                    "AND status = 'prepared' "
+                    "AND status = 'in_flight' "
                     "RETURNING *"
                 ),
                 state_values,
@@ -416,7 +502,7 @@ class PluginLifecycleLedger:
                     "WHERE operation_id = CAST(:operation_id AS uuid) "
                     "AND tenant_id = CAST(:tenant_id AS uuid) "
                     "AND actor_user_id = CAST(:actor_user_id AS uuid) "
-                    "AND status = 'prepared' "
+                    "AND status IN ('prepared', 'in_flight') "
                     "RETURNING *"
                 ),
                 values,
@@ -440,7 +526,7 @@ class PluginLifecycleLedger:
             record = _operation(row)
             if record["status"] != "unknown":
                 raise PluginLifecycleLedgerError(
-                    "Only a prepared or unknown lifecycle claim may be marked unknown"
+                    "Only a prepared, in_flight or unknown lifecycle claim may be marked unknown"
                 )
             return record
 
