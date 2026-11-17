@@ -686,6 +686,119 @@ class PostgresConversationRepository(ConversationRepository):
     @instrument_repository(
         operation="add_completed_turn", repository="PostgresConversationRepository"
     )
+    @instrument_repository(
+        operation="read_committed_turn", repository="PostgresConversationRepository",
+    )
+    async def read_committed_turn(
+        self,
+        *,
+        conversation_id: str,
+        tenant_id: str,
+        user_id: str,
+        request_id: str,
+        correlation_id: str,
+        session_id: Optional[str],
+        user_message_id: str,
+        assistant_message_id: str,
+        user_text: str,
+        assistant_text: str,
+        persona_scope_id: Optional[str] = None,
+    ) -> RepositoryResult[bool]:
+        """Read back the exact transaction outcome without changing finality.
+
+        A parent FOR SHARE lock waits for a concurrent completed-turn writer's
+        FOR UPDATE lock, so an interrupted post-commit session close cannot
+        cause a premature negative observation. The same transaction enforces
+        tenant/user RLS context before any message is inspected.
+        """
+        if not all((
+            conversation_id, tenant_id, user_id, request_id, correlation_id,
+            user_message_id, assistant_message_id, user_text, assistant_text,
+        )) or user_message_id == assistant_message_id:
+            return RepositoryResult(success=False, error="invalid_committed_turn_scope")
+        try:
+            async with await self._session() as session:
+                async with session.begin():
+                    scope = {
+                        "conversation": conversation_id,
+                        "tenant": tenant_id,
+                        "owner": user_id,
+                        "user_message": user_message_id,
+                        "assistant_message": assistant_message_id,
+                    }
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        scope,
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :owner, true)"),
+                        scope,
+                    )
+                    owner = await session.execute(
+                        text("""
+                            SELECT 1 FROM public.conversations
+                            WHERE conversation_id = CAST(:conversation AS uuid)
+                              AND tenant_id = CAST(:tenant AS uuid)
+                              AND user_id = CAST(:owner AS uuid)
+                            FOR SHARE
+                        """),
+                        scope,
+                    )
+                    if owner.scalar_one_or_none() is None:
+                        return RepositoryResult(success=True, data=False)
+                    found = await session.execute(
+                        text("""
+                            SELECT m.message_id::text AS message_id,
+                                   m.conversation_id::text AS conversation_id,
+                                   m.role, m.content, m.message_metadata
+                            FROM public.messages AS m
+                            WHERE m.conversation_id = CAST(:conversation AS uuid)
+                              AND m.message_id IN (
+                                  CAST(:user_message AS uuid),
+                                  CAST(:assistant_message AS uuid)
+                              )
+                        """),
+                        scope,
+                    )
+                    rows = {
+                        str(row["message_id"]): row
+                        for row in found.mappings().all()
+                    }
+                    if len(rows) != 2:
+                        return RepositoryResult(success=True, data=False)
+                    expected = (
+                        (user_message_id, "user", user_text, "user"),
+                        (assistant_message_id, "assistant", assistant_text, "assistant"),
+                    )
+                    for message_id, role, content, actor in expected:
+                        row = rows.get(message_id)
+                        if row is None or row["role"] != role or row["content"] != content:
+                            return RepositoryResult(success=True, data=False)
+                        meta = row["message_metadata"]
+                        if isinstance(meta, str):
+                            meta = json.loads(meta)
+                        if not isinstance(meta, dict) or not (
+                            str(row["conversation_id"]) == conversation_id
+                            and meta.get("source") == "chat_runtime"
+                            and meta.get("transcript_actor") == actor
+                            and meta.get("request_id") == request_id
+                            and meta.get("correlation_id") == correlation_id
+                            and meta.get("session_id") == session_id
+                            and meta.get("conversation_id") == conversation_id
+                            and meta.get("authorized_user_id") == user_id
+                            and meta.get("persona_scope_id") == persona_scope_id
+                        ):
+                            return RepositoryResult(success=True, data=False)
+                    return RepositoryResult(success=True, data=True)
+        except Exception as exc:
+            logger.warning(
+                "committed_turn_reconciliation_unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+            return RepositoryResult(
+                success=False, error="committed_turn_reconciliation_unavailable",
+            )
+
     async def add_completed_turn(
         self, user_message: Message, assistant_message: Message,
         *, run_lease: Optional[ChatRunLease] = None,
