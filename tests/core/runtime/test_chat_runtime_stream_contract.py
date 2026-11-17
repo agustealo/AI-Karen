@@ -1743,3 +1743,124 @@ async def test_b2c2_cancel_during_precommit_persistence_is_terminal(
         transcript.assert_not_awaited()
     else:
         transcript.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("committed_status", ["persisted", "already_persisted"])
+async def test_b2c2_cancel_after_fallback_transcript_commit_preserves_completion(
+    committed_status: str,
+) -> None:
+    """Later memory cancellation cannot overwrite a durable assistant turn."""
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = True
+    plan = _make_plan()
+    memory_started = asyncio.Event()
+    committed = TranscriptPersistenceResult(
+        status=committed_status,
+        conversation_id=CONVERSATION_ID,
+        user_message_id=USER_MESSAGE_ID,
+        assistant_message_id=ASSISTANT_MESSAGE_ID,
+        persisted_messages=2 if committed_status == "persisted" else 0,
+    )
+    recovered = ChatExecutionResult(
+        answer="Recovered durable answer",
+        metadata=ChatRuntimeMetadata(
+            correlation_id=request.context.correlation_id,
+            actual_provider="ollama-local",
+            actual_model="llama3",
+            response_source="fallback_provider_runtime",
+            degraded_mode=True,
+            fallback_level=1,
+        ),
+        status=ChatExecutionStatus.DEGRADED,
+    )
+
+    async def primary_failure(*args, **kwargs):
+        raise RuntimeError("primary failed")
+
+    async def after_commit_memory(*args, **kwargs):
+        memory_started.set()
+        await asyncio.Event().wait()
+
+    with ExitStack() as patches:
+        patches.enter_context(patch.object(
+            runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_freeze_persona_snapshot", new_callable=AsyncMock,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_prepare_conversation_continuation", new_callable=AsyncMock,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_decide", new_callable=AsyncMock, return_value=decision,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_record_user_behavior_observation", new_callable=AsyncMock,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_build_authorized_plan", return_value=plan,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_grounded_personal_response", return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_is_explicit_save_turn", return_value=False,
+        ))
+        direct = patches.enter_context(patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+        ))
+        direct.return_value.can_handle.return_value = False
+        patches.enter_context(patch.object(
+            runtime, "_run_simple", side_effect=primary_failure,
+        ))
+        patches.enter_context(patch(
+            "ai_karen_engine.core.runtime.chat_runtime.build_runtime_fallback",
+            new_callable=AsyncMock, return_value=recovered,
+        ))
+        transcript = patches.enter_context(patch.object(
+            runtime, "_persist_transcript",
+            new_callable=AsyncMock, return_value=committed,
+        ))
+        memory = patches.enter_context(patch.object(
+            runtime, "_persist_memory", side_effect=after_commit_memory,
+        ))
+        outcome = patches.enter_context(patch.object(
+            runtime, "_record_execution_outcome", new_callable=AsyncMock,
+        ))
+        with patch.object(runtime._emitter, "emit") as emitted:
+            task = asyncio.create_task(runtime.execute(request))
+            try:
+                await asyncio.wait_for(memory_started.wait(), timeout=5)
+                transcript.assert_awaited_once()
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+    rows = store.list_for_tenant(TENANT_ID)
+    assert len(rows) == 1
+    assert rows[0].execution_status == "success"
+    assert rows[0].completed_at is not None
+    assert rows[0].error_code == "fallback:RuntimeError"
+    assert rows[0].actual_provider == "ollama-local"
+    assert rows[0].actual_model == "llama3"
+    assert rows[0].fallback_level == 1
+    assert rows[0].degraded_mode is True
+    assert rows[0].response_source == "fallback_provider_runtime"
+    assert rows[0].request_id == request.context.request_id
+    assert rows[0].tenant_id == TENANT_ID
+    assert gateway.calls == []
+    memory.assert_awaited_once()
+    outcome.assert_not_awaited()
+    assert any(
+        "REQUEST_CANCELLED" in str(call.args)
+        for call in emitted.call_args_list
+    ), "post-commit cancellation must still be observable"
