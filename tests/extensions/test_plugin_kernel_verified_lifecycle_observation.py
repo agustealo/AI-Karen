@@ -298,11 +298,15 @@ async def test_prepared_transition_serializes_competing_local_operations(
         ),
         return_exceptions=True,
     )
-    assert sum(isinstance(result, PluginLifecycleKernelObservation) for result in results) == 1
+    assert (
+        sum(isinstance(result, PluginLifecycleKernelObservation) for result in results)
+        == 1
+    )
     assert sum(isinstance(result, RuntimeError) for result in results) == 1
-    assert (await kernel.observe_lifecycle_for_finalization(
+    verified = await kernel.observe_lifecycle_for_finalization(
         "kernel-terminal", operation_id=str(uuid.uuid4())
-    )).observed_state == "enabled"
+    )
+    assert verified.observed_state == "enabled"
 
 
 @pytest.mark.asyncio
@@ -319,13 +323,16 @@ async def test_prepared_transition_does_not_return_success_after_failed_attestat
         "kernel-terminal", operation_id=str(uuid.uuid4())
     )
     scope = _approval_scope(
-        action="enable", checksum=initial.manifest_checksum,
+        action="enable",
+        checksum=initial.manifest_checksum,
         expected_state="disabled",
     )
     observe = kernel._observe_lifecycle_unlocked
     calls = 0
 
-    def damaged_attestation(plugin_id: str, *, operation_id: str) -> PluginLifecycleKernelObservation:
+    def damaged_attestation(
+        plugin_id: str, *, operation_id: str
+    ) -> PluginLifecycleKernelObservation:
         nonlocal calls
         calls += 1
         if calls == 2:
