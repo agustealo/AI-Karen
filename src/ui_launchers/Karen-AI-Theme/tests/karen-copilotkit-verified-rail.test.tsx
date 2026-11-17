@@ -7,6 +7,10 @@ vi.mock("@copilotkit/react-core/v2", () => ({
   CopilotChatUserMessage: () => null,
 }));
 
+vi.mock("@/components/chat/KarenBrowserSpeechPlayback", () => ({
+  KarenBrowserSpeechPlayback: () => null,
+}));
+
 vi.mock("@/components/chat/ConversationContextRail", () => ({
   default: ({ metadata, agentSteps }: {
     metadata: Record<string, unknown>; agentSteps: unknown[];
@@ -20,6 +24,7 @@ vi.mock("@/components/chat/ConversationContextRail", () => ({
 
 import {
   KarenVerifiedHistoryProvider,
+  KarenCopilotAssistantMessage,
   parseKarenVerifiedHistory,
 } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
 import { KarenCopilotVerifiedRail } from "@/components/chat/copilotkit/KarenCopilotVerifiedRail";
@@ -412,4 +417,91 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(disclosure.querySelector('[data-testid="canonical-conversation-rail"]')).not.toBeNull();
   });
 
+});
+
+
+describe("CopilotKit saved plugin management status authority", () => {
+  const preview = (overrides: Record<string, unknown> = {}) => ({
+    installation_id: "time-query",
+    requested_action: "disable",
+    operation_scope: "application_global",
+    required_permission: "admin.plugins:manage",
+    permission_verified: true,
+    approval_granted: false,
+    mutation_performed: false,
+    action_receipt: null,
+    status: "needs_explicit_confirmation",
+    current_state: "enabled",
+    next_action: "plugin.open_admin_management",
+    confirmation_channel: "authenticated_plugin_management_ui",
+    ...overrides,
+  });
+
+  const event = (value: Record<string, unknown>, id = "assistant-1") => ({
+    type: "CUSTOM" as const,
+    name: "karen.plugin_management_preflight.v1",
+    messageId: id,
+    value,
+  });
+
+  it("renders administrator navigation only from a bounded event bound to an assistant message", () => {
+    const parts = parseKarenVerifiedHistory([event(preview())], messages);
+    expect(parts.get("assistant-1")).toHaveLength(1);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotAssistantMessage
+          {...({ message: { id: "assistant-1" } } as unknown as React.ComponentProps<
+            typeof KarenCopilotAssistantMessage
+          >)}
+        />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getByTestId("plugin-management-preflight")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open Plugins & Tools" });
+    expect(link.getAttribute("href")).toBe("/plugins");
+    expect(screen.getByText(/No plugin state was changed or approved/)).toBeTruthy();
+  });
+
+  it("does not turn a denied owner-scoped result into navigation", () => {
+    const parts = parseKarenVerifiedHistory([
+      event(preview({
+        status: "permission_denied",
+        permission_verified: false,
+        next_action: null,
+        confirmation_channel: undefined,
+      })),
+    ], messages);
+    render(
+      <KarenVerifiedHistoryProvider parts={parts}>
+        <KarenCopilotAssistantMessage
+          {...({ message: { id: "assistant-1" } } as unknown as React.ComponentProps<
+            typeof KarenCopilotAssistantMessage
+          >)}
+        />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getByText(/does not have the required plugin administration permission/)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open Plugins & Tools" })).toBeNull();
+  });
+
+  it("rejects duplicate, wrong-user, forged-grant and mutation events instead of partial replay", () => {
+    const correct = event(preview());
+    expect(() => parseKarenVerifiedHistory([correct, correct], messages))
+      .toThrow("Unsupported verified plugin management status");
+    expect(() => parseKarenVerifiedHistory([
+      event(preview(), "user-1"),
+    ], messages)).toThrow("Unsupported verified conversation event");
+    for (const invalid of [
+      preview({ mutation_performed: true }),
+      preview({ approval_granted: true }),
+      preview({ required_permission: "read" }),
+      preview({ action_receipt: { plugin_id: "time-query" } }),
+      preview({ next_action: "javascript:alert(1)" }),
+      preview({ confirmation_channel: "user-supplied" }),
+      preview({ current_state: undefined }),
+    ]) {
+      expect(() => parseKarenVerifiedHistory([event(invalid)], messages))
+        .toThrow("Unsupported verified plugin management status");
+    }
+  });
 });
