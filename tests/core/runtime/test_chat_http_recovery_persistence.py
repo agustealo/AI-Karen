@@ -1,6 +1,7 @@
 """Recovering an HTTP reply must not bypass durable transcript authority."""
 
 from types import SimpleNamespace
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -61,7 +62,7 @@ async def test_recovery_response_requires_durable_transcript(persisted):
     )
     decision = ExecutionDecision(max_model_calls=2, memory_write_allowed=True)
     plan = AuthorizedExecutionPlan(
-        execution_id="exec-request-a",
+        execution_id=f"exec-request-a-{uuid4().hex}",
         policy_decision_id="policy-a",
         authorized_user_id=ctx.user_id,
         authorized_tenant_id=ctx.tenant_id,
