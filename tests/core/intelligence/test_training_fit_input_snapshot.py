@@ -221,7 +221,7 @@ def test_oversized_supplied_content_rejected_before_hmac_serialization(
             source[0], feature_version="v" * (2 * 1024 * 1024),
         )
     elif mutation == "too_many_features":
-        source[0].features = {str(i): i for i in range(129)}
+        source[0] = replace(source[0], features={str(i): i for i in range(129)})
     else:
         source[0].features["confidence"] = 1 << 10000
 
