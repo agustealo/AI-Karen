@@ -450,6 +450,27 @@ async def test_copied_original_plan_and_fresh_same_budget_meter_cannot_reset_quo
         copied_context.bind_runtime_model_authority(
             admission.plan, fresh_meter_same_budget,
         )
+
+    # A full value-preserving clone must not be able to reissue the same
+    # RuntimePolicy request with a fresh budget and zeroed counters.
+    copied_budget = replace(admission.plan.budget)
+    copied_policy_plan = replace(admission.plan, budget=copied_budget)
+    copied_meter = ExecutionBudgetMeter(copied_budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        copied_context.bind_runtime_model_authority(
+            copied_policy_plan, copied_meter,
+        )
+    forged = replace(
+        admission,
+        plan=copied_policy_plan,
+        meter=copied_meter,
+        authenticated_context=copied_context,
+    )
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        await manager.generate_embedding("replay", execution_admission=forged)
+    assert copied_meter.model_calls == 0
     for clone in (
         replace(admission, plan=copied_plan),
         replace(admission, meter=fresh_meter_same_budget),
