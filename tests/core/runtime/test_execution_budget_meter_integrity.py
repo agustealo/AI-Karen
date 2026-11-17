@@ -214,3 +214,18 @@ async def test_external_reservation_mode_must_be_a_literal_boolean(invalid) -> N
         await meter.reserve_model_execution(external=invalid)
     assert meter.model_calls == 0
     assert meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_original_remaining_deadline_cannot_be_extended_by_child_runtime(monkeypatch):
+    clock = _clock(monkeypatch)
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_duration_ms=1000))
+    meter.start()
+    assert await meter.remaining_duration_ms() == pytest.approx(1000.0)
+    clock["seconds"] = 100.4
+    meter.start()
+    assert await meter.remaining_duration_ms() == pytest.approx(600.0)
+    clock["seconds"] = 101.0
+    assert await meter.remaining_duration_ms() == 0.0
+    assert meter.exhausted is True
+    assert await meter.reserve_model_execution() is False
