@@ -411,6 +411,51 @@ async def test_native_model_fallback_drift_is_denied_before_receipt(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_native_relative_model_path_resolves_to_same_actual_model(monkeypatch, tmp_path) -> None:
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+        TransformersRuntime,
+    )
+
+    folder = tmp_path / "installed-model"
+    folder.mkdir()
+    monkeypatch.chdir(tmp_path)
+    manager = object.__new__(ModelManager)
+    selection = RuntimeSelection(
+        provider_id="builtin_transformers", display_name="Transformers",
+        endpoint_type=ProviderEndpointType.BUILTIN_TRANSFORMERS,
+        model="installed-model", runtime_engine="transformers",
+    )
+    runtime = object.__new__(TransformersRuntime)
+    monkeypatch.setattr(
+        runtime, "generate_text_with_model",
+        lambda prompt, **kwargs: ("real text", str(folder.resolve())),
+    )
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: runtime)
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    monkeypatch.setattr(
+        manager, "_get_breaker",
+        lambda _: SimpleNamespace(
+            allow_request=lambda: True,
+            record_success=lambda: None,
+            record_failure=lambda: None,
+        ),
+    )
+    successes = []
+    monkeypatch.setattr(
+        manager, "_record_provider_result",
+        lambda provider, success, *args, **kwargs: successes.append(success),
+    )
+    receipt = await manager.generate_chat(
+        [{"role": "user", "content": "hello"}], return_receipt=True,
+    )
+    assert receipt.text == "real text"
+    assert receipt.model == str(folder.resolve())
+    assert receipt.runtime_engine == "transformers"
+    assert successes == [True]
+
+
+@pytest.mark.asyncio
 async def test_auto_native_receipt_uses_observed_model_not_auto(monkeypatch) -> None:
     from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
         TransformersRuntime,
