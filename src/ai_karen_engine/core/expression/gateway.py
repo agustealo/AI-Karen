@@ -244,6 +244,31 @@ class ExpressionGateway:
                 )
                 continue
 
+            # A configured cloud engine is not an external-execution grant.
+            # Enforce the separate policy before reserving a model call,
+            # instantiating an engine, or transmitting user prompt context.
+            if engine_id == "cloud" and not self.settings.policies.allow_external_engines:
+                skipped_engines.append(
+                    {"engine_id": engine_id, "reason": "external_engines_forbidden"}
+                )
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="external_engines_forbidden",
+                )
+                emit_expression_event(
+                    "expression.engine.policy_rejected",
+                    self._event_payload(
+                        task,
+                        engine_id=engine_id,
+                        fallback_level=level,
+                        degradation_reason="external_engines_forbidden",
+                    ),
+                )
+                continue
+
             if self.circuits.is_open(f"expression.engine.{engine_id}"):
                 skipped_engines.append(
                     {"engine_id": engine_id, "reason": "circuit_open"}
