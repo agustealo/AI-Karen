@@ -40,7 +40,7 @@ describe('canonical admin WhatsApp Cloud navigation', () => {
     const tab = await screen.findByRole('tab', { name: 'WhatsApp Cloud' });
     expect(tab).toBeTruthy();
     expect(screen.queryByTestId('canonical-whatsapp-cloud-panel')).toBeNull();
-    fireEvent.click(tab);
+    fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
     expect(await screen.findByTestId('canonical-whatsapp-cloud-panel')).toBeTruthy();
     expect(tab.getAttribute('aria-selected')).toBe('true');
     expect(apiClient.post).not.toHaveBeenCalled();
