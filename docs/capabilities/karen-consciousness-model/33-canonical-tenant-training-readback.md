@@ -41,13 +41,17 @@ authenticate those facts from caller-supplied parameters.
 
 ## File-integrity guarantees
 
-The reader uses the existing tenant directory resolver and checks
-the ancestor symlink guard. It opens the tenant directory and named file
-with `O_NOFOLLOW` (and `O_DIRECTORY` for the directory), rejects nonregular
-or hardlinked files, enforces a bounded read and checks the file's
-device/inode/mode/link count/size/timestamps before and after reading.
-It then resolves the filename via the **already-open directory descriptor**
-and rejects atomic replacements or modifications during the read.
+The reader uses the existing tenant directory resolver but **does not
+trust a check-then-open pathname**. It walks the absolute host-owned root
+from the filesystem anchor, opening **every ancestor component** with
+`O_DIRECTORY | O_NOFOLLOW` relative to the prior pinned descriptor.
+It then opens the tenant directory relative to that secured root FD and the
+named file relative to the tenant FD, also with `O_NOFOLLOW`. This defeats
+an intermediate-ancestor symlink swap after the initial ancestor check.
+It rejects nonregular or hardlinked files, enforces a bounded read and
+compares device/inode/mode/link count/size/timestamps before and after.
+It then resolves the filename through the **already-open tenant directory
+descriptor** and rejects atomic replacements or modifications during the read.
 
 The SHA-256 is computed over the *actual bytes read*, not an application
 supplied row list. Parsing uses LF-only record boundaries, rejects oversized
@@ -89,9 +93,11 @@ loaded. All higher-privilege flags remain false:
 tenant importer and stored files. It verifies exact hash/readback,
 an observed-fit HMAC comparison using rows from the file, wrong tenant
 or owner session, wrong hashes, path traversal, symlinked directories/files,
-hard links, in-place mutation, atomic rename races, principal drift,
-malformed row/feature payloads, Unicode line separators, byte/row budgets
-and preservation of the canonical listing behavior after deduplication.
+hard links, **ancestor symlink swaps between check and open and
+between individual dirfd opens**, in-place mutation, atomic rename races,
+principal drift, malformed row/feature payloads, Unicode line separators,
+byte/row budgets and preservation of the canonical listing behavior after
+deduplication.
 
 The real KCM PostgreSQL proof workflow runs the tests alongside its
 existing tenant/RLS, consent and deletion-epoch cases.
