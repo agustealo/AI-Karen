@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -50,7 +51,7 @@ def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmi
         max_duration_ms=60000,
     )
     plan = AuthorizedExecutionPlan(
-        execution_id="execution-a",
+        execution_id=f"execution-{uuid4().hex}",
         policy_decision_id="policy-a",
         authorized_user_id="user-a",
         authorized_tenant_id=tenant,
