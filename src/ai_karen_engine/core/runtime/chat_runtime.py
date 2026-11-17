@@ -4398,6 +4398,12 @@ class ChatRuntime:
                     "actual_model", "runtime_engine", "response_source",
                     "fallback_level", "degraded_mode", "degradation_reason",
                     "reasoning_model_attribution_status",
+                    # Only ReasoningExecutor execution diagnostics own these
+                    # receipts; activation hints cannot forge actual work.
+                    "reasoning_id", "reasoning_status",
+                    "reasoning_model_calls", "reasoning_steps",
+                    "verification_strategy_executed",
+                    "execution_spans",
                 }
             },
         }
