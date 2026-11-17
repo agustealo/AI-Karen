@@ -10,13 +10,14 @@ without importing provider SDKs or integration registries.
 import json
 from typing import Any, Dict, Iterator, List, Optional, Union
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from ai_karen_engine.core.model_runtime.provider_contracts import (
     EmbeddingFailed,
     GenerationFailed,
     ProviderNotAvailable,
 )
+from ai_karen_engine.core.model_runtime.provider_execution import _open_provider_request
 
 
 class OpenAICompatibleRuntimeClient:
@@ -47,7 +48,7 @@ class OpenAICompatibleRuntimeClient:
             method="POST",
         )
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
+            with _open_provider_request(request, timeout=self.timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -119,7 +120,7 @@ class OpenAICompatibleRuntimeClient:
         if self.api_key:
             request.add_header("Authorization", f"Bearer {self.api_key}")
         try:
-            with urlopen(request, timeout=min(self.timeout_seconds, 10.0)) as response:
+            with _open_provider_request(request, timeout=min(self.timeout_seconds, 10.0)) as response:
                 return {
                     "status": "healthy" if response.status < 400 else "unhealthy",
                     "provider": self.provider_name,
