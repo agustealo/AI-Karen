@@ -1335,3 +1335,141 @@ async def test_b2c2_real_task_cancel_after_first_token_is_terminal() -> None:
     assert records[0].actual_provider is None
     assert gateway.calls == []
     outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_close_immediately_after_status_records_cancelled() -> None:
+    """The initial STATUS yield is already inside the allocated trajectory."""
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_persist_transcript", new_callable=AsyncMock) as persist:
+                    with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                        stream = runtime.execute_stream(request)
+                        assert (await anext(stream)).type == ChatStreamEventType.STATUS
+                        await stream.aclose()
+
+    records = store.list_for_tenant(TENANT_ID)
+    assert len(records) == 1
+    assert records[0].execution_status == "cancelled"
+    assert records[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert records[0].actual_model is None
+    assert gateway.calls == []
+    persist.assert_not_awaited()
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_cancel_during_recall_records_terminal_without_generation() -> None:
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = True
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+    recall_started = asyncio.Event()
+    recall_release = asyncio.Event()
+
+    async def blocked_recall(*args, **kwargs):
+        recall_started.set()
+        await recall_release.wait()
+        return {}
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_consume_resolved_memory", side_effect=blocked_recall):
+                    with patch.object(runtime, "_run_simple_stream", new_callable=AsyncMock) as generate:
+                        with patch.object(runtime, "_persist_transcript", new_callable=AsyncMock) as persist:
+                            with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                                stream = runtime.execute_stream(request)
+                                assert (await anext(stream)).type == ChatStreamEventType.STATUS
+                                task = asyncio.create_task(anext(stream))
+                                try:
+                                    await asyncio.wait_for(recall_started.wait(), timeout=5)
+                                    task.cancel()
+                                    with pytest.raises(asyncio.CancelledError):
+                                        await task
+                                finally:
+                                    if not task.done():
+                                        task.cancel()
+                                        await asyncio.gather(task, return_exceptions=True)
+                                await stream.aclose()
+
+    records = store.list_for_tenant(TENANT_ID)
+    assert len(records) == 1
+    assert records[0].execution_status == "cancelled"
+    assert records[0].actual_provider is None
+    assert records[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert gateway.calls == []
+    generate.assert_not_awaited()
+    persist.assert_not_awaited()
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_repeated_cancel_cannot_suppress_request_cancel_event() -> None:
+    """The request-cancel observation must precede an interruptible DB await."""
+    from ai_karen_engine.platform.observability.contracts import (
+        EventType as RuntimeEventType,
+    )
+
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+    content_seen = asyncio.Event()
+    persistence_started = asyncio.Event()
+    persistence_release = asyncio.Event()
+
+    async def token_then_block(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="partial", correlation_id="corr-1",
+        )
+        await asyncio.Event().wait()
+
+    async def blocked_trajectory_write(*args, **kwargs):
+        persistence_started.set()
+        await persistence_release.wait()
+
+    async def consume() -> None:
+        async for chunk in runtime.execute_stream(request):
+            if chunk.type == ChatStreamEventType.CONTENT:
+                content_seen.set()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_run_simple_stream", side_effect=token_then_block):
+                    with patch.object(runtime, "_record_cancelled_trajectory", side_effect=blocked_trajectory_write):
+                        with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                            with patch.object(runtime._emitter, "emit") as emit:
+                                task = asyncio.create_task(consume())
+                                try:
+                                    await asyncio.wait_for(content_seen.wait(), timeout=5)
+                                    task.cancel()
+                                    await asyncio.wait_for(persistence_started.wait(), timeout=5)
+                                    assert any(
+                                        call.args and call.args[0] == RuntimeEventType.REQUEST_CANCELLED
+                                        for call in emit.call_args_list
+                                    )
+                                    task.cancel()
+                                    with pytest.raises(asyncio.CancelledError):
+                                        await task
+                                finally:
+                                    if not task.done():
+                                        task.cancel()
+                                        await asyncio.gather(task, return_exceptions=True)
+    assert gateway.calls == []
+    outcome.assert_not_awaited()
