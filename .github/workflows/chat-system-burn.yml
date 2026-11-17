@@ -93,7 +93,7 @@ jobs:
             tests/core/expression/test_expression_stream_fallback_integrity.py \
             tests/core/expression/test_gateway_fallbacks.py \
             tests/core/expression/test_gateway.py
-          pytest -q tests/core/model_runtime/test_provider_completion_integrity.py tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_personal_model_transport_grant.py tests/core/model_runtime/test_openai_compatible_client_transport.py tests/core/model_runtime/test_openai_compatible_adapter.py tests/core/model_runtime/test_openai_compatible_client_admission.py tests/core/model_runtime/test_model_execution_truth.py
+          pytest -q tests/core/model_runtime/test_provider_completion_integrity.py tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_personal_model_transport_grant.py tests/core/model_runtime/test_openai_compatible_client_transport.py tests/core/model_runtime/test_openai_compatible_adapter.py tests/core/model_runtime/test_openai_compatible_client_admission.py tests/core/model_runtime/test_model_execution_truth.py tests/core/model_runtime/test_governed_core_inference_admission.py
 
       - name: Verify conversational name and output hygiene contracts
         run: pytest tests/core/runtime/test_name_response_prompt_contract.py tests/core/runtime/test_conversational_output_hygiene.py -q
