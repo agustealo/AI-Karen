@@ -70,8 +70,8 @@ never authorized.
 Medusa's serialized handoff compares dataclass-normalized values before
 recovering the original request-owned plan, because nested degradation and
 provenance data become dictionaries in the transfer payload. An empty root
-allowlist retains its existing unspecified semantics; nonempty root lists
-cannot be widened by specialist child registration.
+allowlist is a denial, not a wildcard; no root permission list may be
+widened by specialist child registration.
 
 ### RuntimePolicy-issued model-execution provenance
 
@@ -149,3 +149,12 @@ reservation limits or the original shared object identity. No extra meter
 was introduced. Tests exercise post-admission budget mutation, external
 request caps, and rejection without added model usage. This does not
 constitute arbitrary in-process Python sandboxing.
+
+### Empty root allowlists are denials
+
+Independent P1 review reproduced a narrower child registering additional
+plugins, tools or agents from an empty original policy list. The canonical
+child-plan registrar now enforces strict subset checks even when the root is
+empty. Both immediate in-process child registration and serialized Medusa
+handoff must deny that widening **before** any planner or provider invocation.
+Dedicated negative regressions assert zero model calls and unchanged meter.
