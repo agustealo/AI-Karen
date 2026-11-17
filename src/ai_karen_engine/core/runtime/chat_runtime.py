@@ -581,17 +581,23 @@ class ChatRuntime:
                 metadata={"error_code": "CHAT_EXECUTION_FAILED"},
             )
             conversation_id = ctx.require_conversation_id()
-            fallback = await build_runtime_fallback(
-                runtime=self,
-                request=request,
-                failure=exc,
-                correlation_id=ctx.correlation_id,
-                conversation_id=conversation_id,
-                start_time=start,
-                decision=decision,
-                authorized_plan=plan,
-                meter=meter,
-            )
+            try:
+                fallback = await build_runtime_fallback(
+                    runtime=self,
+                    request=request,
+                    failure=exc,
+                    correlation_id=ctx.correlation_id,
+                    conversation_id=conversation_id,
+                    start_time=start,
+                    decision=decision,
+                    authorized_plan=plan,
+                    meter=meter,
+                )
+            except asyncio.CancelledError:
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, start,
+                )
+                raise
             if fallback is not None and fallback.answer:
                 # A recovered model answer is not a completed conversation
                 # until the same transcript owner used by ordinary chat has
@@ -605,6 +611,11 @@ class ChatRuntime:
                         recovery_meta,
                         trajectory_id=trajectory.trajectory_id,
                     )
+                except asyncio.CancelledError:
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, start,
+                    )
+                    raise
                 except Exception as persistence_exc:
                     logger.error(
                         "chat.recovery_transcript_persistence_failed",
@@ -655,12 +666,18 @@ class ChatRuntime:
                         },
                     )
                 elif decision.memory_write_allowed:
-                    await self._persist_memory(
-                        request,
-                        fallback.answer,
-                        memory_recall_meta,
-                        plan,
-                    )
+                    try:
+                        await self._persist_memory(
+                            request,
+                            fallback.answer,
+                            memory_recall_meta,
+                            plan,
+                        )
+                    except asyncio.CancelledError:
+                        await self._observe_request_cancellation(
+                            trajectory, decision, request, plan, meter, start,
+                        )
+                        raise
                 await self._record_trajectory_completion(
                     trajectory,
                     decision,
@@ -1277,6 +1294,12 @@ class ChatRuntime:
                         authorized_plan=plan,
                         meter=meter,
                     )
+            except (asyncio.CancelledError, GeneratorExit):
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
             except Exception as fallback_exc:
                 logger.error(
                     "ChatRuntime stream fallback failed",
@@ -1315,56 +1338,70 @@ class ChatRuntime:
                     or "stream_primary_execution_failed"
                 )
                 streamed_text += fallback.answer
-                yield self._enrich_chunk(
-                    ChatStreamChunk(
-                        type="content",
-                        content=fallback.answer,
-                        correlation_id=ctx.correlation_id,
-                        metadata={
-                            "response_source": provider_meta.get("response_source"),
-                            "actual_provider": provider_meta.get("actual_provider"),
-                            "actual_model": provider_meta.get("actual_model"),
-                            "fallback_level": provider_meta.get("fallback_level", 1),
-                            "degraded_mode": True,
-                        },
-                    ),
-                    sequence,
-                    request_id,
-                    response_id,
-                    conversation_id,
-                )
+                try:
+                    yield self._enrich_chunk(
+                        ChatStreamChunk(
+                            type="content",
+                            content=fallback.answer,
+                            correlation_id=ctx.correlation_id,
+                            metadata={
+                                "response_source": provider_meta.get("response_source"),
+                                "actual_provider": provider_meta.get("actual_provider"),
+                                "actual_model": provider_meta.get("actual_model"),
+                                "fallback_level": provider_meta.get("fallback_level", 1),
+                                "degraded_mode": True,
+                            },
+                        ),
+                        sequence,
+                        request_id,
+                        response_id,
+                        conversation_id,
+                    )
+                except (asyncio.CancelledError, GeneratorExit):
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, stream_start,
+                        request_id=request_id, conversation_id=conversation_id,
+                    )
+                    raise
                 sequence += 1
             else:
                 generation_error = exc
                 provider_meta["generation_error"] = True
                 provider_meta["degraded_mode"] = True
                 provider_meta["degradation_reason"] = "all_execution_paths_failed"
-                yield self._enrich_chunk(
-                    ChatStreamChunk(
-                        type="error",
-                        content="Unable to complete the response.",
-                        correlation_id=ctx.correlation_id,
-                        metadata={
-                            "error_code": "CHAT_GENERATION_FAILED",
-                            "error_type": type(exc).__name__,
-                            "correlation_id": ctx.correlation_id,
-                            "requested_provider": request.preferred_provider,
-                            "requested_model": request.preferred_model,
-                            "actual_provider": provider_meta.get("actual_provider"),
-                            "actual_model": provider_meta.get("actual_model"),
-                            "runtime_engine": provider_meta.get("runtime_engine"),
-                            "fallback_level": provider_meta.get("fallback_level", 0),
-                            "degradation_reason": "all_execution_paths_failed",
-                            "response_source": provider_meta.get("response_source"),
-                            "degraded_mode": True,
-                            "fallback_reason": provider_meta.get("fallback_reason"),
-                        },
-                    ),
-                    sequence,
-                    request_id,
-                    response_id,
-                    conversation_id,
-                )
+                try:
+                    yield self._enrich_chunk(
+                        ChatStreamChunk(
+                            type="error",
+                            content="Unable to complete the response.",
+                            correlation_id=ctx.correlation_id,
+                            metadata={
+                                "error_code": "CHAT_GENERATION_FAILED",
+                                "error_type": type(exc).__name__,
+                                "correlation_id": ctx.correlation_id,
+                                "requested_provider": request.preferred_provider,
+                                "requested_model": request.preferred_model,
+                                "actual_provider": provider_meta.get("actual_provider"),
+                                "actual_model": provider_meta.get("actual_model"),
+                                "runtime_engine": provider_meta.get("runtime_engine"),
+                                "fallback_level": provider_meta.get("fallback_level", 0),
+                                "degradation_reason": "all_execution_paths_failed",
+                                "response_source": provider_meta.get("response_source"),
+                                "degraded_mode": True,
+                                "fallback_reason": provider_meta.get("fallback_reason"),
+                            },
+                        ),
+                        sequence,
+                        request_id,
+                        response_id,
+                        conversation_id,
+                    )
+                except (asyncio.CancelledError, GeneratorExit):
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, stream_start,
+                        request_id=request_id, conversation_id=conversation_id,
+                    )
+                    raise
                 sequence += 1
 
         # A stream that emitted ERROR is failed even if partial text arrived.
