@@ -469,45 +469,30 @@ async def install_plugin_endpoint(
             detail="Uploaded plugin activation requires a verified isolated runtime",
         )
 
-    try:
-        success = await plugin_service.enable_plugin(request.plugin_id)
-    except (ValueError, RuntimeError) as exc:
-        _audit_plugin_event(
-            request=http_request,
-            current_user=current_user,
-            event_type="plugin_install",
-            action="enable_local_catalog_plugin",
-            outcome="rejected",
-            details={"plugin_id": request.plugin_id, "reason": "lifecycle_conflict"},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-
+    # The local-catalog Install button historically enables the plugin.
+    # Package upload is distinct and remains disabled by default. Installation
+    # activation requires the same action/revision-bound approval as the
+    # canonical admin Enable action; RBAC alone is never an execution grant.
     _audit_plugin_event(
         request=http_request,
         current_user=current_user,
         event_type="plugin_install",
         action="enable_local_catalog_plugin",
-        outcome="ok" if success else "error",
-        details={"plugin_id": request.plugin_id, "version": actual_version},
+        outcome="rejected",
+        details={
+            "plugin_id": request.plugin_id,
+            "version": actual_version,
+            "reason": "lifecycle_approval_required",
+        },
     )
-
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Plugin {request.plugin_id} could not be enabled",
-        )
-
-    return {
-        "success": True,
-        "message": f"Plugin '{request.plugin_id}' enabled from the local catalog",
-        "plugin_id": request.plugin_id,
-        "version": actual_version,
-        "operation": "enable_local_catalog_plugin",
-        **_response_meta(http_request),
-    }
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Plugin lifecycle approval required: local catalog activation "
+            "cannot execute without a fresh, actor-bound, revision-verified "
+            "human approval."
+        ),
+    )
 
 
 @router.post("/rate", response_model=Dict[str, Any])

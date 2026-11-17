@@ -531,55 +531,65 @@ async def get_extension_system_status(user: dict[str, Any] = Depends(require_ext
         }
 
 
+def _reject_unapproved_extension_lifecycle(
+    *,
+    request: Request,
+    user: dict[str, Any],
+    extension_name: str,
+    action: str,
+) -> None:
+    """Audit a legacy write denial without selecting a provider or executor."""
+    from ai_karen_engine.audit_logging import (
+        AuditEventType, AuditSeverity, get_audit_logger,
+    )
+
+    request_id, correlation_id = _settings_receipt_ids(request)
+    get_audit_logger().log_audit_event({
+        "event_type": AuditEventType.SECURITY_EVENT,
+        "severity": AuditSeverity.WARNING,
+        "message": "extension_lifecycle_approval_required",
+        "user_id": user.get("user_id"),
+        "tenant_id": user.get("tenant_id"),
+        "correlation_id": correlation_id,
+        "metadata": {
+            "request_id": request_id,
+            "extension_id": extension_name,
+            "action": action,
+            "outcome": "rejected",
+            "reason": "lifecycle_approval_required",
+        },
+    })
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Extension lifecycle approval required: this legacy route has "
+            "no authenticated, revision-bound, single-use execution receipt."
+        ),
+    )
+
+
 @router.post("/{extension_name}/load")
-async def load_extension(extension_name: str, user=Depends(require_extension_mutation_access)):
-    """Load an extension."""
-    manager = get_extension_manager()
-    if not manager:
-        raise HTTPException(status_code=503, detail="Extension manager not initialized")
-    try:
-        record = await manager.load_extension(extension_name)
-        if record is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Extension could not be enabled by the canonical runtime",
-            )
-        await manager.refresh_extensions()
-        return {
-            "success": True,
-            "message": f"Extension {extension_name} loaded",
-            "plugin_id": extension_name,
-            "status": (record.get("status", "loaded") if isinstance(record, dict) else getattr(getattr(record, "status", None), "value", "loaded")) if record else "loaded",
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Extension enable failed")
-        raise HTTPException(status_code=503, detail="Extension enable failed")
+async def load_extension(
+    extension_name: str,
+    request: Request,
+    user=Depends(require_extension_mutation_access),
+):
+    """Refuse the unapproved legacy enable path, without a kernel write."""
+    _reject_unapproved_extension_lifecycle(
+        request=request, user=user, extension_name=extension_name, action="enable",
+    )
 
 
 @router.post("/{extension_name}/unload")
-async def unload_extension(extension_name: str, user=Depends(require_extension_mutation_access)):
-    """Unload an extension."""
-    manager = get_extension_manager()
-    if not manager:
-        raise HTTPException(status_code=503, detail="Extension manager not initialized")
-    try:
-        success = await manager.unload_extension(extension_name)
-        if not success:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Extension {extension_name} is not currently loaded",
-            )
-        await manager.refresh_extensions()
-        return {
-            "success": True,
-            "message": f"Extension {extension_name} unloaded",
-            "plugin_id": extension_name,
-            "status": "unloaded",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def unload_extension(
+    extension_name: str,
+    request: Request,
+    user=Depends(require_extension_mutation_access),
+):
+    """Refuse the unapproved legacy disable path, without a kernel write."""
+    _reject_unapproved_extension_lifecycle(
+        request=request, user=user, extension_name=extension_name, action="disable",
+    )
 
 
 @router.post("/{extension_name}/remove-ui")

@@ -45,6 +45,7 @@ on:
       - 'tests/architecture/test_grounded_article_reference_boundary.py'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
+      - 'tests/architecture/test_plugin_lifecycle_ingress_fence.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
@@ -93,6 +94,7 @@ on:
       - 'tests/architecture/test_grounded_article_reference_boundary.py'
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
+      - 'tests/architecture/test_plugin_lifecycle_ingress_fence.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
@@ -248,6 +250,7 @@ jobs:
             tests/architecture/test_grounded_article_reference_boundary.py \
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
+            tests/architecture/test_plugin_lifecycle_ingress_fence.py \
             tests/architecture/test_plugin_runtime_authority.py \
             tests/architecture/test_plugin_store_api_shape_guards.py \
             -v \
