@@ -72,7 +72,7 @@ RUN python -m pip install --no-cache-dir \
 # -----------------------------
 FROM runtime AS runtime-pocket-tts
 COPY requirements/pocket-tts.txt /app/requirements/pocket-tts.txt
-RUN python -m pip install --no-cache-dir -r /app/requirements/pocket-tts.txt && \
+RUN python -m pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r /app/requirements/pocket-tts.txt && \
     python -m pip check && \
     python -c "from importlib.metadata import version; from pocket_tts import TTSModel; assert version('pocket-tts') == '4.0.1'"
 
