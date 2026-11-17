@@ -264,13 +264,21 @@ class ChannelActivationService:
         authorized_plan: AuthorizedExecutionPlan,
         adapter: ChannelAdapter,
         settings: Mapping[str, Any],
+        expected_revision: int | None = None,
     ) -> ChannelConnection:
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ChannelActivationDenied("Valid expected revision required")
         async with self._lock:
             connection = await self._repository.get_connection(
                 tenant_id=tenant_id, connection_id=connection_id,
             )
-            if connection is None or connection.enabled:
-                raise ChannelActivationDenied("Channel connection is absent or already active")
+            if (
+                connection is None or connection.enabled
+                or (expected_revision is not None and connection.revision != expected_revision)
+            ):
+                raise ChannelActivationDenied("Channel connection is absent, changed, or already active")
             await self._authorize(
                 tenant_id=tenant_id, user_id=user_id, session_id=session_id,
                 installation_id=connection.installation_id,
@@ -341,13 +349,21 @@ class ChannelActivationService:
         user_id: str, session_id: str,
         authorized_plan: AuthorizedExecutionPlan,
         adapter: ChannelAdapter,
+        expected_revision: int | None = None,
     ) -> ChannelConnection:
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ChannelActivationDenied("Valid expected revision required")
         async with self._lock:
             connection = await self._repository.get_connection(
                 tenant_id=tenant_id, connection_id=connection_id,
             )
-            if connection is None or not connection.enabled:
-                raise ChannelActivationDenied("Channel connection is absent or inactive")
+            if (
+                connection is None or not connection.enabled
+                or (expected_revision is not None and connection.revision != expected_revision)
+            ):
+                raise ChannelActivationDenied("Channel connection is absent, changed, or inactive")
             await self._authorize(
                 tenant_id=tenant_id, user_id=user_id, session_id=session_id,
                 installation_id=connection.installation_id,
