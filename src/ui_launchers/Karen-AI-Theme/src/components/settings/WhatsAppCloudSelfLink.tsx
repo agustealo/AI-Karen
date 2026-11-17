@@ -1,0 +1,221 @@
+'use client';
+
+/**
+ * KWA-01C6C2B2: one-time, consumer-accessible WhatsApp Cloud self-link UX.
+ *
+ * Only the canonical authenticated ChannelHost may issue a link challenge.
+ * A returned /link command is not evidence of provider delivery or identity
+ * binding. Never persist the command, copy it automatically, or log it.
+ */
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, Copy, Loader2, ShieldCheck } from 'lucide-react';
+
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ApiError, apiClient } from '@/lib/api';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const COMMAND = /^\/link [A-Za-z0-9_-]{43}$/;
+
+type IssuedChallenge = Readonly<{
+  command: string;
+  expires_in_seconds: number;
+}>;
+
+function validateChallenge(value: unknown): IssuedChallenge {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid identity challenge response');
+  }
+  const entry = value as Record<string, unknown>;
+  if (
+    Object.keys(entry).length !== 3 ||
+    typeof entry.challenge_id !== 'string' ||
+    !UUID.test(entry.challenge_id) ||
+    typeof entry.command !== 'string' ||
+    !COMMAND.test(entry.command) ||
+    typeof entry.expires_in_seconds !== 'number' ||
+    !Number.isSafeInteger(entry.expires_in_seconds) ||
+    entry.expires_in_seconds < 60 ||
+    entry.expires_in_seconds > 900
+  ) {
+    throw new Error('Unverified identity challenge response');
+  }
+  // The challenge ID is only for the host's durable ledger; it is not a
+  // permission or a consumer-facing provider status.
+  return {
+    command: entry.command,
+    expires_in_seconds: entry.expires_in_seconds,
+  };
+}
+
+function describeFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) return 'Sign in again to request an identity link.';
+    if (error.status === 403) return 'Your account or this connection is not authorized for identity linking.';
+    if (error.status === 404) return 'The requested WhatsApp connection was not found.';
+    if (error.status === 409) return 'The connection changed. Ask the operator to verify its current state.';
+    if (error.status === 422) return 'The connection ID was not accepted.';
+    if (error.status === 503) return 'Identity linking is unavailable. No command was verified.';
+  }
+  return 'Karen could not verify the identity-link request. No link is confirmed.';
+}
+
+export default function WhatsAppCloudSelfLink() {
+  const [connectionId, setConnectionId] = useState('');
+  const [issued, setIssued] = useState<IssuedChallenge | null>(null);
+  const [pending, setPending] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestEpoch = useRef(0);
+
+  // The parent keys and unmounts this panel on signed-in principal changes.
+  // Drop stale responses on unmount and erase the token after its TTL.
+  useEffect(() => () => { requestEpoch.current += 1; }, []);
+  useEffect(() => {
+    if (issued === null) return;
+    const clear = window.setTimeout(() => {
+      setIssued(null);
+      setCopied(false);
+    }, issued.expires_in_seconds * 1000);
+    return () => window.clearTimeout(clear);
+  }, [issued]);
+
+  const clearCommand = () => {
+    requestEpoch.current += 1;
+    setIssued(null);
+    setCopied(false);
+    setError(null);
+  };
+
+  const changeConnection = (nextValue: string) => {
+    clearCommand();
+    setConnectionId(nextValue.trim());
+  };
+
+  const issueChallenge = async () => {
+    const id = connectionId;
+    if (pending || !UUID.test(id)) return;
+
+    const epoch = ++requestEpoch.current;
+    setIssued(null);
+    setCopied(false);
+    setError(null);
+    setPending(true);
+    try {
+      const result = await apiClient.post<unknown>(
+        `/api/channels/identity/whatsapp/connections/${id}/challenge`,
+        {},
+      );
+      const verified = validateChallenge(result);
+      if (requestEpoch.current === epoch) setIssued(verified);
+    } catch (failure) {
+      if (requestEpoch.current === epoch) setError(describeFailure(failure));
+    } finally {
+      if (requestEpoch.current === epoch) setPending(false);
+    }
+  };
+
+  const copyCommand = async () => {
+    if (!issued) return;
+    try {
+      await navigator.clipboard.writeText(issued.command);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+      setError('Clipboard permission was denied. Select and copy the one-time command manually.');
+    }
+  };
+
+  return (
+    <Card role="region" aria-label="WhatsApp Cloud account linking">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ShieldCheck aria-hidden="true" className="h-4 w-4" />
+          Link your WhatsApp Cloud sender
+        </CardTitle>
+        <CardDescription>
+          For an official WhatsApp Business Cloud API connection supplied by your Karen
+          operator, request a one-time command for your verified Karen account.
+          This is separate from personal WhatsApp Linked Devices pairing.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="space-y-2">
+          <Label htmlFor="whatsapp-self-link-connection">Operator-provided connection ID</Label>
+          <Input
+            id="whatsapp-self-link-connection"
+            value={connectionId}
+            onChange={(event) => changeConnection(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="WhatsApp Cloud connection UUID"
+            maxLength={36}
+            disabled={pending}
+          />
+        </div>
+        <Button
+          type="button"
+          disabled={pending || !UUID.test(connectionId)}
+          onClick={() => void issueChallenge()}
+        >
+          {pending && <Loader2 aria-hidden="true" className="mr-2 h-4 w-4 animate-spin" />}
+          Request one-time link command
+        </Button>
+        {error && (
+          <Alert variant="destructive" role="alert">
+            <AlertCircle aria-hidden="true" className="h-4 w-4" />
+            <AlertTitle>Link request not verified</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        {issued && (
+          <div className="space-y-3 rounded-md border border-border/60 p-3">
+            <p className="text-sm font-semibold">One-time command issued by Karen</p>
+            <p className="text-xs text-muted-foreground">
+              Send this exact command from your own WhatsApp test sender to your
+              operator-approved WhatsApp Business test number within{' '}
+              {Math.ceil(issued.expires_in_seconds / 60)} minutes.
+              Treat it as a secret. Never post it in screenshots, logs or support tickets.
+            </p>
+            <code
+              aria-label="One-time WhatsApp link command"
+              className="block select-all break-all rounded bg-muted p-2 font-mono text-xs"
+            >
+              {issued.command}
+            </code>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm"
+                onClick={() => void copyCommand()}>
+                <Copy aria-hidden="true" className="mr-2 h-4 w-4" />
+                Copy command
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={clearCommand}>
+                Clear command from screen
+              </Button>
+            </div>
+            {copied && (
+              <p role="status" className="text-xs text-muted-foreground">
+                Copied. Clear your clipboard after sending the command.
+              </p>
+            )}
+            <p className="text-xs font-medium">
+              Command issued does not mean the sender is linked. Karen must independently
+              verify a real, signed provider message and bind your sender identity.
+              Live ChatRuntime and delivery remain unverified here.
+            </p>
+          </div>
+        )}
+        {!issued && (
+          <p className="text-xs text-muted-foreground">
+            A new challenge replaces any previous unused challenge for this
+            account and connection. No provider delivery or linked status is
+            asserted by this screen.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
