@@ -94,6 +94,27 @@ must be verified before any artifact is promoted. PR #997's exact-head
 tests and the 10/10 post-merge workflows establish source proof, **not**
 two actual licensed source downloads or a running local TTS engine.
 
+### Exact post-merge workflow evidence
+
+All ten GitHub Actions runs below completed with `success` on the **same
+merged `main` commit** `eac75564253ae7f5b21b9577910270b80d7b0afb`,
+not just on PR branch revisions. Source code tests, workflow availability and
+a passing First-Boot CI image smoke remain distinct from a licensed target-host
+Pocket download or audible voice trial.
+
+| Workflow | Exact GitHub run | Observed conclusion |
+| --- | --- | --- |
+| Model Download Durable Worker Gate | [44165311178](https://github.com/agustealo/AI-Karen/actions/runs/44165311178) | success |
+| Cognitive Proof CI | [44165311309](https://github.com/agustealo/AI-Karen/actions/runs/44165311309) | success |
+| Production Database Baseline Contract | [44165311330](https://github.com/agustealo/AI-Karen/actions/runs/44165311330) | success |
+| Production Data Recovery Contract | [44165311285](https://github.com/agustealo/AI-Karen/actions/runs/44165311285) | success |
+| Automation Authority Gate | [44165311290](https://github.com/agustealo/AI-Karen/actions/runs/44165311290) | success |
+| Production Auth Security | [44165311320](https://github.com/agustealo/AI-Karen/actions/runs/44165311320) | success |
+| Main Quality Gate | [44165311598](https://github.com/agustealo/AI-Karen/actions/runs/44165311598) | success |
+| Plugin Ecosystem CI/CD | [44165311186](https://github.com/agustealo/AI-Karen/actions/runs/44165311186) | success |
+| Ollama Settings Live E2E | [44165311265](https://github.com/agustealo/AI-Karen/actions/runs/44165311265) | success |
+| Production First-Boot Smoke | [44165311278](https://github.com/agustealo/AI-Karen/actions/runs/44165311278) | success |
+
 ### Observed beta API deployment gap
 
 A read-only check of the existing `ai-karen-beta-api` Render service on
