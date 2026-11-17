@@ -24,7 +24,7 @@ from ai_karen_engine.config.channels import ChannelHostSettings
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.persistence.repositories.channel_repository import SqlChannelRepository
-from ai_karen_engine.services.channels.activation import ChannelActivationService
+from ai_karen_engine.services.channels.activation import ChannelActivationConflict, ChannelActivationService
 from ai_karen_engine.services.channels.credentials import ChannelVaultSecretResolver
 from ai_karen_engine.services.channels.ingress import ChannelIngressService
 from ai_karen_engine.services.channels.execution import ChannelExecutionService
@@ -226,9 +226,10 @@ class ChannelHostServices:
             connection is None or connection.tenant_id != tenant_id
             or connection.connection_id != connection_id
             or connection.installation_id != "whatsapp-cloud"
-            or connection.enabled or connection.revision != expected_revision
         ):
             raise PermissionError("WhatsApp connection unavailable for activation")
+        if connection.enabled or connection.revision != expected_revision:
+            raise ChannelActivationConflict("WhatsApp connection revision changed")
         return await self.activation.activate(
             tenant_id=tenant_id, connection_id=connection_id,
             user_id=user_id, session_id=session_id,
@@ -253,9 +254,10 @@ class ChannelHostServices:
             connection is None or connection.tenant_id != tenant_id
             or connection.connection_id != connection_id
             or connection.installation_id != "whatsapp-cloud"
-            or not connection.enabled or connection.revision != expected_revision
         ):
             raise PermissionError("WhatsApp connection unavailable for deactivation")
+        if not connection.enabled or connection.revision != expected_revision:
+            raise ChannelActivationConflict("WhatsApp connection revision changed")
         return await self.activation.deactivate(
             tenant_id=tenant_id, connection_id=connection_id,
             user_id=user_id, session_id=session_id,
