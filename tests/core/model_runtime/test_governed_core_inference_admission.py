@@ -74,6 +74,7 @@ def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmi
         correlation_id="correlation-a",
         authenticated_user=principal,
     )
+    context.bind_runtime_model_authority(plan, meter)
     return GovernedToolModelAdmission(
         plan=plan,
         meter=meter,

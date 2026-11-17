@@ -55,6 +55,8 @@ def _request(*, authenticated: bool = True):
             if authenticated else None
         ),
     )
+    if authenticated:
+        context.bind_runtime_model_authority(plan, meter)
     runtime_request = RuntimeRequest(
         query="Research safely",
         user_id="user-a",

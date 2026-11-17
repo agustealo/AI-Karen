@@ -46,6 +46,7 @@ class GovernedToolModelAdmission:
             and bool(self.plan.policy_decision_id)
             and self.plan.policy_decision_id == self.policy_decision_id
             and self.meter.budget is self.plan.budget
+            and context.is_runtime_model_plan_authorized(self.plan, self.meter)
             and bool(self.user_id)
             and bool(self.tenant_id)
             and bool(self.request_id)

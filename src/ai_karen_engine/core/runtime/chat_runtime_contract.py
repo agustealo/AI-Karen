@@ -88,6 +88,89 @@ class ChatExecutionContext:
     permissions: List[str] = field(default_factory=list)
     authenticated_user: Optional["UserData"] = field(default=None, repr=False, compare=False)
 
+
+    def bind_runtime_model_authority(self, plan: Any, meter: Any) -> None:
+        """Pin original RuntimePolicy objects on the authenticated request.
+
+        Only ChatRuntime owns initial binding after constructing its plan and
+        meter. Keeping this state outside dataclass fields prevents copied
+        or serialized ChatExecutionContext values from inheriting authority.
+        """
+        from ai_karen_engine.core.runtime.contracts import (
+            AuthorizedExecutionPlan, ExecutionBudgetMeter,
+        )
+
+        self.require_authenticated_user()
+        if (
+            not isinstance(plan, AuthorizedExecutionPlan)
+            or not isinstance(meter, ExecutionBudgetMeter)
+            or meter.budget is not plan.budget
+            or not self.request_id
+            or not self.correlation_id
+            or not plan.matches_execution_scope(
+                user_id=self.user_id,
+                tenant_id=self.tenant_id,
+                session_id=self.session_id,
+                policy_decision_id=plan.policy_decision_id,
+            )
+        ):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        binding = self.__dict__.get("_runtime_model_authority")
+        if binding is None:
+            self.__dict__["_runtime_model_authority"] = (plan, meter)
+            self.__dict__["_runtime_model_child_plans"] = []
+        elif binding[0] is not plan or binding[1] is not meter:
+            raise PermissionError("runtime_model_execution_authority_invalid")
+
+    def original_runtime_model_plan(self, meter: Any) -> Any | None:
+        """Expose the original policy plan only for its original meter."""
+        binding = self.__dict__.get("_runtime_model_authority")
+        if binding is None or binding[1] is not meter:
+            return None
+        return binding[0]
+
+    def register_runtime_model_child_plan(self, plan: Any, meter: Any) -> None:
+        """Register a Medusa-scoped derivative without minting a new grant."""
+        from dataclasses import replace
+
+        root = self.original_runtime_model_plan(meter)
+        if root is None or type(plan) is not type(root):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        if plan is root:
+            return
+        if (
+            plan.budget is not root.budget
+            or replace(
+                root,
+                allowed_tools=list(plan.allowed_tools),
+                allowed_plugins=list(plan.allowed_plugins),
+                allowed_agents=list(plan.allowed_agents),
+            ) != plan
+        ):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        for attribute in ("allowed_tools", "allowed_plugins", "allowed_agents"):
+            if not set(getattr(plan, attribute)).issubset(
+                set(getattr(root, attribute))
+            ):
+                raise PermissionError("runtime_model_execution_authority_invalid")
+        children = self.__dict__["_runtime_model_child_plans"]
+        if not any(child is plan for child in children):
+            children.append(plan)
+
+    def is_runtime_model_plan_authorized(self, plan: Any, meter: Any) -> bool:
+        """Only root and approved child object identities may execute."""
+        root = self.original_runtime_model_plan(meter)
+        return (
+            root is not None
+            and (
+                plan is root
+                or any(
+                    child is plan
+                    for child in self.__dict__.get("_runtime_model_child_plans", ())
+                )
+            )
+        )
+
     def require_authenticated_user(self) -> "UserData":
         """Require the ingress principal and matching user and tenant scope."""
         from ai_karen_engine.auth.models import UserData

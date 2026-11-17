@@ -39,7 +39,7 @@ def _test_governed_admission():
         authorized_session_id="test-session",
         budget=budget,
     )
-    return GovernedToolModelAdmission(
+    admission = GovernedToolModelAdmission(
         plan=plan,
         meter=ExecutionBudgetMeter(budget),
         user_id="test-user",
@@ -64,6 +64,10 @@ def _test_governed_admission():
             ),
         ),
     )
+    admission.authenticated_context.bind_runtime_model_authority(
+        admission.plan, admission.meter,
+    )
+    return admission
 
 
 @pytest.mark.asyncio

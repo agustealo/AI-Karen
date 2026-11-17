@@ -247,21 +247,23 @@ class MedusaCoordinator:
         # Standalone governed Medusa requests retain a fresh plan-bound meter.
         shared_meter = request.runtime_budget_meter
         if shared_meter is not None:
+            trusted_context = _trusted_chat_execution_context(
+                request, authorized_plan,
+            )
+            original_plan = (
+                trusted_context.original_runtime_model_plan(shared_meter)
+                if trusted_context is not None else None
+            )
             if (
                 not isinstance(shared_meter, ExecutionBudgetMeter)
-                or _trusted_chat_execution_context(request, authorized_plan) is None
+                or original_plan is None
                 or shared_meter.budget != authorized_plan.budget
+                or original_plan != authorized_plan
             ):
                 raise PermissionError("medusa_shared_budget_authority_invalid")
-            # The trusted request supplied this exact original meter. The
-            # serialized policy budget was validated above by value, but its
-            # deserialization allocates a distinct object. Rebind only after
-            # authenticated scope validation so specialist plan clones retain
-            # the original meter.budget identity without weakening admission.
-            authorized_plan = replace(
-                authorized_plan,
-                budget=shared_meter.budget,
-            )
+            # Deserialization is only policy evidence: reuse the exact plan
+            # and meter already bound by the authenticated ChatRuntime.
+            authorized_plan = original_plan
             meter = shared_meter
         else:
             meter = ExecutionBudgetMeter(authorized_plan.budget)
@@ -553,6 +555,17 @@ class MedusaCoordinator:
             allowed_plugins=list(step.required_plugins),
             allowed_agents=[step.agent_specialist],
         )
+        if request.runtime_budget_meter is not None:
+            trusted_context = _trusted_chat_execution_context(
+                request, specialist_plan,
+            )
+            if trusted_context is None:
+                raise PermissionError("medusa_shared_budget_authority_invalid")
+            # Medusa registers only this narrowed plan identity with the
+            # same original meter, never a copied meter or wider grant.
+            trusted_context.register_runtime_model_child_plan(
+                specialist_plan, meter,
+            )
         # Preserve the typed advisory only when it came through the
         # authenticated Runtime and matches the exact Medusa scope. A
         # standalone Medusa caller cannot inject arbitrary learning ranks.

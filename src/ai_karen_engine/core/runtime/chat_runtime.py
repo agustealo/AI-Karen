@@ -425,6 +425,7 @@ class ChatRuntime:
                 ),
             )
         meter = ExecutionBudgetMeter(plan.budget)
+        request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         trajectory = self._trajectory_recorder.start()
         decision_observation_id = await self._record_learning_decision(
@@ -989,6 +990,7 @@ class ChatRuntime:
             )
             return
         meter = ExecutionBudgetMeter(plan.budget)
+        request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         trajectory = self._trajectory_recorder.start()
         decision_observation_id = await self._record_learning_decision(
