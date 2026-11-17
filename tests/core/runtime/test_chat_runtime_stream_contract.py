@@ -24,6 +24,7 @@ from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     TranscriptPersistenceResult,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 from ai_karen_engine.core.runtime.trajectory.contracts import ExecutionTrajectory
 from ai_karen_engine.core.runtime.trajectory.recorder import TrajectoryRecorder
 from ai_karen_engine.core.runtime.trajectory.store import InMemoryTrajectoryStore
@@ -2006,4 +2007,110 @@ async def test_b2c2_cancel_during_postcommit_session_cleanup_reconciles_truth(
     else:
         assert rows[0].execution_status not in {"success", "cancelled"}
         assert rows[0].error_code != "CHAT_REQUEST_CANCELLED"
+    outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_leased_stream_postcommit_memory_cancellation_preserves_turn() -> None:
+    """An atomic run+transcript commit survives later memory cancellation."""
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    request.runtime_run_lease = ChatRunLease(
+        execution_id="55555555-5555-5555-5555-555555555555",
+        lease_token="66666666-6666-6666-6666-666666666666",
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        conversation_id=CONVERSATION_ID,
+        transport_run_id="run-leased",
+        request_id=request.context.request_id,
+        correlation_id=request.context.correlation_id,
+    )
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = True
+    plan = _make_plan()
+    memory_entered = asyncio.Event()
+
+    async def committed_stream(*args, **kwargs):
+        kwargs["_meta"].update({
+            "response_source": "provider_runtime",
+            "actual_provider": "ollama-local",
+            "actual_model": "installed-model",
+        })
+        yield ChatStreamChunk(
+            type="content", content="Committed streamed answer",
+            correlation_id="corr-1",
+        )
+
+    async def interrupted_memory(*args, **kwargs):
+        memory_entered.set()
+        await asyncio.Event().wait()
+
+    async def consume() -> None:
+        async for _ in runtime.execute_stream(request):
+            pass
+
+    with ExitStack() as patches:
+        patches.enter_context(patch.object(
+            runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_decide", new_callable=AsyncMock, return_value=decision,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_build_authorized_plan", return_value=plan,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_grounded_personal_response", return_value=None,
+        ))
+        patches.enter_context(patch.object(
+            runtime, "_is_explicit_save_turn", return_value=False,
+        ))
+        direct = patches.enter_context(patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+        ))
+        direct.return_value.can_handle.return_value = False
+        patches.enter_context(patch.object(
+            runtime, "_run_simple_stream", side_effect=committed_stream,
+        ))
+        transcript = patches.enter_context(patch.object(
+            runtime, "_persist_transcript", new_callable=AsyncMock,
+            return_value=TranscriptPersistenceResult(
+                status="persisted", conversation_id=CONVERSATION_ID,
+                user_message_id=USER_MESSAGE_ID,
+                assistant_message_id=ASSISTANT_MESSAGE_ID,
+                persisted_messages=2,
+            ),
+        ))
+        memory = patches.enter_context(patch.object(
+            runtime, "_persist_memory", side_effect=interrupted_memory,
+        ))
+        outcome = patches.enter_context(patch.object(
+            runtime, "_record_execution_outcome", new_callable=AsyncMock,
+        ))
+        task = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(memory_entered.wait(), timeout=5)
+            transcript.assert_awaited_once()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    assert len(store.list_for_tenant(TENANT_ID)) == 1
+    row = store.list_for_tenant(TENANT_ID)[0]
+    assert row.execution_status == "success"
+    assert row.error_code is None
+    assert row.actual_provider == "ollama-local"
+    assert row.actual_model == "installed-model"
+    assert row.tenant_id == TENANT_ID
+    assert row.user_id == USER_ID
+    assert row.request_id == request.context.request_id
+    assert row.response_source == "provider_runtime"
+    assert gateway.reconciliation_calls == []
+    memory.assert_awaited_once()
     outcome.assert_not_awaited()
