@@ -56,8 +56,8 @@ type DownloadJob = {
   channel_id: string;
   status: string;
   progress: number;
-  message?: string | null;
-  error?: string | null;
+  // This comes from the canonical owned SQL projection, never raw worker errors.
+  failure_category?: "source_access" | "network" | "storage" | "integrity" | "cancelled" | "unknown" | null;
   requested_by?: string | null;
 };
 type DownloadReceipt = { job_id: string; status: string };
@@ -73,22 +73,22 @@ function normalizedProgress(value: unknown): number {
   return Math.min(100, Math.max(0, numeric > 1 ? numeric : numeric * 100));
 }
 
-/** Show a bounded operator next step, never raw worker exceptions or paths. */
+/** Only the owner-scoped server category may choose an operator action. */
 function downloadFailureGuidance(job: DownloadJob): string {
-  const cause = `${job.error ?? ""} ${job.message ?? ""}`.toLowerCase().slice(0, 1200);
-  if (/401|403|gated|unauthoriz|access.denied|permission.denied|license/.test(cause)) {
-    return "Model source access was denied. Confirm your Hugging Face account has accepted the gated model terms and Karen’s backend has approved source access, then retry.";
+  switch (job.failure_category) {
+    case "source_access":
+      return "Model source access was denied. Confirm your Hugging Face account has accepted the gated model terms and Karen’s backend has approved source access, then retry.";
+    case "network":
+      return "The model worker could not reach or verify its source. Check backend network, proxy, TLS and source availability before retrying.";
+    case "storage":
+      return "The model worker reported a storage limit. Check available model storage and worker quota before retrying.";
+    case "integrity":
+      return "Model revision or artifact integrity could not be verified. Do not use the partial download; inspect Models & Runtime before retrying.";
+    case "cancelled":
+      return "The download was cancelled. Start a new download only after checking the reason in Models & Runtime.";
+    default:
+      return "Check the authenticated job details in Models & Runtime before retrying. A failed download is never a ready model.";
   }
-  if (/network|offline|connection|timed.out|timeout|dns|ssl|tls|proxy|http.5[0-9][0-9]/.test(cause)) {
-    return "The model worker could not reach or verify its source. Check backend network, proxy, TLS and source availability before retrying.";
-  }
-  if (/disk|storage|no.space|quota/.test(cause)) {
-    return "The model worker reported a storage limit. Check available model storage and worker quota before retrying.";
-  }
-  if (/checksum|digest|revision|integrity|hash.mismatch/.test(cause)) {
-    return "Model revision or artifact integrity could not be verified. Do not use the partial download; inspect Models & Runtime before retrying.";
-  }
-  return "Check the authenticated job details in Models & Runtime before retrying. A failed download is never a ready model.";
 }
 
 function isModelRecommendation(value: unknown): value is ModelRecommendation {
