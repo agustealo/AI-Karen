@@ -96,6 +96,29 @@ class _FakeEngine:
         return _verified(task, self.engine_id)
 
 
+def test_availability_rejects_cloud_only_when_external_execution_forbidden() -> None:
+    settings = _settings(local_enabled=False, external_allowed=False)
+    settings.active_engine = "cloud"
+    settings.engine_fallback_order = ["cloud"]
+
+    available, reason = ExpressionGateway(settings).availability()
+
+    assert available is False
+    assert reason is not None
+    assert "cloud:external_engines_forbidden" in reason
+
+
+def test_availability_can_use_local_fallback_when_cloud_is_forbidden() -> None:
+    settings = _settings(local_enabled=True, external_allowed=False)
+    settings.active_engine = "cloud"
+    settings.engine_fallback_order = ["local"]
+
+    available, reason = ExpressionGateway(settings).availability()
+
+    assert available is True
+    assert reason is None
+
+
 @pytest.mark.asyncio
 async def test_successful_second_engine_consumes_one_more_original_model_call() -> None:
     meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
