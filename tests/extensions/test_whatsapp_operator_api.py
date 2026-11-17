@@ -206,3 +206,110 @@ def test_operator_host_missing_is_unavailable_not_fake_success(operator_api):
         json={"provider_account_id": "30987654321", "credential_handle": "vault://wa"},
     )
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_host_uses_canonical_loaded_whatsapp_adapter_for_lifecycle():
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+
+    adapter = object()
+    plan = AuthorizedExecutionPlan(
+        execution_id="operator-exec",
+        policy_decision_id="operator-policy",
+        authorized_user_id=USER,
+        authorized_tenant_id=TENANT,
+        authorized_session_id="session-verified",
+        allowed_plugins=["whatsapp-cloud"],
+        allowed_capabilities=[
+            "channel.provision", "channel.activate", "channel.deactivate",
+        ],
+    )
+    host = object.__new__(ChannelHostServices)
+    host._initialized = True
+    host._closed = False
+    host._installed = {"whatsapp-cloud": adapter}
+    host.kernel = SimpleNamespace(
+        get_channel_activation_manifest=lambda name: object(),
+        is_canonical_channel_adapter=lambda name, candidate: (
+            name == "whatsapp-cloud" and candidate is adapter
+        ),
+    )
+    host.repository = SimpleNamespace(
+        get_connection=AsyncMock(return_value=_connection(enabled=False, revision=1))
+    )
+    host.activation = SimpleNamespace(
+        provision=AsyncMock(return_value=_connection(enabled=False, revision=1)),
+        activate=AsyncMock(return_value=_connection(enabled=True, revision=2)),
+        deactivate=AsyncMock(return_value=_connection(enabled=False, revision=3)),
+    )
+
+    prepared = await host.provision_whatsapp_connection(
+        tenant_id=TENANT, user_id=USER, session_id="session-verified",
+        provider_account_id="30987654321",
+        credential_handle="vault://scoped-wa", authorized_plan=plan,
+    )
+    assert not prepared.enabled
+    assert host.activation.provision.await_args.kwargs["installation_id"] == "whatsapp-cloud"
+    assert host.activation.provision.await_args.kwargs["authorized_plan"] is plan
+
+    activated = await host.activate_whatsapp_connection(
+        tenant_id=TENANT, connection_id=CONNECTION, user_id=USER,
+        session_id="session-verified", authorized_plan=plan,
+        expected_revision=1,
+    )
+    assert activated.enabled
+    assert host.activation.activate.await_args.kwargs["adapter"] is adapter
+    assert host.activation.activate.await_args.kwargs["expected_revision"] == 1
+    assert host.activation.activate.await_args.kwargs["settings"] == {
+        "private_text_only": True
+    }
+
+    host.repository.get_connection.return_value = activated
+    deactivated = await host.deactivate_whatsapp_connection(
+        tenant_id=TENANT, connection_id=CONNECTION, user_id=USER,
+        session_id="session-verified", authorized_plan=plan,
+        expected_revision=2,
+    )
+    assert not deactivated.enabled
+    assert host.activation.deactivate.await_args.kwargs["adapter"] is adapter
+    assert host.activation.deactivate.await_args.kwargs["expected_revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_host_never_executes_stale_or_foreign_whatsapp_connection():
+    adapter = object()
+    host = object.__new__(ChannelHostServices)
+    host._initialized = True
+    host._closed = False
+    host._installed = {"whatsapp-cloud": adapter}
+    host.kernel = SimpleNamespace(
+        get_channel_activation_manifest=lambda name: object(),
+        is_canonical_channel_adapter=lambda name, candidate: candidate is adapter,
+    )
+    host.repository = SimpleNamespace(
+        get_connection=AsyncMock(return_value=_connection(enabled=False, revision=2))
+    )
+    host.activation = SimpleNamespace(activate=AsyncMock(), deactivate=AsyncMock())
+    args = {
+        "tenant_id": TENANT, "connection_id": CONNECTION, "user_id": USER,
+        "session_id": "session-verified", "authorized_plan": object(),
+        "expected_revision": 1,
+    }
+    with pytest.raises(ChannelActivationConflict):
+        await host.activate_whatsapp_connection(**args)
+    host.activation.activate.assert_not_awaited()
+
+    host.repository.get_connection.return_value = _connection(
+        enabled=False, revision=1,
+        tenant_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+    )
+    with pytest.raises(PermissionError):
+        await host.activate_whatsapp_connection(**args)
+    host.activation.activate.assert_not_awaited()
+
+    host.repository.get_connection.return_value = _connection(
+        enabled=True, revision=3,
+    )
+    with pytest.raises(ChannelActivationConflict):
+        await host.deactivate_whatsapp_connection(**{**args, "expected_revision": 2})
+    host.activation.deactivate.assert_not_awaited()
