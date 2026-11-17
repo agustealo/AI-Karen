@@ -43,14 +43,16 @@ def validate_plugin_management_preflight(raw: Any) -> dict[str, Any] | None:
         or not set(_KEYS - {"current_state", "confirmation_channel"}).issubset(raw)
         or not isinstance(raw.get("installation_id"), str)
         or not _PLUGIN_ID.fullmatch(raw["installation_id"])
-        or raw.get("requested_action") not in {"enable", "disable"}
+        or not isinstance(raw.get("requested_action"), str)
+        or raw["requested_action"] not in {"enable", "disable"}
         or raw.get("operation_scope") != "application_global"
         or raw.get("required_permission") != "admin.plugins:manage"
         or type(raw.get("permission_verified")) is not bool
         or raw.get("approval_granted") is not False
         or raw.get("mutation_performed") is not False
         or raw.get("action_receipt") is not None
-        or raw.get("status") not in _STATES
+        or not isinstance(raw.get("status"), str)
+        or raw["status"] not in _STATES
     ):
         return None
 
