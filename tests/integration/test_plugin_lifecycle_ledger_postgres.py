@@ -111,6 +111,12 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 / "supabase/migrations/20261117020000_61_plugin_global_lifecycle_terminal_status.sql"
             ).read_text(encoding="utf-8")
         )
+        await raw.execute(
+            (
+                Path(__file__).resolve().parents[2]
+                / "supabase/migrations/20261117030000_62_plugin_global_lifecycle_execution_admission.sql"
+            ).read_text(encoding="utf-8")
+        )
         status_max_length = await raw.fetchval(
             "SELECT character_maximum_length FROM information_schema.columns "
             "WHERE table_schema = 'public' "
@@ -367,10 +373,59 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 tenant_id=str(tenant_a), actor_user_id=str(actor_a),
                 observation={"observed_state": "enabled"},
             )
-        await service.enable_plugin("terminal-demo")
-        observation = await kernel.observe_lifecycle_for_finalization(
-            "terminal-demo", operation_id=enable_claim["operation_id"],
-        )
+        # Durable admission commits before the kernel is allowed to touch
+        # physical state. A second PostgreSQL connection cannot enter.
+        with pytest.raises(PluginLifecycleOperationNotFound):
+            await ledger.complete_verified(
+                operation_id=enable_claim["operation_id"],
+                tenant_id=str(tenant_a),
+                actor_user_id=str(actor_a),
+                observation=PluginLifecycleKernelObservation(
+                    operation_id=enable_claim["operation_id"],
+                    installation_id="terminal-demo",
+                    manifest_checksum=checksum,
+                    observed_state="enabled",
+                ),
+            )
+        for wrong_scope, wrong_operation in (
+            (replace(enable_scope, user_id=str(actor_b)), enable_claim["operation_id"]),
+            (enable_scope, str(uuid.uuid4())),
+            (replace(enable_scope, manifest_checksum="a" * 64), enable_claim["operation_id"]),
+        ):
+            with pytest.raises(PluginLifecycleRevisionConflict):
+                async with ledger.hold_prepared_execution(
+                    scope=wrong_scope, operation_id=wrong_operation,
+                ):
+                    pytest.fail("Mismatched actor, operation or digest entered execution")
+        assert (await ledger.read_operation(
+            operation_id=enable_claim["operation_id"],
+            tenant_id=str(tenant_a),
+            actor_user_id=str(actor_a),
+        ))["status"] == "prepared"
+        async with ledger.hold_prepared_execution(
+            scope=enable_scope, operation_id=enable_claim["operation_id"],
+        ) as admitted:
+            assert admitted["status"] == "in_flight"
+            async with session_factory() as second_connection:
+                assert (await second_connection.scalar(
+                    text(
+                        "SELECT pg_try_advisory_xact_lock("
+                        "hashtext(:namespace), hashtext(:installation))"
+                    ),
+                    {
+                        "namespace": "karen-plugin-global-lifecycle-v1",
+                        "installation": "terminal-demo",
+                    },
+                )) is False
+            observation = await kernel.transition_prepared_lifecycle(
+                enable_scope, operation_id=enable_claim["operation_id"],
+            )
+        # Losing the lock does not make one-shot in_flight admission reusable.
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            async with ledger.hold_prepared_execution(
+                scope=enable_scope, operation_id=enable_claim["operation_id"],
+            ):
+                pytest.fail("An in_flight operation must never be re-admitted")
         assert isinstance(observation, PluginLifecycleKernelObservation)
         assert observation.observed_state == "enabled"
         assert observation.manifest_checksum == checksum
@@ -430,9 +485,9 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
         assert (await ledger.read_operation(
             operation_id=enable_claim["operation_id"],
             tenant_id=str(tenant_a), actor_user_id=str(actor_a),
-        ))["status"] == "prepared"
+        ))["status"] == "in_flight"
 
-        # Competing processes/sessions race for one prepared receipt.
+        # Competing processes/sessions race for one in_flight receipt.
         # Exactly one global CAS may commit, with no duplicate revision.
         completion_attempts = await asyncio.gather(
             ledger.complete_verified(
@@ -489,6 +544,106 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                     observed_state=claim["target_state"],
                 ),
             )
+
+        # Cross-session PostgreSQL contention must permit exactly one
+        # physical disable + matching terminal CAS under the same held fence.
+        disable_scope = replace(
+            enable_scope,
+            action="disable",
+            expected_state="enabled",
+            expected_revision=2,
+        )
+        disable_approval = await approve(disable_scope)
+        disable_claim = await ledger.reserve_approved(
+            approval_id=disable_approval,
+            scope=disable_scope,
+            request_id="disable-fence-proof",
+            correlation_id="disable-fence-correlation",
+        )
+        owner_entered = asyncio.Event()
+        other_attempted = asyncio.Event()
+
+        async def physical_owner() -> dict[str, object]:
+            async with ledger.hold_prepared_execution(
+                scope=disable_scope, operation_id=disable_claim["operation_id"],
+            ) as admitted:
+                assert admitted["status"] == "in_flight"
+                owner_entered.set()
+                await other_attempted.wait()
+                verified = await kernel.transition_prepared_lifecycle(
+                    disable_scope, operation_id=disable_claim["operation_id"],
+                )
+                assert verified.observed_state == "disabled"
+                return await ledger.complete_verified(
+                    operation_id=disable_claim["operation_id"],
+                    tenant_id=str(tenant_a),
+                    actor_user_id=str(actor_a),
+                    observation=verified,
+                )
+
+        async def competing_owner() -> None:
+            await owner_entered.wait()
+            try:
+                with pytest.raises(
+                    PluginLifecycleRevisionConflict,
+                    match="physical execution is already locked",
+                ):
+                    async with ledger.hold_prepared_execution(
+                        scope=disable_scope, operation_id=disable_claim["operation_id"],
+                    ):
+                        pytest.fail("A competing connection entered execution")
+            finally:
+                other_attempted.set()
+
+        terminal_disable, _ = await asyncio.wait_for(
+            asyncio.gather(physical_owner(), competing_owner()), timeout=15
+        )
+        assert terminal_disable["status"] == "verified_committed"
+        assert terminal_disable["next_revision"] == 3
+        assert (await ledger.read_observation("terminal-demo"))["observed_state"] == "disabled"
+
+        # A crash just after durable admission must never convert the global
+        # revision into ready or let the same approved operation execute again.
+        crash_scope = replace(
+            enable_scope,
+            expected_revision=3,
+        )
+        crash_approval = await approve(crash_scope)
+        crash_claim = await ledger.reserve_approved(
+            approval_id=crash_approval,
+            scope=crash_scope,
+            request_id="crash-fence-proof",
+            correlation_id="crash-fence-correlation",
+        )
+        with pytest.raises(RuntimeError, match="simulated crash after admission"):
+            async with ledger.hold_prepared_execution(
+                scope=crash_scope, operation_id=crash_claim["operation_id"],
+            ):
+                assert (await ledger.read_operation(
+                    operation_id=crash_claim["operation_id"],
+                    tenant_id=str(tenant_a),
+                    actor_user_id=str(actor_a),
+                ))["status"] == "in_flight"
+                raise RuntimeError("simulated crash after admission")
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            async with ledger.hold_prepared_execution(
+                scope=crash_scope, operation_id=crash_claim["operation_id"],
+            ):
+                pytest.fail("Crash claim must never re-enter physical execution")
+        held = await ledger.read_observation("terminal-demo")
+        assert held["revision"] == 3
+        assert held["disposition"] == "unresolved"
+        assert held["observed_state"] == "disabled"
+        assert (await ledger.mark_unknown(
+            operation_id=crash_claim["operation_id"],
+            tenant_id=str(tenant_a),
+            actor_user_id=str(actor_a),
+        ))["status"] == "unknown"
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            async with ledger.hold_prepared_execution(
+                scope=crash_scope, operation_id=crash_claim["operation_id"],
+            ):
+                pytest.fail("Unknown operation must remain frozen")
 
         # A client with no host privilege must never read global revisions
         # or operation receipts directly, even though the tables exist.

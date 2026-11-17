@@ -563,6 +563,51 @@ and extension-platform mutation entrypoints under the same global policy gate.
 Until those gates and acceptance tests pass, conversation-driven plugin
 enable/disable remains unavailable.
 
+## PostgreSQL-held physical execution admission (KPLUG-CONV-02C3B2A)
+
+The existing `PluginLifecycleLedger` now owns an internal, application-global
+`hold_prepared_execution(scope, operation_id)` context. It accepts only the
+exact tenant/actor-scoped prepared claim and a matching global installation,
+manifest SHA-256, state and revision. It acquires a transaction-scoped
+PostgreSQL advisory lock keyed to the canonical installation, then commits an
+independent, one-way status update from `prepared` to `in_flight` **before**
+yielding to a physical kernel transition. The advisory lock must remain held
+across the kernel's locally atomic `transition_prepared_lifecycle` and the
+ledger's `complete_verified` CAS. Separate workers attempting the same global
+installation are refused; this is not merely a process-local asyncio lock.
+
+The forward-only migration
+`20261117030000_62_plugin_global_lifecycle_execution_admission.sql` adds
+the `in_flight` state and a durable `execution_started_at` field.
+Existing `verified_committed` history is not backfilled with fictitious
+execution timestamps. Terminal CAS now accepts **only** `in_flight`, not
+`prepared`, and an admitted claim cannot be entered again even if its
+connection dies or its kernel transition returns an uncertain outcome.
+`mark_unknown` accepts `prepared` and `in_flight` without releasing the
+unresolved global revision. There is no automatic physical retry.
+
+**Explicit scope:** this is a host-only persistence and concurrency primitive.
+It is NOT a RuntimePolicy decision, RBAC permission, human approval, trusted
+chat action, or production entrypoint. Existing direct administrator/store/
+extension compatibility calls have not been migrated to this fence and can
+still bypass its physical serialization. A PostgreSQL advisory lock excludes
+only cooperating callers and a lost database connection releases that lock;
+the surviving `in_flight` operation is what prevents repeat admission.
+The global deployment must share the same authoritative database and physical
+plugin installation before any multi-host execution certification. Do not
+claim globally safe mutation until every active caller uses one service owner
+and fresh policy/RBAC is proven. Chat enable/disable remains **disabled**.
+
+**Proof:** the dedicated disposable PostgreSQL lifecycle integration test
+applies the real forward-only migration, uses a restricted backend role,
+refuses forged actor/operation/checksum, demonstrates two independent
+connections contending for one installation lock while a real kernel
+transition and terminal CAS run, verifies replay denial, and models a crash
+after durable admission that leaves an irreversible unresolved claim.
+The test is part of the exact-head Plugin Backend workflow, not a mock-only
+contract. Startup recovery, policy-bound service orchestration and API caller
+migration remain subsequent KPLUG-CONV-02C3B work.
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and
