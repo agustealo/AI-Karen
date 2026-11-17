@@ -93,11 +93,13 @@ function validateChallenge(value: unknown): IssuedChallenge {
   };
 }
 
-function describeFailure(error: unknown): string {
+function describeFailure(error: unknown, statusRequest = false): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return 'Sign in again to request an identity link.';
     if (error.status === 403) return 'Your account or this connection is not authorized for identity linking.';
-    if (error.status === 404) return 'The requested WhatsApp connection was not found.';
+    if (error.status === 404) return statusRequest
+      ? 'This link challenge was not found for your verified account.'
+      : 'The requested WhatsApp connection was not found.';
     if (error.status === 409) return 'The connection changed. Ask the operator to verify its current state.';
     if (error.status === 422) return 'The connection ID was not accepted.';
     if (error.status === 503) return 'Identity linking is unavailable. No command was verified.';
@@ -122,9 +124,13 @@ export default function WhatsAppCloudSelfLink() {
   useEffect(() => {
     if (issued === null) return;
     const clear = window.setTimeout(() => {
+      // An in-flight status read made before expiry cannot revive "pending"
+      // after the local command has already reached its declared lifetime.
+      requestEpoch.current += 1;
       setIssued(null);
       setCopied(false);
       setLastStatus(null);
+      setStatusPending(false);
     }, issued.expires_in_seconds * 1000);
     return () => window.clearTimeout(clear);
   }, [issued]);
@@ -196,7 +202,7 @@ export default function WhatsAppCloudSelfLink() {
         }
       }
     } catch (failure) {
-      if (requestEpoch.current === epoch) setError(describeFailure(failure));
+      if (requestEpoch.current === epoch) setError(describeFailure(failure, true));
     } finally {
       if (requestEpoch.current === epoch) setStatusPending(false);
     }
