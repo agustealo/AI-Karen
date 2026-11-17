@@ -327,7 +327,13 @@ class ModelOrchestratorService:
                 "huggingface_hub is required for remote model metadata operations",
                 {"missing_dependency": "huggingface_hub", "error": str(exc)},
             ) from exc
-        return HfApi()
+        token = (
+            os.getenv("HF_TOKEN", "").strip()
+            or os.getenv("HUGGINGFACE_API_KEY", "").strip()
+            or os.getenv("HUGGING_FACE_HUB_TOKEN", "").strip()
+            or None
+        )
+        return HfApi(token=token)
 
     async def list_models(
         self,
@@ -632,6 +638,12 @@ class ModelOrchestratorService:
             # Real download path: Hugging Face snapshot
             from huggingface_hub import snapshot_download
 
+            token = (
+                os.getenv("HF_TOKEN", "").strip()
+                or os.getenv("HUGGINGFACE_API_KEY", "").strip()
+                or os.getenv("HUGGING_FACE_HUB_TOKEN", "").strip()
+                or None
+            )
             await asyncio.to_thread(
                 snapshot_download,
                 repo_id=req.model_id,
@@ -642,6 +654,7 @@ class ModelOrchestratorService:
                 allow_patterns=req.include_patterns,
                 ignore_patterns=req.exclude_patterns,
                 force_download=req.force_redownload,
+                token=token,
             )
         except ImportError as exc:
             raise ModelOrchestratorError(
