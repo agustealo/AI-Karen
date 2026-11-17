@@ -12,11 +12,10 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 _HF_ORIGIN = "https://huggingface.co"
@@ -47,7 +46,7 @@ def _safe_path(value: str) -> str:
         or "\\" in value
         or value.startswith("/")
         or "//" in value
-        or any(part in {"", ".", ".."} for part in PurePosixPath(value).parts)
+        or any(part in {"", ".", ".."} for part in value.split("/"))
     ):
         raise DirectHttpsDownloadError("Unsafe remote model artifact path")
     return value
