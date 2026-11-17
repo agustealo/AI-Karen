@@ -8,6 +8,7 @@ It executes the checked-in channel migration and the actual repository SQL.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261017010000_31_channel_gateway_durable_admission.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(migration)
+        link_proof_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261017020000_32_channel_link_proof.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(link_proof_migration)
         consent_migration = (
             Path(__file__).resolve().parents[2]
             / "supabase/migrations/20261018010000_33_channel_personal_pairing_consent.sql"
@@ -304,6 +310,97 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_id=str(tenant_a), connection_id=trial_connection,
             external_event_id="wamid.missing-event",
         ) is None
+        # KWA-01C6C2C2: actual digest-only issuance and one-use binding
+        # consumption, queried via tenant-RLS under the original principal.
+        # Fixture consumption is NOT independent Meta signature evidence.
+        proof_store = SqlChannelRepository()
+        proof_digest = hashlib.sha256(b"fixture-sender-proof-a").hexdigest()
+        proof_issued = await proof_store.issue_link_challenge(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection,
+            proof_digest=proof_digest, ttl_seconds=600,
+        )
+        assert proof_issued is not None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) == "pending"
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_b), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) is None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(uuid.uuid4()),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) is None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=connection_id, challenge_id=proof_issued,
+        ) is None
+        # Consume through the exact canonical repository transaction. A
+        # second proof use cannot mint a new sender identity.
+        original_connection = await proof_store.get_enabled_connection(
+            tenant_id=str(tenant_a), connection_id=trial_connection,
+        )
+        assert original_connection is not None
+        new_sender = "15551234555"
+        consumed = await proof_store.consume_verified_link(
+            connection=original_connection,
+            external_sender_id=new_sender,
+            proof_digest=proof_digest,
+        )
+        assert consumed is not None and consumed.user_id == str(user)
+        assert await proof_store.consume_verified_link(
+            connection=original_connection,
+            external_sender_id=new_sender,
+            proof_digest=proof_digest,
+        ) is None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) == "consumed"
+
+        superseded = await proof_store.issue_link_challenge(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection,
+            proof_digest=hashlib.sha256(b"fixture-sender-proof-b").hexdigest(),
+            ttl_seconds=600,
+        )
+        expiring = await proof_store.issue_link_challenge(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection,
+            proof_digest=hashlib.sha256(b"fixture-sender-proof-c").hexdigest(),
+            ttl_seconds=600,
+        )
+        assert superseded is not None and expiring is not None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=superseded,
+        ) == "revoked"
+        await raw.execute(
+            """UPDATE public.channel_link_challenges
+               SET created_at = clock_timestamp() - interval '20 minutes',
+                   expires_at = clock_timestamp() - interval '10 minutes'
+               WHERE challenge_id = $1 AND tenant_id = $2""",
+            uuid.UUID(expiring), tenant_a,
+        )
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=expiring,
+        ) == "expired"
+        # Preserve the consumed historical status even after connection
+        # deactivation/rotation; never assert current binding availability.
+        await raw.execute(
+            """UPDATE public.channel_connections
+               SET enabled = false, revision = revision + 1
+               WHERE tenant_id = $1 AND connection_id = $2""",
+            tenant_a, trial_connection,
+        )
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) == "consumed"
+
         # Isolate this fixture before the rest of the integration scenario.
         assert await raw.execute(
             "DELETE FROM public.channel_connections WHERE tenant_id=$1 AND connection_id=$2",

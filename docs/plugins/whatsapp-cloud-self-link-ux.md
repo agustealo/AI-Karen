@@ -39,6 +39,53 @@ native `/link` ingress must consume the digest-only one-use proof within the
 same tenant, connection revision and expiry. Ordinary messages then require
 fresh current principal checks and are executed only by canonical ChatRuntime.
 
+## Read-only proof status after sending
+
+The consumer may explicitly select **Check link proof status** after sending
+the one-time command. The UI calls the authenticated, no-cache endpoint:
+
+```text
+GET /api/channels/identity/whatsapp/connections/{connection_uuid}/challenges/{challenge_uuid}/status
+```
+
+The challenge UUID is a non-secret lookup reference, **not** the one-time
+bearer token. The exact active verified tenant/user principal gets a new
+`channel.link` RuntimePolicy and RBAC decision. `ChannelHostServices`
+checks the canonical installed WhatsApp transport and the existing activation
+gate before the original SQL repository reads a record joined to the matching
+tenant, user, connection and challenge. RLS enforces the tenant again.
+
+The database reports one of five statuses using its own clock and original
+connection revision:
+
+| Status | Precise meaning |
+| --- | --- |
+| `pending` | No recorded consumption, not a provider delivery failure |
+| `consumed` | Original one-use proof was consumed by Karen's signed native ingress, **historical** evidence only |
+| `expired` | No consumption before the database expiry time |
+| `revoked` | The unconsumed challenge was revoked or replaced |
+| `invalidated` | The owning connection is disabled or its revision has changed |
+
+A missing or foreign challenge returns **404**, not a fabricated pending or
+success state. The response has `Cache-Control: no-store, private` and
+`Pragma: no-cache`, and exposes **no** token, digest, sender ID, account ID,
+user ID, binding ID or provider message ID. Every response explicitly reports
+`evidence_basis=host_link_challenge_ledger`,
+`current_binding_verified=false` and `delivery_verified=false`.
+
+The browser **does not poll** or automatically copy the token. A deliberate
+status check is required. Any completed or invalidated status removes the
+secret command from memory immediately; expiry also removes the command even
+without a check. The non-secret challenge reference can remain available
+for an explicit check after expiry. Clearing the panel, changing connections
+or changing authenticated user/tenant removes that reference as well. Stale
+asynchronous responses cannot restore a cleared command or stale status.
+
+The `consumed` state is **not** proof that a sender binding is still active
+today. It does not prove a model response, Meta provider reachability, or a
+delivered/read reply. Operator-observed live trial lineage remains a
+**separate** evidence path (KWA-01C6C2C1).
+
 ## Source verification
 
 ```bash
@@ -48,7 +95,7 @@ npm run typecheck
 npm run build
 ```
 
-Unit tests use mocked API **response contracts** only, not simulated Meta
+Backend proof runs from the repository root with:\n\n```bash\npytest -q tests/extensions/test_whatsapp_self_link_api.py tests/extensions/test_channel_link_repository.py\n```\n\nUnit tests use mocked API **response contracts** only, not simulated Meta
 transport success. They cover empty/invalid UUIDs, explicit request only,
 redacted authorization failures, fake provider claims, precise response shape,
 request cancellation, TTL cleanup and clipboard opt-in. Existing
