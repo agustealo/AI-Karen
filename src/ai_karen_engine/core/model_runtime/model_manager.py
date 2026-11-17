@@ -60,7 +60,7 @@ class RuntimeSelection:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
- class ModelManager:
+class ModelManager:
     """Single source of truth for provider selection and model execution."""
 
     def __init__(
