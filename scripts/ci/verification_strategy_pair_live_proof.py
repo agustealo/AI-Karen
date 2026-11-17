@@ -166,7 +166,14 @@ def require_gateway_receipt(
         raise LiveStrategyProofError("gateway_provenance_identity_mismatch")
     if source not in (MODEL_GENERATION_RESPONSE_SOURCES - {"fallback_provider_runtime"}):
         raise LiveStrategyProofError("gateway_response_source_unverified")
-    if metadata.get("fallback_level") != 0 or metadata.get("degraded_mode") is not False:
+    if (
+        metadata.get("fallback_level") != 0
+        or metadata.get("degraded_mode") is not False
+        or metadata.get("used_fallback") is True
+        or metadata.get("generation_error") is True
+        or provenance.fallback_level != 0
+        or bool(provenance.degradation_reason)
+    ):
         raise LiveStrategyProofError("gateway_degraded_or_fallback")
     if meter.model_calls != 1 or meter.exhausted:
         raise LiveStrategyProofError("gateway_model_budget_mismatch")
