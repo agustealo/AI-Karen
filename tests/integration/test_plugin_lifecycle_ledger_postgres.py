@@ -763,7 +763,9 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
         assert success_receipt["policy_decision_id"]
         assert (await ledger.read_observation("governed-demo"))["disposition"] == "ready"
         assert (await ledger.read_observation("governed-demo"))["observed_state"] == "enabled"
-        with pytest.raises(PluginLifecycleRevisionConflict):
+        # Once consumed, the same approval is rejected by current policy even
+        # if the stored global revision now correctly reflects enabled state.
+        with pytest.raises(PermissionError, match="policy denied"):
             await service.execute_approved_lifecycle(
                 context=governed_context(),
                 scope=governed_scope,
