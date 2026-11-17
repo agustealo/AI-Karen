@@ -57,11 +57,12 @@ type DownloadJob = {
   channel_id: string;
   status: string;
   progress: number;
+  download_method?: "hf_hub" | "direct_https";
   // This comes from the canonical owned SQL projection, never raw worker errors.
   failure_category?: "source_access" | "network" | "storage" | "integrity" | "cancelled" | "unknown" | null;
   requested_by?: string | null;
 };
-type DownloadReceipt = { job_id: string; status: string };
+type DownloadReceipt = { job_id: string; status: string; download_method: "hf_hub" | "direct_https" };
 type OwnedJobsResponse = { jobs: DownloadJob[]; scope: "authenticated_user" };
 
 const IMMUTABLE_REVISION = /^[a-f0-9]{40,64}$/i;
@@ -289,7 +290,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           download_method: downloadMethod,
         },
       );
-      if (!JOB_ID.test(receipt.job_id) || !ACTIVE.has(receipt.status)) {
+      if (!JOB_ID.test(receipt.job_id) || !ACTIVE.has(receipt.status) ||
+          receipt.download_method !== downloadMethod) {
         throw new Error("model_setup_queue_unverified");
       }
       setTrackedJob({
@@ -298,6 +300,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         revision,
         channel_id: item.channel_id,
         status: receipt.status,
+        download_method: receipt.download_method,
         progress: 0,
       });
       setJobs((current) => [{
@@ -306,6 +309,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         revision,
         channel_id: item.channel_id,
         status: receipt.status,
+        download_method: receipt.download_method,
         progress: 0,
       }, ...current]);
       setNotice(`Karen confirmed the ${item.label} download job is ${receipt.status}.`);
@@ -413,7 +417,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
               </p>
             ) : activeJob ? (
               <div role="status" className="text-xs">
-                Download job: {activeJob.status}. {normalizedProgress(activeJob.progress).toFixed(1)}% reported.
+                Download job: {activeJob.status} via {activeJob.download_method === "direct_https"
+                  ? "Direct HTTPS" : "Hugging Face Hub"}. {normalizedProgress(activeJob.progress).toFixed(1)}% reported.
                 Completion alone does not establish TTS runtime readiness.
               </div>
             ) : (
