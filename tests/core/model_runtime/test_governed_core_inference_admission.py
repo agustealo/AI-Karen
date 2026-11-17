@@ -444,6 +444,12 @@ async def test_copied_original_plan_and_fresh_same_budget_meter_cannot_reset_quo
     copied_plan = replace(admission.plan)
     fresh_meter_same_budget = ExecutionBudgetMeter(admission.plan.budget)
     copied_context = replace(admission.authenticated_context)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        copied_context.bind_runtime_model_authority(
+            admission.plan, fresh_meter_same_budget,
+        )
     for clone in (
         replace(admission, plan=copied_plan),
         replace(admission, meter=fresh_meter_same_budget),
@@ -483,6 +489,7 @@ def test_runtime_context_binding_is_not_serialized_or_cloned():
     context = admission.authenticated_context
     assert context.original_runtime_model_plan(admission.meter) is admission.plan
     assert "_runtime_model_authority" not in asdict(context)
+    assert "_runtime_model_authority" not in asdict(admission.plan.budget)
     assert not replace(context).is_runtime_model_plan_authorized(
         admission.plan, admission.meter,
     )
