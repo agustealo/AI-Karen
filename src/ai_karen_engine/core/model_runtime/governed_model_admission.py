@@ -106,9 +106,18 @@ class GovernedToolModelAdmission:
             or constraints.get("external_allowed") is False
         ):
             raise PermissionError("governed_external_model_execution_denied")
+        expected = constraints.get("model")
+        allowed = constraints.get("allowed_models")
+        # A server-selected 'auto' model cannot satisfy an explicit policy
+        # model/allowlist restriction before the actual model is known. Deny
+        # before reserving quota or executing any provider transport.
+        if (expected or allowed is not None) and (
+            not isinstance(model, str)
+            or not model.strip()
+            or model.strip().lower() == "auto"
+        ):
+            raise PermissionError("governed_model_identity_not_authorized")
         if model is not None:
-            expected = constraints.get("model")
-            allowed = constraints.get("allowed_models")
             if expected and expected != model:
                 raise PermissionError("governed_model_identity_not_authorized")
             if allowed is not None:

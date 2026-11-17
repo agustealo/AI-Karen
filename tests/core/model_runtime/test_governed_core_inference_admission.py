@@ -87,7 +87,7 @@ def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmi
     )
 
 
-def _local_manager(monkeypatch, *, observed_model: str = "model-a"):
+def _local_manager(monkeypatch, *, observed_model: str | None = "model-a"):
     from ai_karen_engine.core.model_runtime import model_manager as manager_module
     from ai_karen_engine.core.model_runtime import llm_adapter as adapter_module
 
@@ -229,6 +229,55 @@ async def test_policy_provider_constraint_denies_before_client_execution(monkeyp
         )
     assert attempts == []
     assert scope.meter.model_calls == 0
+
+
+@pytest.mark.parametrize("selected_model", [None, "auto"])
+@pytest.mark.parametrize(
+    "restriction",
+    [
+        {"model": "model-a"},
+        {"allowed_models": ["model-a"]},
+        {"allowed_models": []},
+    ],
+)
+@pytest.mark.asyncio
+async def test_restricted_model_with_unresolved_identity_denied_before_wire(
+    monkeypatch, selected_model, restriction,
+):
+    manager, attempts, _ = _local_manager(
+        monkeypatch, observed_model=selected_model,
+    )
+    scope = _scope()
+    scope.plan.provider_constraints.update(restriction)
+    with pytest.raises(PermissionError, match="governed_model_identity_not_authorized"):
+        await manager.generate_chat(
+            [{"role": "user", "content": "restricted model input"}],
+            return_receipt=True,
+            execution_admission=scope,
+        )
+    assert attempts == []
+    assert scope.meter.model_calls == 0
+    assert scope.meter.external_requests == 0
+
+
+@pytest.mark.parametrize(
+    "restriction",
+    [{"model": "model-a"}, {"allowed_models": ["model-a"]}],
+)
+@pytest.mark.asyncio
+async def test_restricted_model_with_exact_identity_can_execute(monkeypatch, restriction):
+    manager, attempts, _ = _local_manager(monkeypatch, observed_model="model-a")
+    scope = _scope()
+    scope.plan.provider_constraints.update(restriction)
+    response = await manager.generate_chat(
+        [{"role": "user", "content": "approved model input"}],
+        return_receipt=True,
+        execution_admission=scope,
+    )
+    assert isinstance(response, ProviderExecutionResult)
+    assert response.model == "model-a"
+    assert len(attempts) == 1
+    assert scope.meter.model_calls == 1
 
 
 @pytest.mark.asyncio
