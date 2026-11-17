@@ -1283,3 +1283,55 @@ async def test_b2c2_nonstream_cancel_does_not_trigger_fallback_or_saved_answer()
     assert gateway.calls == []
     persist.assert_not_awaited()
     outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_b2c2_real_task_cancel_after_first_token_is_terminal() -> None:
+    """Cancel the consumer task, not merely raise a synthetic exception."""
+    runtime, gateway = _make_runtime()
+    store = _b2c2_store(runtime)
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+    content_seen = asyncio.Event()
+    provider_cancelled = asyncio.Event()
+    never_complete = asyncio.Event()
+
+    async def blocked_provider(*args, **kwargs):
+        try:
+            yield ChatStreamChunk(
+                type="content", content="partial", correlation_id="corr-1",
+            )
+            await never_complete.wait()
+        finally:
+            provider_cancelled.set()
+
+    async def consume():
+        async for chunk in runtime.execute_stream(request):
+            if chunk.type == ChatStreamEventType.CONTENT:
+                content_seen.set()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+            with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                with patch.object(runtime, "_run_simple_stream", side_effect=blocked_provider):
+                    with patch.object(runtime, "_record_execution_outcome", new_callable=AsyncMock) as outcome:
+                        task = asyncio.create_task(consume())
+                        try:
+                            await asyncio.wait_for(content_seen.wait(), timeout=5)
+                            task.cancel()
+                            with pytest.raises(asyncio.CancelledError):
+                                await task
+                        finally:
+                            if not task.done():
+                                task.cancel()
+                                await asyncio.gather(task, return_exceptions=True)
+    records = store.list_for_tenant(TENANT_ID)
+    assert len(records) == 1
+    assert records[0].execution_status == "cancelled"
+    assert records[0].error_code == "CHAT_REQUEST_CANCELLED"
+    assert records[0].actual_provider is None
+    assert gateway.calls == []
+    outcome.assert_not_awaited()
