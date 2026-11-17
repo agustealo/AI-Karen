@@ -145,19 +145,33 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           nextJobs?.scope !== "authenticated_user" || !Array.isArray(nextJobs.jobs)) {
         throw new Error("model_setup_contract_invalid");
       }
-      setItems(recommended.recommendations.filter((item) =>
+      const eligible = recommended.recommendations.filter((item) =>
         item.app_consumers.includes(pluginId),
-      ));
+      );
+      setItems(eligible);
       setPolicy(nextPolicy);
       setChannels(channelResponse.channels);
       setJobs(nextJobs.jobs);
+      // An owned active job must remain tracked after navigation or a reload.
+      // Match only the current plugin's backend-verified immutable revision.
+      const resumed = nextJobs.jobs.find((job) =>
+        JOB_ID.test(job.job_id) &&
+        ACTIVE.has(job.status) &&
+        eligible.some((item) =>
+          item.model_id === job.model_id &&
+          item.channel_id === job.channel_id &&
+          item.resolved_revision === job.revision &&
+          typeof item.resolved_revision === "string" &&
+          IMMUTABLE_REVISION.test(item.resolved_revision),
+        ),
+      ) ?? null;
       setTrackedJob((current) => {
-        if (!current) return null;
+        if (!current) return resumed;
         const latest = nextJobs.jobs.find((job) => job.job_id === current.job_id);
         return latest &&
           latest.model_id === current.model_id &&
           latest.revision === current.revision &&
-          latest.channel_id === current.channel_id ? latest : current;
+          latest.channel_id === current.channel_id ? latest : resumed;
       });
       // License acceptance must be fresh for the backend-verified revision.
       setAccepted({});
@@ -178,7 +192,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
     return () => { epoch.current += 1; };
   }, [canManage, refresh]);
 
-  // Poll only the operator's newly queued job, not all recommendations.
+  // Poll one verified owned active job, including across navigation and reloads.
   useEffect(() => {
     if (!trackedJob || !ACTIVE.has(trackedJob.status)) return;
     let cancelled = false;
@@ -204,6 +218,9 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           setNotice("Model download completed. Refresh Voice Studio to verify that the runtime can load it.");
         } else if (updated.status === "failed" || updated.status === "cancelled") {
           setNotice(null);
+          // Failed/cancelled attempts never carry a reusable license grant.
+          // The operator must actively review and accept the current revision.
+          setAccepted({});
           setProblem(`Model download did not complete. ${downloadFailureGuidance(updated)}`);
         }
       }).catch(() => {
