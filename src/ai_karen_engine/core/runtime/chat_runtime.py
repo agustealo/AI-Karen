@@ -3558,7 +3558,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "surface_layout_plan"},
             reserve_additional_model_call=meter.consume_model_call,
-            authorize_external_engine_attempt=self._external_engine_attempt_guard(request, plan),
+            authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
             generated = await self._composition.expression_gateway.generate(task)
@@ -3770,7 +3770,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "grounded_search", "evidence_count": len(sources)},
             reserve_additional_model_call=meter.consume_model_call,
-            authorize_external_engine_attempt=self._external_engine_attempt_guard(request, plan),
+            authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
             result = (
@@ -3890,7 +3890,7 @@ class ChatRuntime:
             },
             token_sink=token_sink,
             reserve_additional_model_call=meter.consume_model_call,
-            authorize_external_engine_attempt=self._external_engine_attempt_guard(request, plan),
+            authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
 
         self._emitter.emit(
