@@ -245,7 +245,7 @@ class MedusaCoordinator:
         # Preserve the original ChatRuntime meter when the authenticated
         # request+plan lineage proves it belongs to this Medusa invocation.
         # Standalone governed Medusa requests retain a fresh plan-bound meter.
-        shared_meter = request.context.get("execution_budget_meter")
+        shared_meter = request.runtime_budget_meter
         if shared_meter is not None:
             if (
                 not isinstance(shared_meter, ExecutionBudgetMeter)
