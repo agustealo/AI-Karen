@@ -690,11 +690,21 @@ class ModelOrchestratorService:
                 "download_method": req.download_method,
                 "error_type": type(exc).__name__,
             }
-            if isinstance(exc, DirectHttpsDownloadError):
-                details["reason"] = str(exc)
-            raise ModelOrchestratorError(
-                E_NET, f"Model transfer failed for {req.model_id}", details,
-            ) from None
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            safe_reason = str(exc) if isinstance(exc, DirectHttpsDownloadError) else ""
+            if status in {401, 403} or "access denied" in safe_reason:
+                code = E_PERM
+                message = "Model source access denied; verify gated terms and host credentials"
+            elif "checksum" in safe_reason or "size mismatch" in safe_reason:
+                code = E_VERIFY
+                message = "Model artifact integrity verification failed"
+            elif status == 429:
+                code = E_NET
+                message = "Model source rate limit reached"
+            else:
+                code = E_NET
+                message = "Model transfer network unavailable or source rejected"
+            raise ModelOrchestratorError(code, message, details) from None
 
         await asyncio.to_thread(self._reject_snapshot_symlinks, install_path)
         if req.storage_key == "spacy":
@@ -755,6 +765,7 @@ class ModelOrchestratorService:
             "revision": revision,
             "install_path": str(install_path),
             "files": files,
+            "download_method": req.download_method,
             "total_size": total_size,
             "pinned": bool(req.pin),
             "last_modified": datetime.now(timezone.utc).isoformat(),
