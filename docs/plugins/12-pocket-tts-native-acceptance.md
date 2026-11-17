@@ -3,11 +3,13 @@
 [Plugin wiki](README.md) · [Voice/modality contract](08-voice-and-modalities.md) ·
 [First-party Pocket plugin](../../src/ai_karen_engine/extensions/plugins/pocket-tts/README.md)
 
-> **Status (2026-11-16): voice source repairs merged, native consumer acceptance
-> unverified.** This ledger is the auditable release record because the GitHub
-> repository does not currently accept new Issues. Do not mark a test complete
-> without linking its exact code revision, real runtime log/artifact and observed
-> outcome. Source-level mocked WAV tests are not evidence of real audio.
+> **Status (2026-11-17): the governed dual model-transfer integration is
+> merged and 10/10 post-merge workflows passed; native Pocket TTS consumer
+> acceptance remains UNVERIFIED.** This ledger is the auditable release record
+> because the GitHub repository does not currently accept new Issues. Do not
+> mark a test complete without an exact deployed revision, authenticated
+> tenant-owned model job, real target runtime evidence and observed audio.
+> Source-level mocked WAV tests are not proof of actual speech.
 
 ## Pocket TTS consumer workspace and optional runtime profile (PR #978)
 
@@ -38,11 +40,11 @@ both read endpoints, status-specific classification and tenant/user
 isolation. The consumer panel shows a bounded remedy only from this
 backend category. Unknown and unverified failures remain fail-closed.
 
-The new workspace and Docker profile have **source-level acceptance pending
-on PR #978**. Do not mark hardware or end-user release GO until actual
-licensed model download/installation, native model import/load, authorized
-voice catalog, non-silent WAV synthesis, user audible playback, and CPU/RAM
-observations are captured on Karen's supported target machine.
+The workspace and Docker profile are **merged in PR #978**, but this
+establishes only source-level integration. Do not mark hardware or end-user
+release GO until actual licensed model download/installation, native model
+import/load, authorized voice catalog, non-silent WAV synthesis, user audible
+playback, and CPU/RAM observations are captured on Karen's supported machine.
 
 ## Milestones and truth table
 
@@ -56,6 +58,8 @@ observations are captured on Karen's supported target machine.
 | Governed built-in model download in Pocket plugin UX | [PR #911](https://github.com/agustealo/AI-Karen/pull/911) | **Merged**; licensed native load and audio still unverified |
 | Complete PCM16 WAV payload validation for local/plugin synthesis | [PR #922](https://github.com/agustealo/AI-Karen/pull/922) | **Merged**; transport-integrity tests, not actual model acceptance |
 | Enabled `plugin_audio` channel downloads from plugin management | [PR #925](https://github.com/agustealo/AI-Karen/pull/925) | **Merged**; frontend policy/contract wiring, not real licensed download |
+| Pocket-specific consumer workspace and CPU Docker profile | [PR #978](https://github.com/agustealo/AI-Karen/pull/978) | **Merged**; licensed target-device audio not yet observed |
+| Governed choice of `hf_hub` or `direct_https` transfer | [PR #997](https://github.com/agustealo/AI-Karen/pull/997) | **Merged** at `eac75564253ae7f5b21b9577910270b80d7b0afb`; 21/21 exact-head checks and 10/10 post-merge workflows green; proxy-header and manifest-pagination P1 fixes reviewed, no real source download certified |
 | Authenticated real Pocket server audio acceptance runner | `tests/core/voice/test_pocket_tts_live_acceptance.py` | **Operator opt-in only**; no target run or captured device artifact |
 | Pocket deactivation fences queued native calls | `test_queued_request_is_denied_after_plugin_shutdown` | **Source-only regression**; model/device evidence still open |
 | Curated Pocket download patterns and native loader parity | `tests/extensions/test_pocket_tts_recommendation_contract.py::test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec` | **Source-only contract**; licensed device download still unverified |
@@ -69,6 +73,98 @@ observations are captured on Karen's supported target machine.
 manifest validates, a user preference persists, a synthetic WAV test passes, or
 CI is green. Streaming, cloning, uploaded engines and cloud fallback remain
 out of scope.
+
+## 2026-11-17 source and target-host acceptance boundary
+
+The single `plugin_audio` model-download authority now supports two
+transfer methods: `hf_hub` (default Hub SDK) and `direct_https` (pinned
+Hugging Face tree and file URLs). Both require the same reviewed 40-character
+model revision, explicit source-license consent, tenant/user authority,
+PostgreSQL job state, worker lease, private staging, file validation,
+publication and recovery. The backend-advertised method list controls UI
+choices. A transport method is not a separate plugin, a second installer,
+an independent license channel or permission to bypass gated upstream access.
+
+The exact model remains `kyutai/pocket-tts` revision
+`db04f0e653473e5c7333c69686ac92b7460b0c1d`, installed under the
+reviewed language subdirectory. The direct transfer now strips proxy
+credentials and cross-host authorization/cookies on redirects using
+case-insensitive header handling; a complete bounded paginated manifest
+must be verified before any artifact is promoted. PR #997's exact-head
+tests and the 10/10 post-merge workflows establish source proof, **not**
+two actual licensed source downloads or a running local TTS engine.
+
+### Exact post-merge workflow evidence
+
+All ten GitHub Actions runs below completed with `success` on the **same
+merged `main` commit** `eac75564253ae7f5b21b9577910270b80d7b0afb`,
+not just on PR branch revisions. Source code tests, workflow availability and
+a passing First-Boot CI image smoke remain distinct from a licensed target-host
+Pocket download or audible voice trial.
+
+| Workflow | Exact GitHub run | Observed conclusion |
+| --- | --- | --- |
+| Model Download Durable Worker Gate | [44165311178](https://github.com/agustealo/AI-Karen/actions/runs/44165311178) | success |
+| Cognitive Proof CI | [44165311309](https://github.com/agustealo/AI-Karen/actions/runs/44165311309) | success |
+| Production Database Baseline Contract | [44165311330](https://github.com/agustealo/AI-Karen/actions/runs/44165311330) | success |
+| Production Data Recovery Contract | [44165311285](https://github.com/agustealo/AI-Karen/actions/runs/44165311285) | success |
+| Automation Authority Gate | [44165311290](https://github.com/agustealo/AI-Karen/actions/runs/44165311290) | success |
+| Production Auth Security | [44165311320](https://github.com/agustealo/AI-Karen/actions/runs/44165311320) | success |
+| Main Quality Gate | [44165311598](https://github.com/agustealo/AI-Karen/actions/runs/44165311598) | success |
+| Plugin Ecosystem CI/CD | [44165311186](https://github.com/agustealo/AI-Karen/actions/runs/44165311186) | success |
+| Ollama Settings Live E2E | [44165311265](https://github.com/agustealo/AI-Karen/actions/runs/44165311265) | success |
+| Production First-Boot Smoke | [44165311278](https://github.com/agustealo/AI-Karen/actions/runs/44165311278) | success |
+
+### Observed beta API deployment gap
+
+A read-only check of the existing `ai-karen-beta-api` Render service on
+2026-11-17 found only failed deployment attempts, including the latest
+2026-11-15 attempt. The startup exception reported missing required
+production environment configuration, including connection URLs for
+PostgreSQL/Redis and authentication, signing and encryption keys.
+The Render PostgreSQL and Key Value resources themselves were present
+and reported available, but the service could not boot. Auto-deploy was
+disabled, and no deployment of the merged model-transfer revision was
+observed. **Do not claim hosted Pocket readiness on the basis of CI.**
+
+Use the existing fail-closed `scripts/deploy/inspect_render_beta_environment.py`
+under the protected `Render Beta Service Reconcile` workflow
+(`inspect-env` mode), not a duplicate inspector. That owner checks the
+production environment without disclosing credentials. Operator-owned
+connections and secrets must be populated through approved private
+configuration, preserving the required non-development security flags;
+never add defaults, temporary keys or auth bypass to make startup pass.
+The beta datastore's free/expiring plan is not durable consumer storage.
+The opt-in Pocket CPU runtime profile is separate from the default API
+image; neither a successful API boot nor a `completed` download receipt
+proves voice playback.
+
+### Mandatory real acceptance sequence
+
+1. Establish a healthy supported target host at the reviewed revision,
+   with its approved `pocket-tts==4.0.1` CPU runtime and durable database
+   configuration. Record host build/revision and actual capacity.
+2. Have the operator accept upstream gated license terms under their real
+   source account and configure the upstream token only in the authorized
+   trusted worker environment.
+3. Run a licensed install through the governed Pocket model panel. Capture
+   the returned job ID, authenticated tenant owner, selected persisted
+   `download_method`, actual pinned revision, complete model files and
+   registry readiness. Prove each supported method independently using
+   authorized, isolated installation trials, with no overwriting of live
+   artifacts or fabricated success receipts.
+4. Run the existing loopback-only
+   `tests/core/voice/test_pocket_tts_live_acceptance.py` against the real
+   authenticated VoiceRuntime. Require a real catalog voice and non-silent,
+   complete PCM16 WAV, with denied anonymous/tenant access and invented
+   voices failing closed.
+5. Observe actual audible browser preview/read-aloud and Stop behavior.
+   Capture cold/warm CPU, RAM, synthesis latency, cancellation and
+   offline-inference results with redacted evidence, then make the release
+   decision. No synthetic audio or CI skip counts as native acceptance.
+
+**Decision: SOURCE INTEGRATED; NATIVE CONSUMER ACCEPTANCE = NO-GO
+until the above target-host evidence is attached.**
 
 ## Exact implementation and authority
 
