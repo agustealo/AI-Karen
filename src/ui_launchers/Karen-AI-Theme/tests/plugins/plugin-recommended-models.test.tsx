@@ -45,6 +45,7 @@ const recommendation = {
     'languages/english_18m_refl_2026-10/embeddings/**',
   ],
   app_consumers: ['pocket-tts'],
+  download_methods: ['hf_hub', 'direct_https'],
   installed: false,
 };
 
@@ -75,7 +76,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.admin = true;
   getImpl();
-  mocks.post.mockImplementation(async (path: string) => {
+  mocks.post.mockImplementation(async (path: string, payload?: { download_method?: string }) => {
     if (path === '/api/models/download/validate') {
       return {
         allowed: true,
@@ -89,6 +90,7 @@ beforeEach(() => {
       return {
         job_id: 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335',
         status: 'queued',
+        download_method: payload?.download_method || 'hf_hub',
       };
     }
     throw new Error('Unexpected download route: ' + path);
@@ -137,8 +139,46 @@ describe('Governed plugin model setup', () => {
       trust_remote_code: false,
       accept_license: true,
       pin: true,
+      download_method: 'hf_hub',
     });
     expect(await screen.findByText(/download job is queued/)).toBeTruthy();
+  });
+
+  it('chooses direct HTTPS without changing license, revision, validation or worker endpoint', async () => {
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    expect(screen.getByLabelText('Download method')).toBeTruthy();
+    expect(screen.getByText('Direct HTTPS (no Hub SDK for transfer)')).toBeTruthy();
+    expect(mocks.post).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Download method'), {
+      target: { value: 'direct_https' },
+    });
+    expect(screen.getByRole('button', { name: 'Download recommended model' })
+      .hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
+
+    expect(mocks.post).toHaveBeenNthCalledWith(1, '/api/models/download/validate', {
+      model_id: recommendation.model_id, revision: PINNED, channel_id: 'plugin_audio',
+      include_patterns: recommendation.include_patterns,
+      exclude_patterns: [], trust_remote_code: false, accept_license: true,
+    });
+    expect(mocks.post).toHaveBeenNthCalledWith(2, '/api/models/download', {
+      model_id: recommendation.model_id, revision: null, validated_revision: PINNED,
+      channel_id: 'plugin_audio', include_patterns: recommendation.include_patterns,
+      exclude_patterns: [], trust_remote_code: false, accept_license: true,
+      pin: true, download_method: 'direct_https',
+    });
+    expect(await screen.findByText(/download job is queued/)).toBeTruthy();
+  });
+
+  it('does not infer direct transport support without a backend catalog declaration', async () => {
+    getImpl(catalog({ download_methods: ['hf_hub'] }));
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    expect(screen.queryByLabelText('Download method')).toBeNull();
   });
 
   it('keeps the download blocked when the actual audio channel is disabled', async () => {
