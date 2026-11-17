@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -21,6 +22,9 @@ _SCHEMA = "kcm-sklearn-fit-observation-v1"
 _MAX_MEMBERS = 10_000
 _MAX_BYTES = 4 * 1024 * 1024
 _HEX = re.compile(r"[a-f0-9]{64}\Z")
+_MAX_SNAPSHOT_CONTENT_BYTES = 8 * 1024 * 1024
+_MAX_SNAPSHOT_FEATURES = 128
+_MAX_SNAPSHOT_TEXT_CHARS = 256
 _BODY_KEYS = frozenset({
     "schema_version", "engine", "tenant_key", "job_id", "model_id",
     "model_version", "dataset_version", "feature_version", "key_id",
@@ -294,6 +298,50 @@ def inspect_sklearn_fit_observation(
         return None
 
 
+def _snapshot_content_within_budget(
+    examples: Sequence[TopologyTrainingExample],
+) -> bool:
+    """Bound row values BEFORE canonical JSON/HMAC serialization.
+
+    Each Unicode character needs at most six bytes of JSON escaping.
+    The conservative estimate includes representation overhead; real sklearn
+    features are finite numeric scalars rather than arbitrary nested objects.
+    """
+    estimated = 0
+    for example in examples:
+        if type(example.features) is not dict:
+            return False
+        for label in (
+            example.example_id, example.feature_version, example.target,
+        ):
+            if (
+                type(label) is not str
+                or not 1 <= len(label) <= _MAX_SNAPSHOT_TEXT_CHARS
+                or not label.strip()
+            ):
+                return False
+            estimated += 12 * len(label) + 8
+        if not 1 <= len(example.features) <= _MAX_SNAPSHOT_FEATURES:
+            return False
+        for name, value in example.features.items():
+            if (
+                type(name) is not str
+                or not 1 <= len(name) <= 128
+                or not name.strip()
+            ):
+                return False
+            estimated += 12 * len(name) + 160
+            if type(value) not in (int, float, bool):
+                return False
+            if type(value) is int and value.bit_length() > 128:
+                return False
+            if not math.isfinite(float(value)):
+                return False
+        if estimated > _MAX_SNAPSHOT_CONTENT_BYTES:
+            return False
+    return True
+
+
 def inspect_sklearn_fit_input_snapshot(
     encoded: bytes,
     *,
@@ -330,6 +378,8 @@ def inspect_sklearn_fit_input_snapshot(
                 for example in examples
             )
         ):
+            return None
+        if not _snapshot_content_within_budget(examples):
             return None
         expected = _members(
             examples=examples, indices=range(len(examples)),
