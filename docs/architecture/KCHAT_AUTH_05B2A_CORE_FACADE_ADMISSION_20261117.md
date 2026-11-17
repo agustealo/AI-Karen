@@ -10,6 +10,10 @@ and original shared ExecutionBudgetMeter are **passed in** to a Core-owned
 GovernedToolModelAdmission. No SDK, plugin, LLMUtils or InferencePort can mint
 a new policy decision, construct a new plan, or renew a caller's budget.
 
+Medusa's trusted serialized-plan handoff now validates against the original
+meter before rebinding its deserialized plan to that exact original budget
+object, preventing identity loss while preserving authenticated scope checks.
+
 The original admission class has been moved out of the optional LangChain
 adapter to core/model_runtime/governed_model_admission.py; the original
 GovernedToolModelAdmission name remains an import alias for Deep Agents,
@@ -22,6 +26,8 @@ so there is no second admission implementation.
   reused. Denied attempts spend zero model/external quota.
 - Each accepted governed attempt reserves exactly once on the original
   ExecutionBudgetMeter, including local embeddings and concurrent requests.
+  Missing local embedding models and blank inputs fail before reservation.
+  Embeddings reuse the same eligible/forbidden provider lists as model chat.
   Retry attempts require another reservation.
 - ModelManager's governed calls validate the scope before provider selection
   and reserve before warming or invoking the model. InferencePort denies missing

@@ -75,32 +75,36 @@ class GovernedToolModelAdmission:
                 if external else "governed_model_scope_or_budget_invalid"
             ) from exc
 
-    def _require_constraints(self, endpoint: ProviderEndpoint, model: str | None, *, external: bool) -> None:
-        if not isinstance(endpoint, ProviderEndpoint) or not endpoint.enabled:
-            raise PermissionError("governed_model_endpoint_not_eligible")
+    def _require_provider_constraints(
+        self, provider_id: str, model: str | None, *, external: bool,
+    ) -> None:
+        """The same policy allow/deny lists govern chat and local embeddings."""
         constraints = self.plan.provider_constraints
         if not isinstance(constraints, dict):
             raise PermissionError("governed_model_provider_constraints_invalid")
         required = constraints.get("provider")
         eligible = constraints.get("eligible_providers")
         forbidden = constraints.get("forbidden_providers")
-        if required and required != endpoint.provider_id:
+        if required and required != provider_id:
             raise PermissionError("governed_model_provider_not_authorized")
         if eligible is not None:
             if not isinstance(eligible, (list, tuple, set)) or not all(
                 isinstance(item, str) and item for item in eligible
             ):
                 raise PermissionError("governed_model_provider_constraints_invalid")
-            if eligible and endpoint.provider_id not in eligible:
+            if eligible and provider_id not in eligible:
                 raise PermissionError("governed_model_provider_not_authorized")
         if forbidden is not None:
             if not isinstance(forbidden, (list, tuple, set)) or not all(
                 isinstance(item, str) and item for item in forbidden
             ):
                 raise PermissionError("governed_model_provider_constraints_invalid")
-            if endpoint.provider_id in forbidden:
+            if provider_id in forbidden:
                 raise PermissionError("governed_model_provider_not_authorized")
-        if external and (constraints.get("local_only") is True or constraints.get("external_allowed") is False):
+        if external and (
+            constraints.get("local_only") is True
+            or constraints.get("external_allowed") is False
+        ):
             raise PermissionError("governed_external_model_execution_denied")
         if model is not None:
             expected = constraints.get("model")
@@ -108,10 +112,21 @@ class GovernedToolModelAdmission:
             if expected and expected != model:
                 raise PermissionError("governed_model_identity_not_authorized")
             if allowed is not None:
-                if not isinstance(allowed, (list, tuple, set)) or not all(
-                    isinstance(item, str) and item for item in allowed
-                ) or model not in allowed:
+                if (
+                    not isinstance(allowed, (list, tuple, set))
+                    or not all(isinstance(item, str) and item for item in allowed)
+                    or model not in allowed
+                ):
                     raise PermissionError("governed_model_identity_not_authorized")
+
+    def _require_constraints(
+        self, endpoint: ProviderEndpoint, model: str | None, *, external: bool,
+    ) -> None:
+        if not isinstance(endpoint, ProviderEndpoint) or not endpoint.enabled:
+            raise PermissionError("governed_model_endpoint_not_eligible")
+        self._require_provider_constraints(
+            endpoint.provider_id, model, external=external,
+        )
 
     async def reserve_transport(self, endpoint: ProviderEndpoint, *, model: str | None = None) -> None:
         """Validate first; charge exactly one actual model attempt on original meter."""
@@ -137,19 +152,9 @@ class GovernedToolModelAdmission:
         self._require_scope()
         if not isinstance(model, str) or not model or model == "auto":
             raise PermissionError("governed_embedding_model_identity_required")
-        # An independently loaded local embedding model never gets a cloud grant.
-        # A policy-constrained provider cannot be replaced with this local engine.
-        constraints = self.plan.provider_constraints
-        if not isinstance(constraints, dict):
-            raise PermissionError("governed_model_provider_constraints_invalid")
-        if constraints.get("provider") not in (None, "", "builtin_transformers"):
-            raise PermissionError("governed_embedding_provider_not_authorized")
-        allowed = constraints.get("allowed_models")
-        expected = constraints.get("model")
-        if expected and expected != model:
-            raise PermissionError("governed_model_identity_not_authorized")
-        if allowed is not None:
-            if not isinstance(allowed, (list, tuple, set)) or model not in allowed:
-                raise PermissionError("governed_model_identity_not_authorized")
+        # The built-in local encoder uses the same provider allow/deny policy.
+        self._require_provider_constraints(
+            "builtin_transformers", model, external=False,
+        )
         if not await self.meter.reserve_model_execution(external=False):
             raise RuntimeError("governed_model_execution_budget_exhausted")

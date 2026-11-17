@@ -22,7 +22,10 @@ from ai_karen_engine.core.model_runtime.governed_model_admission import (
 from ai_karen_engine.core.model_runtime.openai_compatible_client import (
     OpenAICompatibleRuntimeClient,
 )
-from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+from ai_karen_engine.core.model_runtime.provider_contracts import (
+    EmbeddingFailed,
+    ProviderNotAvailable,
+)
 from ai_karen_engine.core.model_runtime.provider_execution import (
     ProviderExecutionResult,
     provider_endpoint_requires_external_permission,
@@ -409,6 +412,15 @@ class ModelManager:
         if execution_admission is not None:
             if not isinstance(execution_admission, GovernedToolModelAdmission):
                 raise PermissionError("governed_model_transport_admission_required")
+            # Invalid input and an uninstalled model are not actual attempts.
+            # Deny before spending any original request quota.
+            if not isinstance(text, str) or not text.strip():
+                raise EmbeddingFailed("embedding_input_required")
+            if (
+                not getattr(self.embedding_manager, "model_loaded", False)
+                or getattr(self.embedding_manager, "model", None) is None
+            ):
+                raise EmbeddingFailed("embedding_model_unavailable")
             await execution_admission.reserve_local_embedding(
                 model=self.embedding_manager.model_name,
             )

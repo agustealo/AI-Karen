@@ -337,6 +337,8 @@ def test_facade_embedding_batch_consumes_one_budget_per_actual_vector(monkeypatc
     calls = []
     manager.embedding_manager = SimpleNamespace(
         model_name="local-sentence-transformer",
+        model_loaded=True,
+        model=object(),
         embed_authoritative=lambda text: calls.append(text) or [0.4, 0.8],
     )
     scope = _scope(calls=2)
@@ -366,3 +368,53 @@ async def test_concurrent_port_calls_cannot_exceed_shared_budget(monkeypatch):
     assert sum(not isinstance(answer, BaseException) for answer in answers) == 2
     assert len(attempts) == 2
     assert scope.meter.model_calls == 2
+
+
+@pytest.mark.parametrize(
+    "constraints",
+    [
+        {"eligible_providers": ["ollama-local"]},
+        {"forbidden_providers": ["builtin_transformers"]},
+    ],
+)
+def test_embedding_respects_runtime_policy_provider_allow_and_deny(monkeypatch, constraints):
+    manager, _, _ = _local_manager(monkeypatch)
+    invoked = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: invoked.append(text) or [0.1],
+    )
+    scope = _scope()
+    scope.plan.provider_constraints.update(constraints)
+    with pytest.raises(PermissionError, match="provider_not_authorized"):
+        LLMUtils().embed("private text", execution_admission=scope)
+    assert invoked == []
+    assert scope.meter.model_calls == 0
+
+
+def test_invalid_embedding_input_and_missing_model_spend_no_budget(monkeypatch):
+    manager, _, _ = _local_manager(monkeypatch)
+    invoked = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=False,
+        model=None,
+        embed_authoritative=lambda text: invoked.append(text) or [0.1],
+    )
+    scope = _scope(calls=1)
+    facade = LLMUtils()
+    with pytest.raises(EmbeddingFailed, match="embedding_model_unavailable"):
+        facade.embed("input", execution_admission=scope)
+    assert scope.meter.model_calls == 0
+    manager.embedding_manager.model_loaded = True
+    manager.embedding_manager.model = object()
+    for invalid in ("", "   "):
+        with pytest.raises(EmbeddingFailed, match="embedding_input_required"):
+            facade.embed(invalid, execution_admission=scope)
+    assert scope.meter.model_calls == 0
+    assert invoked == []
+    assert facade.embed("actual input", execution_admission=scope) == [0.1]
+    assert scope.meter.model_calls == 1
+    assert invoked == ["actual input"]
