@@ -330,3 +330,46 @@ async def test_no_session_and_bad_size_budget_are_not_positive():
         await inspect(m, data, rows, limit=1)
     with pytest.raises(KcmSklearnAssessmentJoinError, match="budget"):
         await inspect(m, b"", rows)
+
+
+
+@pytest.mark.asyncio
+async def test_actual_tenant_immutable_importer_roundtrip_is_accepted(tmp_path):
+    """Use the production importer and its real tenant-specific stored bytes."""
+    from io import BytesIO
+
+    from ai_karen_engine.core.intelligence.ml.training.dataset_import import (
+        import_jsonl_dataset,
+        tenant_dataset_directory,
+    )
+
+    m, data, rows = fixture()
+    raw = canonical_jsonl(rows)
+    root = tmp_path / "datasets"
+    imported = import_jsonl_dataset(
+        source=BytesIO(raw), root=root, tenant_id=TENANT,
+        version="frozen-assessment-snapshot-v1",
+    )
+    imported_path = (
+        tenant_dataset_directory(root, TENANT)
+        / "frozen-assessment-snapshot-v1.jsonl"
+    )
+    assert imported["rows"] == 2
+    assert imported["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert imported_path.read_bytes() == raw
+    report = await inspect(
+        m, data, rows, raw=imported_path.read_bytes(),
+    )
+    assert report.training_jsonl_sha256 == imported["sha256"]
+    assert report.frozen_assessment_membership_consistent
+    assert report.source_to_feature_transformation_verified is False
+    assert report.actual_fit_membership_verified is False
+    assert report.training_example_inventory_verified is False
+    assert report.training_authorized is False
+
+    # Storage isolation does not turn the self-asserted row IDs into rights.
+    other_tenant_path = (
+        tenant_dataset_directory(root, uid(999))
+        / "frozen-assessment-snapshot-v1.jsonl"
+    )
+    assert not other_tenant_path.exists()
