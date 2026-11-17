@@ -243,6 +243,35 @@ class ChannelHostServices:
             )
         return evidence
 
+    async def inspect_whatsapp_self_link_status(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        connection_id: str, challenge_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> str | None:
+        """Read only the signed-in principal's durable link proof status."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.link", plan=authorized_plan,
+        )
+        status = await self.repository.inspect_link_challenge_status(
+            tenant_id=tenant_id, user_id=user_id,
+            connection_id=connection_id, challenge_id=challenge_id,
+        )
+        if status is not None:
+            logger.info(
+                "channel.identity.challenge_status_inspected",
+                extra={
+                    "tenant_id": tenant_id, "user_id": user_id,
+                    "connection_id": connection_id,
+                    "challenge_id": challenge_id,
+                    "challenge_status": status,
+                    "policy_decision_id": authorized_plan.policy_decision_id,
+                },
+            )
+        return status
+
     async def issue_whatsapp_self_link_challenge(
         self, *, tenant_id: str, user_id: str, session_id: str,
         connection_id: str, authorized_plan: AuthorizedExecutionPlan,
