@@ -159,7 +159,7 @@ async def test_graph_and_stream_preserve_original_chat_meter_at_medusa_boundary(
     assert any(chunk.content == "Observed real runtime response" for chunk in chunks)
     assert len(observed) == 2
     assert all(
-        item.context["execution_budget_meter"] is meter
+        item.runtime_budget_meter is meter
         and item.context["execution_context"] is req.context
         for item in observed
     )
