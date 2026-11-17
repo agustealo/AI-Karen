@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 from copy import deepcopy
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -58,9 +60,19 @@ from ai_karen_engine.core.runtime.contracts import (
     ExecutionTopology,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 from ai_karen_engine.core.runtime.outcome.store import (
     OutcomeStoreError,
     PostgresOutcomeStore,
+)
+from ai_karen_engine.core.runtime.contracts import (
+    ResponseProvenance,
+    ResponseSource,
+)
+from ai_karen_engine.platform.observability.context import (
+    CorrelationContext,
+    reset_correlation_context,
+    set_correlation_context,
 )
 from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
 
@@ -536,6 +548,125 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
         assert planned.action_probabilities == {}
         assert planned.ope_ineligible_reason == "missing_propensity"
         assert "verification_policy_snapshot" not in planned.metadata
+
+        # B2C3B: actual ChatRuntime-selected decision-time lineage is linked
+        # through the original OutcomeRecorder/OutcomeStore write. This is a
+        # test-only typed provider receipt, NOT a live model or proof of answer
+        # accuracy. The real PostgreSQL readback must find the strategy ID.
+        strategy_link = runtime_trajectory.metadata[
+            "selected_strategy_decision_observation_v1"
+        ]
+        assert strategy_link["decision_observation_id"] == planned.decision_observation_id
+        assert strategy_link["trajectory_id"] == runtime_trajectory.trajectory_id
+        assert strategy_link["selected_action"] == "verify_then_respond"
+        assert strategy_link["ope_eligible"] is False
+        assert topology_id != planned.decision_observation_id
+
+        runtime._outcome_recorder = OutcomeRecorder(store=PostgresOutcomeStore())
+        test_meter = SimpleNamespace(
+            model_calls=1, tool_calls=0, reasoning_steps=2,
+        )
+        proven_provider = {
+            "response_source": "model",
+            "actual_provider": "ollama",
+            "actual_model": "installed-test-receipt-only",
+            "runtime_engine": "ollama",
+            "fallback_level": 0,
+            "degraded_mode": False,
+            "provenance": ResponseProvenance(
+                response_source=ResponseSource.MODEL,
+                provider="ollama",
+                model="installed-test-receipt-only",
+                engine="ollama",
+                correlation_id=runtime_trajectory.correlation_id,
+                decision_id=policy_decision.policy_decision_id,
+            ),
+            "reasoning_id": "test-only-verifier-execution",
+            "reasoning_status": "abstained",
+            "reasoning_activation": "core_defaults",
+            "reasoning_generation_mode": "model_after_authorized_reasoning",
+            "reasoning_model_calls": 0,
+            "reasoning_model_attribution_status": "not_executed",
+            "verification_strategy_executed": True,
+            "reasoning_steps": 2,
+            "reasoning_modes": ["verification"],
+        }
+        ctx_token = set_correlation_context(CorrelationContext(
+            request_id=runtime_trajectory.request_id,
+            correlation_id=runtime_trajectory.correlation_id,
+            tenant_id=tenant_a,
+            user_id=subject_a,
+        ))
+        try:
+            await runtime._record_trajectory_completion(
+                runtime_trajectory,
+                policy_decision,
+                "Test-only synthetic completed answer.",
+                time.time() - 0.01,
+                test_meter,
+                proven_provider,
+                {},
+            )
+            await runtime._record_execution_outcome(
+                trajectory_id=runtime_trajectory.trajectory_id,
+                decision=policy_decision,
+                decision_observation_id=topology_id,
+                text="Test-only synthetic completed answer.",
+                start=time.time() - 0.01,
+                meter=test_meter,
+                memory_meta={},
+                success=True,
+                transcript_meta={"transcript_persistence_status": "persisted"},
+                provider_meta=proven_provider,
+                selected_strategy_decision=strategy_link,
+            )
+        finally:
+            reset_correlation_context(ctx_token)
+
+        actual_rows = await asyncio.to_thread(
+            PostgresOutcomeStore().get_for_trajectory,
+            runtime_trajectory.trajectory_id,
+            tenant_id=tenant_a,
+        )
+        execution_rows = [
+            item for item in actual_rows
+            if item.get("source") == "runtime.execution"
+            and item.get("decision_observation_id") == planned.decision_observation_id
+        ]
+        assert len(execution_rows) == 1
+        assert execution_rows[0]["metadata"]["topology_decision_observation_id"] == topology_id
+        assert execution_rows[0]["metadata"][
+            "selected_strategy_execution"
+        ]["status"] == "selected_runtime_path_observed"
+        assert execution_rows[0]["metadata"][
+            "selected_strategy_execution"
+        ]["ope_eligible"] is False
+        assert await asyncio.to_thread(
+            PostgresTrajectoryStore().get,
+            runtime_trajectory.trajectory_id,
+            tenant_id=tenant_b,
+        ) is None
+        assert await asyncio.to_thread(
+            PostgresOutcomeStore().get_for_trajectory,
+            runtime_trajectory.trajectory_id,
+            tenant_id=tenant_b,
+        ) == []
+        with pytest.raises(ValueError, match="not verification-OPE eligible"):
+            await authenticated_review.submit(
+                ReviewJudgement(
+                    decision_observation_id=planned.decision_observation_id,
+                    subject_user_id=subject_a,
+                    reward=0.95,
+                    verification_needed=True,
+                ),
+                reviewer=reviewer,
+            )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.outcome_records "
+            "WHERE decision_observation_id=$1"
+            " AND source='intelligence.ml'",
+            planned.decision_observation_id,
+        ) == 0
 
         # KCOG-01C1B2C2: an interrupted selected path uses the *same*
         # PostgresTrajectoryStore and tenant RLS as frozen runtime decisions.
