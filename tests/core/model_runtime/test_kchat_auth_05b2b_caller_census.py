@@ -36,7 +36,50 @@ def test_census_records_direct_dynamic_and_constructor_candidates(tmp_path: Path
     ]
     assert report["candidates"][0]["execution_admission_keyword"] is True
     assert report["candidates"][1]["execution_admission_keyword"] is False
-    assert report["candidates"][-1]["kind"] == "dynamic_attribute_lookup"
+    assert report["candidates"][-1]["kind"] == "dynamic_attribute_invocation"
+    assert all(entry["review_status"] == "unverified_candidate" for entry in report["candidates"])
+
+
+
+def test_census_detects_thread_dispatch_method_references(tmp_path: Path):
+    (tmp_path / "threads.py").write_text(
+        "import asyncio\n"
+        "async def run(provider, manager, loop):\n"
+        "    await asyncio.to_thread(provider.generate_text_with_model, 'private')\n"
+        "    await asyncio.to_thread(manager.embedding_manager.embed_authoritative, 'private')\n"
+        "    loop.run_in_executor(None, provider.generate_text, 'private')\n",
+        encoding="utf-8",
+    )
+    report = scan_sources(tmp_path)
+    assert not report["parse_errors"]
+    assert [entry["method"] for entry in report["candidates"]] == [
+        "generate_text_with_model",
+        "embed_authoritative",
+        "generate_text",
+    ]
+    assert [entry["kind"] for entry in report["candidates"]] == [
+        "thread_dispatch",
+    ] * 3
+    assert report["categories"]["authoritative_embedding"] == 1
+    assert all(entry["review_status"] == "unverified_candidate" for entry in report["candidates"])
+
+
+def test_census_dynamic_invocation_carries_actual_keywords_without_duplicates(tmp_path: Path):
+    (tmp_path / "dynamic.py").write_text(
+        "def run(manager, grant):\n"
+        "    getattr(manager, 'generate_chat')([], execution_admission=grant, model='m')\n"
+        "    alias = getattr(manager, 'embed')\n"
+        "    return alias\n",
+        encoding="utf-8",
+    )
+    report = scan_sources(tmp_path)
+    assert report["candidate_total"] == 2
+    invoked, lookup = report["candidates"]
+    assert invoked["kind"] == "dynamic_attribute_invocation"
+    assert invoked["execution_admission_keyword"] is True
+    assert invoked["selected_model_keyword"] is True
+    assert lookup["kind"] == "dynamic_attribute_lookup"
+    assert lookup["execution_admission_keyword"] is False
     assert all(entry["review_status"] == "unverified_candidate" for entry in report["candidates"])
 
 

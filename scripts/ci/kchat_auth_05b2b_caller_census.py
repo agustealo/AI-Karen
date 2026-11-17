@@ -58,6 +58,7 @@ class _CallsiteVisitor(ast.NodeVisitor):
         self.relative_path = relative_path
         self.scope: list[str] = []
         self.callsites: list[dict[str, Any]] = []
+        self._consumed_getattr_nodes: set[int] = set()
 
     def _visit_scoped(self, node: ast.AST, name: str) -> None:
         self.scope.append(name)
@@ -99,9 +100,62 @@ class _CallsiteVisitor(ast.NodeVisitor):
             }
         )
 
+    @staticmethod
+    def _getattr_target(expression: ast.AST) -> tuple[str, str] | None:
+        """Recognize only literal method names without evaluating expressions."""
+        if not isinstance(expression, ast.Call):
+            return None
+        if not isinstance(expression.func, ast.Name) or expression.func.id != "getattr":
+            return None
+        if (
+            len(expression.args) < 2
+            or not isinstance(expression.args[1], ast.Constant)
+            or not isinstance(expression.args[1].value, str)
+            or expression.args[1].value not in METHOD_CATEGORIES
+        ):
+            return None
+        return expression.args[1].value, _receiver_name(expression.args[0])
+
+    def _record_dispatched_method(self, node: ast.Call, target: ast.AST) -> None:
+        """Include a known wrapper's bound method without claiming reachability."""
+        if isinstance(target, ast.Attribute) and target.attr in METHOD_CATEGORIES:
+            self._record(
+                node,
+                method=target.attr,
+                receiver=_receiver_name(target.value),
+                category=METHOD_CATEGORIES[target.attr],
+                kind="thread_dispatch",
+            )
+            return
+        resolved = self._getattr_target(target)
+        if resolved is not None:
+            method, receiver = resolved
+            self._record(
+                node,
+                method=method,
+                receiver=receiver,
+                category=METHOD_CATEGORIES[method],
+                kind="thread_dispatch",
+            )
+            self._consumed_getattr_nodes.add(id(target))
+
     def visit_Call(self, node: ast.Call) -> None:
         callee = node.func
-        if isinstance(callee, ast.Attribute):
+        if isinstance(callee, ast.Call):
+            # getattr(obj, "method")(..., execution_admission=grant) carries
+            # execution keywords on the OUTER invocation, not on getattr().
+            resolved = self._getattr_target(callee)
+            if resolved is not None:
+                method, receiver = resolved
+                self._record(
+                    node,
+                    method=method,
+                    receiver=receiver,
+                    category=METHOD_CATEGORIES[method],
+                    kind="dynamic_attribute_invocation",
+                )
+                self._consumed_getattr_nodes.add(id(callee))
+        elif isinstance(callee, ast.Attribute):
             method = callee.attr
             if method in METHOD_CATEGORIES:
                 self._record(
@@ -119,6 +173,13 @@ class _CallsiteVisitor(ast.NodeVisitor):
                     category=FACTORY_CATEGORIES[method],
                     kind="construction",
                 )
+            elif method == "to_thread" and node.args:
+                # asyncio.to_thread(bound_method, *args, **kwargs) executes
+                # the bound method; its own AST node is not a Call.
+                self._record_dispatched_method(node, node.args[0])
+            elif method == "run_in_executor" and len(node.args) >= 2:
+                # loop.run_in_executor(executor, bound_method, *args).
+                self._record_dispatched_method(node, node.args[1])
         elif isinstance(callee, ast.Name):
             if callee.id in FACTORY_CATEGORIES:
                 self._record(
@@ -128,21 +189,17 @@ class _CallsiteVisitor(ast.NodeVisitor):
                     category=FACTORY_CATEGORIES[callee.id],
                     kind="construction",
                 )
-            elif (
-                callee.id == "getattr"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and isinstance(node.args[1].value, str)
-                and node.args[1].value in METHOD_CATEGORIES
-            ):
-                method = node.args[1].value
-                self._record(
-                    node,
-                    method=method,
-                    receiver=_receiver_name(node.args[0]),
-                    category=METHOD_CATEGORIES[method],
-                    kind="dynamic_attribute_lookup",
-                )
+            elif id(node) not in self._consumed_getattr_nodes:
+                resolved = self._getattr_target(node)
+                if resolved is not None:
+                    method, receiver = resolved
+                    self._record(
+                        node,
+                        method=method,
+                        receiver=receiver,
+                        category=METHOD_CATEGORIES[method],
+                        kind="dynamic_attribute_lookup",
+                    )
         self.generic_visit(node)
 
 
