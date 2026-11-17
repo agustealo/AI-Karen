@@ -4,7 +4,9 @@ import hashlib
 import logging
 import math
 import time
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from ai_karen_engine.core.intelligence.features import IntelligenceFeatures
 from ai_karen_engine.core.intelligence.ml.contracts import Prediction, PredictionTask
@@ -46,10 +48,13 @@ class BenchmarkRunner:
         if not cases:
             return self._empty_result(config)
 
+        evaluation_started_at = datetime.now(timezone.utc)
+        evaluation_run_id = uuid4().hex
         outcomes: list[PredictionOutcome] = []
         for case in cases:
             outcome = await self._run_case(predictor, case)
             outcomes.append(outcome)
+        evaluation_finished_at = datetime.now(timezone.utc)
 
         # Benchmark evidence must originate from this model, not a fallback.
         for outcome in outcomes:
@@ -96,6 +101,9 @@ class BenchmarkRunner:
             fallback_count=fallback_count,
             abstention_count=abstention_count,
             outcomes=outcomes,
+            evaluation_run_id=evaluation_run_id,
+            evaluation_started_at=evaluation_started_at,
+            evaluation_finished_at=evaluation_finished_at,
         )
 
     async def run_and_record(

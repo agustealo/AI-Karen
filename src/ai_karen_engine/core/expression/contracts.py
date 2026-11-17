@@ -23,6 +23,12 @@ class ExpressionTask:
     token_sink: Callable[[str], Awaitable[None]] | None = field(
         default=None, repr=False, compare=False,
     )
+    # Trusted in-process budget guard for every additional actual engine
+    # invocation after the Runtime has already charged the initial model call.
+    # Never persist, serialize, or populate this from an HTTP client request.
+    reserve_additional_model_call: Callable[[], Awaitable[bool]] | None = field(
+        default=None, repr=False, compare=False,
+    )
     # Tracked by the canonical gateway to prohibit switching models after a
     # partial response has already been made visible to the consumer.
     stream_started: bool = field(default=False, repr=False, compare=False)

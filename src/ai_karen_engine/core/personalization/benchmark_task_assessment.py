@@ -76,6 +76,10 @@ class KcmBenchmarkTaskAssessment:
     curated_oracle_sha256: str = ""
     curated_oracle_source_verified: bool = False
     declared_group_count: int = 0
+    runner_evaluation_started_at: datetime | None = None
+    runner_evaluation_finished_at: datetime | None = None
+    runner_execution_window_recorded: bool = False
+    freshness_basis: str = "receipt_issuance_only"
 
 
 def _wilson_interval(successes: int, count: int) -> tuple[float, float]:
@@ -238,7 +242,14 @@ class KcmBenchmarkTaskProjector:
                 return reject("benchmark_issuer_timestamp_unavailable")
             if receipt.evaluated_at > now:
                 return reject("benchmark_issuer_timestamp_in_future")
-            expires_at = receipt.evaluated_at + timedelta(
+            # A newly issued receipt cannot refresh an older inference.
+            # Historical observations remain explicitly issuer-age-only.
+            freshness_reference = (
+                receipt.runner_evaluation_finished_at
+                if receipt.runner_evaluation_finished_at is not None
+                else receipt.evaluated_at
+            )
+            expires_at = freshness_reference + timedelta(
                 seconds=self._max_evidence_age_seconds,
             )
             if now >= expires_at:
@@ -247,6 +258,7 @@ class KcmBenchmarkTaskProjector:
                 receipt=receipt, observations=observations,
                 tenant_id=tenant_id, user_id=user_id,
                 expires_at=expires_at,
+                max_evidence_age_seconds=self._max_evidence_age_seconds,
                 reject=reject,
             )
         except PermissionError:
@@ -270,6 +282,7 @@ class KcmBenchmarkTaskProjector:
         tenant_id: str,
         user_id: str,
         expires_at: datetime | None,
+        max_evidence_age_seconds: int,
         reject,
     ) -> KcmBenchmarkTaskAssessment:
         prefix = f"benchmark:{receipt.receipt_id}:"
@@ -318,6 +331,19 @@ class KcmBenchmarkTaskProjector:
             "artifact_architecture": receipt.artifact_architecture,
             "curated_oracle_sha256": receipt.curated_oracle_sha256,
             "declared_group_count": receipt.declared_group_count,
+            "runner_evaluation_run_id": receipt.runner_evaluation_run_id,
+            "runner_evaluation_started_at": (
+                receipt.runner_evaluation_started_at.isoformat()
+                if receipt.runner_evaluation_started_at is not None else None
+            ),
+            "runner_evaluation_finished_at": (
+                receipt.runner_evaluation_finished_at.isoformat()
+                if receipt.runner_evaluation_finished_at is not None else None
+            ),
+            # This is a policy-dependent diagnostic, not an off-host signature.
+            "freshness_policy_version": "kcm_benchmark_evidence_age_v2",
+            "freshness_max_age_seconds": max_evidence_age_seconds,
+            "expires_at": expires_at.isoformat() if expires_at is not None else None,
         }
         digest = hashlib.sha256(
             json.dumps(lineage, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -347,7 +373,20 @@ class KcmBenchmarkTaskProjector:
             curated_oracle_sha256=receipt.curated_oracle_sha256,
             curated_oracle_source_verified=bool(receipt.curated_oracle_sha256),
             declared_group_count=receipt.declared_group_count,
+            runner_evaluation_started_at=receipt.runner_evaluation_started_at,
+            runner_evaluation_finished_at=receipt.runner_evaluation_finished_at,
+            runner_execution_window_recorded=(
+                receipt.runner_evaluation_finished_at is not None
+            ),
+            freshness_basis=(
+                "runner_observed_inference_end"
+                if receipt.runner_evaluation_finished_at is not None
+                else "receipt_issuance_only"
+            ),
             reason_codes=(
+                "runner_observed_inference_window"
+                if receipt.runner_evaluation_finished_at is not None
+                else "receipt_age_only_not_inference_recency",
                 "task_and_model_specific_benchmark_only",
                 "curated_oracle_source_verified"
                 if receipt.curated_oracle_sha256
