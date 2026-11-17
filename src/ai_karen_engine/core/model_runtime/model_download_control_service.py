@@ -1454,6 +1454,15 @@ class ModelDownloadControlService:
             item["installed"] = installed
             item["install_path"] = install_path or None
             item["status"] = "installed" if installed else "available"
+            # Supported transfer options come from runtime authority, not UI.
+            methods = ["hf_hub"]
+            if (
+                isinstance(item.get("include_patterns"), list)
+                and bool(item["include_patterns"])
+                and re.fullmatch(r"[a-fA-F0-9]{40}", str(item.get("resolved_revision") or ""))
+            ):
+                methods.append("direct_https")
+            item["download_methods"] = methods
             recommendations.append(item)
         essential = [item for item in recommendations if item.get("tier") == "essential"]
         return {
