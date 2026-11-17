@@ -148,7 +148,7 @@ export default function PluginStorePage() {
     !extensionCatalogLoading &&
     !extensionCatalogError &&
     selectedPlugin?.installed &&
-    selectedPlugin.plugin.id === "pocket-tts" &&
+    selectedPlugin?.plugin?.id === "pocket-tts" &&
     selectedExtension?.id === "pocket-tts" &&
     selectedExtension.supportsVoiceOutput,
   );
