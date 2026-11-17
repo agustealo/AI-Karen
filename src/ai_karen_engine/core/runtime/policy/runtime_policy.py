@@ -9,8 +9,10 @@ LangGraph remains a workflow executor and never owns global policy.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field, replace
+from weakref import WeakValueDictionary
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -276,6 +278,13 @@ class RuntimePolicyEnforcer:
 
     def __init__(self, config: Optional[RuntimePolicyConfig] = None):
         self.config = config or RuntimePolicyConfig()
+        # The existing RuntimePolicy is the sole issuer. A policy ID or a
+        # caller-constructed PolicyDecision is never an execution grant.
+        # Weak values expire with the actual issuer-returned decision.
+        self._issued_model_decisions: WeakValueDictionary[str, PolicyDecision] = (
+            WeakValueDictionary()
+        )
+        self._issued_model_lock = threading.RLock()
         self.level_transitions = {
             RuntimeLevel.FULL: [RuntimeLevel.REDUCED],
             RuntimeLevel.REDUCED: [RuntimeLevel.SAFE, RuntimeLevel.FULL],
@@ -428,6 +437,103 @@ class RuntimePolicyEnforcer:
         )
 
     async def evaluate(self, request: PolicyEvaluationRequest) -> PolicyDecision:
+        """Evaluate once, then retain exact original decision object provenance.
+
+        The identity record belongs to RuntimePolicy, not to ChatRuntime,
+        a provider, an SDK or a copyable policy ID. An unapproved decision
+        cannot issue model execution permission.
+        """
+        decision = await self._evaluate_policy_request(request)
+        if decision.allowed:
+            with self._issued_model_lock:
+                existing = self._issued_model_decisions.get(decision.decision_id)
+                if existing is not None and existing is not decision:
+                    raise PermissionError("runtime_model_policy_issuance_conflict")
+                self._issued_model_decisions[decision.decision_id] = decision
+        return decision
+
+    def bind_chat_model_policy(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        decision: PolicyDecision,
+    ) -> None:
+        """Prove this authenticated request owns a real issuer-returned decision."""
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
+
+        if not isinstance(context, ChatExecutionContext):
+            raise PermissionError("runtime_model_policy_issuance_invalid")
+        context.require_authenticated_user()
+        constraints = decision.runtime_constraints
+        with self._issued_model_lock:
+            if (
+                not decision.allowed
+                or self._issued_model_decisions.get(decision.decision_id) is not decision
+                or constraints.get("authorized_user_id") != context.user_id
+                or constraints.get("authorized_tenant_id") != context.tenant_id
+                or constraints.get("authorized_session_id") != context.session_id
+                or constraints.get("correlation_id") != context.correlation_id
+            ):
+                raise PermissionError("runtime_model_policy_issuance_invalid")
+            original_context = decision.__dict__.get("_issued_model_context")
+            bound_decision = context.__dict__.get("_runtime_policy_issuance")
+            if original_context is None and bound_decision is None:
+                decision.__dict__["_issued_model_context"] = context
+                context.__dict__["_runtime_policy_issuance"] = (self, decision)
+            elif (
+                original_context is not context
+                or bound_decision is None
+                or bound_decision[0] is not self
+                or bound_decision[1] is not decision
+            ):
+                raise PermissionError("runtime_model_policy_issuance_invalid")
+
+    def verifies_chat_model_policy(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        plan: AuthorizedExecutionPlan,
+    ) -> bool:
+        """Check actual issuer provenance, original context and budget bounds."""
+        binding = context.__dict__.get("_runtime_policy_issuance")
+        if not isinstance(binding, tuple) or len(binding) != 2:
+            return False
+        issuer, decision = binding
+        if issuer is not self or not isinstance(decision, PolicyDecision):
+            return False
+        with self._issued_model_lock:
+            if (
+                not decision.allowed
+                or self._issued_model_decisions.get(decision.decision_id) is not decision
+                or decision.__dict__.get("_issued_model_context") is not context
+                or plan.policy_decision_id != decision.decision_id
+                or not plan.matches_execution_scope(
+                    user_id=context.user_id,
+                    tenant_id=context.tenant_id,
+                    session_id=context.session_id,
+                )
+            ):
+                return False
+            constraints = decision.runtime_constraints
+            if (
+                constraints.get("authorized_user_id") != context.user_id
+                or constraints.get("authorized_tenant_id") != context.tenant_id
+                or constraints.get("authorized_session_id") != context.session_id
+                or constraints.get("correlation_id") != context.correlation_id
+            ):
+                return False
+            quota = constraints.get("max_model_calls")
+            return (
+                type(quota) is int
+                and quota > 0
+                and 0 <= plan.budget.max_model_calls <= quota
+            )
+
+    async def _evaluate_policy_request(
+        self, request: PolicyEvaluationRequest,
+    ) -> PolicyDecision:
         """Evaluate capabilities and reasoning modes as distinct policy domains."""
         decision_id = f"policy-{request.tenant_id}-{request.user_id}-{time.time_ns()}"
         policy_version = "v2"

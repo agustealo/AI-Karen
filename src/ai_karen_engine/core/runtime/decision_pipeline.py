@@ -95,6 +95,14 @@ class RuntimeDecisionPipeline:
         )
         cognitive = finalize_decision_with_context(preliminary, cognitive_context)
         policy = await self._evaluate_execution_policy(request, cognitive)
+        # Only the actual issuer-returned, authorized PolicyDecision can pin
+        # execution provenance to the original authenticated request context.
+        # This witness is never included in ExecutionDecision metadata.
+        if policy.allowed:
+            self._policy.bind_chat_model_policy(
+                context=request.context,
+                decision=policy,
+            )
         authorized_decision = self._apply_execution_policy(cognitive, policy)
         # A CORTEX-originated value cannot supply a trusted policy proof.
         constraints = dict(authorized_decision.policy_constraints)
