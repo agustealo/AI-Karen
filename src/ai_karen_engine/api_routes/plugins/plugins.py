@@ -430,36 +430,27 @@ async def reload_plugins(
     current_user: Dict[str, Any] = Depends(_require_plugin_mutation_access),
     plugin_service: PluginService = Depends(get_plugin_service),
 ):
+    """Refuse registry rebuilds that may change plugin runtime eligibility."""
     _audit_plugin_mutation(
         request=request,
         user=current_user,
         action="refresh_plugin_registry",
         outcome="attempt",
     )
-    try:
-        count = await plugin_service.refresh_plugins()
-        _audit_plugin_mutation(
-            request=request,
-            user=current_user,
-            action="refresh_plugin_registry",
-            outcome="ok",
-        )
-        return {
-            "success": True,
-            "message": f"Refreshed {count} plugins successfully",
-            "plugins_loaded": count,
-        }
-    except Exception as exc:
-        logger.exception("Failed to refresh plugins")
-        _audit_plugin_mutation(
-            request=request,
-            user=current_user,
-            action="refresh_plugin_registry",
-            outcome="error",
-        )
-        raise _service_error(
-            exc, "Failed to refresh plugins. Please try again."
-        ) from exc
+    _audit_plugin_mutation(
+        request=request,
+        user=current_user,
+        action="refresh_plugin_registry",
+        outcome="rejected",
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Plugin registry refresh requires governed lifecycle admission: "
+            "the legacy reload action may enable or retire plugins without "
+            "an action-bound approval."
+        ),
+    )
 
 
 @router.get("/health")
@@ -548,6 +539,13 @@ async def _set_enabled(
     service: PluginService,
     enabled: bool,
 ) -> Dict[str, Any]:
+    """Reject legacy unapproved lifecycle calls without touching the kernel.
+
+    The trusted PluginService.execute_approved_lifecycle entrypoint requires
+    a fresh authenticated session and a database-backed action/revision-bound
+    human approval. This historical route has neither, so the admin role by
+    itself must not be promoted into execution authority.
+    """
     action = "enable_plugin" if enabled else "disable_plugin"
     _audit_plugin_mutation(
         request=request,
@@ -556,60 +554,20 @@ async def _set_enabled(
         outcome="attempt",
         plugin_name=plugin_name,
     )
-    try:
-        ok = (
-            await service.enable_plugin(plugin_name)
-            if enabled
-            else await service.disable_plugin(plugin_name)
-        )
-        if not ok:
-            raise _not_found(plugin_name)
-        _audit_plugin_mutation(
-            request=request,
-            user=user,
-            action=action,
-            outcome="ok",
-            plugin_name=plugin_name,
-        )
-        verb = "enabled" if enabled else "disabled"
-        return {
-            "success": True,
-            "message": f"Plugin {plugin_name} {verb} successfully",
-        }
-    except HTTPException:
-        _audit_plugin_mutation(
-            request=request,
-            user=user,
-            action=action,
-            outcome="rejected",
-            plugin_name=plugin_name,
-        )
-        raise
-    except (ValueError, RuntimeError) as exc:
-        _audit_plugin_mutation(
-            request=request,
-            user=user,
-            action=action,
-            outcome="rejected",
-            plugin_name=plugin_name,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-    except Exception as exc:
-        logger.exception("Plugin mutation failed")
-        _audit_plugin_mutation(
-            request=request,
-            user=user,
-            action=action,
-            outcome="error",
-            plugin_name=plugin_name,
-        )
-        raise _service_error(
-            exc, "Failed to update plugin state. Please try again."
-        ) from exc
-
+    _audit_plugin_mutation(
+        request=request,
+        user=user,
+        action=action,
+        outcome="rejected",
+        plugin_name=plugin_name,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Plugin lifecycle approval required: this legacy action cannot "
+            "execute without a fresh, actor-bound, revision-verified human approval."
+        ),
+    )
 
 @router.post("/{plugin_name}/enable")
 async def enable_plugin(

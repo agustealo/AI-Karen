@@ -667,6 +667,40 @@ store/install, extension load/unload/reload and startup/refresh paths,
 convert each to this single governed owner, and prohibit direct bypasses
 before any user-facing or conversational activation control is enabled.
 
+## Unapproved ingress closure (KPLUG-CONV-02C3B3A)
+
+The previously merged B2B method is a host-only execution boundary; old
+administrator roles did **not** carry a human-approved lifecycle grant.
+This source-scoped B3A hardening removes the direct physical mutation path
+from mounted plugin enable/disable/reload, Plugin Store install-as-enable,
+and extension load/unload HTTP routes. Those routes preserve existing
+authentication, RBAC and audit and now respond with explicit HTTP 409
+approval-required rather than an invented success, an automatic approval or
+a raw `PluginKernel` transition. Uploaded-package quarantine and local
+catalog version checks still take precedence for incompatible requests.
+
+`ExtensionCoreManager.load_extension` and `unload_extension` now require
+the existing typed context, exact action/installation approval scope and
+single-use approval ID, then delegate to
+`PluginService.execute_approved_lifecycle` and accept only the actual
+`verified_committed` receipt. Silent `reload_extension`,
+`refresh_registry`, and `reload_runtime` are refused. Catalog GET reads
+no longer invoke `refresh_plugins`; they project the initialized canonical
+service snapshot, preventing a read action from rebuilding live runtime
+eligibility.
+
+**Not complete:** `PluginService.enable_plugin`/`disable_plugin`,
+`PluginService.refresh_plugins`, initial bootstrap, package publication and
+uninstall, and legacy registry managers still need broader physical caller
+migration and multi-host acceptance. The legacy HTTP actions are temporarily
+unavailable, **not** replaced by a full admin confirmation workflow.
+Do not treat this as universal mutation safety, do not reactivate chat
+controls, and do not generate fake approval/session context.
+
+See `docs/architecture/KPLUG_CONV_02C3B3A_MUTATION_INGRESS_AUDIT_20261117.md`
+for exact ingress classifications, remaining owners, acceptance tests and
+B3B/B3C continuation.
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and

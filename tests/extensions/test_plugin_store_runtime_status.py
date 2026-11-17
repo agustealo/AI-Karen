@@ -125,7 +125,7 @@ async def test_plugin_store_rejects_role_only_admin_without_management_permissio
 
 
 @pytest.mark.asyncio
-async def test_plugin_store_allows_explicit_permission_grant_without_admin_role(
+async def test_plugin_store_management_permission_alone_is_not_activation_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     access_events = []
@@ -156,18 +156,21 @@ async def test_plugin_store_allows_explicit_permission_grant_without_admin_role(
         lambda: SimpleNamespace(log_audit_event=audit_events.append),
     )
 
-    result = await store.install_plugin_endpoint(
-        http_request=_request(),
-        request=store.PluginInstallRequest(plugin_id="alpha-plugin"),
-        current_user={"user_id": "operator", "tenant_id": "tenant-a", "roles": ["operator"]},
-        plugin_service=Service(),
-    )
+    with pytest.raises(HTTPException) as exc:
+        await store.install_plugin_endpoint(
+            http_request=_request(),
+            request=store.PluginInstallRequest(plugin_id="alpha-plugin"),
+            current_user={"user_id": "operator", "tenant_id": "tenant-a", "roles": ["operator"]},
+            plugin_service=Service(),
+        )
 
-    assert result["success"] is True
-    assert result["operation"] == "enable_local_catalog_plugin"
-    assert enabled_plugins == ["alpha-plugin"]
+    assert exc.value.status_code == 409
+    assert "approval required" in str(exc.value.detail).lower()
+    assert enabled_plugins == []
     assert access_events[0]["granted"] is True
-    assert audit_events[0]["event_type"] == "plugin_install"
+    assert audit_events[-1]["event_type"] == "plugin_install"
+    assert audit_events[-1]["metadata"]["outcome"] == "rejected"
+    assert audit_events[-1]["metadata"]["reason"] == "lifecycle_approval_required"
 
 
 def test_invalid_runtime_plugin_is_not_presented_as_installable() -> None:
@@ -266,14 +269,14 @@ async def test_store_install_quarantine_is_audited_409_without_enable_attempt(
 
 
 @pytest.mark.asyncio
-async def test_plugin_mutation_reports_quarantine_conflict_without_fake_success(
+async def test_plugin_mutation_without_approval_never_calls_raw_enable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events = []
 
     class Service:
         async def enable_plugin(self, plugin_id):
-            raise ValueError("Uploaded plugin execution requires a verified isolated runtime")
+            pytest.fail("Legacy HTTP mutation must not reach the raw kernel transition")
 
     monkeypatch.setattr(
         plugin_routes, "get_audit_logger",
@@ -288,5 +291,5 @@ async def test_plugin_mutation_reports_quarantine_conflict_without_fake_success(
             enabled=True,
         )
     assert exc.value.status_code == 409
-    assert "isolated runtime" in exc.value.detail
+    assert "approval required" in str(exc.value.detail).lower()
     assert [event["metadata"]["outcome"] for event in events] == ["attempt", "rejected"]

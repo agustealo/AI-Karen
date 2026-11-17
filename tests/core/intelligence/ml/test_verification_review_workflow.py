@@ -22,6 +22,7 @@ from ai_karen_engine.core.runtime.outcome.store import (
     InMemoryOutcomeStore,
     OutcomeStoreError,
 )
+from ai_karen_engine.core.runtime.trajectory.contracts import ExecutionTrajectory
 from ai_karen_engine.core.runtime.trajectory.learning_contracts import (
     DecisionObservation,
     FeatureSnapshot,
@@ -89,7 +90,10 @@ def lineage(*, tenant=TENANT, subject=SUBJECT, index=1):
         correlation_id=f"corr-{index}",
         feature_version="features-v1",
         created_at=datetime.now(timezone.utc),
-        metadata={"prompt": "NEVER_PERSIST_PROMPT"},
+        metadata={
+            "prompt": "NEVER_PERSIST_PROMPT",
+            "policy_decision_id": f"runtime-policy-{index}",
+        },
     )
     return recorded, features
 
@@ -101,7 +105,69 @@ def case(*, recorded=None, features=None):
     decisions = InMemoryTrajectoryStore()
     decisions.save_feature_snapshot(snapshot)
     decisions.save_decision_observation(stored)
+    # This fixture models a genuinely completed selected strategy. Review
+    # admission must read these *independently stored* runtime observations
+    # rather than derive them from the externally supplied review judgement.
+    trajectory = ExecutionTrajectory(
+        trajectory_id=stored.trajectory_id,
+        tenant_id=TENANT,
+        user_id=SUBJECT,
+        request_id=snapshot.request_id,
+        correlation_id=snapshot.correlation_id,
+        session_id="review-session",
+        conversation_id="review-conversation",
+        executed_topology="direct",
+        policy_decision_id=f"runtime-policy-1",
+        execution_status="success",
+        completed_at=datetime.now(timezone.utc),
+        actual_provider="ollama-local",
+        actual_model="measured-installed-model",
+        fallback_level=0,
+        degraded_mode=False,
+        response_source="model",
+    )
+    decisions.save(trajectory)
     receipts = InMemoryOutcomeStore()
+    receipts.save_outcome({
+        "outcome_id": "test-runtime-selected-1",
+        "source": "runtime.execution",
+        "trajectory_id": trajectory.trajectory_id,
+        "decision_observation_id": stored.decision_observation_id,
+        "tenant_id": TENANT,
+        "user_id": SUBJECT,
+        "request_id": snapshot.request_id,
+        "correlation_id": snapshot.correlation_id,
+        "session_id": trajectory.session_id,
+        "conversation_id": trajectory.conversation_id,
+        "status": "success",
+        "response_completed": True,
+        "persistence_success": True,
+        "fallback_count": 0,
+        "metadata": {
+            "transcript_persistence_status": "persisted",
+            "actual_provider": trajectory.actual_provider,
+            "actual_model": trajectory.actual_model,
+            "model_calls": 1,
+            "tool_calls": 0,
+            "selected_strategy_execution": {
+                "schema_version": "selected_strategy_execution_v1",
+                "selected_action": "respond_direct",
+                "policy_decision_id": trajectory.policy_decision_id,
+                "policy_version": "v2",
+                "status": "selected_runtime_path_observed",
+                "provider_receipt_observed": True,
+                "response_completed": True,
+                "transcript_durable": True,
+                "actual_provider": trajectory.actual_provider,
+                "actual_model": trajectory.actual_model,
+                "execution_observation_only": True,
+                "independent_verification_proven": False,
+                "dual_action_eligibility_established": False,
+                "randomized_selection": False,
+                "ope_eligible": False,
+            },
+        },
+    })
     handler = VerificationReviewWorkflow(
         lineage_store=decisions, outcome_store=receipts,
     )
@@ -288,3 +354,131 @@ def test_review_input_requires_bounded_independent_labels():
     ):
         with pytest.raises(ValueError):
             mutation.validate()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("execution_status", "cancelled"),
+        ("execution_status", "failure"),
+        ("execution_status", None),
+        ("completed_at", None),
+        ("tenant_id", OTHER_TENANT),
+        ("user_id", OTHER_USER),
+        ("request_id", "unrelated-request"),
+        ("correlation_id", "unrelated-correlation"),
+        ("policy_decision_id", "unrelated-policy"),
+        ("error_code", "CHAT_REQUEST_CANCELLED"),
+        ("actual_provider", None),
+        ("actual_model", None),
+        ("degraded_mode", True),
+        ("degraded_mode", None),
+        ("fallback_level", 1),
+        ("fallback_level", None),
+        ("executed_topology", "reasoning"),
+    ],
+)
+async def test_b2c3a_reviewer_refuses_unverified_or_incomplete_execution_trajectory(
+    field, value,
+):
+    handler, judgement, receipts, observed, lineage_store = case()
+    trajectory = lineage_store.get(observed.trajectory_id, tenant_id=TENANT)
+    assert trajectory is not None
+    setattr(trajectory, field, value)
+    # The exact tenant-scoped store deliberately hides a foreign trajectory
+    # before the later execution-integrity checks can inspect its contents.
+    denial = (
+        "Selected runtime execution evidence is unavailable"
+        if field == "tenant_id"
+        else "Completed selected runtime trajectory"
+    )
+    with pytest.raises(ValueError, match=denial):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata_path,value",
+    [
+        (("status",), "failure"),
+        (("response_completed",), False),
+        (("persistence_success",), False),
+        (("fallback_count",), 1),
+        (("user_id",), OTHER_USER),
+        (("tenant_id",), OTHER_TENANT),
+        (("request_id",), "unrelated-request"),
+        (("correlation_id",), "unrelated-correlation"),
+        (("session_id",), "other-session"),
+        (("conversation_id",), "other-conversation"),
+        (("decision_observation_id",), "other-decision"),
+        (("metadata", "transcript_persistence_status"), "failed"),
+        (("metadata", "actual_provider"), "invented"),
+        (("metadata", "actual_model"), "invented"),
+        (("metadata", "model_calls"), 0),
+        (("metadata", "tool_calls"), 1),
+        (("metadata", "selected_strategy_execution", "schema_version"), "other"),
+        (("metadata", "selected_strategy_execution", "selected_action"), "verify_then_respond"),
+        (("metadata", "selected_strategy_execution", "policy_decision_id"), "other"),
+        (("metadata", "selected_strategy_execution", "policy_version"), "other"),
+        (("metadata", "selected_strategy_execution", "status"), "unverified"),
+        (("metadata", "selected_strategy_execution", "provider_receipt_observed"), False),
+        (("metadata", "selected_strategy_execution", "transcript_durable"), False),
+        (("metadata", "selected_strategy_execution", "response_completed"), False),
+        (("metadata", "selected_strategy_execution", "actual_provider"), "invented"),
+        (("metadata", "selected_strategy_execution", "actual_model"), "invented"),
+        (("metadata", "selected_strategy_execution", "independent_verification_proven"), True),
+        (("metadata", "selected_strategy_execution", "ope_eligible"), True),
+        (("metadata", "selected_strategy_execution", "randomized_selection"), True),
+    ],
+)
+async def test_b2c3a_reviewer_refuses_forged_execution_outcome_receipts(
+    metadata_path, value,
+):
+    handler, judgement, receipts, _, _ = case()
+    observed = receipts._records[0]  # In-memory test fixture only.
+    target = observed
+    for part in metadata_path[:-1]:
+        target = target[part]
+    target[metadata_path[-1]] = value
+    with pytest.raises(ValueError, match="(selected execution receipt|Exactly one selected execution)"):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["missing_trajectory", "missing_receipt", "duplicate_receipt", "missing_policy_bind"])
+async def test_b2c3a_review_requires_unique_real_scoped_runtime_evidence(scenario):
+    handler, judgement, receipts, recorded, decisions = case()
+    if scenario == "missing_trajectory":
+        decisions._records.clear()
+    elif scenario == "missing_receipt":
+        receipts._records.clear()
+    elif scenario == "duplicate_receipt":
+        receipts.save_outcome({
+            **receipts._records[0],
+            "outcome_id": "different-outcome-id",
+        })
+    else:
+        feature = decisions.get_feature_snapshot(
+            recorded.feature_snapshot_id, tenant_id=TENANT,
+        )
+        assert feature is not None
+        feature.metadata.pop("policy_decision_id")
+    with pytest.raises(ValueError):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
+
+
+@pytest.mark.asyncio
+async def test_b2c3a_selected_execution_readback_storage_error_cannot_create_label():
+    handler, judgement, receipts, _, _ = case()
+
+    def unavailable(*args, **kwargs):
+        raise OutcomeStoreError("readback backend unavailable")
+
+    receipts.get_for_trajectory = unavailable
+    with pytest.raises(OutcomeStoreError):
+        await handler.submit(judgement, reviewer=principal())
+    assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []

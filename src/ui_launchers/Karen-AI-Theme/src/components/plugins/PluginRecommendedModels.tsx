@@ -31,6 +31,7 @@ type ModelRecommendation = {
   gated?: boolean;
   include_patterns?: string[] | null;
   app_consumers: string[];
+  download_methods?: Array<"hf_hub" | "direct_https">;
   installed: boolean;
 };
 
@@ -56,11 +57,12 @@ type DownloadJob = {
   channel_id: string;
   status: string;
   progress: number;
+  download_method?: "hf_hub" | "direct_https";
   // This comes from the canonical owned SQL projection, never raw worker errors.
   failure_category?: "source_access" | "network" | "storage" | "integrity" | "cancelled" | "unknown" | null;
   requested_by?: string | null;
 };
-type DownloadReceipt = { job_id: string; status: string };
+type DownloadReceipt = { job_id: string; status: string; download_method: "hf_hub" | "direct_https" };
 type OwnedJobsResponse = { jobs: DownloadJob[]; scope: "authenticated_user" };
 
 const IMMUTABLE_REVISION = /^[a-f0-9]{40,64}$/i;
@@ -118,6 +120,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const [channels, setChannels] = useState<DownloadChannel[]>([]);
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
   const [accepted, setAccepted] = useState<Record<string, boolean>>({});
+  const [downloadMethods, setDownloadMethods] = useState<Record<string, "hf_hub" | "direct_https">>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -236,6 +239,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const install = async (item: ModelRecommendation) => {
     const revision = item.resolved_revision;
     const channel = channels.find((entry) => entry.id === item.channel_id);
+    const downloadMethod = downloadMethods[item.id] || "hf_hub";
+    if (!(item.download_methods || ["hf_hub"]).includes(downloadMethod)) return;
     const alreadyRunning = jobs.some((job) =>
       job.model_id === item.model_id && job.revision === revision &&
       job.channel_id === item.channel_id && ACTIVE.has(job.status));
@@ -282,9 +287,11 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           trust_remote_code: false,
           accept_license: true,
           pin: true,
+          download_method: downloadMethod,
         },
       );
-      if (!JOB_ID.test(receipt.job_id) || !ACTIVE.has(receipt.status)) {
+      if (!JOB_ID.test(receipt.job_id) || !ACTIVE.has(receipt.status) ||
+          receipt.download_method !== downloadMethod) {
         throw new Error("model_setup_queue_unverified");
       }
       setTrackedJob({
@@ -293,6 +300,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         revision,
         channel_id: item.channel_id,
         status: receipt.status,
+        download_method: receipt.download_method,
         progress: 0,
       });
       setJobs((current) => [{
@@ -301,6 +309,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         revision,
         channel_id: item.channel_id,
         status: receipt.status,
+        download_method: receipt.download_method,
         progress: 0,
       }, ...current]);
       setNotice(`Karen confirmed the ${item.label} download job is ${receipt.status}.`);
@@ -376,7 +385,13 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         const blocked = !policy?.master_enabled || policy.block_new_downloads ||
           !channel?.effective_enabled;
         const acceptanceKey = `${item.id}:${revision || "unverified"}`;
+        const availableMethods: Array<"hf_hub" | "direct_https"> =
+          item.download_methods?.filter((value) =>
+            value === "hf_hub" || value === "direct_https",
+          ) ?? ["hf_hub"];
+        const selectedMethod = downloadMethods[item.id] || "hf_hub";
         const canQueue = !item.installed && !activeJob && !blocked && verified &&
+          availableMethods.includes(selectedMethod) &&
           accepted[acceptanceKey] === true && busyId === null;
         return (
           <div key={item.id} className="space-y-3 rounded-lg border bg-background p-3">
@@ -402,7 +417,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
               </p>
             ) : activeJob ? (
               <div role="status" className="text-xs">
-                Download job: {activeJob.status}. {normalizedProgress(activeJob.progress).toFixed(1)}% reported.
+                Download job: {activeJob.status} via {activeJob.download_method === "direct_https"
+                  ? "Direct HTTPS" : "Hugging Face Hub"}. {normalizedProgress(activeJob.progress).toFixed(1)}% reported.
                 Completion alone does not establish TTS runtime readiness.
               </div>
             ) : (
@@ -446,6 +462,34 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                         for revision {revision?.slice(0, 12)}.</span>
                     </label>
                   </div>
+                )}
+                {verified && !blocked && availableMethods.length > 1 && (
+                  <label className="block space-y-1 text-xs">
+                    <span className="font-medium">Download method</span>
+                    <select aria-label="Download method"
+                      className="w-full rounded-md border bg-background px-2 py-2"
+                      value={selectedMethod}
+                      disabled={busyId !== null}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        if (next === "hf_hub" || next === "direct_https") {
+                          if (availableMethods.includes(next)) {
+                            setDownloadMethods((old) => ({ ...old, [item.id]: next }));
+                          }
+                        }
+                      }}>
+                      {availableMethods.includes("hf_hub") && (
+                        <option value="hf_hub">Hugging Face Hub (SDK)</option>
+                      )}
+                      {availableMethods.includes("direct_https") && (
+                        <option value="direct_https">Direct HTTPS (no Hub SDK for transfer)</option>
+                      )}
+                    </select>
+                    <span className="block text-muted-foreground">
+                      Both methods require the same reviewed license, backend authentication,
+                      model revision, audited download worker and installation checks.
+                    </span>
+                  </label>
                 )}
                 <Button type="button" size="sm" disabled={!canQueue}
                   onClick={() => void install(item)}>
