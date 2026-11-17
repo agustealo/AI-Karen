@@ -5698,9 +5698,28 @@ class ChatRuntime:
             MODEL_GENERATION_RESPONSE_SOURCES,
         )
 
+        from ai_karen_engine.core.model_runtime.provider_registry_service import (
+            ProviderRegistryService,
+        )
+
         provenance = provider_meta.get("provenance")
         provider = provider_meta.get("actual_provider")
         model = provider_meta.get("actual_model")
+        requested_provider = provider_meta.get("requested_provider")
+        # The canonical registry owns proven provider aliases. A requested
+        # "ollama" and an observed "ollama-local" refer to the same provider,
+        # not an unauthorized post-selection drift or recovered fallback.
+        provider_identity_matches = (
+            requested_provider is None
+            or (
+                isinstance(requested_provider, str)
+                and bool(requested_provider.strip())
+                and ProviderRegistryService.canonicalize_provider_id(
+                    requested_provider
+                )
+                == ProviderRegistryService.canonicalize_provider_id(provider)
+            )
+        )
         receipt_matches = (
             isinstance(provenance, ResponseProvenance)
             and provenance.response_source == ResponseSource.MODEL
@@ -5716,7 +5735,7 @@ class ChatRuntime:
             # When the gateway records a requested target, a drifted actual
             # target is not evidence for the selected comparable strategy.
             # Missing optional request hints are not fabricated.
-            and provider_meta.get("requested_provider") in (None, provider)
+            and provider_identity_matches
             and provider_meta.get("requested_model") in (None, model)
             and provenance.decision_id == decision.policy_decision_id
             and isinstance(correlation_id, str) and bool(correlation_id.strip())
