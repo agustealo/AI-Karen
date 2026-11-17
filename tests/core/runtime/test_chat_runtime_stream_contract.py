@@ -3,6 +3,8 @@ import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from uuid import uuid4
+
 import pytest
 
 from ai_karen_engine.auth.models import UserData
@@ -149,7 +151,7 @@ def _make_decision() -> ExecutionDecision:
 
 def _make_plan() -> AuthorizedExecutionPlan:
     return AuthorizedExecutionPlan(
-        execution_id="exec-req-1",
+        execution_id=f"exec-req-1-{uuid4().hex}",
         policy_decision_id="policy-1",
         authorized_user_id=USER_ID,
         authorized_tenant_id=TENANT_ID,
