@@ -499,3 +499,62 @@ query string. Refuse unknown or unreviewed public hosts.
 Never forge a Meta signature with a local test token and label that provider
 acceptance. Source-only signed fixtures remain useful security regressions,
 but do not substitute for provider traffic.
+
+## KWA-01C6C2B1: authenticated self-link proof and live RBAC configuration
+
+The active Meta inbound acceptance path requires a verified Karen identity
+binding before normal WhatsApp text can enter ChatRuntime. The existing
+`ChannelLinkService` and PostgreSQL `channel_link_challenges` already issue
+256-bit one-time token digests and accept only signed, unexpired native
+`/link` commands. Before this slice, that issuance service was not wired to
+the active channel host or an authenticated API, and `channel.link` was
+absent from the canonical channel action allowlist.
+
+The central RBAC registry now defines `channel.link` for verified Karen
+users. The checked-in effective role configuration also explicitly grants
+admins the already implemented channel operator actions, which the old
+checked-in admin map omitted. Regular users gain **only** `channel.link`,
+not provision, activation, send, retention or inspection authority. The
+`channel.link` exception to the manifest's operator-only role gate is
+limited to fresh, tenant-scoped account self-linking: the normal RBAC
+`Permission.CHANNEL_LINK`, RuntimePolicy, approved execution plan and
+`ActionExecutionGate` still all apply.
+
+The new authenticated endpoint:
+
+```text
+POST /api/channels/identity/whatsapp/connections/{connection_uuid}/challenge
+```
+
+takes no user-supplied identity, tenant, permission, provider account, secret,
+sender or TTL. With a live verified session, the host verifies the installed
+canonical WhatsApp adapter and the original link service verifies the enabled
+tenant connection before issuing a short-lived, one-use `/link <token>`
+command. Only the digest is persisted; the command is returned once with
+`Cache-Control: no-store, private`. Follow the approved operator workflow to
+send that command **from the actual WhatsApp test sender** to the configured
+business test number. The inbound POST must be Meta-signed and bound to the
+exact existing tenant connection to consume the challenge. Failed, used,
+expired, foreign-tenant and revoked credentials never create a sender binding
+or ChatRuntime message.
+
+**Source proof:**
+
+```bash
+pytest -q tests/extensions/test_whatsapp_self_link_api.py \
+  tests/extensions/test_channel_provision_and_link_service.py \
+  tests/extensions/test_channel_verified_link_ingress.py \
+  tests/extensions/test_whatsapp_operator_api.py \
+  tests/extensions/test_channel_runtime_policy_permissions.py
+```
+
+These are source and policy regressions, **not** Meta sender or signed-inbound
+certification. An approved, observed provider-originated signed `/link`
+message, then a separate ordinary signed text with a durable Inbox →
+ChatRuntime → outbox → provider-receipt chain are still necessary. The
+one-time proof is a bearer credential: never publish or paste it into bug
+reports, browser logs, screenshots, telemetry or CI.
+
+The standalone issuance endpoint intentionally does not invent a linked
+status in the UI; that must be derived from future bounded, tenant-scoped
+backend evidence rather than optimistic client state.

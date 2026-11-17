@@ -96,7 +96,7 @@ class ChannelActivationService:
             str(getattr(role, "value", role))
             for role in (catalog.rbac.allowed_roles or ())
         }
-        if action != "channel.consent" and (
+        if action not in {"channel.consent", "channel.link"} and (
             not declared_roles or not principal_roles.intersection(declared_roles)
         ):
             raise ChannelActivationDenied("Operator role is not permitted by channel manifest")
@@ -127,6 +127,7 @@ class ChannelActivationService:
         if action not in {
             "channel.send", "channel.recover", "channel.provision",
             "channel.activate", "channel.deactivate", "channel.consent",
+            "channel.link",
             "channel.inspect", "channel.webhook.register",
             "channel.status_prune",
         }:
@@ -160,7 +161,7 @@ class ChannelActivationService:
             str(getattr(role, "value", role))
             for role in (catalog.rbac.allowed_roles or ())
         }
-        if action != "channel.consent" and not roles.intersection(catalog_roles):
+        if action not in {"channel.consent", "channel.link"} and not roles.intersection(catalog_roles):
             raise ChannelActivationDenied("Channel manifest denies operator role")
         granted = get_rbac_manager().get_user_permissions({
             "user_id": user_id, "tenant_id": tenant_id,

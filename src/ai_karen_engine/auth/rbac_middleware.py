@@ -140,6 +140,7 @@ class Permission(str, Enum):
     # Channel transport effects. Central RBAC owns entitlement resolution;
     # transport plugins, prompts and API request bodies cannot grant these.
     CHANNEL_CONSENT = "channel.consent"
+    CHANNEL_LINK = "channel.link"
     CHANNEL_PROVISION = "channel.provision"
     CHANNEL_ACTIVATE = "channel.activate"
     CHANNEL_DEACTIVATE = "channel.deactivate"
@@ -229,6 +230,7 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
             "inherits_from": Role.READONLY.value,
             "permissions": [
                 Permission.CHANNEL_CONSENT.value,
+                Permission.CHANNEL_LINK.value,
                 Permission.BROWSER.value,
                 Permission.DATA_READ.value,
                 Permission.PLANNER_READ.value,

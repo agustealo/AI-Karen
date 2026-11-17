@@ -27,6 +27,7 @@ from ai_karen_engine.persistence.repositories.channel_repository import SqlChann
 from ai_karen_engine.services.channels.activation import ChannelActivationConflict, ChannelActivationService
 from ai_karen_engine.services.channels.credentials import ChannelVaultSecretResolver
 from ai_karen_engine.services.channels.ingress import ChannelIngressService
+from ai_karen_engine.services.channels.linking import ChannelLinkService, IssuedChannelLink
 from ai_karen_engine.services.channels.execution import ChannelExecutionService
 from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
 from ai_karen_engine.services.channels.worker import ChannelInboxWorker
@@ -63,6 +64,7 @@ class ChannelHostServices:
         self._chat_runtime = chat_runtime
         self.ingress: ChannelIngressService | None = None
         self.activation: ChannelActivationService | None = None
+        self.linking: ChannelLinkService | None = None
         self.execution: ChannelExecutionService | None = None
         self.delivery: ChannelDeliveryService | None = None
         self.worker: ChannelInboxWorker | None = None
@@ -105,6 +107,9 @@ class ChannelHostServices:
             self.activation = ChannelActivationService(
                 kernel=self.kernel, repository=self.repository,
                 credential_authorizer=self.authorize_reference,
+            )
+            self.linking = ChannelLinkService(
+                kernel=self.kernel, repository=self.repository,
             )
             # A worker is permitted only after the canonical ChatRuntime has
             # been attached. It starts empty; webhook admission supplies only
@@ -205,6 +210,23 @@ class ChannelHostServices:
         )
         return await self.repository.list_whatsapp_operator_connections(
             tenant_id=tenant_id,
+        )
+
+    async def issue_whatsapp_self_link_challenge(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        connection_id: str, authorized_plan: AuthorizedExecutionPlan,
+    ) -> IssuedChannelLink:
+        """Issue the current principal's single-use native identity proof.
+
+        The installed transport and tenant-scoped connection are host-owned;
+        only the canonical link service generates the token and stores a digest.
+        """
+        await self._whatsapp_operator_adapter()
+        if self.linking is None:
+            raise PermissionError("Channel identity linking is unavailable")
+        return await self.linking.issue_challenge(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            connection_id=connection_id, authorized_plan=authorized_plan,
         )
 
     async def provision_whatsapp_connection(
@@ -1513,6 +1535,7 @@ class ChannelHostServices:
         self._initialized = False
         self.ingress = None
         self.activation = None
+        self.linking = None
         worker = self.worker
         self.worker = None
         # A failed or cancelled worker join must not skip shutting down the
