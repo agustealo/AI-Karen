@@ -23,6 +23,7 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B3A: exact ML task benchmark artifact and evaluated case projection | [PR #953](https://github.com/agustealo/AI-Karen/pull/953), merge `7abce8006c973906ba3e90aa3b4915cfb8550a2a` | Merged; 11/11 exact-head checks passed |
 | KCM-02B3B: conditioned curated-oracle source and assessment expiry | [PR #956](https://github.com/agustealo/AI-Karen/pull/956), merge `a1188e594201e0713cc6a16833a5acc1f4ae40ae` | Merged; 19/19 exact-head checks passed; source integrity and issuer freshness only |
 | KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961) · [25 — Runner observation](25-run-observation-and-freshness.md) | In review; no independently signed runtime or general-skill certification |
+| KCM-02B3C2A: owner-scoped curated-oracle reviewer observation | [PR #963](https://github.com/agustealo/AI-Karen/pull/963) · [26 — Reviewer observations](26-reviewed-curated-oracle-observations.md) | In review; acknowledgment only, no independently verified groups/ground truth/execution |
 
 ## Configuration
 

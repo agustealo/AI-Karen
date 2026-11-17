@@ -393,7 +393,9 @@ class GovernedCuratedOracleReviewEvidence:
             recorded_at = (
                 original_recorded_at
                 if isinstance(original_recorded_at, datetime)
-                else datetime.fromisoformat(str(original_recorded_at))
+                else datetime.fromisoformat(
+                    str(original_recorded_at).replace("Z", "+00:00")
+                )
             )
         except (TypeError, ValueError):
             return None
