@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -19,9 +18,9 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import Field
 
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
+from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
 from ai_karen_engine.core.model_runtime.provider_execution import (
     execute_structured_provider_endpoint,
-    provider_endpoint_requires_external_permission,
 )
 
 
@@ -60,77 +59,6 @@ def _message_to_wire(message: BaseMessage) -> dict[str, Any]:
         return payload
     raise TypeError("Unsupported chat role for governed provider model")
 
-
-@dataclass(frozen=True, slots=True, repr=False)
-class GovernedToolModelAdmission:
-    """Host-only RuntimePolicy scope and original meter for one tool model.
-
-    The SDK does not issue grants. A model may be cloned by bind_tools or
-    invoked directly; every actual transport must recheck this in-process
-    admission before executing HTTP or returning a model receipt.
-    """
-
-    plan: Any
-    meter: Any
-    user_id: str
-    tenant_id: str
-    session_id: str | None
-    policy_decision_id: str
-    request_id: str
-    correlation_id: str
-    authenticated_context: Any = None
-
-    async def reserve_transport(self, endpoint: ProviderEndpoint) -> None:
-        from ai_karen_engine.core.runtime.contracts import (
-            AuthorizedExecutionPlan,
-            ExecutionBudgetMeter,
-        )
-
-        if (
-            not isinstance(self.plan, AuthorizedExecutionPlan)
-            or not isinstance(self.meter, ExecutionBudgetMeter)
-            or not self.plan.policy_decision_id
-            or self.plan.policy_decision_id != self.policy_decision_id
-            or self.meter.budget != self.plan.budget
-            or not self.plan.matches_execution_scope(
-                user_id=self.user_id,
-                tenant_id=self.tenant_id,
-                session_id=self.session_id,
-                policy_decision_id=self.policy_decision_id,
-            )
-        ):
-            raise PermissionError("governed_model_scope_or_budget_invalid")
-
-        external = provider_endpoint_requires_external_permission(endpoint)
-        if external:
-            from ai_karen_engine.core.expression.settings import get_expression_settings
-            from ai_karen_engine.core.runtime.chat_runtime_contract import (
-                ChatExecutionContext,
-            )
-            from ai_karen_engine.core.runtime.policy.runtime_policy import (
-                RuntimePolicyEnforcer,
-            )
-
-            context = self.authenticated_context
-            if (
-                not isinstance(context, ChatExecutionContext)
-                or str(context.user_id) != self.user_id
-                or str(context.tenant_id) != self.tenant_id
-                or context.session_id != self.session_id
-                or context.request_id != self.request_id
-                or context.correlation_id != self.correlation_id
-                or not RuntimePolicyEnforcer.authorize_external_provider_execution(
-                    context=context,
-                    plan=self.plan,
-                    expression_policies=get_expression_settings().policies,
-                )
-            ):
-                raise PermissionError("governed_external_model_execution_denied")
-
-        # This is the only charge for a governed Deep Agents model call.
-        # SDK on_chat_model_start is observability, not budget authority.
-        if not await self.meter.reserve_model_execution(external=external):
-            raise RuntimeError("governed_model_execution_budget_exhausted")
 
 
 class KarenGovernedChatModel(BaseChatModel):
@@ -186,7 +114,7 @@ class KarenGovernedChatModel(BaseChatModel):
         admission = self.execution_admission
         if not isinstance(admission, GovernedToolModelAdmission):
             raise PermissionError("governed_model_transport_admission_required")
-        await admission.reserve_transport(self.endpoint)
+        await admission.reserve_transport(self.endpoint, model=self.selected_model)
         result = await execute_structured_provider_endpoint(
             self.endpoint,
             messages=wire_messages,
