@@ -20,6 +20,7 @@ from ai_karen_engine.core.model_runtime.openai_compatible_client import (
     OpenAICompatibleRuntimeClient,
 )
 from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpoint,
     ProviderEndpointType,
@@ -56,6 +57,7 @@ class RuntimeSelection:
     supports_embeddings: bool = False
     selected_via: str = "registry"
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    runtime_engine: Optional[str] = None
 
 
 class ModelManager:
@@ -76,6 +78,7 @@ class ModelManager:
         self.embedding_manager = embedding_manager or EmbeddingManager()
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self._runtime_cache: Dict[str, Any] = {}
+        self._runtime_cache_endpoints: Dict[str, ProviderEndpoint] = {}
 
     def select_provider(
         self,
@@ -112,6 +115,7 @@ class ModelManager:
             display_name=endpoint.display_name,
             endpoint_type=endpoint.endpoint_type,
             model=endpoint.default_model,
+            runtime_engine=endpoint.runtime_engine.value,
             base_url=endpoint.base_url,
             supports_streaming=endpoint.supports_streaming,
             supports_embeddings=endpoint.supports_embeddings,
@@ -182,14 +186,28 @@ class ModelManager:
             raise ProviderNotAvailable(
                 f"Provider endpoint not found: {selection.provider_id}"
             )
-        if endpoint.endpoint_type != selection.endpoint_type:
-            raise ProviderNotAvailable(
-                "Runtime selection endpoint type no longer matches provider registry"
+        if (
+            not endpoint.enabled
+            or endpoint.endpoint_type != selection.endpoint_type
+            or endpoint.base_url != selection.base_url
+            or endpoint.default_model != selection.model
+            or (
+                selection.runtime_engine is not None
+                and selection.runtime_engine != endpoint.runtime_engine.value
             )
+        ):
+            raise ProviderNotAvailable("runtime_selection_registry_drift")
+        # Provider IDs alone cannot keep a stale endpoint/model runtime alive.
+        # Credential-env clients are cheap to reconstruct on key rotation.
+        if endpoint.api_key_env:
+            self._runtime_cache.pop(selection.provider_id, None)
+            self._runtime_cache_endpoints.pop(selection.provider_id, None)
+            return self._build_runtime(endpoint)
         runtime = self._runtime_cache.get(selection.provider_id)
-        if runtime is None:
+        if runtime is None or self._runtime_cache_endpoints.get(selection.provider_id) != endpoint:
             runtime = self._build_runtime(endpoint)
             self._runtime_cache[selection.provider_id] = runtime
+            self._runtime_cache_endpoints[selection.provider_id] = endpoint
         return runtime
 
     def _normalize_capability(
@@ -251,11 +269,21 @@ class ModelManager:
         messages: List[Dict[str, Any]],
         context: Optional[Dict[str, Any]] = None,
         stream: bool = False,
+        return_receipt: bool = False,
         **kwargs: Any,
     ) -> Any:
+        if type(return_receipt) is not bool or (return_receipt and stream):
+            raise ProviderNotAvailable("model_execution_receipt_mode_invalid")
         selection = self.select_provider("chat_completion", context=context, stream=stream)
         if not selection:
             raise ProviderNotAvailable("No capable model provider is available")
+
+        requested_model = kwargs.get("model")
+        if requested_model not in (None, "") and (
+            not isinstance(requested_model, str)
+            or requested_model != selection.model
+        ):
+            raise ProviderNotAvailable("requested_model_not_registry_eligible")
 
         prompt = self._messages_to_prompt(messages)
         provider = self.resolve_runtime(selection)
@@ -271,9 +299,62 @@ class ModelManager:
         try:
             if stream:
                 return self.stream_provider(provider, prompt, **kwargs)
-            response = await self.invoke_provider(provider, prompt, **kwargs)
+            # Compatibility HTTP may serve an auto-selected model. Obtain
+            # the response and its reported model from *one* request result.
+            # Reading a shared client's mutable "model" after await races
+            # concurrent calls and can attach another request's identity.
+            observed_model = None
+            if return_receipt:
+                from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+                    TransformersRuntime,
+                )
+
+                if isinstance(provider, (OpenAICompatibleRuntimeClient, TransformersRuntime)):
+                    response, observed_model = await asyncio.to_thread(
+                        provider.generate_text_with_model, prompt, **kwargs
+                    )
+                    if (
+                        not isinstance(observed_model, str)
+                        or not observed_model.strip()
+                        or observed_model.lower() == "auto"
+                    ):
+                        denial = (
+                            "compatibility_execution_model_unobserved"
+                            if isinstance(provider, OpenAICompatibleRuntimeClient)
+                            else "native_execution_model_unobserved"
+                        )
+                        raise ProviderNotAvailable(denial)
+                else:
+                    raise ProviderNotAvailable("model_execution_provenance_unsupported")
+                # Observed-model identity is part of the typed receipt path.
+                # Text-only callers must not be forced to invent provenance.
+                if selection.model not in {None, "", "auto"}:
+                    if isinstance(provider, TransformersRuntime):
+                        matching_model = (
+                            isinstance(observed_model, str)
+                            and os.path.realpath(selection.model)
+                            == os.path.realpath(observed_model)
+                        )
+                    else:
+                        matching_model = observed_model == selection.model
+                    if not matching_model:
+                        raise ProviderNotAvailable("executed_model_registry_identity_drift")
+            else:
+                response = await self.invoke_provider(provider, prompt, **kwargs)
             self._record_provider_result(selection.provider_id, True, start)
             breaker.record_success()
+            if return_receipt:
+                actual_model = (
+                    observed_model
+                    if observed_model not in {None, "", "auto"}
+                    else selection.model if selection.model not in {None, "", "auto"} else None
+                )
+                return ProviderExecutionResult(
+                    text=str(response or ""),
+                    provider_id=selection.provider_id,
+                    model=actual_model,
+                    runtime_engine=selection.runtime_engine,
+                )
             return response
         except Exception as exc:
             self._record_provider_result(
@@ -287,11 +368,10 @@ class ModelManager:
             raise
 
     async def generate_embedding(self, text: str, **kwargs: Any) -> List[float]:
-        try:
-            return await asyncio.to_thread(self.embedding_manager.embed, text)
-        except Exception as exc:
-            logger.warning("Embedding manager failed, using deterministic fallback: %s", exc)
-            return self._deterministic_embedding(text)
+        """Return only an actual model embedding, never synthetic data."""
+        if kwargs:
+            raise ProviderNotAvailable("embedding_execution_options_unsupported")
+        return await asyncio.to_thread(self.embedding_manager.embed_authoritative, text)
 
     @classmethod
     async def invoke_provider(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:
@@ -299,10 +379,13 @@ class ModelManager:
             method = getattr(provider, method_name, None)
             if not callable(method):
                 continue
-            result = method(prompt, **kwargs)
+            if inspect.iscoroutinefunction(method):
+                result = await method(prompt, **kwargs)
+            else:
+                result = await asyncio.to_thread(method, prompt, **kwargs)
             if inspect.isawaitable(result):
                 return await result
-            return await asyncio.to_thread(lambda: result)
+            return result
         raise AttributeError("Provider does not expose a supported generation method")
 
     @classmethod
@@ -370,10 +453,13 @@ class ModelManager:
             method = getattr(provider, method_name, None)
             if not callable(method):
                 continue
-            result = method(text, **kwargs)
+            if inspect.iscoroutinefunction(method):
+                result = await method(text, **kwargs)
+            else:
+                result = await asyncio.to_thread(method, text, **kwargs)
             if inspect.isawaitable(result):
                 return await result
-            return await asyncio.to_thread(lambda: result)
+            return result
         raise AttributeError("Provider does not expose an embedding method")
 
     # Private compatibility alias. New specialist Runtime code should use
@@ -452,12 +538,6 @@ class ModelManager:
                 parts.append(f"{role}: {content}")
         return "\n".join(parts).strip()
 
-    def _deterministic_embedding(self, text: str, dimensions: int = 16) -> List[float]:
-        import hashlib
-        digest = hashlib.sha256((text or "").encode("utf-8")).digest()
-        return [((digest[index % len(digest)] / 255.0) * 2.0 - 1.0) for index in range(dimensions)]
-
-
 _model_manager: Optional[ModelManager] = None
 
 
@@ -474,4 +554,7 @@ def initialize_model_manager() -> ModelManager:
     return _model_manager
 
 
-__all__ = ["ModelManager", "RuntimeSelection", "get_model_manager", "initialize_model_manager"]
+__all__ = [
+    "ModelManager", "RuntimeSelection",
+    "get_model_manager", "initialize_model_manager",
+]
