@@ -35,6 +35,10 @@ from ai_karen_engine.core.intelligence.ml.training.datasets import (
     JsonlTrainingDatasetProvider,
     TopologyTrainingExample,
 )
+from ai_karen_engine.core.intelligence.ml.training.consumption_evidence import (
+    create_sklearn_fit_observation,
+)
+from ai_karen_engine.config.learning import get_learning_settings
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +125,14 @@ class SklearnTrainingExecutor(TrainingExecutor):
             class_weight = None
         if not 0.05 <= test_size <= 0.5 or not 100 <= max_iter <= 10000 or class_weight not in (None, 'balanced'):
             raise ValueError('Invalid advanced sklearn training configuration')
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_seed, stratify=stratify
+        # Carry the original example indices through the exact same sklearn
+        # partition. A declaration of the input dataset or sample counts is
+        # not evidence of the rows selected for model.fit.
+        X_train, X_test, y_train, y_test, fit_indices, holdout_indices = (
+            train_test_split(
+                X, y, list(range(len(examples))), test_size=test_size,
+                random_state=random_seed, stratify=stratify,
+            )
         )
 
         model = LogisticRegression(
@@ -131,6 +141,11 @@ class SklearnTrainingExecutor(TrainingExecutor):
             class_weight=class_weight,
             solver="lbfgs",
         )
+        observation_key = None
+        if job.metadata.get("dataset_scope") == "tenant":
+            observation_key = (
+                get_learning_settings().get_kcm_sklearn_fit_observation_key()
+            )
         model.fit(X_train, y_train)
 
         test_pred = model.predict(X_test)
@@ -199,6 +214,30 @@ class SklearnTrainingExecutor(TrainingExecutor):
             "tenant_key": hashlib.sha256(tenant_id.encode("utf-8")).hexdigest()[:16] if tenant_id else "",
             "class_weight": class_weight,
         }
+        if observation_key is not None:
+            tenant_key_id, tenant_hmac_key = observation_key
+            observed = create_sklearn_fit_observation(
+                tenant_id=tenant_id,
+                job_id=job.job_id,
+                model_id=model_id,
+                model_version=model_version,
+                dataset_version=job.dataset_version,
+                feature_version=feature_version,
+                seed=random_seed,
+                examples=examples,
+                train_indices=fit_indices,
+                holdout_indices=holdout_indices,
+                key_id=tenant_key_id,
+                key=tenant_hmac_key,
+            )
+            # A receipt is emitted only after successful fit, and is sealed
+            # into the canonical artifact hash along with its metadata.
+            (artifact_root / "training_consumption.json").write_bytes(observed)
+            training_metadata["fit_observation_sha256"] = (
+                hashlib.sha256(observed).hexdigest()
+            )
+            training_metadata["fit_observation_key_id"] = tenant_key_id
+
         metadata_path = artifact_root / "training_metadata.json"
         metadata_path.write_text(
             json.dumps(training_metadata, indent=2, sort_keys=True), encoding="utf-8"
