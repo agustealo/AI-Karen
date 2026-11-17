@@ -258,6 +258,7 @@ class MedusaCoordinator:
             )
             if (
                 not isinstance(shared_meter, ExecutionBudgetMeter)
+                or trusted_context is None
                 or original_plan is None
                 or shared_meter.budget != authorized_plan.budget
             ):
