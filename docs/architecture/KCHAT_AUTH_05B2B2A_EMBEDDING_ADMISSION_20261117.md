@@ -158,3 +158,36 @@ child-plan registrar now enforces strict subset checks even when the root is
 empty. Both immediate in-process child registration and serialized Medusa
 handoff must deny that widening **before** any planner or provider invocation.
 Dedicated negative regressions assert zero model calls and unchanged meter.
+
+### Original immutable issuance and delegated grant evidence
+
+A policy decision's Python object identity alone is insufficient because the
+decision's `runtime_constraints` and capability lists remain mutable. The
+existing `RuntimePolicyEnforcer.evaluate` now retains an independent, deep
+issuer-time snapshot of the exact permitted constraints and relevant capability
+fields, with weak-lifetime cleanup. Every policy-context bind and later
+verification checks that the original decision **still matches what the
+evaluator actually returned**. Cloning the decision or changing its model quota,
+principal scope or capability claims cannot create a new grant.
+
+The original `ExecutionBudgetMeter` has one numeric snapshot for all quota
+reservations. At first plan/meter binding, its snapshot must match **all**
+current budget fields as well as the actual issuer decision's maximum model
+calls. Increasing the meter's snapshot and then lowering the budget before
+binding fails closed. Changes after binding also invalidate model admission,
+without turning a quota denial into a provider fallback.
+
+The existing authenticated `ChatExecutionContext` independently snapshots
+execution-bearing root fields (capabilities, tool/plugin/agent allowlists,
+provider restrictions, topology and other scoped controls) at the original
+binding. Its child registrar compares rights against that immutable snapshot,
+not against a mutated root plan. Each admitted child also retains its own
+immutable grant snapshot; modifying a child after registration does not
+authorize additional execution. Runtime telemetry and observed degradation
+metadata remain mutable, as neither is a permission issuer.
+
+Regression cases cover prebind meter inflation, postbind budget mutation,
+post-evaluation decision mutation, mutable root grant escalation, serialized
+Medusa handoff escalation and child-plan mutation. No new policy owner, quota
+meter or independent provider router is introduced. Full exact-head release
+gates and independent P1/P2 review remain mandatory.
