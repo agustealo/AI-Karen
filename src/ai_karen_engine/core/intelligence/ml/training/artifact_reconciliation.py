@@ -104,6 +104,12 @@ class TrainingArtifactReconciler:
         job_id = metrics.get("training_job_id")
         if (
             not isinstance(job_id, str) or not job_id.strip()
+            or not isinstance(manifest.model_version, str)
+            or not manifest.model_version.strip()
+            or not isinstance(manifest.training_dataset_version, str)
+            or not manifest.training_dataset_version.strip()
+            or not isinstance(manifest.purpose, str)
+            or not manifest.purpose.strip()
             or metrics.get("tenant_key") != tenant_key
             or metrics.get("tenant_scoped") is not True
             or metrics.get("dataset_version") != manifest.training_dataset_version
@@ -186,7 +192,12 @@ class TrainingArtifactReconciler:
         # computes the artifact's content hash, including training metadata.
         if not self.registry.validate_artifact(manifest):
             return None
-        current = self.registry.get(model_id)
+        # This second potentially slow hash MUST finish before the final
+        # identity, registry, and owner-scoped ledger reads. Otherwise changes
+        # during hashing would escape the final drift check.
+        if not self.registry.validate_artifact(manifest):
+            return None
+        current = deepcopy(self.registry.get(model_id))
         replay = self.ledger.get(job_id, tenant_id=tenant, user_id=owner)
         if (
             principal.is_expired()
@@ -197,7 +208,6 @@ class TrainingArtifactReconciler:
             )
             or current != manifest
             or replay != record
-            or not self.registry.validate_artifact(manifest)
         ):
             return None
 
@@ -212,6 +222,14 @@ class TrainingArtifactReconciler:
                 "training_example_inventory_verified": False,
             },
         )
+        # Authentication can expire while the final storage reads or logging
+        # run. Recheck the unchanged trusted session immediately before return.
+        if principal.is_expired() or trusted_claims != (
+            principal.tenant_id, principal.user_id, principal.session_id,
+            tuple(principal.roles), tuple(principal.permissions),
+            principal.expires_at,
+        ):
+            return None
         return ScopedTrainingArtifactLineage(
             tenant_id=tenant,
             user_id=owner,
