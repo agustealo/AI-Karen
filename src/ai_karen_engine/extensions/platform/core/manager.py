@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from ai_karen_engine.services.plugin_service import PluginService
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.plugin_lifecycle_approval import PluginLifecycleApprovalScope
 
 logger = logging.getLogger(__name__)
 
@@ -141,13 +143,10 @@ class ExtensionCoreManager:
         }
 
     async def refresh_registry(self) -> Dict[str, Any]:
-        service = await self._ensure_service()
-        await service.refresh_plugins()
-        records = await service.list_plugins()
-        return {
-            "discovered_count": len(records),
-            "discovered": [record["manifest"].name for record in records],
-        }
+        """Refuse unapproved registry rebuilds that can change runtime state."""
+        raise PermissionError(
+            "Plugin registry refresh needs governed lifecycle admission"
+        )
 
     def list_extension_statuses(self) -> List[Dict[str, Any]]:
         service = self._service()
@@ -164,13 +163,10 @@ class ExtensionCoreManager:
         return self._status_from_record(record) if record is not None else None
 
     async def reload_runtime(self) -> Dict[str, Any]:
-        service = await self._ensure_service()
-        discovered_count = await service.refresh_plugins()
-        enabled = await service.list_plugins(enabled_only=True)
-        return {
-            "discovered_count": discovered_count,
-            "loaded_count": len(enabled),
-        }
+        """Legacy reload is not an approved multi-plugin state transition."""
+        raise PermissionError(
+            "Plugin runtime reload needs governed lifecycle admission"
+        )
 
     async def initialize(self) -> Dict[str, Any]:
         """Initialize the canonical service without importing plugin code."""
@@ -178,26 +174,77 @@ class ExtensionCoreManager:
         logger.info("Canonical plugin service initialized through platform facade")
         return self.health_summary()
 
-    async def load_extension(self, extension_name: str) -> Optional[Dict[str, Any]]:
-        """Compatibility name: enable a plugin without eagerly importing its code."""
+    async def load_extension(
+        self,
+        extension_name: str,
+        *,
+        context: Optional["ChatExecutionContext"] = None,
+        scope: Optional["PluginLifecycleApprovalScope"] = None,
+        approval_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Compatibility name for one approved general-plugin enable.
+
+        Historical callers may not use the raw PluginService enable method.
+        The governed service verifies the current principal, human approval,
+        global revision and actual kernel transition before reporting success.
+        """
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+
+        if (
+            context is None
+            or not isinstance(scope, PluginLifecycleApprovalScope)
+            or not approval_id
+        ):
+            raise PermissionError("Approved lifecycle execution context required")
+        if scope.installation_id != extension_name or scope.action != "enable":
+            raise ValueError("Approved lifecycle action differs from requested extension")
         service = await self._ensure_service()
-        if not await service.enable_plugin(extension_name):
-            return None
+        receipt = await service.execute_approved_lifecycle(
+            context=context, scope=scope, approval_id=approval_id,
+        )
+        if receipt.get("status") != "verified_committed":
+            raise RuntimeError("Extension enable did not commit a verified lifecycle receipt")
         record = await service.get_plugin_info(extension_name)
         return self._status_from_record(record) if record is not None else None
 
-    async def unload_extension(self, extension_name: str) -> bool:
-        """Compatibility name: disable a plugin in the canonical runtime."""
+    async def unload_extension(
+        self,
+        extension_name: str,
+        *,
+        context: Optional["ChatExecutionContext"] = None,
+        scope: Optional["PluginLifecycleApprovalScope"] = None,
+        approval_id: Optional[str] = None,
+    ) -> bool:
+        """Compatibility name for one approved general-plugin disable."""
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+
+        if (
+            context is None
+            or not isinstance(scope, PluginLifecycleApprovalScope)
+            or not approval_id
+        ):
+            raise PermissionError("Approved lifecycle execution context required")
+        if scope.installation_id != extension_name or scope.action != "disable":
+            raise ValueError("Approved lifecycle action differs from requested extension")
         service = await self._ensure_service()
-        return await service.disable_plugin(extension_name)
+        receipt = await service.execute_approved_lifecycle(
+            context=context, scope=scope, approval_id=approval_id,
+        )
+        return receipt.get("status") == "verified_committed"
 
     async def reload_extension(self, extension_name: str) -> Optional[Dict[str, Any]]:
-        service = await self._ensure_service()
-        await service.refresh_plugins()
-        if not await service.enable_plugin(extension_name):
-            return None
-        record = await service.get_plugin_info(extension_name)
-        return self._status_from_record(record) if record is not None else None
+        """Never silently turn one reload into an unapproved enable.
+
+        A real physical disable/re-enable requires two separate, current
+        revision-bound human approvals and verified terminal receipts.
+        """
+        raise PermissionError(
+            "Extension reload requires separately approved disable and enable transitions"
+        )
 
     async def discover_extensions(self) -> List[Dict[str, Any]]:
         service = await self._ensure_service()
@@ -229,8 +276,9 @@ class ExtensionCoreManager:
     async def refresh_extensions(
         self, *, user_context: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
+        # GET/catalog projection must not silently perform a runtime rebuild.
+        # Initialization already establishes the current read-only snapshot.
         service = await self._ensure_service()
-        await service.refresh_plugins()
         records = await service.list_plugins()
         if user_context is not None:
             records = [

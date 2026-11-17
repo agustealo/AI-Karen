@@ -148,7 +148,7 @@ async def test_extension_install_requires_plugin_management_permission(
 
 
 @pytest.mark.asyncio
-async def test_load_extension_supports_canonical_dict_status(catalog_app, monkeypatch):
+async def test_admin_cannot_use_legacy_extension_route_without_approval(catalog_app, monkeypatch):
     app, _ = catalog_app
 
     async def admin(_request):
@@ -158,22 +158,28 @@ async def test_load_extension_supports_canonical_dict_status(catalog_app, monkey
             "roles": ["admin"],
         }
 
-    class Manager:
-        async def load_extension(self, name):
-            assert name == "intelligent-search"
-            return {"status": "enabled", "name": name}
+    from ai_karen_engine import audit_logging
 
-        async def refresh_extensions(self):
-            return []
-
+    audits = []
+    monkeypatch.setattr(
+        audit_logging,
+        "get_audit_logger",
+        lambda: SimpleNamespace(log_audit_event=audits.append),
+    )
     monkeypatch.setattr(routes, "get_current_user", admin)
-    monkeypatch.setattr(routes, "get_extension_manager", lambda: Manager())
+    monkeypatch.setattr(
+        routes,
+        "get_extension_manager",
+        lambda: pytest.fail("Unapproved HTTP call must not reach runtime manager"),
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.post("/api/extensions/intelligent-search/load")
-    assert response.status_code == 200
-    assert response.json()["status"] == "enabled"
+    assert response.status_code == 409
+    assert "approval required" in response.json()["detail"].lower()
+    assert audits[-1]["metadata"]["outcome"] == "rejected"
+    assert audits[-1]["metadata"]["extension_id"] == "intelligent-search"
 
 
 @pytest.mark.asyncio
