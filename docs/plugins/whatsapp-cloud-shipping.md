@@ -340,3 +340,42 @@ tests/extensions/test_channel_activation_service.py` and the exact-head
 Plugin Backend, Plugin Security Reports, Main Quality and relevant production
 boot gates. A signed-in operator UI and actual Meta sandbox transcript are
 still necessary for consumer-ready shipping.
+
+
+## KWA-01C6B: bounded tenant operator inventory and Admin UI
+
+Admin Settings → WhatsApp Cloud now offers an authenticated, operator-only
+workflow using the same `ChannelActivationService` action plans and canonical
+host authority as KWA-01C6A. Operators can provide a **numeric Meta phone-number
+ID** and an **existing opaque Vault handle** to provision a disabled connection,
+inspect the tenant's persisted connections, activate after the real Meta Graph
+identity probe, or durably deactivate with an exact expected revision. The
+frontend submits neither actor identity nor runtime policy grants.
+
+`GET /api/channels/operator/whatsapp/connections` first mints a fresh
+`channel.inspect` plan, then the host verifies the installed canonical
+adapter and live operator entitlement before delegating to
+`SqlChannelRepository.list_whatsapp_operator_connections`. The SQL executes
+inside the existing tenant-scoped transaction/RLS boundary, filters
+`installation_id='whatsapp-cloud'`, returns **only** UUID, persisted revision
+and enabled flag, and refuses an inventory larger than 50 records. It never
+selects Vault handles, token values or Meta phone identifiers. The UI rejects
+malformed/unexpected response shapes, clears previous tenant state on identity
+changes, and gives no fake empty or connected state when backend inspection
+fails.
+
+The UI text deliberately distinguishes **persisted Karen enablement** from
+live Meta webhook health or message delivery. Successful activation may confirm
+a Meta phone identity check, but never changes the displayed webhook,
+signed-inbound or delivery indicators to verified. Failed or uncertain
+mutations do not synthesize saved/connected state and require a fresh backend
+read. No localStorage or browser credential persistence is added.
+
+Dedicated proof includes
+`pytest -q tests/extensions/test_whatsapp_operator_api.py`,
+the disposable `tests/integration/test_channel_claim_concurrency_postgres.py`,
+and frontend `tests/settings/whatsapp-cloud-settings.test.tsx`. Production
+acceptance still needs a real signed-in browser walkthrough, a configured
+Meta sandbox, public callback handshake, verified identity binding and
+provider-observed signed delivery/read receipts. Source-only UI/API success
+is **not** a WhatsApp shipping approval.

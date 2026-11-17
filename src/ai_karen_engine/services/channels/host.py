@@ -192,6 +192,21 @@ class ChannelHostServices:
             raise PermissionError("Canonical WhatsApp transport unavailable")
         return adapter
 
+    async def list_whatsapp_operator_connections(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> list[dict[str, str | int | bool]]:
+        """Inspect only this tenant's persisted WhatsApp state after fresh policy."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.inspect", plan=authorized_plan,
+        )
+        return await self.repository.list_whatsapp_operator_connections(
+            tenant_id=tenant_id,
+        )
+
     async def provision_whatsapp_connection(
         self, *, tenant_id: str, user_id: str, session_id: str,
         provider_account_id: str, credential_handle: str,
