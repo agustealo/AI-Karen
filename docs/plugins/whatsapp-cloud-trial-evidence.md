@@ -103,3 +103,40 @@ event and never grants consumer certification.
 This slice follows the installed authority model: thin API ingress,
 host policy and plugin gating, SQL truth, no UI-owned fallbacks and no
 new execution path.
+
+## Opt-in real deployed browser acceptance
+
+A separate Playwright acceptance harness follows the actual signed-in admin
+screen, reads the exact provider-originated inbound ID that the operator
+obtained outside Karen, and compares the ledger's redacted outbound SHA-256
+fingerprint to the exact real Meta Graph send-response ID supplied through
+the operator's approved secret injector. It also checks that the requested
+provider `delivered` or `read` receipt has been durably recorded. It never
+generates signed Meta payloads or performs a delivery itself.
+
+Operator-provided environment: `KAREN_BASE_URL` and
+`KAREN_WHATSAPP_DEPLOYMENT_REVISION` for the reviewed HTTPS SHA,
+`KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` for a verified tenant
+operator, `KAREN_WHATSAPP_ACCEPTANCE_CONNECTION_ID` (UUID),
+`KAREN_WHATSAPP_ACCEPTANCE_INBOUND_MESSAGE_ID` (real Meta inbound
+`wamid.`), `KAREN_WHATSAPP_ACCEPTANCE_OUTBOUND_MESSAGE_ID`
+(real Graph send-response `wamid.`), and
+`KAREN_WHATSAPP_TRIAL_REQUIRED_RECEIPT` (`delivered` or `read`).
+The trial must already have been sent using approved provider credentials.
+
+Run from `src/ui_launchers/Karen-AI-Theme`:
+
+```bash
+KAREN_WHATSAPP_TRIAL_EVIDENCE_REQUIRED=true \
+npx playwright test e2e/whatsapp-cloud-trial-evidence-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium --retries=0
+```
+
+The suite binds to the actual deployment revision and real admin connection
+inventory, does not store or log raw IDs or response bodies, and disables
+Playwright screenshot, trace and video recording. Source CI skips this
+operator-secret-dependent suite by default. Even when it passes, the suite
+establishes **host-ledger agreement with operator-provided Meta IDs**, not
+independent Meta webhook origin or subscriber-read certification. An approved
+provider dashboard or independently captured signed callback must separately
+confirm that the original input evidence actually came from Meta.
