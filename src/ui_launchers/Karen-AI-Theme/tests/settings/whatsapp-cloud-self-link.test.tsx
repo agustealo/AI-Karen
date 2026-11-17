@@ -51,6 +51,105 @@ afterEach(() => {
 });
 
 describe('WhatsApp Cloud single-use consumer self-link', () => {
+  it('does not fetch or select a business connection until explicitly requested', async () => {
+    render(<WhatsAppCloudSelfLink />);
+    expect(apiClient.get).not.toHaveBeenCalled();
+    expect(apiClient.post).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Available connections')).toBeNull();
+
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      connections: [{ connection_id: ID, connection_revision: 4 }],
+    });
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Find available WhatsApp Cloud connections',
+    }));
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledWith(
+      '/api/channels/identity/whatsapp/connections',
+    ));
+    const picker = await screen.findByLabelText('Available connections');
+    expect((picker as HTMLSelectElement).value).toBe('');
+    expect(screen.getByText(/does not establish live Meta connectivity/)).toBeTruthy();
+    expect(apiClient.post).not.toHaveBeenCalled();
+
+    fireEvent.change(picker, { target: { value: ID } });
+    expect((screen.getByLabelText('Operator-provided connection ID') as HTMLInputElement).value)
+      .toBe(ID);
+    fireEvent.click(screen.getByRole('button', { name: 'Request one-time link command' }));
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith(ENDPOINT, {}));
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(COMMAND)).toBeTruthy();
+  });
+
+  it('does not invent enabled connections when the canonical inventory is empty', async () => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce({ connections: [] });
+    render(<WhatsAppCloudSelfLink />);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Find available WhatsApp Cloud connections',
+    }));
+    expect(await screen.findByText(/no enabled WhatsApp Cloud connections/)).toBeTruthy();
+    expect(screen.queryByLabelText('Available connections')).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { connections: [{ connection_id: ID, connection_revision: 0 }] },
+    { connections: [{ connection_id: ID, connection_revision: true }] },
+    { connections: [{ connection_id: ID, connection_revision: '3' }] },
+    { connections: [{ connection_id: ID, connection_revision: 4,
+      provider_account_id: 'sensitive-provider-account' }] },
+    { connections: [{ connection_id: 'invalid', connection_revision: 4 }] },
+    { connections: [{ connection_id: ID, connection_revision: 4 },
+      { connection_id: ID, connection_revision: 4 }] },
+    { connections: Array.from({ length: 51 }, (_, index) => ({
+      connection_id: ID, connection_revision: index + 1,
+    })) },
+    { connections: [{ connection_id: ID, connection_revision: 4 }],
+      tenant_id: 'forged-tenant' },
+  ])('does not display an unverified or forged connection inventory', async (invalid) => {
+    vi.mocked(apiClient.get).mockResolvedValueOnce(invalid);
+    render(<WhatsAppCloudSelfLink />);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Find available WhatsApp Cloud connections',
+    }));
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('could not verify your available WhatsApp Cloud connections');
+    expect(screen.queryByLabelText('Available connections')).toBeNull();
+    expect(screen.queryByText(/sensitive-provider-account/)).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
+  it('redacts unauthorised inventory responses and leaves direct input disabled', async () => {
+    vi.mocked(apiClient.get).mockRejectedValueOnce(
+      new ApiError(403, 'vault://not-for-client'),
+    );
+    render(<WhatsAppCloudSelfLink />);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Find available WhatsApp Cloud connections',
+    }));
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('Your account cannot list WhatsApp Cloud connections');
+    expect(screen.queryByText(/vault:\/\/not-for-client/)).toBeNull();
+    expect((screen.getByRole('button', { name: 'Request one-time link command' }) as HTMLButtonElement)
+      .disabled).toBe(true);
+  });
+
+  it('discards a stale inventory response after the account component unmounts', async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(apiClient.get).mockImplementationOnce(
+      () => new Promise((resolve) => { finish = resolve; }),
+    );
+    const view = render(<WhatsAppCloudSelfLink />);
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Find available WhatsApp Cloud connections',
+    }));
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalledTimes(1));
+    view.unmount();
+    finish({ connections: [{ connection_id: ID, connection_revision: 4 }] });
+    await Promise.resolve();
+    expect(screen.queryByLabelText('Available connections')).toBeNull();
+    expect(apiClient.post).not.toHaveBeenCalled();
+  });
+
   it('does nothing until an operator-provided UUID and explicit click', async () => {
     render(<WhatsAppCloudSelfLink />);
     const request = screen.getByRole('button', { name: 'Request one-time link command' });

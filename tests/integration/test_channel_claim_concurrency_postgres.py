@@ -247,6 +247,22 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                        true,4)""",
             trial_connection, tenant_a, f"trial-{uuid.uuid4().hex}",
         )
+        # KWA-01C6C2C3: independently query the actual enabled-only tenant
+        # choices with RLS and verified principal. Never fetch provider IDs.
+        self_link_repository = SqlChannelRepository()
+        choices = await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        assert choices == [{
+            "connection_id": trial_connection, "connection_revision": 4,
+        }]
+        assert await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_b), user_id=str(user),
+        ) == []
+        assert await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_a), user_id=str(uuid.uuid4()),
+        ) == []
+        assert "vault://trial-fixture" not in str(choices)
         await raw.execute(
             """INSERT INTO public.channel_identity_bindings
                (binding_id, tenant_id, connection_id, external_sender_id,
@@ -400,6 +416,9 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             tenant_id=str(tenant_a), user_id=str(user),
             connection_id=trial_connection, challenge_id=proof_issued,
         ) == "consumed"
+        assert await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_a), user_id=str(user),
+        ) == []
 
         # Isolate this fixture before the rest of the integration scenario.
         assert await raw.execute(
