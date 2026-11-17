@@ -275,3 +275,50 @@ async def test_single_verified_engine_never_reserves_an_extra_call() -> None:
     assert result.text == "Generated answer"
     assert visited == ["local"]
     assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_external_provider_policy_denies_enabled_cloud_engine_before_invocation() -> None:
+    # A runtime setting enabling an endpoint is never a grant to send private
+    # chat context outside the installation.
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call() is True
+    visited: list[str] = []
+    settings = _settings(external_allowed=False)
+    settings.active_engine = "cloud"
+    settings.engine_fallback_order = []
+    task = _task(meter)
+    task.preferred_provider = "gemini"
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(
+            engine_id, visited, fail_primary=False,
+        ),
+    ):
+        with pytest.raises(EngineUnavailableError, match="No model engine produced"):
+            await ExpressionGateway(settings).generate(task)
+
+    assert visited == []
+    assert meter.model_calls == 1
+    assert meter.exhausted is False
+
+
+@pytest.mark.asyncio
+async def test_external_policy_blocks_cloud_fallback_without_spending_extra_quota() -> None:
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call() is True
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        result = await ExpressionGateway(
+            _settings(external_allowed=False, extra_engine=True)
+        ).generate(_task(meter))
+
+    assert visited == ["local", "alternate"]
+    assert result.metadata["fallback_level"] == 2
+    assert {
+        "engine_id": "cloud", "reason": "external_engines_forbidden",
+    } in result.metadata["skipped_engines"]
+    assert meter.model_calls == 2
