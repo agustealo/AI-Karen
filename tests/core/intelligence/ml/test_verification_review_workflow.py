@@ -386,7 +386,14 @@ async def test_b2c3a_reviewer_refuses_unverified_or_incomplete_execution_traject
     trajectory = lineage_store.get(observed.trajectory_id, tenant_id=TENANT)
     assert trajectory is not None
     setattr(trajectory, field, value)
-    with pytest.raises(ValueError, match="Completed selected runtime trajectory"):
+    # The exact tenant-scoped store deliberately hides a foreign trajectory
+    # before the later execution-integrity checks can inspect its contents.
+    denial = (
+        "Selected runtime execution evidence is unavailable"
+        if field == "tenant_id"
+        else "Completed selected runtime trajectory"
+    )
+    with pytest.raises(ValueError, match=denial):
         await handler.submit(judgement, reviewer=principal())
     assert receipts.list_for_tenant(TENANT, source="intelligence.ml") == []
 
