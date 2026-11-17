@@ -135,7 +135,9 @@ class TestOpenAICompatibleAdapter:
             )
             caps = adapter.discover_capabilities()
             mock_httpx.Client.assert_called_once_with(
-                timeout=adapter.timeout_seconds, trust_env=False, follow_redirects=False
+                timeout=adapter.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
             )
             assert caps.chat is True
 
@@ -162,7 +164,9 @@ class TestOpenAICompatibleAdapter:
             )
             health = adapter.check_health()
             mock_httpx.Client.assert_called_once_with(
-                timeout=adapter.timeout_seconds, trust_env=False, follow_redirects=False
+                timeout=adapter.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
             )
             assert health == "healthy"
 
@@ -186,6 +190,8 @@ class TestOpenAICompatibleAdapter:
             )
             health = adapter.check_health()
             mock_httpx.Client.assert_called_once_with(
-                timeout=adapter.timeout_seconds, trust_env=False, follow_redirects=False
+                timeout=adapter.timeout_seconds,
+                trust_env=False,
+                follow_redirects=False,
             )
             assert health == "unavailable"
