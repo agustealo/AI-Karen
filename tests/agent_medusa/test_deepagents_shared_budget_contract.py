@@ -20,6 +20,7 @@ from ai_karen_engine.core.runtime.contracts import (
     ExecutionBudget,
     ExecutionBudgetMeter,
     ExecutionTopology,
+    DegradationState,
 )
 
 
@@ -134,6 +135,26 @@ async def test_medusa_refuses_invalid_shared_meter_before_any_planning(invalid):
     with pytest.raises(PermissionError, match="medusa_shared_budget_authority_invalid"):
         await coordinator._handle_request(request)
     planner.create_plan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shared_medusa_degradation_metadata_restores_original_plan_identity():
+    request, plan, meter, _ = _request()
+    plan.degradation_state = DegradationState(
+        degraded=True, reason_code="diagnostic-only", level="medium",
+    )
+    request.authorized_plan = asdict(plan)
+    planner = SimpleNamespace(
+        create_plan=AsyncMock(side_effect=RuntimeError("planner_sentinel")),
+    )
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.planner = planner
+    coordinator.registry = SimpleNamespace()
+    with pytest.raises(RuntimeError, match="planner_sentinel"):
+        await coordinator._handle_request(request)
+    planner.create_plan.assert_awaited_once()
+    assert planner.create_plan.await_args.kwargs["authorized_plan"] is plan
+    assert planner.create_plan.await_args.kwargs["budget"] is meter.budget
 
 
 @pytest.mark.asyncio

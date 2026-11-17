@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any, Dict, List, Optional
 
 from ...core.runtime.outcome.store import OutcomeStoreError
@@ -258,7 +258,7 @@ class MedusaCoordinator:
                 not isinstance(shared_meter, ExecutionBudgetMeter)
                 or original_plan is None
                 or shared_meter.budget != authorized_plan.budget
-                or original_plan != authorized_plan
+                or asdict(original_plan) != asdict(authorized_plan)
             ):
                 raise PermissionError("medusa_shared_budget_authority_invalid")
             # Deserialization is only policy evidence: reuse the exact plan

@@ -66,3 +66,9 @@ Regression tests now exercise fresh meters sharing the original budget,
 copied plans, cloned contexts, exhausted quotas, and valid narrowed Medusa
 plans. A valid copied plan without explicit trusted child registration is
 never authorized.
+
+Medusa's serialized handoff compares dataclass-normalized values before
+recovering the original request-owned plan, because nested degradation and
+provenance data become dictionaries in the transfer payload. An empty root
+allowlist retains its existing unspecified semantics; nonempty root lists
+cannot be widened by specialist child registration.

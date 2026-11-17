@@ -149,8 +149,12 @@ class ChatExecutionContext:
         ):
             raise PermissionError("runtime_model_execution_authority_invalid")
         for attribute in ("allowed_tools", "allowed_plugins", "allowed_agents"):
-            if not set(getattr(plan, attribute)).issubset(
-                set(getattr(root, attribute))
+            # Empty policy lists have existing "unspecified" semantics.
+            # Preserve the coordinator's policy and planner checks; never
+            # widen an explicit nonempty allowlist.
+            policy_allowed = set(getattr(root, attribute))
+            if policy_allowed and not set(getattr(plan, attribute)).issubset(
+                policy_allowed
             ):
                 raise PermissionError("runtime_model_execution_authority_invalid")
         children = self.__dict__["_runtime_model_child_plans"]
