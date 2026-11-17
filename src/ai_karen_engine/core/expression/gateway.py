@@ -81,6 +81,11 @@ class ExpressionGateway:
             if not cfg or not cfg.enabled:
                 blocked.append(f"{engine_id}:disabled")
                 continue
+            # Availability must honor the same installation-level external
+            # execution policy as generate(). Enabled does not mean permitted.
+            if engine_id == "cloud" and not self.settings.policies.allow_external_engines:
+                blocked.append(f"{engine_id}:external_engines_forbidden")
+                continue
             if self.circuits.is_open(f"expression.engine.{engine_id}"):
                 blocked.append(f"{engine_id}:circuit_open")
                 continue
