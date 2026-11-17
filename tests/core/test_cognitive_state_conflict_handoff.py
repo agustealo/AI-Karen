@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.context.contracts import (
     ContextEvidence,
     EvidenceContradiction,
@@ -96,8 +97,10 @@ class DenyMemoryPolicy(RuntimePolicyEnforcer):
 
 
 class DenyVerificationPolicy(RuntimePolicyEnforcer):
-    async def evaluate(self, request):
-        policy = await super().evaluate(request)
+    async def _evaluate_policy_request(self, request):
+        # Return the final policy decision to the canonical evaluate issuer,
+        # instead of replacing an already-issued decision afterward.
+        policy = await super()._evaluate_policy_request(request)
         if request.action != "context.resolve":
             return replace(
                 policy,
@@ -119,6 +122,14 @@ def _request() -> ChatExecutionRequest:
             session_id="session-a",
             request_id="request-a",
             correlation_id="correlation-a",
+            authenticated_user=UserData(
+                user_id="user-a",
+                tenant_id="tenant-a",
+                roles=["user"],
+                permissions=[],
+                is_active=True,
+                is_verified=True,
+            ),
         ),
     )
 
