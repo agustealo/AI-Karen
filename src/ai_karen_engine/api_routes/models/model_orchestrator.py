@@ -494,6 +494,7 @@ async def download_model(
             "job_id": job["job_id"],
             "message": "Download queued",
             "status": job["status"],
+            "download_method": str(job.get("download_method") or "hf_hub"),
         }
     except ModelOrchestratorError as exc:
         raise handle_orchestrator_error(exc) from exc
