@@ -13,6 +13,8 @@
 
 ## Narrow fail-closed repair
 
+The canonical shared destination classifier also excludes IPv4 `169.254.0.0/16` and IPv6 `fe80::/10` from the trusted local-model set. The old classifier silently allowed cloud instance-metadata and interface-local targets as local traffic. IPv4-mapped IPv6 addresses are normalized before this decision. Existing loopback, Docker bridge aliases and RFC1918/ULA model-serving addresses retain their configured local-first behavior. The metadata/link-local policy is enforced for both compatibility and governed ExpressionGateway admission; tests cover both paths.
+
 The compatibility client cannot validate a `ChatExecutionContext`, an exact `AuthorizedExecutionPlan`, or a shared `ExecutionBudgetMeter`. Therefore it may not emit **nonlocal** inference or embedding HTTP at all. Before constructing a `Request`, and again for health probes, the raw compatibility transport asks the **existing canonical** `provider_endpoint_requires_external_permission()` classifier to evaluate its current actual URL. Cloud/unknown/invalid destinations fail closed with `ungoverned_external_compatibility_transport_denied`. A local-looking provider ID cannot override the check; mutating `base_url` is evaluated per attempt. No new provider registry, RuntimePolicy service, network-locality rules, budget, fallback or global urllib state is introduced.
 
 The already-governed ChatRuntime/ExpressionGateway and Deep Agents transports continue to own explicitly authorized external model execution. This shim **does not** issue new external permissions or claim support for authorized external calls through this legacy interface.
