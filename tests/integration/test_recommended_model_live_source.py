@@ -299,6 +299,17 @@ def test_pocket_tts_live_pinned_manifest_matches_both_transports() -> None:
     assert remote.sha == revision, "HF SDK resolved a different Pocket revision"
     assert bool(remote.gated), "Reviewed gated model access contract changed"
 
+    # Public repository metadata does NOT prove that this identity accepted
+    # upstream gated model terms. Enforce token-specific source authorization
+    # independently, without downloading or resolving model artifacts.
+    try:
+        api.auth_check(model_id, repo_type="model", token=token, write=False)
+    except Exception:
+        pytest.fail(
+            "Approved Hugging Face account is not authorized for gated Pocket model",
+            pytrace=False,
+        )
+
     # Hub SDK transparently paginates; direct HTTPS independently validates
     # and follows the cursor chain at the same reviewed repository revision.
     hub_files: dict[str, dict[str, object]] = {}
