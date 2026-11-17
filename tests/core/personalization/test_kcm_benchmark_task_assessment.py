@@ -1188,8 +1188,16 @@ async def test_oracle_review_invalidates_when_numeric_case_revoked_during_lookup
         def list_scoped_outcomes_by_ids(self, tenant_id, *, user_id, source, outcome_ids):
             if (
                 not self._revoked
-                and len(outcome_ids) == 2
-                and any(key.startswith("kcm_curated_review_") for key in outcome_ids)
+                and len(outcome_ids) in (2, 3)
+                and any(
+                    key.startswith("kcm_curated_review_")
+                    for key in outcome_ids
+                )
+                and any(
+                    key.startswith("kcm_curated_review_")
+                    and key != outcome_ids[0]
+                    for key in outcome_ids
+                )
             ):
                 self._revoked = True
                 surviving = [
