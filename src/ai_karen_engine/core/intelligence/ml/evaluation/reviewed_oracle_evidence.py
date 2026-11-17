@@ -41,6 +41,7 @@ from ai_karen_engine.platform.security.principal import AuthenticatedPrincipal
 logger = logging.getLogger(__name__)
 
 _SCHEMA = "kcm_curated_oracle_reviewer_observation_v1"
+_WITHDRAWAL_SCHEMA = "kcm_curated_oracle_reviewer_withdrawal_v1"
 _PERMISSION = Permission.BENCHMARK_ORACLE_REVIEW.value
 _SOURCE = "intelligence.ml"
 
@@ -260,6 +261,15 @@ class GovernedCuratedOracleReviewEvidence:
         return "kcm_curated_review_" + hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _withdrawal_id(tenant: str, user: str, receipt_id: str) -> str:
+        proposed = GovernedCuratedOracleReviewEvidence._outcome_id(
+            tenant, user, receipt_id,
+        )
+        return "kcm_curated_withdrawal_" + hashlib.sha256(
+            (proposed + ":withdrawal").encode("utf-8")
+        ).hexdigest()
+
+    @staticmethod
     def _principal_identity(principal: AuthenticatedPrincipal) -> tuple:
         return (
             principal.tenant_id, principal.user_id, principal.session_id,
@@ -422,15 +432,27 @@ class GovernedCuratedOracleReviewEvidence:
         confirmed_id = self._outcome_id(
             self._tenant, self._user, receipt_id, phase="confirmed",
         )
+        withdrawal_id = self._withdrawal_id(
+            self._tenant, self._user, receipt_id,
+        )
         rows = await asyncio.to_thread(
             self._store.list_scoped_outcomes_by_ids,
             self._tenant,
             user_id=self._user,
             source=_SOURCE,
-            outcome_ids=[proposed_id, confirmed_id],
+            outcome_ids=[proposed_id, confirmed_id, withdrawal_id],
         )
         self._require_same_subject(subject, subject_authority)
-        if not isinstance(rows, list) or len(rows) != 2:
+        if (
+            not isinstance(rows, list)
+            or any(
+                not isinstance(row, dict)
+                or row.get("outcome_id") == withdrawal_id
+                for row in rows
+            )
+            or len(rows) != 2
+        ):
+            # Even a corrupted withdrawal row blocks favorable evidence.
             return None
         if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
             return None
@@ -508,6 +530,23 @@ class GovernedCuratedOracleReviewEvidence:
         self._require_same_subject(subject, subject_authority)
         if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
             return None
+        # Re-read withdrawal after the last awaited cohort check. A parallel
+        # revocation that committed while numeric outcomes were being
+        # verified must not be ignored by the final observation.
+        withdrawn = await asyncio.to_thread(
+            self._store.list_scoped_outcomes_by_ids,
+            self._tenant,
+            user_id=self._user,
+            source=_SOURCE,
+            outcome_ids=[withdrawal_id],
+        )
+        self._require_same_subject(subject, subject_authority)
+        # An empty exact-scoped list proves absence. A missing/malformed
+        # store response is *not* evidence that withdrawal never occurred.
+        if not isinstance(withdrawn, list) or withdrawn:
+            return None
+        if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
+            return None
         return ReviewedOracleObservation(
             tenant_id=self._tenant,
             user_id=self._user,
@@ -519,6 +558,94 @@ class GovernedCuratedOracleReviewEvidence:
             curated_source_integrity_verified=True,
             group_membership_integrity_verified=True,
         )
+
+
+    async def withdraw_review(
+        self, *, subject: AuthenticatedPrincipal,
+        reviewer: AuthenticatedPrincipal,
+        model_id: str, receipt_id: str,
+    ) -> str:
+        """Permanently withdraw the original reviewer's acknowledged cohort.
+
+        This is a restrictive, append-only outcome, not a training or skill
+        authorization. It requires the exact original reviewer and a current
+        authenticated tenant-scoped reviewer principal. Pending or expired
+        cohorts do not qualify for this narrow self-withdrawal operation.
+        """
+        self._require_subject(subject)
+        self._require_reviewer(reviewer)
+        subject_identity = self._principal_identity(subject)
+        reviewer_identity = self._principal_identity(reviewer)
+        reviewed = await self.inspect_review(
+            subject=subject, model_id=model_id, receipt_id=receipt_id,
+        )
+        self._require_same_subject(subject, subject_identity)
+        self._require_same_reviewer(reviewer, reviewer_identity)
+        if reviewed is None:
+            raise OutcomeStoreError("No current confirmed reviewer evidence to withdraw")
+        if reviewed.reviewer_user_id != reviewer.user_id:
+            raise PermissionError("Only the original reviewer may withdraw the receipt")
+        snapshot = self._snapshot(model_id=model_id, receipt_id=receipt_id)
+        if snapshot is None:
+            raise OutcomeStoreError("Original oracle snapshot no longer available")
+        withdrawal_id = self._withdrawal_id(
+            self._tenant, self._user, receipt_id,
+        )
+        confirmed_id = self._outcome_id(
+            self._tenant, self._user, receipt_id, phase="confirmed",
+        )
+        when = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "outcome_id": withdrawal_id,
+            "tenant_id": self._tenant,
+            "user_id": self._user,
+            "source": _SOURCE,
+            "recorded_at": when,
+            "metadata": {
+                "schema_version": _WITHDRAWAL_SCHEMA,
+                "receipt_id": receipt_id,
+                "model_id": model_id,
+                "reviewer_user_id": reviewer.user_id,
+                "review_confirmed_outcome_id": confirmed_id,
+                "review_snapshot_sha256": snapshot.snapshot_sha256,
+                "revoked_at": when,
+                "reason_code": "reviewer_withdrawal",
+                "review_withdrawn": True,
+            },
+        }
+        self._require_same_subject(subject, subject_identity)
+        self._require_same_reviewer(reviewer, reviewer_identity)
+        await self._store.save_unique_outcome_async(payload)
+        # A restrictive revocation that commits despite a lost response
+        # continues to block evidence. Never roll back an issuer withdrawal
+        # because the session expired after commit.
+        rows = await asyncio.to_thread(
+            self._store.list_scoped_outcomes_by_ids,
+            self._tenant,
+            user_id=self._user,
+            source=_SOURCE,
+            outcome_ids=[withdrawal_id],
+        )
+        if (
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or rows[0].get("outcome_id") != withdrawal_id
+            or rows[0].get("metadata") != payload["metadata"]
+        ):
+            raise OutcomeStoreError("Reviewer withdrawal not durably reconciled")
+        PostgresOutcomeStore._validated_identity(rows[0])
+        logger.info(
+            "kcm.curated_oracle_review.withdrawn",
+            extra={
+                "tenant_id": self._tenant,
+                "user_id": self._user,
+                "reviewer_user_id": reviewer_identity[1],
+                "model_id": model_id,
+                "receipt_id": receipt_id,
+                "review_kind": _WITHDRAWAL_SCHEMA,
+            },
+        )
+        return withdrawal_id
 
 
 __all__ = [
