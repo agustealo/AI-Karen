@@ -28,6 +28,7 @@ def _runtime(*, status: str = "abstained", modes: list[str] | None = None,
         "reasoning_model_calls": model_calls,
         "reasoning_steps": 1,
         "reasoning_model_attribution_status": "not_executed",
+        "verification_strategy_executed": True,
         "actual_provider": None,
         "actual_model": None,
         "response_source": "reasoning",
@@ -172,6 +173,7 @@ async def test_nonstream_selected_model_generates_after_reasoning() -> None:
     assert meta["reasoning_status"] == "abstained"
     assert meta["reasoning_model_calls"] == 0
     assert meta["reasoning_generation_mode"] == "model_after_authorized_reasoning"
+    assert meta["verification_strategy_executed"] is True
     assert [entry["name"] for entry in meta["execution_spans"]] == [
         "reasoning_executor", "provider_generation",
     ]
