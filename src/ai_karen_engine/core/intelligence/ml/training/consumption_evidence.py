@@ -49,6 +49,28 @@ class SklearnFitObservationSummary:
     general_skill_certified: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class SklearnFitInputSnapshotConcordance:
+    """Receipt matches supplied rows, NOT independently trusted ancestry."""
+
+    receipt_sha256: str
+    sample_count: int
+    observed_train_count: int
+    observed_holdout_count: int
+    observation_key_id: str
+    receipt_matches_supplied_snapshot: bool = True
+    independently_attested_input_bytes: bool = False
+    source_to_feature_transformation_verified: bool = False
+    source_ancestry_verified: bool = False
+    actual_model_artifact_bound: bool = False
+    training_example_inventory_verified: bool = False
+    training_evaluation_disjointness_verified: bool = False
+    independent_oracle_verified: bool = False
+    training_authorized: bool = False
+    execution_authorized: bool = False
+    general_skill_certified: bool = False
+
+
 def _json_bytes(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
@@ -272,7 +294,77 @@ def inspect_sklearn_fit_observation(
         return None
 
 
+def inspect_sklearn_fit_input_snapshot(
+    encoded: bytes,
+    *,
+    examples: Sequence[TopologyTrainingExample],
+    tenant_id: str,
+    job_id: str,
+    model_id: str,
+    model_version: str,
+    dataset_version: str,
+    key_id: str,
+    key: bytes,
+) -> SklearnFitInputSnapshotConcordance | None:
+    """Match a keyed worker fit partition to supplied exact input rows.
+
+    Reuses the production HMAC domains/serialization and original receipt
+    verifier. No authority certifies the origin of supplied examples or
+    the registry/artifact association in this pure check. No training grant.
+    """
+    verified = inspect_sklearn_fit_observation(
+        encoded,
+        tenant_id=tenant_id, job_id=job_id, model_id=model_id,
+        model_version=model_version, dataset_version=dataset_version,
+        key_id=key_id, key=key,
+    )
+    if verified is None:
+        return None
+    try:
+        if (
+            not isinstance(examples, (list, tuple))
+            or not 2 <= len(examples) <= _MAX_MEMBERS
+            or len(examples) != verified.train_count + verified.holdout_count
+            or not all(
+                isinstance(example, TopologyTrainingExample)
+                for example in examples
+            )
+        ):
+            return None
+        expected = _members(
+            examples=examples, indices=range(len(examples)),
+            tenant_id=tenant_id, key=key,
+        )
+        if len({item["member_hmac"] for item in expected}) != len(examples):
+            return None
+        payload = json.loads(encoded.decode("utf-8"))
+        actual = sorted(
+            [*payload["train"], *payload["holdout"]],
+            key=lambda item: item["member_hmac"],
+        )
+        if not hmac.compare_digest(_json_bytes(actual), _json_bytes(expected)):
+            return None
+        if any(
+            example.feature_version != payload["feature_version"]
+            for example in examples
+        ):
+            return None
+        return SklearnFitInputSnapshotConcordance(
+            receipt_sha256=verified.evidence_sha256,
+            sample_count=len(examples),
+            observed_train_count=verified.train_count,
+            observed_holdout_count=verified.holdout_count,
+            observation_key_id=key_id,
+        )
+    except (
+        ValueError, TypeError, KeyError, UnicodeError, OverflowError,
+        RecursionError, AttributeError,
+    ):
+        return None
+
+
 __all__ = [
-    "SklearnFitObservationSummary", "create_sklearn_fit_observation",
-    "inspect_sklearn_fit_observation",
+    "SklearnFitObservationSummary", "SklearnFitInputSnapshotConcordance",
+    "create_sklearn_fit_observation",
+    "inspect_sklearn_fit_observation", "inspect_sklearn_fit_input_snapshot",
 ]
