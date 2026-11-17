@@ -11,6 +11,8 @@ pytest.importorskip("langchain_core")
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpoint, ProviderEndpointType,
 )
@@ -48,6 +50,22 @@ def model():
     )
     meter = ExecutionBudgetMeter(budget)
     meter.start()
+    principal = UserData(
+        user_id="u-1",
+        tenant_id="t-1",
+        roles=["user"],
+        permissions=[],
+        is_active=True,
+        is_verified=True,
+    )
+    authenticated_context = ChatExecutionContext(
+        user_id="u-1",
+        tenant_id="t-1",
+        session_id="s-1",
+        request_id="run-1",
+        correlation_id="corr-1",
+        authenticated_user=principal,
+    )
     return KarenGovernedChatModel(
         endpoint=endpoint(),
         selected_model="model-with-tools",
@@ -55,6 +73,7 @@ def model():
             plan=plan, meter=meter, user_id="u-1", tenant_id="t-1",
             session_id="s-1", policy_decision_id="policy-1",
             request_id="run-1", correlation_id="corr-1",
+            authenticated_context=authenticated_context,
         ),
     )
 
