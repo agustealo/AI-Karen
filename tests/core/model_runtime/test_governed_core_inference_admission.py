@@ -37,6 +37,9 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyDecision, RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
@@ -74,6 +77,26 @@ def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmi
         request_id="request-a",
         correlation_id="correlation-a",
         authenticated_user=principal,
+    )
+    issuer = RuntimePolicyEnforcer()
+    issued_decision = PolicyDecision(
+        decision_id=plan.policy_decision_id,
+        policy_version="fixture",
+        allowed=True,
+        runtime_constraints={
+            "authorized_user_id": context.user_id,
+            "authorized_tenant_id": context.tenant_id,
+            "authorized_session_id": context.session_id,
+            "correlation_id": context.correlation_id,
+            "max_model_calls": plan.budget.max_model_calls,
+        },
+    )
+    # These tests exercise admission using an original issuer-returned
+    # decision object. Policy evaluation itself has separate real-policy
+    # integration coverage, never a production test-mode bypass.
+    issuer._issued_model_decisions[issued_decision.decision_id] = issued_decision
+    issuer.bind_chat_model_policy(
+        context=context, decision=issued_decision,
     )
     context.bind_runtime_model_authority(plan, meter)
     return GovernedToolModelAdmission(

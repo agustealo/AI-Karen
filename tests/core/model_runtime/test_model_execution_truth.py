@@ -29,6 +29,9 @@ def _test_governed_admission():
     from ai_karen_engine.auth.models import UserData
     from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyDecision, RuntimePolicyEnforcer,
+)
     from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudget, ExecutionBudgetMeter
 
     budget = ExecutionBudget(max_model_calls=2, max_duration_ms=60000)
@@ -65,9 +68,23 @@ def _test_governed_admission():
             ),
         ),
     )
-    admission.authenticated_context.bind_runtime_model_authority(
-        admission.plan, admission.meter,
+    context = admission.authenticated_context
+    issuer = RuntimePolicyEnforcer()
+    issued_decision = PolicyDecision(
+        decision_id=plan.policy_decision_id,
+        policy_version="fixture",
+        allowed=True,
+        runtime_constraints={
+            "authorized_user_id": context.user_id,
+            "authorized_tenant_id": context.tenant_id,
+            "authorized_session_id": context.session_id,
+            "correlation_id": context.correlation_id,
+            "max_model_calls": plan.budget.max_model_calls,
+        },
     )
+    issuer._issued_model_decisions[issued_decision.decision_id] = issued_decision
+    issuer.bind_chat_model_policy(context=context, decision=issued_decision)
+    context.bind_runtime_model_authority(admission.plan, admission.meter)
     return admission
 
 
