@@ -383,7 +383,8 @@ is **not** a WhatsApp shipping approval.
 
 ## KWA-01C6C1: canonical admin reachability and opt-in real-browser observer
 
-The existing `WhatsAppCloudSettings` is now reachable from Karen's canonical
+The existing `WhatsAppCloudSettings` is now reachable through the authenticated
+dashboard's administrator-only **Admin settings** link and Karen's canonical
 `/admin` → **WhatsApp Cloud** tab, not only from a
 `SettingsDialog(adminMode=true)` configuration that the consumer dashboard
 does not use. This mounts the already governed component and its authenticated
@@ -395,7 +396,8 @@ admin tab integration in the ordinary frontend test suite. The read-only
 `e2e/whatsapp-cloud-admin-acceptance.spec.ts` is separately **opt-in** for an
 approved HTTPS deployment with a dedicated, authorized, sanitized operator.
 The real browser tests exercise **390, 768 and 1440 px** widths, sign in through
-Karen, open the actual admin tab, and require an HTTP 200 for canonical
+Karen, follow the administrator navigation link into the actual admin tab,
+and require an HTTP 200 for canonical
 `channel.inspect` inventory. They reject unexpected inventory fields, ensure
 the UI distinguishes locally enabled connections from provider health, and
 verify that observing the screen issues no channel mutations. No route mocks
