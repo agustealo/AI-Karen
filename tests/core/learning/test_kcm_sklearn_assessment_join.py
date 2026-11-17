@@ -418,9 +418,19 @@ async def test_real_importer_preserves_unicode_line_separators_inside_records(
 @pytest.mark.asyncio
 async def test_row_budget_is_checked_before_materializing_all_jsonl_lines():
     m, data, rows = fixture()
-    # A short repeated line is not a valid training row, but must be
-    # rejected at the caller's row budget before parsing unlimited records.
-    encoded = b"{}\n" * 100_000
+    # The first 100 records are legitimate canonical examples. Only the
+    # 101st LF record trips the budget; the malformed 100,000-record tail
+    # must never be deserialized or materialized as a list of lines.
+    valid_rows = [
+        {
+            "example_id": uid(20_000 + index),
+            "feature_version": "v1",
+            "features": {"count": index},
+            "target": "positive",
+        }
+        for index in range(100)
+    ]
+    encoded = canonical_jsonl(valid_rows) + (b"{}\n" * 100_000)
     with pytest.raises(
         KcmSklearnAssessmentJoinError,
         match="training_row_budget_exceeded",
