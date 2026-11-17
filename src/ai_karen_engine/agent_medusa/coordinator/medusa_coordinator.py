@@ -259,7 +259,8 @@ class MedusaCoordinator:
             # authenticated scope validation so specialist plan clones retain
             # the original meter.budget identity without weakening admission.
             authorized_plan = replace(
-                authorized_plan, budget=shared_meter.budget,
+                authorized_plan,
+                budget=shared_meter.budget,
             )
             meter = shared_meter
         else:
