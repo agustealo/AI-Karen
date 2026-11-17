@@ -6,6 +6,7 @@ import asyncio
 import threading
 from dataclasses import replace
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -32,7 +33,7 @@ def _test_governed_admission():
 
     budget = ExecutionBudget(max_model_calls=2, max_duration_ms=60000)
     plan = AuthorizedExecutionPlan(
-        execution_id="test-exec",
+        execution_id=f"test-exec-{uuid4().hex}",
         policy_decision_id="test-policy",
         authorized_user_id="test-user",
         authorized_tenant_id="test-tenant",
