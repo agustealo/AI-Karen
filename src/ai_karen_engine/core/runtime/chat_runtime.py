@@ -3542,6 +3542,7 @@ class ChatRuntime:
             correlation_id=request.context.correlation_id,
             request_id=request.context.request_id,
             metadata={"execution_mode": "surface_layout_plan"},
+            reserve_additional_model_call=meter.consume_model_call,
         )
         try:
             generated = await self._composition.expression_gateway.generate(task)
@@ -3587,13 +3588,34 @@ class ChatRuntime:
         from urllib.parse import urlsplit
 
         sources = []
-        # Research references are resolved exclusively from the authorized
-        # capability's returned sources, never from client request metadata.
+        # Fetched-page text, including inline excerpts, is model-visible only
+        # after the originating tool/plugin has an independently successful,
+        # plan-eligible execution receipt. Stored article references additionally
+        # require tenant-scoped artifact lookup below.
+        source_kind = getattr(retrieved, "source", None)
+        source_id = getattr(retrieved, "source_id", None)
+        source_attempts = getattr(retrieved, "attempts", None)
+        attempts = source_attempts if isinstance(source_attempts, list) else []
+        eligible = {
+            "tool": set(getattr(plan, "allowed_tools", ()) or ()),
+            "plugin": set(getattr(plan, "allowed_plugins", ()) or ()),
+        }
         authorized_source = (
-            retrieved.success
-            and retrieved.source == "plugin"
-            and retrieved.source_id in set(plan.allowed_plugins)
+            getattr(retrieved, "success", False) is True
+            and getattr(retrieved, "degraded", True) is False
+            and source_kind in eligible
+            and isinstance(source_id, str)
+            and source_id in eligible[source_kind]
+            and any(
+                isinstance(attempt, dict)
+                and attempt.get("type") == source_kind
+                and attempt.get("id") == source_id
+                and attempt.get("status") == "success"
+                for attempt in attempts
+            )
         )
+        if not authorized_source:
+            return None
         article_service = None
         for item in retrieved.sources:
             if not isinstance(item, dict) or item.get("evidence_level") != "fetched_page":
@@ -3643,22 +3665,10 @@ class ChatRuntime:
                 break
         is_observation = decision.intent in {"search.weather", "time.current"}
         if is_observation:
-            # Only observations from successful, policy-allowed tool/plugin calls
-            # may enter the model prompt. The executor has enforced its action
-            # gate; verify that the supplied receipt matches the authorized plan.
-            allowed = set(plan.allowed_tools) | set(plan.allowed_plugins)
-            attempts = retrieved.attempts if isinstance(retrieved.attempts, list) else []
-            if (
-                not retrieved.success or retrieved.degraded
-                or retrieved.source not in {"tool", "plugin"}
-                or retrieved.source_id not in allowed
-                or not any(
-                    isinstance(a, dict) and a.get("id") == retrieved.source_id
-                    and a.get("type") == retrieved.source and a.get("status") == "success"
-                    for a in attempts
-                )
-                or not isinstance(retrieved.payload, dict)
-            ):
+            # The same plan-eligible success receipt was verified above for
+            # both search and observations. Only a structured observation can
+            # now influence a time/weather response.
+            if not isinstance(retrieved.payload, dict):
                 return None
             payload = retrieved.payload
             if decision.intent == "search.weather":
@@ -3743,6 +3753,7 @@ class ChatRuntime:
             correlation_id=request.context.correlation_id,
             request_id=request.context.request_id,
             metadata={"execution_mode": "grounded_search", "evidence_count": len(sources)},
+            reserve_additional_model_call=meter.consume_model_call,
         )
         try:
             result = (
@@ -3861,6 +3872,7 @@ class ChatRuntime:
                 "topology": plan.topology.value,
             },
             token_sink=token_sink,
+            reserve_additional_model_call=meter.consume_model_call,
         )
 
         self._emitter.emit(
