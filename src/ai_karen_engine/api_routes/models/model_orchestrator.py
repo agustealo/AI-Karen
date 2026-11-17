@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -60,6 +60,7 @@ class ModelDownloadRequest(BaseModel):
     exclude_patterns: Optional[List[str]] = Field(None, description="File patterns to exclude")
     pin: bool = Field(False, description="Pin model to protect it from cleanup")
     force_redownload: bool = Field(False, description="Force a new download")
+    download_method: Literal["hf_hub", "direct_https"] = "hf_hub"
     storage_key: Optional[str] = Field(None, description="Storage namespace override")
     trust_remote_code: bool = Field(False, description="Allow trusted remote code when policy permits")
     accept_license: bool = Field(False, description="Record license acceptance for this download")
@@ -197,6 +198,7 @@ class DownloadJobResponse(BaseModel):
     exclude_patterns: Optional[List[str]] = None
     pin: bool = False
     force_redownload: bool = False
+    download_method: Literal["hf_hub", "direct_https"] = "hf_hub"
     pause_requested: bool = False
     cancel_requested: bool = False
     warnings: List[str] = Field(default_factory=list)
@@ -316,6 +318,7 @@ def _serialize_download_job(job_payload: Optional[Dict[str, Any]]) -> DownloadJo
         exclude_patterns=job_payload.get("exclude_patterns"),
         pin=bool(job_payload.get("pin", False)),
         force_redownload=bool(job_payload.get("force_redownload", False)),
+        download_method=str(job_payload.get("download_method") or "hf_hub"),
         pause_requested=bool(job_payload.get("pause_requested", False)),
         cancel_requested=bool(job_payload.get("cancel_requested", False)),
         warnings=list(job_payload.get("warnings") or []),
@@ -491,6 +494,7 @@ async def download_model(
             "job_id": job["job_id"],
             "message": "Download queued",
             "status": job["status"],
+            "download_method": str(job.get("download_method") or "hf_hub"),
         }
     except ModelOrchestratorError as exc:
         raise handle_orchestrator_error(exc) from exc

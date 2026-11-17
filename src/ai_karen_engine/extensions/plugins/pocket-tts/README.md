@@ -60,6 +60,39 @@ model access, the actual completed model job, native CPU import/load, a
 non-silent authentic WAV and audible browser playback. Source CI and build
 configuration alone cannot certify this.
 
+## Download method selection
+
+Karen provides two model-file transfer methods in the same existing
+**Plugins → Pocket TTS → Model installation** workflow:
+
+- **Hugging Face Hub SDK** (default): \`snapshot_download()\` uses the trusted
+  host's Hugging Face token and reviewed revision.
+- **Direct HTTPS**: transfer model assets by direct authenticated HTTPS
+  \`/resolve/<sha>/<path>\` requests without calling the \`huggingface_hub\`
+  Python SDK for file transfer. The backend discovers the immutable repository
+  file selection over HTTPS and enforces bounded file count, size, optional
+  repository LFS SHA-256 checks, strict redirects, and staging isolation.
+
+Both methods are selected from a backend-advertised list. Both use the *same*
+admin authorization, explicit model-license acceptance, immutable revision,
+approved include patterns, persisted tenant/owner-scoped job, audited worker
+lease, staging, atomic publication/compensation and model registry. Model
+sources remain host-only; neither UI nor Pocket plugin sees credentials.
+Source-side gated access still requires a Hugging Face account that accepted
+the upstream conditions and a working host \`HF_TOKEN\` (or approved equivalent).
+**Direct HTTPS does not circumvent gated repositories.**
+
+One job has one persisted \`download_method\` (\`hf_hub\` or \`direct_https\`).
+The worker never changes methods automatically after an error or retry.
+Direct HTTPS requires a full reviewed 40-character revision and explicit
+file patterns; it fails closed for unpinned or unbounded downloads.
+
+The API may still use the existing Hugging Face metadata lookup to verify
+license and revision before queueing. The direct method removes the SDK from
+the *file transfer path*, not from the canonical access-verification boundary.
+A download marked \`completed\` is still not voice-readiness proof: test native
+load, genuine WAV output and browser playback separately.
+
 ## Security and behavior
 
 No remote config, downloaded conditioning audio, custom reference upload,
