@@ -558,8 +558,6 @@ class WorkflowRuntime:
             request_id=req_config["request_id"],
             context={
                 "execution_context": ctx,
-                # In-process trusted meter only; never passed through API JSON.
-                "execution_budget_meter": budget_meter,
                 "preferred_provider": request.preferred_provider,
                 "preferred_model": request.preferred_model,
                 "learning_task_type": decision.intent,
@@ -569,6 +567,7 @@ class WorkflowRuntime:
             },
             authorized_plan=_serialize_plan(plan),
             execution_requirements=requirements,
+            runtime_budget_meter=budget_meter,
         )
         coordinator = MedusaCoordinator()
         if event_sink is not None:
