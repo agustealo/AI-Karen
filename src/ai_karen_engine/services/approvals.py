@@ -250,6 +250,12 @@ class ApprovalService:
             )
 
         if current["status"] == "approved":
+            if decision.intent in _LIFECYCLE_INTENTS:
+                # Until PluginKernel supplies a verified durable CAS/claim,
+                # approval is evidence of consent, not execution authority.
+                raise ApprovalStateError(
+                    "Plugin lifecycle execution remains revision-fenced and unavailable"
+                )
             await self.consume_for_request(
                 approval_id, request=request, lifecycle_scope=lifecycle_scope,
             )
@@ -415,6 +421,11 @@ class ApprovalService:
     ) -> Dict[str, Any]:
         if lifecycle_scope is not None:
             lifecycle_scope.require_matching_context(request.context)
+            # No current kernel revision authority exists yet. This public
+            # method may not be mistaken for an executable approval grant.
+            raise ApprovalStateError(
+                "Plugin lifecycle execution remains revision-fenced and unavailable"
+            )
         record = await self._repository.consume_approved(
             approval_id,
             tenant_id=request.context.tenant_id,
