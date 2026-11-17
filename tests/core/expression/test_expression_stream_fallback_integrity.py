@@ -41,6 +41,7 @@ def _settings() -> ExpressionSettings:
     settings.engines["cloud"] = EngineConfig(
         enabled=True, type="openai_compatible", fallback_eligible=True,
     )
+    settings.policies.allow_external_engines = True
     return settings
 
 
