@@ -896,3 +896,41 @@ async def test_live_canonical_runner_projection_reports_actual_freshness_basis(t
     assert assessment.general_skill_certified is False
     assert assessment.execution_authorized is False
     assert assessment.training_authorized is False
+
+
+@pytest.mark.asyncio
+async def test_partial_or_malformed_runner_window_in_receipt_fails_closed(tmp_path):
+    import json
+
+    manifest, _, _, _ = await fixture(tmp_path)
+    benchmark = await _actual_runner_result(manifest)
+    receipt_id = EvaluationEvidenceStore(tmp_path)._record(manifest, benchmark)
+    database = tmp_path / "benchmark_evidence.sqlite3"
+    with sqlite3.connect(database) as db:
+        original = json.loads(db.execute(
+            "SELECT evidence_json FROM benchmark_receipts WHERE receipt_id=?",
+            (receipt_id,),
+        ).fetchone()[0])
+        corrupted = dict(original)
+        corrupted.pop("runner_evaluation_finished_at")
+        db.execute(
+            "UPDATE benchmark_receipts SET evidence_json=? WHERE receipt_id=?",
+            (json.dumps(corrupted), receipt_id),
+        )
+    assert EvaluationEvidenceStore(
+        tmp_path, create_if_missing=False,
+    ).read_case_receipt(
+        manifest=manifest, tenant_id=TENANT, receipt_id=receipt_id,
+    ) is None
+
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "UPDATE benchmark_receipts SET evidence_json=?, created_at=?"
+            " WHERE receipt_id=?",
+            (json.dumps(original), "2020-01-01 00:00:00", receipt_id),
+        )
+    assert EvaluationEvidenceStore(
+        tmp_path, create_if_missing=False,
+    ).read_case_receipt(
+        manifest=manifest, tenant_id=TENANT, receipt_id=receipt_id,
+    ) is None
