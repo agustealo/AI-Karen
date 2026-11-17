@@ -178,6 +178,90 @@ async def test_invalid_proof_never_queries_database(digest, ttl):
         )
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observed", [
+    "pending", "consumed", "revoked", "expired", "invalidated",
+])
+async def test_link_status_uses_owner_tenant_connection_and_database_clock(
+    monkeypatch, observed,
+):
+    challenge_id = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    session = Session(Result(scalar=observed))
+    install(monkeypatch, session)
+    result = await SqlChannelRepository().inspect_link_challenge_status(
+        tenant_id=TENANT, user_id=USER,
+        connection_id="conn", challenge_id=challenge_id,
+    )
+    assert result == observed
+    sql, args = session.calls[0]
+    for guard in (
+        "public.channel_link_challenges p",
+        "JOIN public.channel_connections c",
+        "c.tenant_id = p.tenant_id",
+        "c.connection_id = p.connection_id",
+        "c.installation_id = 'whatsapp-cloud'",
+        "p.tenant_id = CAST(:tenant AS uuid)",
+        "p.user_id = CAST(:user AS uuid)",
+        "p.connection_id = :connection",
+        "p.challenge_id = CAST(:challenge AS uuid)",
+        "p.consumed_at IS NOT NULL",
+        "p.revoked_at IS NOT NULL",
+        "c.revision <> p.connection_revision",
+        "c.enabled = false",
+        "p.expires_at <= clock_timestamp()",
+    ):
+        assert guard in sql
+    assert args == {
+        "tenant": TENANT, "user": USER,
+        "connection": "conn", "challenge": challenge_id,
+    }
+    assert TOKEN not in str(session.calls)
+    assert "proof_digest" not in sql
+    assert "external_sender_id" not in sql
+    assert "binding_id" not in sql
+
+
+@pytest.mark.asyncio
+async def test_link_status_missing_does_not_invent_success(monkeypatch):
+    session = Session(Result(scalar=None))
+    install(monkeypatch, session)
+    assert await SqlChannelRepository().inspect_link_challenge_status(
+        tenant_id=TENANT, user_id=USER, connection_id="conn",
+        challenge_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_link_status_corrupted_value_fails_closed(monkeypatch):
+    session = Session(Result(scalar="provider_verified"))
+    install(monkeypatch, session)
+    with pytest.raises(RuntimeError, match="Invalid persisted"):
+        await SqlChannelRepository().inspect_link_challenge_status(
+            tenant_id=TENANT, user_id=USER, connection_id="conn",
+            challenge_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user,challenge,connection_id", [
+    ("not-uuid", "cccccccc-cccc-cccc-cccc-cccccccccccc", "conn"),
+    (USER, "not-uuid", "conn"),
+    (USER, "cccccccc-cccc-cccc-cccc-cccccccccccc", ""),
+])
+async def test_bad_link_status_scope_never_queries_database(
+    monkeypatch, user, challenge, connection_id,
+):
+    session = Session()
+    install(monkeypatch, session)
+    with pytest.raises(ValueError):
+        await SqlChannelRepository().inspect_link_challenge_status(
+            tenant_id=TENANT, user_id=user,
+            connection_id=connection_id, challenge_id=challenge,
+        )
+    assert session.calls == []
+
+
 def test_link_schema_enforces_tenant_foreign_keys_one_use_and_rls():
     path = (
         Path(__file__).resolve().parents[2]
