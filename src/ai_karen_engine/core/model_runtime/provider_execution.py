@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import ipaddress
+import socket
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.error import HTTPError, URLError
@@ -163,7 +164,57 @@ class _RejectProviderRedirect(HTTPRedirectHandler):
 
 
 def _open_provider_request(request: Request, timeout: float):
-    """Use a fresh no-redirect opener without modifying global urllib state."""
+    """Use a fresh, no-redirect and metadata-safe provider HTTP opener."""
+    # External RuntimePolicy authorization is not permission to contact cloud
+    # instance metadata or interface-local addresses. Reject these wire targets
+    # even for an otherwise authorized external provider attempt. This is an
+    # IP-literal guard; DNS resolution and socket pinning require separate proof.
+    # urllib.Request decodes percent-escaped authority text when setting
+    # request.host, while urlsplit(request.full_url).hostname leaves it encoded.
+    # Never classify one host and connect to another. Reject encoded
+    # authorities and mismatched Request hosts before opener construction.
+    try:
+        parsed = urlsplit(request.full_url)
+        parsed_hostname = parsed.hostname
+    except ValueError:
+        raise ProviderExecutionError("provider_destination_not_allowed") from None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed_hostname
+        or "%" in parsed.netloc
+        # libc's IDNA conversion can normalize Unicode digits/dot lookalikes
+        # into a forbidden numeric IP, bypassing ipaddress and inet_aton.
+        # Configured IDN servers must use their canonical ASCII/punycode host.
+        or not parsed.netloc.isascii()
+        or parsed.username is not None
+        or parsed.password is not None
+        or request.host.lower() != parsed.netloc.lower()
+    ):
+        raise ProviderExecutionError("provider_destination_not_allowed")
+    try:
+        destination = ipaddress.ip_address(parsed_hostname)
+    except ValueError:
+        # libc's IPv4 parser accepts noncanonical numeric aliases that
+        # ipaddress rejects (decimal dword, hexadecimal and octal forms).
+        # urllib's resolver can send those directly to metadata addresses.
+        # Reject every such alias before constructing an HTTP opener, even
+        # for otherwise authorized external provider execution. inet_aton
+        # parses numeric IPv4 only; it performs no DNS lookup.
+        try:
+            socket.inet_aton(parsed.hostname)
+        except OSError:
+            destination = None
+        else:
+            raise ProviderExecutionError("provider_destination_not_allowed")
+    if isinstance(destination, ipaddress.IPv6Address) and destination.ipv4_mapped:
+        destination = destination.ipv4_mapped
+    if destination is not None and (
+        destination.is_link_local
+        or destination.is_unspecified
+        or destination.is_multicast
+    ):
+        raise ProviderExecutionError("provider_destination_not_allowed")
+
     # urllib otherwise installs its default ProxyHandler, which honors
     # ambient HTTP(S)_PROXY / ALL_PROXY. An apparently local approved
     # endpoint could therefore egress through an unapproved proxy and
@@ -244,9 +295,12 @@ _LOCAL_PROVIDER_HOSTS = frozenset({
     "localhost", "host.docker.internal", "gateway.docker.internal",
     "host.containers.internal",
 })
+# Never classify link-local destinations as trusted local model servers.
+# IPv4 169.254/16 includes cloud instance metadata; IPv6 fe80::/10 is
+# interface-scoped and must not bypass RuntimePolicy merely for being local.
 _LOCAL_PROVIDER_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
     "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-    "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+    "::1/128", "fc00::/7",
 ))
 
 
