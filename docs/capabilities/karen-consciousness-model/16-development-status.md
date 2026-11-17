@@ -29,7 +29,8 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B3C3B1: keyed sklearn fit-membership observation | [PR #981](https://github.com/agustealo/AI-Karen/pull/981), merge `c2025a5abb7d9246b9853e7f1a4989d19ef5a67d` · [29 — Sklearn fit observation](29-sklearn-fit-observation.md) | Merged; 18/18 exact-head checks passed; bounded default-off worker assertion only, no KCM training inventory |
 | KCM-02B3C3B2: owner-scoped model-job-bound fit receipt | [PR #984](https://github.com/agustealo/AI-Karen/pull/984), merge `7b1cf8d78e402fe32c14029dccd521f6aa05af7b` · [30 — Owner-scoped fit binding](30-owner-scoped-fit-artifact-binding.md) | Merged; 11/11 exact-head checks passed; no verified KCM inventory or source ancestry |
 | KCM-02B3C3B3A: frozen assessment to sklearn row alignment | [PR #987](https://github.com/agustealo/AI-Karen/pull/987), merge `26c6d76ac51a0dd69a6d5d2dfd836c698bbf322b` · [31 — Frozen assessment-to-JSONL alignment](31-frozen-assessment-to-sklearn-jsonl.md) | Merged; 9/9 exact-head checks passed; structural train UUID alignment with current rights/epoch evidence only |
-| KCM-02B3C3B3B: keyed fit-to-input commitment concordance | [32 — Fit input commitments](32-observed-fit-input-commitments.md) | Candidate; private, read-only worker fit receipt HMAC equality to a caller-supplied snapshot; no independently attested input provenance or permission |
+| KCM-02B3C3B3B: keyed fit-to-input commitment concordance | [PR #989](https://github.com/agustealo/AI-Karen/pull/989), merge `e1fdd64503bfb5997ed846fc725ef4b12d17c576` · [32 — Fit input commitments](32-observed-fit-input-commitments.md) | Merged; 12/12 exact-head checks passed, clean review; supplied snapshot HMAC concordance only |
+| KCM-02B3C3B4A: canonical tenant import byte readback | [33 — Canonical import readback](33-canonical-tenant-training-readback.md) | Candidate; nofollow, bounded, exact file SHA-256 and input row readback; no independently signed expected digest, actual worker-byte or source lineage proof |
 
 ## Configuration
 
@@ -78,13 +79,13 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Compare existing keyed worker-observed fit
-HMAC member/content commitments to an exact supplied input snapshot, using
-the canonical serialization and HMAC implementation. This **does not**
-authenticate snapshot provenance or prove which file was consumed during
-training. Frozen KCM train assessment-ID alignment and owner-bound model/job
-artifact receipts exist separately; the still-unbuilt higher-assurance stage
-must bind independently reviewed source-to-feature/target transformations
-to immutable bytes consumed by the actual worker, under a durable
-revocation-fenced training/promotion lease. Independent benchmark overlap
-exclusion and training authorization remain disabled.
+**Next controlled slice:** Read the canonical tenant-scoped JSONL
+import through a bounded nofollow file descriptor, compare the exact
+stored bytes with a separately expected SHA-256 and feed a snapshot into
+the existing keyed fit-row HMAC comparison. This is a snapshot read, not
+proof of the expected hash's independent authority or proof that sklearn
+loaded those bytes during its actual fit. Separately governed source
+revision-to-feature/target transformation receipts, worker-observed file
+digest binding, and a durable rights/deletion-epoch training/promotion
+lease remain unimplemented. Independent benchmark exclusion, training
+authorization and general-skill certification stay disabled.

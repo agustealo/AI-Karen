@@ -57,6 +57,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [30 — Owner-scoped observed-fit artifact binding](30-owner-scoped-fit-artifact-binding.md) | Read-only successful job, registered artifact and keyed sklearn fit-observation reconciliation; no source-ancestry claim |
 | [31 — Frozen assessment to sklearn JSONL alignment](31-frozen-assessment-to-sklearn-jsonl.md) | Live rights/epoch rechecked, exact frozen train-ID-to-canonical-JSONL structural matching; no verified transformation or training membership |
 | [32 — Observed fit to supplied input commitments](32-observed-fit-input-commitments.md) | Read-only keyed row content HMAC concordance for supplied snapshots; no independent byte or model/source ancestry |
+| [33 — Canonical tenant sklearn dataset readback](33-canonical-tenant-training-readback.md) | Nofollow bounded tenant import file/hash verification and LF-only row parsing; no worker-byte or source attestation |
 
 ### Machine-readable proposed contracts
 
