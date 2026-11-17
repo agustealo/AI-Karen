@@ -1128,3 +1128,39 @@ async def test_legacy_receipt_cannot_gain_reviewer_provenance(tmp_path):
             subject=identity(), reviewer=_authorized_curated_reviewer(),
             model_id=manifest.model_id, receipt_id=receipt,
         )
+
+
+@pytest.mark.asyncio
+async def test_oracle_review_never_claims_success_without_durable_readback(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+
+    class FalseAcknowledgmentStore(InMemoryOutcomeStore):
+        def __init__(self, records):
+            super().__init__()
+            self._records = records
+
+        async def save_unique_outcome_async(self, payload):
+            # Simulate a defective or interrupted persistence adapter that
+            # returns without writing the requested review receipt.
+            return None
+
+    broken = FalseAcknowledgmentStore(store._records)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER,
+        registry_dir=tmp_path, store=broken,
+    )
+    with pytest.raises(OutcomeStoreError, match="not durably reconciled"):
+        await adapter.record_review(
+            subject=identity(),
+            reviewer=_authorized_curated_reviewer(),
+            model_id=manifest.model_id,
+            receipt_id=receipt,
+        )
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None

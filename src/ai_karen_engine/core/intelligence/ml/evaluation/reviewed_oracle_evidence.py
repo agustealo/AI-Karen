@@ -304,28 +304,26 @@ class GovernedCuratedOracleReviewEvidence:
                 "receipt_id": receipt_id,
                 "model_id": model_id,
                 "reviewer_user_id": reviewer.user_id,
-                "reviewer_session_id_sha256": hashlib.sha256(
-                    reviewer.session_id.encode("utf-8")
-                ).hexdigest(),
+                "reviewer_session_present": True,
                 "reviewed_at": now.isoformat(),
                 "exact_snapshot_sha256": snapshot.snapshot_sha256,
                 "review_acknowledged": True,
             },
         }
         await self._store.save_unique_outcome_async(outcome)
-        if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
-            raise OutcomeStoreError("Oracle cohort drifted during review write")
-        return ReviewedOracleObservation(
-            tenant_id=self._tenant,
-            user_id=self._user,
-            model_id=model_id,
-            receipt_id=receipt_id,
-            reviewer_user_id=reviewer.user_id,
-            reviewed_at=now,
-            exact_cohort_reviewer_acknowledged=True,
-            curated_source_integrity_verified=True,
-            group_membership_integrity_verified=True,
+        # A write adapter may acknowledge without durably persisting.
+        # Prove the exact original receipt can actually be read back before
+        # reporting a completed reviewer acknowledgment.
+        persisted = await self.inspect_review(
+            subject=subject, model_id=model_id, receipt_id=receipt_id,
         )
+        if (
+            persisted is None
+            or persisted.reviewer_user_id != reviewer.user_id
+            or persisted.reviewed_at != now
+        ):
+            raise OutcomeStoreError("Reviewer observation was not durably reconciled")
+        return persisted
 
     async def inspect_review(
         self, *, subject: AuthenticatedPrincipal,
@@ -374,19 +372,27 @@ class GovernedCuratedOracleReviewEvidence:
             or not isinstance(reviewer, str)
             or not reviewer.strip()
             or reviewer == self._user
-            or not isinstance(metadata.get("reviewer_session_id_sha256"), str)
-            or len(metadata["reviewer_session_id_sha256"]) != 64
+            or metadata.get("reviewer_session_present") is not True
             or not isinstance(when, str)
-            or row.get("recorded_at") != when
         ):
             return None
         try:
             reviewed_at = datetime.fromisoformat(when)
+            original_recorded_at = row.get("recorded_at")
+            recorded_at = (
+                original_recorded_at
+                if isinstance(original_recorded_at, datetime)
+                else datetime.fromisoformat(str(original_recorded_at))
+            )
         except (TypeError, ValueError):
             return None
         if (
             reviewed_at.tzinfo is None
             or reviewed_at.utcoffset() is None
+            or recorded_at.tzinfo is None
+            or recorded_at.utcoffset() is None
+            or recorded_at.astimezone(timezone.utc)
+            != reviewed_at.astimezone(timezone.utc)
             or reviewed_at > datetime.now(timezone.utc)
             or reviewed_at < snapshot.runner_finished_at
         ):
