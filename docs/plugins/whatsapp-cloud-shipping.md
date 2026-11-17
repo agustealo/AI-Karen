@@ -379,3 +379,51 @@ acceptance still needs a real signed-in browser walkthrough, a configured
 Meta sandbox, public callback handshake, verified identity binding and
 provider-observed signed delivery/read receipts. Source-only UI/API success
 is **not** a WhatsApp shipping approval.
+
+
+## KWA-01C6C1: canonical admin reachability and opt-in real-browser observer
+
+The existing `WhatsAppCloudSettings` is now reachable through the authenticated
+dashboard's administrator-only **Admin settings** link and Karen's canonical
+`/admin` → **WhatsApp Cloud** tab, not only from a
+`SettingsDialog(adminMode=true)` configuration that the consumer dashboard
+does not use. This mounts the already governed component and its authenticated
+operator endpoints; it adds no second API, provider selector, credential owner,
+installation path, policy grant, or lifecycle implementation.
+
+`tests/settings/whatsapp-cloud-admin-navigation.test.tsx` guards the actual
+admin tab integration in the ordinary frontend test suite. The read-only
+`e2e/whatsapp-cloud-admin-acceptance.spec.ts` is separately **opt-in** for an
+approved HTTPS deployment with a dedicated, authorized, sanitized operator.
+The real browser tests exercise **390, 768 and 1440 px** widths, sign in through
+Karen, follow the administrator navigation link into the actual admin tab,
+and require an HTTP 200 for canonical
+`channel.inspect` inventory. They reject unexpected inventory fields, ensure
+the UI distinguishes locally enabled connections from provider health, and
+verify that observing the screen issues no channel mutations. No route mocks
+or synthetic connection state are used.
+
+From `src/ui_launchers/Karen-AI-Theme` on an approved deployment, export
+`KAREN_BASE_URL` (exact approved HTTPS origin), `KAREN_UX_EMAIL` and
+`KAREN_UX_PASSWORD` through the operator's secure environment, then run:
+
+```bash
+KAREN_WHATSAPP_ADMIN_ACCEPTANCE_REQUIRED=true \
+npx playwright test e2e/whatsapp-cloud-admin-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium --retries=0
+```
+
+The URL in this command denotes an operator-selected, authorized HTTPS
+deployment, **not** an existing or verified installation. Keep actual secrets
+outside source control and CI artifacts. This suite disables Playwright traces,
+screenshots and video; the approved login helper refuses untrusted origins.
+Without explicit opt-in it skips, and a skipped test is never a passing live
+browser acceptance receipt. With opt-in, missing credentials, denied inventory,
+unavailable host, unexpected backend fields, or unreachable admin navigation
+fail the test.
+
+**Not certified by this slice:** a real Meta webhook challenge response, Meta
+subscription, signed native message, identity link, ChatRuntime turn, outbound
+provider message ID or delivered/read receipt. Those require separately
+reviewed, credential-governed provider-side evidence on the exact deployed
+commit and cannot be inferred from this browser observation or green CI.

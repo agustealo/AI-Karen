@@ -99,6 +99,7 @@ import MaintenancePanel from "./MaintenancePanel";
 import SystemConfigPanel from "./SystemConfigPanel";
 import TrainingSettingsPanel from "./TrainingSettingsPanel";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
+import WhatsAppCloudSettings from "@/components/settings/WhatsAppCloudSettings";
 
 type UserRole = "Admin" | "User" | "Editor";
 type BackendRole = "admin" | "user" | "editor";
@@ -807,6 +808,10 @@ export default function AdminSettingsPage() {
               <Bell className="mr-1.5 h-4 w-4" />
               Communications
             </TabsTrigger>
+            <TabsTrigger value="whatsapp-cloud">
+              <Bell className="mr-1.5 h-4 w-4" />
+              WhatsApp Cloud
+            </TabsTrigger>
             <TabsTrigger value="system">
               <Activity className="mr-1.5 h-4 w-4" />
               System
@@ -1277,6 +1282,10 @@ export default function AdminSettingsPage() {
 
           <TabsContent value="communications" className="mt-6">
             <CommsCenterPage />
+          </TabsContent>
+
+          <TabsContent value="whatsapp-cloud" className="mt-6">
+            <WhatsAppCloudSettings />
           </TabsContent>
 
           <TabsContent value="system" className="mt-6">

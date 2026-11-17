@@ -444,6 +444,36 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # An ordinary PolicyEvaluationRequest is not a trusted plugin
+        # lifecycle approval. Roles, permissions and capability identifiers in
+        # this input may originate from ingress. Until the separate, server-
+        # bound revision-fenced lifecycle grant is implemented, fail closed.
+        # Do not infer authority from admin roles, plugin name or chat prose.
+        lifecycle_requested = (
+            isinstance(request.action, str)
+            and request.action.startswith("plugin.lifecycle.")
+        ) or any(
+            isinstance(capability, str)
+            and capability.startswith("plugin.lifecycle.")
+            for capability in request.requested_capabilities
+        )
+        if lifecycle_requested:
+            return PolicyDecision(
+                decision_id=decision_id,
+                policy_version=policy_version,
+                allowed=False,
+                reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                denied_capabilities=[
+                    cap
+                    for cap in request.requested_capabilities
+                    if isinstance(cap, str) and cap.startswith("plugin.lifecycle.")
+                ] or [str(request.action)],
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
+                requires_human_gate=True,
+                risk_level="high",
+                evaluated_at=evaluated_at,
+            )
+
         # The host-only Identity Vault resolver requires an exact personal
         # credential execution grant. A general PolicyEvaluationRequest is
         # intentionally NOT that trusted grant source: its capability list,
