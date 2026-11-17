@@ -24,12 +24,14 @@ def _settings(
     cloud_enabled: bool = True,
     extra_engine: bool = False,
     local_enabled: bool = True,
+    external_allowed: bool = True,
 ) -> ExpressionSettings:
     order = ["cloud", "alternate"] if extra_engine else ["cloud"]
     settings = ExpressionSettings(
         active_engine="local",
         engine_fallback_order=order,
     )
+    settings.policies.allow_external_engines = external_allowed
     settings.engines["local"] = EngineConfig(
         enabled=local_enabled,
         type="openai_compatible",
