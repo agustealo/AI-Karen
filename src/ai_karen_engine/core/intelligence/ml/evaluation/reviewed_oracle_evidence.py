@@ -323,6 +323,17 @@ class GovernedCuratedOracleReviewEvidence:
             or persisted.reviewed_at != now
         ):
             raise OutcomeStoreError("Reviewer observation was not durably reconciled")
+        logger.info(
+            "kcm.curated_oracle_review.recorded",
+            extra={
+                "tenant_id": self._tenant,
+                "user_id": self._user,
+                "reviewer_user_id": reviewer.user_id,
+                "model_id": model_id,
+                "receipt_id": receipt_id,
+                "review_kind": _SCHEMA,
+            },
+        )
         return persisted
 
     async def inspect_review(
