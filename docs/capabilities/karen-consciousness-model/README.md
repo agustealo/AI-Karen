@@ -53,6 +53,7 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [26 — Reviewed oracle observations](26-reviewed-curated-oracle-observations.md) | Tenant-scoped authorized reviewer acknowledgment, exact source snapshot, no independent group certification |
 | [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Append-only reviewer withdrawal and revocation-aware task evidence without permission grants |
 | [28 — Model/job artifact provenance](28-model-training-job-lineage.md) | Exact owner-scoped training job and registry hash link, explicitly not held-out evidence |
+| [29 — sklearn fit observation](29-sklearn-fit-observation.md) | Keyed tenant-scoped observation of actual sklearn fit members, explicitly not verified KCM source inventory |
 
 ### Machine-readable proposed contracts
 
