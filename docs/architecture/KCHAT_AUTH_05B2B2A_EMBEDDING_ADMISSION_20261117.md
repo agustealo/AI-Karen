@@ -136,3 +136,16 @@ Targeted regressions cover these three cases, an attempted widened
 serialized handoff, a truly evaluated RuntimePolicy decision, and
 copied-plan/budget/context replay. Exact-head CI, independent review and
 post-merge acceptance remain required; no release claim is made here.
+
+### Mutable budget field containment
+
+A valid original admission must not be able to expand quota by mutating the
+`AuthorizedExecutionPlan.budget` dataclass before its next call.
+`ExecutionBudgetMeter`, the existing request-owned quota authority, now
+snapshots **all** original policy limits at construction in a private
+read-only mapping. Later changes to `plan.budget.max_model_calls`,
+`max_external_requests`, duration or tool/token bounds never change
+reservation limits or the original shared object identity. No extra meter
+was introduced. Tests exercise post-admission budget mutation, external
+request caps, and rejection without added model usage. This does not
+constitute arbitrary in-process Python sandboxing.
