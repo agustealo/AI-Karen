@@ -163,7 +163,27 @@ class _RejectProviderRedirect(HTTPRedirectHandler):
 
 
 def _open_provider_request(request: Request, timeout: float):
-    """Use a fresh no-redirect opener without modifying global urllib state."""
+    """Use a fresh, no-redirect and metadata-safe provider HTTP opener."""
+    # External RuntimePolicy authorization is not permission to contact cloud
+    # instance metadata or interface-local addresses. Reject these wire targets
+    # even for an otherwise authorized external provider attempt. This is an
+    # IP-literal guard; DNS resolution and socket pinning require separate proof.
+    parsed = urlsplit(request.full_url)
+    if not parsed.hostname:
+        raise ProviderExecutionError("provider_destination_invalid")
+    try:
+        destination = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        destination = None
+    if isinstance(destination, ipaddress.IPv6Address) and destination.ipv4_mapped:
+        destination = destination.ipv4_mapped
+    if destination is not None and (
+        destination.is_link_local
+        or destination.is_unspecified
+        or destination.is_multicast
+    ):
+        raise ProviderExecutionError("provider_destination_not_allowed")
+
     # urllib otherwise installs its default ProxyHandler, which honors
     # ambient HTTP(S)_PROXY / ALL_PROXY. An apparently local approved
     # endpoint could therefore egress through an unapproved proxy and
