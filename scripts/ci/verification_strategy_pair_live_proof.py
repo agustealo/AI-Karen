@@ -388,10 +388,27 @@ def main() -> int:
             )
         )
     except Exception as exc:
-        # No secret or prompt material, raw exception strings or user IDs.
+        # These exact constant diagnostic codes originate solely in the
+        # audited acceptance script, not user/model/provider text. Unknown
+        # exception messages never reach CI logs.
+        public_codes = frozenset({
+            "isolated_ci_approval_or_identity_missing",
+            "policy_scope_or_reasoning_authorization_denied",
+            "canonical_execution_plan_not_equivalent",
+            "gateway_generation_receipt_missing_or_degraded",
+            "verifier_execution_receipt_missing",
+            "direct_path_executed_unrequested_reasoning",
+            "nonpersisted_strategy_receipt_was_promoted",
+            "independent_strategy_execution_not_equivalent",
+        })
+        code = str(exc) if isinstance(exc, LiveStrategyProofError) else ""
         print(
             json.dumps(
-                {"status": "failed", "error_type": type(exc).__name__},
+                {
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error_code": code if code in public_codes else "unclassified",
+                },
                 sort_keys=True,
             ),
             file=sys.stderr,
