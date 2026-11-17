@@ -76,11 +76,19 @@ def test_channel_host_off_by_default(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_disabled_app_lifecycle_does_not_start_any_channel(monkeypatch):
+    from ai_karen_engine.core.runtime.direct_capability_executor import (
+        get_direct_capability_executor,
+    )
+
+    executor = get_direct_capability_executor()
+    stale_host = object.__new__(ChannelHostServices)
+    executor.bind_channel_host(stale_host)
     monkeypatch.delenv("KAREN_CHANNEL_HOST_ENABLED", raising=False)
     app = FastAPI()
     await initialize_application_channel_host(app)
     assert app.state.channel_ingress_service is None
     assert app.state.channel_host_services is None
+    assert executor._channel_host is None
 
 
 def test_personal_pairing_registry_is_explicit_and_requires_signing_secret(monkeypatch):
@@ -294,12 +302,20 @@ async def test_credential_authorizer_denies_unconfigured_installation_and_stoppe
 
 @pytest.mark.asyncio
 async def test_application_shutdown_revokes_ingress_before_database_cleanup(monkeypatch):
+    from ai_karen_engine.core.runtime.direct_capability_executor import (
+        get_direct_capability_executor,
+    )
+
     app = FastAPI()
     seen = []
+    executor = get_direct_capability_executor()
     async def stop():
         assert app.state.channel_ingress_service is None
+        assert executor._channel_host is None
         seen.append("channel_stopped")
-    fake_host = SimpleNamespace(shutdown=AsyncMock(side_effect=stop))
+    fake_host = object.__new__(ChannelHostServices)
+    fake_host.shutdown = AsyncMock(side_effect=stop)
+    executor.bind_channel_host(fake_host)
     app.state.channel_ingress_service = object()
     app.state.channel_host_services = fake_host
     app.state.model_download_worker = None
