@@ -45,6 +45,7 @@ const recommendation = {
     'languages/english_18m_refl_2026-10/embeddings/**',
   ],
   app_consumers: ['pocket-tts'],
+  download_methods: ['hf_hub', 'direct_https'],
   installed: false,
 };
 
@@ -137,45 +138,46 @@ describe('Governed plugin model setup', () => {
       trust_remote_code: false,
       accept_license: true,
       pin: true,
+      download_method: 'hf_hub',
     });
     expect(await screen.findByText(/download job is queued/)).toBeTruthy();
   });
 
-  it('offers a curl alternative without issuing a browser download or bypassing fresh terms', async () => {
+  it('chooses direct HTTPS without changing license, revision, validation or worker endpoint', async () => {
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
     await screen.findByText('Pocket TTS English 18.2M (REFL)');
-
-    expect(screen.getByText('Use curl from an admin terminal')).toBeTruthy();
-    expect(screen.queryByTestId('plugin-model-curl-command')).toBeNull();
-    expect(screen.getByText(/Review and accept the model license above/)).toBeTruthy();
+    expect(screen.getByLabelText('Download method')).toBeTruthy();
+    expect(screen.getByText('Direct HTTPS (no Hub SDK for transfer)')).toBeTruthy();
     expect(mocks.post).not.toHaveBeenCalled();
 
+    fireEvent.change(screen.getByLabelText('Download method'), {
+      target: { value: 'direct_https' },
+    });
+    expect(screen.getByRole('button', { name: 'Download recommended model' })
+      .hasAttribute('disabled')).toBe(true);
     fireEvent.click(screen.getByRole('checkbox'));
-    const command = screen.getByTestId('plugin-model-curl-command').textContent || '';
-    expect(command).toContain('curl --fail-with-body');
-    expect(command).toContain('KAREN_ACCESS_TOKEN');
-    expect(command).toContain('https://');
-    expect(command).toContain('/api/models/download/validate');
-    expect(command).toContain('/api/models/download');
-    expect(command).toContain(PINNED);
-    expect(command).toContain('kyutai/pocket-tts');
-    expect(command).toContain('plugin_audio');
-    expect(command).toContain('resolved_revision');
-    expect(command).toContain('jq -e');
-    expect(command).not.toContain('token=hf_');
-    expect(mocks.post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(screen.getByRole('checkbox'));
-    expect(screen.queryByTestId('plugin-model-curl-command')).toBeNull();
+    expect(mocks.post).toHaveBeenNthCalledWith(1, '/api/models/download/validate', {
+      model_id: recommendation.model_id, revision: PINNED, channel_id: 'plugin_audio',
+      include_patterns: recommendation.include_patterns,
+      exclude_patterns: [], trust_remote_code: false, accept_license: true,
+    });
+    expect(mocks.post).toHaveBeenNthCalledWith(2, '/api/models/download', {
+      model_id: recommendation.model_id, revision: null, validated_revision: PINNED,
+      channel_id: 'plugin_audio', include_patterns: recommendation.include_patterns,
+      exclude_patterns: [], trust_remote_code: false, accept_license: true,
+      pin: true, download_method: 'direct_https',
+    });
+    expect(await screen.findByText(/download job is queued/)).toBeTruthy();
   });
 
-  it('withholds curl commands when source revision or channel cannot be verified', async () => {
-    getImpl(catalog({ metadata_verified: false, verification_state: 'unavailable', resolved_revision: 'main' }));
+  it('does not infer direct transport support without a backend catalog declaration', async () => {
+    getImpl(catalog({ download_methods: ['hf_hub'] }));
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
     await screen.findByText('Pocket TTS English 18.2M (REFL)');
-    expect(screen.queryByTestId('plugin-model-curl-option')).toBeNull();
-    expect(screen.queryByTestId('plugin-model-curl-command')).toBeNull();
-    expect(mocks.post).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Download method')).toBeNull();
   });
 
   it('keeps the download blocked when the actual audio channel is disabled', async () => {
