@@ -17,7 +17,14 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     GenerationFailed,
     ProviderNotAvailable,
 )
-from ai_karen_engine.core.model_runtime.provider_execution import _open_provider_request
+from ai_karen_engine.core.model_runtime.provider_endpoint import (
+    ProviderEndpoint,
+    ProviderEndpointType,
+)
+from ai_karen_engine.core.model_runtime.provider_execution import (
+    _open_provider_request,
+    provider_endpoint_requires_external_permission,
+)
 
 
 class OpenAICompatibleRuntimeClient:
@@ -37,7 +44,26 @@ class OpenAICompatibleRuntimeClient:
         self.display_name = provider_name
         self.timeout_seconds = timeout_seconds
 
+    def _require_local_compatibility_transport(self) -> None:
+        """Reject unscoped remote inference at the actual raw-client boundary.
+
+        This compatibility client has no authenticated RuntimePolicy plan or
+        shared ExecutionBudgetMeter. It must not execute a nonlocal provider,
+        even when selected via ModelManager, LLMUtils, or InferencePort.
+        Governed external model execution remains owned by ChatRuntime and
+        the canonical provider transport, never by this compatibility shim.
+        """
+        endpoint = ProviderEndpoint(
+            provider_id=self.provider_name,
+            display_name=self.display_name,
+            endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+            base_url=self.base_url,
+        )
+        if provider_endpoint_requires_external_permission(endpoint):
+            raise ProviderNotAvailable("ungoverned_external_compatibility_transport_denied")
+
     def _request(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self._require_local_compatibility_transport()
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -116,10 +142,11 @@ class OpenAICompatibleRuntimeClient:
         return vectors[0] if isinstance(text, str) else vectors
 
     def health_check(self) -> Dict[str, Any]:
-        request = Request(f"{self.base_url}/models", method="GET")
-        if self.api_key:
-            request.add_header("Authorization", f"Bearer {self.api_key}")
         try:
+            self._require_local_compatibility_transport()
+            request = Request(f"{self.base_url}/models", method="GET")
+            if self.api_key:
+                request.add_header("Authorization", f"Bearer {self.api_key}")
             with _open_provider_request(request, timeout=min(self.timeout_seconds, 10.0)) as response:
                 return {
                     "status": "healthy" if response.status < 400 else "unhealthy",
