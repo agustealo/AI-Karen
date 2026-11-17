@@ -4181,6 +4181,7 @@ class ChatRuntime:
             "reasoning_model_calls",
             "reasoning_steps",
             "reasoning_model_attribution_status",
+            "verification_strategy_executed",
         ):
             if key in reasoning_meta:
                 result[key] = reasoning_meta[key]
@@ -4376,6 +4377,13 @@ class ChatRuntime:
             "reasoning_modes": list(activation.reasoning_modes),
             "reasoning_model_calls": consumed_model_calls,
             "reasoning_steps": consumed_steps,
+            # Only the canonical executor's executed-ID receipt can establish
+            # whether the verifier actually ran. Neither a requested mode
+            # nor a registered strategy proves execution or correctness.
+            "verification_strategy_executed": (
+                "verification" in activation.reasoning_modes
+                and "verify" in (result.diagnostics.get("strategies_executed") or [])
+            ),
             "execution_spans": [
                 {
                     "name": "reasoning_executor",
