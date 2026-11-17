@@ -165,7 +165,7 @@ def list_tenant_dataset_versions(
 
 
 logger = logging.getLogger(__name__)
-_SHA256 = re.compile(r"[0-9a-f]{64}\\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SNAPSHOT_ROWS = 10_000
 _MAX_SNAPSHOT_ROW_BYTES = 1024 * 1024
 
