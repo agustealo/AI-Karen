@@ -73,6 +73,7 @@ def _receipt(*, verification: bool = False) -> dict:
             "reasoning_generation_mode": "model_after_authorized_reasoning",
             "reasoning_model_calls": 0,
             "reasoning_model_attribution_status": "not_executed",
+            "verification_strategy_executed": True,
             "reasoning_steps": 2,
             "reasoning_modes": ["verification"],
         })
@@ -181,6 +182,8 @@ def test_forged_typed_provenance_never_proves_execution(forgery: dict) -> None:
     {"reasoning_model_attribution_status": "unverified"},
     {"reasoning_steps": 0},
     {"reasoning_modes": ["unapproved"]},
+    {"verification_strategy_executed": False},
+    {"verification_strategy_executed": None},
 ])
 def test_reasoning_receipt_must_match_actual_authorized_chain(changed: dict) -> None:
     metadata = _receipt(verification=True)
