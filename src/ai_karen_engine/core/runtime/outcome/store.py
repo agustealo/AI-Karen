@@ -473,14 +473,25 @@ class PostgresOutcomeStore(OutcomeStore):
             "schema_version", "receipt_id", "model_id", "reviewer_user_id",
             "reviewer_session_present", "reviewed_at",
             "exact_snapshot_sha256", "review_acknowledged",
+            "review_phase", "proposal_outcome_id",
         }
         receipt = metadata.get("receipt_id")
         subject = payload.get("user_id")
         reviewer = metadata.get("reviewer_user_id")
         digest = metadata.get("exact_snapshot_sha256")
         identifier = payload.get("outcome_id")
+        phase = metadata.get("review_phase")
+        proposed_id = metadata.get("proposal_outcome_id")
         if (
             set(metadata) != required
+            or phase not in {"proposed", "confirmed"}
+            or not isinstance(proposed_id, str)
+            or not proposed_id.startswith("kcm_curated_review_")
+            or len(proposed_id) != len("kcm_curated_review_") + 64
+            or any(ch not in "0123456789abcdef"
+                   for ch in proposed_id[len("kcm_curated_review_"):])
+            or (phase == "proposed" and identifier != proposed_id)
+            or (phase == "confirmed" and identifier == proposed_id)
             or not isinstance(subject, str) or not subject.strip()
             or not isinstance(reviewer, str) or not reviewer.strip()
             or reviewer == subject
@@ -496,7 +507,7 @@ class PostgresOutcomeStore(OutcomeStore):
             or not isinstance(digest, str) or len(digest) != 64
             or any(ch not in "0123456789abcdef" for ch in digest)
             or metadata.get("reviewer_session_present") is not True
-            or metadata.get("review_acknowledged") is not True
+            or metadata.get("review_acknowledged") is not (phase == "confirmed")
             or not isinstance(metadata.get("reviewed_at"), str)
             or not isinstance(payload.get("recorded_at"), str)
         ):

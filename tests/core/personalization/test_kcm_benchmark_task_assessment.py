@@ -1188,8 +1188,8 @@ async def test_oracle_review_invalidates_when_numeric_case_revoked_during_lookup
         def list_scoped_outcomes_by_ids(self, tenant_id, *, user_id, source, outcome_ids):
             if (
                 not self._revoked
-                and len(outcome_ids) == 1
-                and outcome_ids[0].startswith("kcm_curated_review_")
+                and len(outcome_ids) == 2
+                and any(key.startswith("kcm_curated_review_") for key in outcome_ids)
             ):
                 self._revoked = True
                 surviving = [
@@ -1241,8 +1241,8 @@ async def test_full_bound_numeric_case_is_not_displaced_by_reviewer_receipt(tmp_
     assert len(numeric) == 1
     assert numeric[0]["metadata"]["schema_version"] == "ml_predictor_evidence_v1"
     assert len(store.list_for_tenant(
-        TENANT, user_id=USER, source="intelligence.ml", limit=2,
-    )) == 2
+        TENANT, user_id=USER, source="intelligence.ml", limit=3,
+    )) == 3
     assert await adapter.inspect_review(
         subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
     ) is not None
@@ -1331,6 +1331,8 @@ def test_canonical_store_rejects_forged_or_malformed_oracle_receipts():
             "reviewer_session_present": True,
             "reviewed_at": now,
             "exact_snapshot_sha256": "c" * 64,
+            "review_phase": "confirmed",
+            "proposal_outcome_id": "kcm_curated_review_" + "d" * 64,
             "review_acknowledged": True,
         },
     }
@@ -1355,3 +1357,80 @@ def test_canonical_store_rejects_forged_or_malformed_oracle_receipts():
     extra["metadata"]["unreviewed_policy_grant"] = True
     with pytest.raises(OutcomeStoreError):
         PostgresOutcomeStore._validated_identity(extra)
+
+
+@pytest.mark.asyncio
+async def test_incomplete_reviewer_proposal_never_becomes_consumable(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, original_store = await _actual_runner_scoped_review_fixture(
+        tmp_path,
+    )
+    reviewer = _authorized_curated_reviewer()
+
+    class ExpiringAfterProposal(InMemoryOutcomeStore):
+        async def save_unique_outcome_async(self, payload):
+            await super().save_unique_outcome_async(payload)
+            if payload["metadata"].get("review_phase") == "proposed":
+                reviewer.expires_at = datetime(
+                    2020, 1, 1, tzinfo=timezone.utc,
+                )
+
+    store = ExpiringAfterProposal()
+    for row in original_store._records:
+        store.save_outcome(row)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=store,
+    )
+    with pytest.raises(PermissionError):
+        await adapter.record_review(
+            subject=identity(), reviewer=reviewer,
+            model_id=manifest.model_id, receipt_id=receipt,
+        )
+    assert sum(
+        (row.get("metadata") or {}).get("review_phase") == "proposed"
+        for row in store._records
+    ) == 1
+    assert not any(
+        (row.get("metadata") or {}).get("review_phase") == "confirmed"
+        for row in store._records
+    )
+    assert await adapter.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_final_await_subject_revocation_prevents_readout(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, store = await _actual_runner_scoped_review_fixture(tmp_path)
+    adapter = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=store,
+    )
+    await adapter.record_review(
+        subject=identity(), reviewer=_authorized_curated_reviewer(),
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    subject = identity()
+    original = adapter._require_measured
+    reads = 0
+
+    async def revoke_on_second_measure(*, subject, snapshot):
+        nonlocal reads
+        await original(subject=subject, snapshot=snapshot)
+        reads += 1
+        if reads == 2:
+            subject.expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+    adapter._require_measured = revoke_on_second_measure
+    with pytest.raises(PermissionError):
+        await adapter.inspect_review(
+            subject=subject, model_id=manifest.model_id, receipt_id=receipt,
+        )

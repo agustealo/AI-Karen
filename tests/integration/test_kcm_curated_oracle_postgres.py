@@ -234,12 +234,13 @@ async def test_real_postgres_exact_oracle_reviewer_receipt_rls_and_replay(tmp_pa
             """SELECT count(*) FROM public.outcome_records
                WHERE tenant_id=$1 AND user_id=$2 AND source='intelligence.ml'""",
             uuid.UUID(tenant_a), uuid.UUID(subject_a),
-        ) == 2
+        ) == 3
         reviewer_row = await raw.fetchrow(
             """SELECT outcome_id, payload FROM public.outcome_records
                WHERE tenant_id=$1 AND user_id=$2
                AND payload->'metadata'->>'schema_version'
-                   = 'kcm_curated_oracle_reviewer_observation_v1'""",
+                   = 'kcm_curated_oracle_reviewer_observation_v1'
+               AND payload->'metadata'->>'review_phase' = 'confirmed'""",
             uuid.UUID(tenant_a), uuid.UUID(subject_a),
         )
         assert reviewer_row is not None

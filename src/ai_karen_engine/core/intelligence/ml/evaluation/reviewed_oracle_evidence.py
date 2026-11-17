@@ -245,11 +245,41 @@ class GovernedCuratedOracleReviewEvidence:
         )
 
     @staticmethod
-    def _outcome_id(tenant: str, user: str, receipt_id: str) -> str:
+    def _outcome_id(
+        tenant: str, user: str, receipt_id: str, *,
+        phase: str = "proposed",
+    ) -> str:
+        # A deterministic pair per run enables strict append-only replay
+        # denial without ever returning a tentative review as confirmed.
+        if phase not in {"proposed", "confirmed"}:
+            raise ValueError("Unknown KCM review phase")
         key = json.dumps(
-            [tenant, user, receipt_id], separators=(",", ":"), ensure_ascii=False,
+            [tenant, user, receipt_id, phase],
+            separators=(",", ":"), ensure_ascii=False,
         )
         return "kcm_curated_review_" + hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _principal_identity(principal: AuthenticatedPrincipal) -> tuple:
+        return (
+            principal.tenant_id, principal.user_id, principal.session_id,
+            tuple(principal.roles), tuple(principal.permissions),
+            principal.expires_at,
+        )
+
+    def _require_same_reviewer(
+        self, reviewer: AuthenticatedPrincipal, authorized: tuple,
+    ) -> None:
+        self._require_reviewer(reviewer)
+        if self._principal_identity(reviewer) != authorized:
+            raise PermissionError("Reviewer authority changed during verification")
+
+    def _require_same_subject(
+        self, subject: AuthenticatedPrincipal, authorized: tuple,
+    ) -> None:
+        self._require_subject(subject)
+        if self._principal_identity(subject) != authorized:
+            raise PermissionError("Subject identity changed during review lookup")
 
     async def _require_measured(
         self, *, subject: AuthenticatedPrincipal,
@@ -283,33 +313,29 @@ class GovernedCuratedOracleReviewEvidence:
         reviewer: AuthenticatedPrincipal,
         model_id: str, receipt_id: str,
     ) -> ReviewedOracleObservation:
-        """Write a distinct reviewer acknowledgment, never an approval to act."""
+        """Append a proposal and a separately authorized confirmation receipt.
+
+        If reviewer authorization fails during the first awaited persistence,
+        only the proposal remains. Readers require the confirmed pair, so a
+        denied request never leaves a consumable reviewed acknowledgment.
+        """
         self._require_subject(subject)
         self._require_reviewer(reviewer)
-        # AuthenticatedPrincipal is mutable. Freeze the exact trusted claims
-        # that authorized this issuance, and reject any change after awaits.
-        reviewer_authority = (
-            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
-            tuple(reviewer.roles), tuple(reviewer.permissions),
-            reviewer.expires_at,
-        )
+        reviewer_authority = self._principal_identity(reviewer)
+        subject_authority = self._principal_identity(subject)
         snapshot = self._snapshot(model_id=model_id, receipt_id=receipt_id)
         if snapshot is None:
             raise OutcomeStoreError("Current canonical oracle cohort unavailable")
         await self._require_measured(subject=subject, snapshot=snapshot)
-        self._require_subject(subject)
-        self._require_reviewer(reviewer)
-        if (
-            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
-            tuple(reviewer.roles), tuple(reviewer.permissions),
-            reviewer.expires_at,
-        ) != reviewer_authority:
-            raise PermissionError("Reviewer authority changed during verification")
+        self._require_same_subject(subject, subject_authority)
+        self._require_same_reviewer(reviewer, reviewer_authority)
         if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
             raise OutcomeStoreError("Oracle cohort drifted during outcome verification")
+
+        proposed_id = self._outcome_id(self._tenant, self._user, receipt_id)
         now = datetime.now(timezone.utc)
-        outcome = {
-            "outcome_id": self._outcome_id(self._tenant, self._user, receipt_id),
+        proposal = {
+            "outcome_id": proposed_id,
             "tenant_id": self._tenant,
             "user_id": self._user,
             "source": _SOURCE,
@@ -322,36 +348,48 @@ class GovernedCuratedOracleReviewEvidence:
                 "reviewer_session_present": True,
                 "reviewed_at": now.isoformat(),
                 "exact_snapshot_sha256": snapshot.snapshot_sha256,
+                "review_phase": "proposed",
+                "proposal_outcome_id": proposed_id,
+                "review_acknowledged": False,
+            },
+        }
+        await self._store.save_unique_outcome_async(proposal)
+
+        # An expired/changed reviewer during proposal persistence cannot
+        # finalize it. An orphan proposal is intentionally non-consumable.
+        self._require_same_subject(subject, subject_authority)
+        self._require_same_reviewer(reviewer, reviewer_authority)
+        if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
+            raise OutcomeStoreError("Oracle cohort drifted before confirmation")
+
+        # Authorization is checked immediately before the final append.
+        # No post-confirmation reviewer rejection is permitted: it would
+        # leave a completed receipt consumable after returning "denied".
+        confirmed_at = datetime.now(timezone.utc)
+        confirmed = {
+            **proposal,
+            "outcome_id": self._outcome_id(
+                self._tenant, self._user, receipt_id, phase="confirmed",
+            ),
+            "recorded_at": confirmed_at.isoformat(),
+            "metadata": {
+                **proposal["metadata"],
+                "reviewed_at": confirmed_at.isoformat(),
+                "review_phase": "confirmed",
                 "review_acknowledged": True,
             },
         }
-        await self._store.save_unique_outcome_async(outcome)
-        self._require_subject(subject)
-        self._require_reviewer(reviewer)
-        if (
-            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
-            tuple(reviewer.roles), tuple(reviewer.permissions),
-            reviewer.expires_at,
-        ) != reviewer_authority:
-            raise PermissionError("Reviewer authority changed during persistence")
-        # A write adapter may acknowledge without durably persisting.
-        # Prove the exact original receipt can actually be read back before
-        # reporting a completed reviewer acknowledgment.
+        await self._store.save_unique_outcome_async(confirmed)
+
+        # A store that falsely acknowledges writes must not report success.
+        # Consumers independently reconcile both append-only records.
         persisted = await self.inspect_review(
             subject=subject, model_id=model_id, receipt_id=receipt_id,
         )
-        self._require_subject(subject)
-        self._require_reviewer(reviewer)
-        if (
-            reviewer.tenant_id, reviewer.user_id, reviewer.session_id,
-            tuple(reviewer.roles), tuple(reviewer.permissions),
-            reviewer.expires_at,
-        ) != reviewer_authority:
-            raise PermissionError("Reviewer authority changed during readback")
         if (
             persisted is None
-            or persisted.reviewer_user_id != reviewer.user_id
-            or persisted.reviewed_at != now
+            or persisted.reviewer_user_id != reviewer_authority[1]
+            or persisted.reviewed_at != confirmed_at
         ):
             raise OutcomeStoreError("Reviewer observation was not durably reconciled")
         logger.info(
@@ -359,7 +397,7 @@ class GovernedCuratedOracleReviewEvidence:
             extra={
                 "tenant_id": self._tenant,
                 "user_id": self._user,
-                "reviewer_user_id": reviewer.user_id,
+                "reviewer_user_id": reviewer_authority[1],
                 "model_id": model_id,
                 "receipt_id": receipt_id,
                 "review_kind": _SCHEMA,
@@ -371,83 +409,103 @@ class GovernedCuratedOracleReviewEvidence:
         self, *, subject: AuthenticatedPrincipal,
         model_id: str, receipt_id: str,
     ) -> ReviewedOracleObservation | None:
-        """Reconcile one original scoped reviewer receipt with current sources."""
+        """Consume only a confirmed, scoped, unchanged original receipt pair."""
         self._require_subject(subject)
+        subject_authority = self._principal_identity(subject)
         snapshot = self._snapshot(model_id=model_id, receipt_id=receipt_id)
         if snapshot is None:
             return None
         await self._require_measured(subject=subject, snapshot=snapshot)
-        review_id = self._outcome_id(self._tenant, self._user, receipt_id)
+        self._require_same_subject(subject, subject_authority)
+
+        proposed_id = self._outcome_id(self._tenant, self._user, receipt_id)
+        confirmed_id = self._outcome_id(
+            self._tenant, self._user, receipt_id, phase="confirmed",
+        )
         rows = await asyncio.to_thread(
             self._store.list_scoped_outcomes_by_ids,
             self._tenant,
             user_id=self._user,
             source=_SOURCE,
-            outcome_ids=[review_id],
+            outcome_ids=[proposed_id, confirmed_id],
         )
-        if not isinstance(rows, list) or len(rows) != 1:
+        self._require_same_subject(subject, subject_authority)
+        if not isinstance(rows, list) or len(rows) != 2:
             return None
         if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
             return None
-        row = rows[0]
-        if not isinstance(row, dict):
-            return None
-        tenant, source = PostgresOutcomeStore._validated_identity(row)
-        if (
-            tenant != self._tenant
-            or source != _SOURCE
-            or row.get("user_id") != self._user
-            or row.get("outcome_id") != review_id
-        ):
-            raise PermissionError("Cross-principal oracle review receipt forbidden")
-        metadata = row.get("metadata")
-        if not isinstance(metadata, dict):
-            return None
-        reviewer = metadata.get("reviewer_user_id")
-        when = metadata.get("reviewed_at")
-        if (
-            metadata.get("schema_version") != _SCHEMA
-            or metadata.get("receipt_id") != receipt_id
-            or metadata.get("model_id") != model_id
-            or metadata.get("exact_snapshot_sha256") != snapshot.snapshot_sha256
-            or metadata.get("review_acknowledged") is not True
-            or not isinstance(reviewer, str)
-            or not reviewer.strip()
-            or reviewer == self._user
-            or metadata.get("reviewer_session_present") is not True
-            or not isinstance(when, str)
-        ):
-            return None
-        try:
-            reviewed_at = datetime.fromisoformat(when)
-            original_recorded_at = row.get("recorded_at")
-            recorded_at = (
-                original_recorded_at
-                if isinstance(original_recorded_at, datetime)
-                else datetime.fromisoformat(
-                    str(original_recorded_at).replace("Z", "+00:00")
-                )
+        indexed: dict[str, tuple[str, datetime]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                return None
+            tenant, source = PostgresOutcomeStore._validated_identity(row)
+            receipt_key = row.get("outcome_id")
+            if (
+                tenant != self._tenant or source != _SOURCE
+                or row.get("user_id") != self._user
+                or receipt_key in indexed
+                or receipt_key not in {proposed_id, confirmed_id}
+            ):
+                raise PermissionError("Cross-principal oracle review receipt forbidden")
+            metadata = row.get("metadata")
+            if not isinstance(metadata, dict):
+                return None
+            expected_phase = (
+                "proposed" if receipt_key == proposed_id else "confirmed"
             )
-        except (TypeError, ValueError):
-            return None
+            reviewer = metadata.get("reviewer_user_id")
+            when = metadata.get("reviewed_at")
+            if (
+                metadata.get("schema_version") != _SCHEMA
+                or metadata.get("receipt_id") != receipt_id
+                or metadata.get("model_id") != model_id
+                or metadata.get("exact_snapshot_sha256") != snapshot.snapshot_sha256
+                or metadata.get("review_phase") != expected_phase
+                or metadata.get("proposal_outcome_id") != proposed_id
+                or metadata.get("review_acknowledged")
+                    is not (expected_phase == "confirmed")
+                or not isinstance(reviewer, str) or not reviewer.strip()
+                or reviewer == self._user
+                or metadata.get("reviewer_session_present") is not True
+                or not isinstance(when, str)
+            ):
+                return None
+            try:
+                reviewed_at = datetime.fromisoformat(when.replace("Z", "+00:00"))
+                raw_recorded = row.get("recorded_at")
+                recorded_at = (
+                    raw_recorded if isinstance(raw_recorded, datetime)
+                    else datetime.fromisoformat(
+                        str(raw_recorded).replace("Z", "+00:00")
+                    )
+                )
+            except (TypeError, ValueError):
+                return None
+            if (
+                reviewed_at.utcoffset() is None
+                or recorded_at.utcoffset() is None
+                or recorded_at.astimezone(timezone.utc)
+                    != reviewed_at.astimezone(timezone.utc)
+                or reviewed_at > datetime.now(timezone.utc)
+                or reviewed_at < snapshot.runner_finished_at
+            ):
+                return None
+            indexed[receipt_key] = (reviewer, reviewed_at)
+        proposed_reviewer, proposed_at = indexed[proposed_id]
+        confirmed_reviewer, confirmed_at = indexed[confirmed_id]
         if (
-            reviewed_at.tzinfo is None
-            or reviewed_at.utcoffset() is None
-            or recorded_at.tzinfo is None
-            or recorded_at.utcoffset() is None
-            or recorded_at.astimezone(timezone.utc)
-            != reviewed_at.astimezone(timezone.utc)
-            or reviewed_at > datetime.now(timezone.utc)
-            or reviewed_at < snapshot.runner_finished_at
+            proposed_reviewer != confirmed_reviewer
+            or confirmed_at < proposed_at
         ):
             return None
-        # The review-receipt await may have overlapped with deletion or
-        # revocation of an original numeric benchmark outcome. Re-verify the
-        # canonical owner-scoped full cohort before returning a live result.
+
+        # This final awaited query can overlap with subject logout, expiry,
+        # tenant changes, or source revocation. Recheck principal after it.
         try:
             await self._require_measured(subject=subject, snapshot=snapshot)
         except OutcomeStoreError:
             return None
+        self._require_same_subject(subject, subject_authority)
         if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
             return None
         return ReviewedOracleObservation(
@@ -455,8 +513,8 @@ class GovernedCuratedOracleReviewEvidence:
             user_id=self._user,
             model_id=model_id,
             receipt_id=receipt_id,
-            reviewer_user_id=reviewer,
-            reviewed_at=reviewed_at,
+            reviewer_user_id=confirmed_reviewer,
+            reviewed_at=confirmed_at,
             exact_cohort_reviewer_acknowledged=True,
             curated_source_integrity_verified=True,
             group_membership_integrity_verified=True,
