@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import UUID
 
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
@@ -164,7 +164,14 @@ class _RejectProviderRedirect(HTTPRedirectHandler):
 
 def _open_provider_request(request: Request, timeout: float):
     """Use a fresh no-redirect opener without modifying global urllib state."""
-    return build_opener(_RejectProviderRedirect()).open(request, timeout=timeout)
+    # urllib otherwise installs its default ProxyHandler, which honors
+    # ambient HTTP(S)_PROXY / ALL_PROXY. An apparently local approved
+    # endpoint could therefore egress through an unapproved proxy and
+    # disclose prompt text or an endpoint-specific bearer credential.
+    # Explicit governed proxy configuration must be a separate policy owner.
+    return build_opener(_RejectProviderRedirect(), ProxyHandler({})).open(
+        request, timeout=timeout
+    )
 
 
 def _inherit_registered_api_path(
@@ -765,7 +772,9 @@ async def stream_provider_endpoint(
     data_lines: list[str] = []
     try:
         async with asyncio.timeout(total_seconds):
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout, follow_redirects=False, trust_env=False
+            ) as client:
                 async with client.stream(
                     "POST", f"{base_url}/chat/completions",
                     json=payload, headers=headers,

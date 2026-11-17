@@ -45,10 +45,14 @@ def _chunk(
 def _transport_client(monkeypatch, handler) -> None:
     original = httpx.AsyncClient
     transport = httpx.MockTransport(handler)
-    monkeypatch.setattr(
-        httpx, "AsyncClient",
-        lambda **kwargs: original(transport=transport, **kwargs),
-    )
+    def guarded_client(**kwargs):
+        # The runtime must not honor HTTP(S)_PROXY / ALL_PROXY, even when
+        # the destination is registered as local or custom.
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        return original(transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", guarded_client)
 
 
 async def _events():
@@ -236,3 +240,32 @@ async def test_network_cancellation_closes_provider_stream(monkeypatch):
     assert first.kind == "delta"
     await stream.aclose()
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_environment_proxy_variables_never_route_the_model_stream(monkeypatch):
+    """A local model request must not inherit an ambient external proxy."""
+    monkeypatch.setenv("HTTP_PROXY", "http://unapproved-relay.example:3128")
+    monkeypatch.setenv("HTTPS_PROXY", "http://unapproved-relay.example:3128")
+    monkeypatch.setenv("ALL_PROXY", "socks5://unapproved-relay.example:9050")
+    monkeypatch.setenv("NO_PROXY", "")
+    seen = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(
+            200,
+            text=(
+                _chunk("Verified local output")
+                + _chunk(None, finish="stop")
+                + "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _transport_client(monkeypatch, respond)
+    parts = await _events()
+    assert [part.kind for part in parts] == ["delta", "complete"]
+    assert len(seen) == 1
+    assert seen[0].startswith("http://")
+    assert "unapproved-relay.example" not in seen[0]

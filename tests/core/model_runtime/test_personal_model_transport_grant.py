@@ -225,6 +225,7 @@ async def test_streamed_personal_key_uses_fresh_audited_vault_resolution(monkeyp
 
     def client(**kwargs):
         assert kwargs["follow_redirects"] is False
+        assert kwargs["trust_env"] is False
         return original_client(transport=mock, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", client)
@@ -453,11 +454,39 @@ def test_sync_provider_uses_nonglobal_no_redirect_opener(monkeypatch):
             return dummy
 
     def build(*handlers):
-        assert len(handlers) == 1
+        assert len(handlers) == 2
         assert isinstance(handlers[0], transport._RejectProviderRedirect)
+        assert isinstance(handlers[1], transport.ProxyHandler)
+        assert handlers[1].proxies == {}
         return Opener()
 
     monkeypatch.setattr(transport, "build_opener", build)
     request = transport.Request("https://api.openai.com/v1/chat/completions")
     assert transport._open_provider_request(request, timeout=3.5) is dummy
     assert calls == [(request, 3.5)]
+
+
+def test_sync_runtime_ignores_ambient_proxy_environment(monkeypatch):
+    """A server-local endpoint must not be rerouted through process env."""
+    monkeypatch.setenv("HTTP_PROXY", "http://unapproved-relay.example:3128")
+    monkeypatch.setenv("HTTPS_PROXY", "http://unapproved-relay.example:3128")
+    monkeypatch.setenv("ALL_PROXY", "socks5://unapproved-relay.example:9050")
+    monkeypatch.setenv("NO_PROXY", "")
+    seen = []
+
+    class Opener:
+        def open(self, request, timeout):
+            seen.append((request.full_url, timeout))
+            return object()
+
+    def guarded_builder(*handlers):
+        assert len(handlers) == 2
+        assert isinstance(handlers[0], transport._RejectProviderRedirect)
+        assert isinstance(handlers[1], transport.ProxyHandler)
+        assert handlers[1].proxies == {}
+        return Opener()
+
+    monkeypatch.setattr(transport, "build_opener", guarded_builder)
+    req = transport.Request("http://127.0.0.1:11434/v1/chat/completions")
+    transport._open_provider_request(req, timeout=4.0)
+    assert seen == [("http://127.0.0.1:11434/v1/chat/completions", 4.0)]
