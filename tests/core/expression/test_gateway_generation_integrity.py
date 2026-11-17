@@ -32,6 +32,7 @@ def _settings(*, fallback: bool) -> ExpressionSettings:
         type="openai_compatible",
         fallback_eligible=True,
     )
+    settings.policies.allow_external_engines = fallback
     return settings
 
 

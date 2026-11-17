@@ -81,6 +81,11 @@ class ExpressionGateway:
             if not cfg or not cfg.enabled:
                 blocked.append(f"{engine_id}:disabled")
                 continue
+            # Availability must honor the same installation-level external
+            # execution policy as generate(). Enabled does not mean permitted.
+            if engine_id == "cloud" and not self.settings.policies.allow_external_engines:
+                blocked.append(f"{engine_id}:external_engines_forbidden")
+                continue
             if self.circuits.is_open(f"expression.engine.{engine_id}"):
                 blocked.append(f"{engine_id}:circuit_open")
                 continue
@@ -222,6 +227,10 @@ class ExpressionGateway:
         # the first delta has reached the consumer. After that, the response
         # belongs to one model and must end as an explicit incomplete stream.
         task.stream_started = False
+        # ChatRuntime has already reserved the initial model call on this task.
+        # Charge each additional *executed* engine against the same meter.
+        # Disabled and circuit-open entries are not actual engine attempts.
+        attempted_model_engines = 0
 
         for level, engine_id in enumerate(sequence):
             cfg = self.settings.engines.get(engine_id)
@@ -240,6 +249,31 @@ class ExpressionGateway:
                 )
                 continue
 
+            # A configured cloud engine is not an external-execution grant.
+            # Enforce the separate policy before reserving a model call,
+            # instantiating an engine, or transmitting user prompt context.
+            if engine_id == "cloud" and not self.settings.policies.allow_external_engines:
+                skipped_engines.append(
+                    {"engine_id": engine_id, "reason": "external_engines_forbidden"}
+                )
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="external_engines_forbidden",
+                )
+                emit_expression_event(
+                    "expression.engine.policy_rejected",
+                    self._event_payload(
+                        task,
+                        engine_id=engine_id,
+                        fallback_level=level,
+                        degradation_reason="external_engines_forbidden",
+                    ),
+                )
+                continue
+
             if self.circuits.is_open(f"expression.engine.{engine_id}"):
                 skipped_engines.append(
                     {"engine_id": engine_id, "reason": "circuit_open"}
@@ -252,6 +286,36 @@ class ExpressionGateway:
                     reason="circuit_open",
                 )
                 continue
+
+            if attempted_model_engines and task.reserve_additional_model_call is not None:
+                try:
+                    permitted = await task.reserve_additional_model_call()
+                except Exception:
+                    # The host callback may include secrets in its exception.
+                    # Suppress chaining so diagnostic tracebacks expose only
+                    # this bounded, non-sensitive execution failure code.
+                    raise EngineUnavailableError("execution_budget_guard_failed") from None
+                if permitted is not True:
+                    _emit_routing_event(
+                        RoutingEvents.REJECTED,
+                        correlation_id=task.correlation_id,
+                        request_id=task.request_id,
+                        engine_id=engine_id,
+                        reason="execution_budget_exhausted_max_model_calls",
+                    )
+                    emit_expression_event(
+                        "expression.engine.budget_rejected",
+                        self._event_payload(
+                            task,
+                            engine_id=engine_id,
+                            fallback_level=level,
+                            degradation_reason="execution_budget_exhausted_max_model_calls",
+                        ),
+                    )
+                    raise EngineUnavailableError(
+                        "execution_budget_exhausted_max_model_calls"
+                    )
+            attempted_model_engines += 1
 
             _emit_routing_event(
                 RoutingEvents.SELECTED,

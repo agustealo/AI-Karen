@@ -12,8 +12,14 @@ def test_grounded_synthesis_keeps_article_reference_resolution_authorized():
                   and node.name == "_synthesize_search_evidence")
     code = ast.get_source_segment(path.read_text(encoding="utf-8"), method)
     assert code is not None
-    assert 'retrieved.source == "plugin"' in code
-    assert "set(plan.allowed_plugins)" in code
+    # Both inline excerpts and scoped references require source-specific,
+    # successfully executed tool/plugin receipt before model synthesis.
+    assert 'source_kind in eligible' in code
+    assert 'source_id in eligible[source_kind]' in code
+    assert '"plugin": set(getattr(plan, "allowed_plugins"' in code
+    assert '"tool": set(getattr(plan, "allowed_tools"' in code
+    assert 'attempt.get("status") == "success"' in code
+    assert 'getattr(retrieved, "degraded", True) is False' in code
     assert "item.get(\"article_id\")" in code
     assert "article_service.read_for_chat(" in code
     assert "execution_context=request.context" in code
