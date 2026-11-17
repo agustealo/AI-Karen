@@ -178,6 +178,7 @@ def _observed(*, verification: bool = False):
             "reasoning_model_calls": 0,
             "reasoning_steps": 1,
             "reasoning_model_attribution_status": "not_executed",
+            "verification_strategy_executed": True,
             "reasoning_modes": ["verification"],
         })
     meter = SimpleNamespace(
@@ -242,6 +243,8 @@ def test_forged_provenance_is_denied(change) -> None:
     {"reasoning_model_calls": 1},
     {"reasoning_steps": 0},
     {"reasoning_modes": ["unapproved"]},
+    {"verification_strategy_executed": False},
+    {"verification_strategy_executed": None},
 ])
 def test_fake_reasoning_chain_is_denied(changed) -> None:
     payload = _observed(verification=True)
