@@ -324,3 +324,59 @@ async def test_unverified_or_non_catalog_role_cannot_issue_policy_plan():
                 tenant_id=TENANT, user_id=USER, session_id=SESSION,
                 installation_id="telegram-bot", action="channel.send",
             )
+
+
+@pytest.mark.asyncio
+async def test_revision_scoped_activation_rejects_stale_operator_request_before_start():
+    service, repository, _kernel, adapter, lookup, _ = components()
+    with pytest.raises(ChannelActivationDenied, match="changed"):
+        await service.activate(
+            tenant_id=TENANT, connection_id="conn-telegram",
+            user_id=USER, session_id=SESSION, authorized_plan=plan(),
+            adapter=adapter, settings={"private_chats_only": True},
+            expected_revision=1,
+        )
+    lookup.assert_not_awaited()
+    adapter.validate_config.assert_not_awaited()
+    adapter.start.assert_not_awaited()
+    repository.set_connection_enabled.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revision_scoped_deactivation_rejects_stale_operator_request_before_stop():
+    service, repository, _kernel, adapter, lookup, _ = components()
+    repository.get_connection.return_value = connection(True, 3)
+    with pytest.raises(ChannelActivationDenied, match="changed"):
+        await service.deactivate(
+            tenant_id=TENANT, connection_id="conn-telegram",
+            user_id=USER, session_id=SESSION,
+            authorized_plan=plan("channel.deactivate"),
+            adapter=adapter, expected_revision=2,
+        )
+    lookup.assert_not_awaited()
+    adapter.stop.assert_not_awaited()
+    repository.set_connection_enabled.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revision_scoped_lifecycle_preserves_authorized_cas_order():
+    service, repository, _kernel, adapter, _lookup, _ = components()
+    opened = await service.activate(
+        tenant_id=TENANT, connection_id="conn-telegram",
+        user_id=USER, session_id=SESSION, authorized_plan=plan(),
+        adapter=adapter, settings={}, expected_revision=2,
+    )
+    assert opened.revision == 3 and opened.enabled
+    repository.get_connection.return_value = opened
+    repository.set_connection_enabled.return_value = connection(False, 4)
+    closed = await service.deactivate(
+        tenant_id=TENANT, connection_id="conn-telegram",
+        user_id=USER, session_id=SESSION,
+        authorized_plan=plan("channel.deactivate"),
+        adapter=adapter, expected_revision=3,
+    )
+    assert closed.revision == 4 and not closed.enabled
+    assert repository.set_connection_enabled.await_args.kwargs == {
+        "tenant_id": TENANT, "connection_id": "conn-telegram",
+        "expected_revision": 3, "enabled": False,
+    }
