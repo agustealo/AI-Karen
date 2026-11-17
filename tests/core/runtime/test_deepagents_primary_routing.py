@@ -18,6 +18,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
+    ExecutionBudgetMeter,
     ExecutionTopology,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
@@ -123,6 +124,46 @@ async def test_agent_first_path_uses_medusa_once_with_exact_runtime_policy(enabl
     assert calls[0].authorized_plan["allowed_agents"] == ["researcher"]
     assert calls[0].authorized_plan["allowed_tools"] == ["web_search"]
     assert calls[0].execution_requirements["requires_agent_delegation"] is True
+
+
+@pytest.mark.asyncio
+async def test_graph_and_stream_preserve_original_chat_meter_at_medusa_boundary(
+    enabled, monkeypatch,
+):
+    observed = []
+    async def handle(_self, medusa_request):
+        observed.append(medusa_request)
+        return RuntimeResponse(
+            request_id="req-1",
+            content="Observed real runtime response",
+            status=ResponseStatus.SUCCESS,
+        )
+
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator."
+        "MedusaCoordinator.handle_request", handle,
+    )
+    rt = WorkflowRuntime()
+    req, decision_obj, policy_plan = request(), decision(), plan()
+    meter = ExecutionBudgetMeter(policy_plan.budget)
+    meter.start()
+    text, _ = await rt.run(
+        req, decision_obj, policy_plan, budget_meter=meter,
+    )
+    assert text == "Observed real runtime response"
+    chunks = [
+        chunk async for chunk in rt.stream(
+            req, decision_obj, policy_plan, budget_meter=meter,
+        )
+    ]
+    assert any(chunk.content == "Observed real runtime response" for chunk in chunks)
+    assert len(observed) == 2
+    assert all(
+        item.runtime_budget_meter is meter
+        and item.context["execution_context"] is req.context
+        for item in observed
+    )
+    assert meter.model_calls == 0  # Handoff is never a fake provider attempt.
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ def _settings(
     extra_engine: bool = False,
     local_enabled: bool = True,
     external_allowed: bool = True,
+    admin_required: bool = False,
 ) -> ExpressionSettings:
     order = ["cloud", "alternate"] if extra_engine else ["cloud"]
     settings = ExpressionSettings(
@@ -32,6 +33,7 @@ def _settings(
         engine_fallback_order=order,
     )
     settings.policies.allow_external_engines = external_allowed
+    settings.policies.require_admin_for_external = admin_required
     settings.engines["local"] = EngineConfig(
         enabled=local_enabled,
         type="openai_compatible",
@@ -345,3 +347,112 @@ async def test_external_policy_blocks_cloud_fallback_without_spending_extra_quot
         "engine_id": "cloud", "reason": "external_engines_forbidden",
     } in result.metadata["skipped_engines"]
     assert meter.model_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_cloud_only_requires_trusted_runtime_admin_guard() -> None:
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=1))
+    assert await meter.consume_model_call() is True
+    settings = _settings(local_enabled=False, admin_required=True)
+    settings.active_engine = "cloud"
+    settings.engine_fallback_order = []
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError, match="No model engine produced"):
+            await ExpressionGateway(settings).generate(_task(meter))
+    assert visited == []
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_admin_approval_allows_cloud_only_engine() -> None:
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=1))
+    assert await meter.consume_model_call() is True
+    settings = _settings(local_enabled=False, admin_required=True)
+    settings.active_engine = "cloud"
+    settings.engine_fallback_order = []
+    task = _task(meter)
+
+    async def authorize():
+        return True
+
+    task.authorize_external_engine_attempt = authorize
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        result = await ExpressionGateway(settings).generate(task)
+    assert result.model == "verified-model"
+    assert visited == ["cloud"]
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("approval", [False, None, 1, "admin"])
+async def test_cloud_guard_requires_literal_true(approval) -> None:
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=1))
+    assert await meter.consume_model_call() is True
+    settings = _settings(local_enabled=False, admin_required=True)
+    settings.active_engine = "cloud"
+    settings.engine_fallback_order = []
+    task = _task(meter)
+
+    async def authorize():
+        return approval
+
+    task.authorize_external_engine_attempt = authorize
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError):
+            await ExpressionGateway(settings).generate(task)
+    assert visited == []
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_external_admin_guard_exception_fails_closed_without_secret_leak() -> None:
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=1))
+    assert await meter.consume_model_call() is True
+    settings = _settings(local_enabled=False, admin_required=True)
+    settings.active_engine = "cloud"
+    settings.engine_fallback_order = []
+    task = _task(meter)
+
+    async def authorize():
+        raise PermissionError("private token: must not appear in a traceback")
+
+    task.authorize_external_engine_attempt = authorize
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError) as captured:
+            await ExpressionGateway(settings).generate(task)
+    assert "private token" not in "".join(traceback.format_exception(captured.value))
+    assert visited == []
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cloud_fallback_denied_by_role_uses_only_authorized_local_engines() -> None:
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call() is True
+    task = _task(meter)
+    settings = _settings(extra_engine=True, admin_required=True)
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        result = await ExpressionGateway(settings).generate(task)
+    assert visited == ["local", "alternate"]
+    assert meter.model_calls == 2
+    assert {"engine_id": "cloud", "reason": "external_admin_permission_required"} in result.metadata["skipped_engines"]

@@ -9,10 +9,12 @@ import {
   useState,
 } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
   Bell,
   Binary,
+  AudioLines,
   ChevronDown,
   Bot as BotIcon,
   LayoutGrid,
@@ -21,6 +23,7 @@ import {
   PlugZap,
   RefreshCw,
   ScrollText,
+  ShieldCheck,
   SettingsIcon as SettingsIconLucide,
   SlidersHorizontal,
   UserCircle,
@@ -35,6 +38,7 @@ import PersonaSettings from "@/components/settings/PersonaSettings";
 import { PluginHost } from "@/components/plugins/PluginHost";
 import { PluginErrorBoundary } from "@/plugin_host/PluginErrorBoundary";
 import PluginOverviewPage from "@/components/plugins/PluginOverviewPage";
+import PocketTTSWorkspace from "@/components/plugins/PocketTTSWorkspace";
 import AgentsOverviewPage from "@/components/automation/AgentsOverviewPage";
 import AgentsPage from "@/components/automation/AgentsPage";
 import TasksPage from "@/components/automation/TasksPage";
@@ -72,7 +76,7 @@ import { Separator } from "@/components/ui/separator";
 
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
-import { isVoiceStudioDashboardRoute } from "@/lib/voice-studio-navigation";
+import { isPocketTtsDashboardRoute, isVoiceStudioDashboardRoute } from "@/lib/voice-studio-navigation";
 
 /**
  * Browser recovery keys are owned by the same authenticated identity as chat.
@@ -112,6 +116,7 @@ type ActiveView =
   | "jobs"
   | "cronJobs"
   | "pluginOverview"
+  | "pocketTts"
   | string;
 
 type BackendStatus = "checking" | "ready" | "failed";
@@ -194,7 +199,13 @@ const PRIMARY_NAV: Array<{
     items: [
       { key: "agentsOverview", label: "Automations", icon: BotIcon },
       { key: "tasks", label: "My tasks", icon: ScrollText },
+    ],
+  },
+  {
+    section: "Plugins",
+    items: [
       { key: "pluginOverview", label: "Tools & plugins", icon: PlugZap },
+      { key: "pocketTts", label: "Pocket TTS", icon: AudioLines },
     ],
   },
   {
@@ -225,13 +236,16 @@ const RUNTIME_SUBGROUPS: NavSubgroup[] = [
 ];
 
 export default function DashboardPage() {
+  const { isAdmin } = useAuth();
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
   const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model' | 'voice'>('behavior');
   // A fixed, host-owned deep link from the Plugin Store opens the same
   // settings panel as Plugins & Tools. No execution or provider decisions
   // are inferred from URL parameters. Only this explicit route is accepted.
   useEffect(() => {
-    if (isVoiceStudioDashboardRoute(window.location.search)) {
+    if (isPocketTtsDashboardRoute(window.location.search)) {
+      setActiveMainView("pocketTts");
+    } else if (isVoiceStudioDashboardRoute(window.location.search)) {
       setSettingsInitialSection('voice');
       setActiveMainView('settings');
     }
@@ -408,7 +422,14 @@ export default function DashboardPage() {
       pluginOverview: <PluginOverviewPage onOpenVoiceStudio={() => {
         setSettingsInitialSection('voice');
         setActiveMainView('settings');
-      }} />,
+      }} onOpenPocketTts={() => setActiveMainView("pocketTts")} />,
+      pocketTts: <PocketTTSWorkspace
+        onOpenVoiceStudio={() => {
+          setSettingsInitialSection("voice");
+          setActiveMainView("settings");
+        }}
+        onOpenPlugins={() => setActiveMainView("pluginOverview")}
+      />,
       agentsOverview: <AgentsOverviewPage onManageTasks={() => setActiveMainView("tasks")} onManageSequences={() => setActiveMainView("jobs")} />,
       agents: <AgentWorkspaceView openChat={() => setActiveMainView("chat")} />,
       tasks: <TasksPage />,
@@ -617,6 +638,24 @@ export default function DashboardPage() {
                     )}
                   </div>
                 ))}
+
+                {isAdmin() && (
+                  <SidebarGroup>
+                    <SidebarGroupLabel className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground/75">
+                      Administration
+                    </SidebarGroupLabel>
+                    <SidebarMenu>
+                      <SidebarMenuItem>
+                        <SidebarMenuButton asChild>
+                          <Link href="/admin">
+                            <ShieldCheck className="h-4 w-4" />
+                            <span>Admin settings</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    </SidebarMenu>
+                  </SidebarGroup>
+                )}
 
                 <Separator className="mx-2 bg-border/50" />
 

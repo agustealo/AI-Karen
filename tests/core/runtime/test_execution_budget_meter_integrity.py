@@ -157,3 +157,75 @@ async def test_misconfigured_non_integer_limit_fails_before_counting() -> None:
         await meter.reserve_model_call()
     assert meter.model_calls == 0
     assert meter.exhausted is False
+
+
+@pytest.mark.asyncio
+async def test_external_model_transport_reserves_both_quotas_atomically() -> None:
+    meter = ExecutionBudgetMeter(
+        ExecutionBudget(max_model_calls=3, max_external_requests=1),
+    )
+    assert await meter.reserve_model_execution(external=True) is True
+    assert meter.model_calls == 1
+    assert meter.external_requests == 1
+    assert await meter.reserve_model_execution(external=True) is False
+    assert meter.model_calls == 1
+    assert meter.external_requests == 1
+    assert meter.exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_model_quota_rejection_never_partially_spends_external_quota() -> None:
+    meter = ExecutionBudgetMeter(
+        ExecutionBudget(max_model_calls=0, max_external_requests=3),
+    )
+    assert await meter.reserve_model_execution(external=True) is False
+    assert meter.model_calls == 0
+    assert meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_nested_model_calls_share_atomic_external_budget() -> None:
+    meter = ExecutionBudgetMeter(
+        ExecutionBudget(max_model_calls=2, max_external_requests=2),
+    )
+    results = await asyncio.gather(
+        *(meter.reserve_model_execution(external=True) for _ in range(24))
+    )
+    assert sum(results) == 2
+    assert meter.model_calls == 2
+    assert meter.external_requests == 2
+
+
+@pytest.mark.asyncio
+async def test_local_model_execution_does_not_spend_external_quota() -> None:
+    meter = ExecutionBudgetMeter(
+        ExecutionBudget(max_model_calls=2, max_external_requests=0),
+    )
+    assert await meter.reserve_model_execution(external=False) is True
+    assert meter.model_calls == 1
+    assert meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [None, 0, 1, "yes", "false"])
+async def test_external_reservation_mode_must_be_a_literal_boolean(invalid) -> None:
+    meter = ExecutionBudgetMeter(ExecutionBudget())
+    with pytest.raises(ValueError, match="must be a boolean"):
+        await meter.reserve_model_execution(external=invalid)
+    assert meter.model_calls == 0
+    assert meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_original_remaining_deadline_cannot_be_extended_by_child_runtime(monkeypatch):
+    clock = _clock(monkeypatch)
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_duration_ms=1000))
+    meter.start()
+    assert await meter.remaining_duration_ms() == pytest.approx(1000.0)
+    clock["seconds"] = 100.4
+    meter.start()
+    assert await meter.remaining_duration_ms() == pytest.approx(600.0)
+    clock["seconds"] = 101.0
+    assert await meter.remaining_duration_ms() == 0.0
+    assert meter.exhausted is True
+    assert await meter.reserve_model_execution() is False

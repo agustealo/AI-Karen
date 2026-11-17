@@ -295,3 +295,266 @@ This verifies PostgreSQL concurrency and archival idempotence under the
 existing 64 KiB / 100-event contract, **not** callback throughput,
 live Meta signature interoperability, provider latency SLOs or approval to
 release the WhatsApp transport.
+
+
+## KWA-01C6A: authenticated operator connection lifecycle
+
+The canonical FastAPI router registry now exposes three authenticated,
+tenant-scoped operator actions for the **preinstalled** `whatsapp-cloud` adapter:
+
+- `POST /api/channels/operator/whatsapp/connections` accepts a Meta numeric
+  phone-number ID and an opaque tenant Vault credential handle, not raw
+  credentials. It mints a fresh `channel.provision` plan through
+  `ChannelActivationService.issue_action_plan`, reuses the host's Vault
+  reference authorizer, and persists a **disabled** revision-1 connection.
+- `POST /api/channels/operator/whatsapp/connections/{connection_uuid}/activate`
+  accepts only `expected_revision`. The host resolves the canonical installed
+  adapter, verifies tenant/installation/revision, and delegates to the existing
+  `ChannelActivationService.activate`. The transport must complete its
+  read-only Meta Graph phone identity probe before the transaction can mark
+  the connection enabled. A stale revision is not silently upgraded.
+- `POST /api/channels/operator/whatsapp/connections/{connection_uuid}/deactivate`
+  accepts only `expected_revision`. The existing service durably revokes the
+  connection before asking the adapter to stop, retaining status-only evidence
+  eligibility for previously finalized sends.
+
+The API never accepts user IDs, tenant IDs, roles, signed policy plans,
+adapter selection, Graph URLs, secrets or raw provider tokens from callers.
+The signed-in user comes from the established session dependency;
+`issue_action_plan` verifies live roles and RuntimePolicy, and
+`ActionExecutionGate` remains in the existing lifecycle owner. Requests with
+unknown fields, forged grant objects, stale revisions or mismatched tenant
+identity fail closed, with redacted error responses.
+
+Results expose the persisted connection revision and exact stage. Only a
+successful activation may report `provider_phone_verified=true` because the
+actual adapter probes Meta before the activation CAS. Every response keeps
+`webhook_subscription_verified`, `signed_inbound_verified` and
+`delivery_verified` false. These remain **separate, live provider acceptance
+gates**. No provider test number, webhook or end-user chat is created by the
+API itself; no new worker, installer, credential store or generic plugin
+executor is introduced.
+
+**Source proof:** `pytest -q tests/extensions/test_whatsapp_operator_api.py
+tests/extensions/test_channel_activation_service.py` and the exact-head
+Plugin Backend, Plugin Security Reports, Main Quality and relevant production
+boot gates. A signed-in operator UI and actual Meta sandbox transcript are
+still necessary for consumer-ready shipping.
+
+
+## KWA-01C6B: bounded tenant operator inventory and Admin UI
+
+Admin Settings → WhatsApp Cloud now offers an authenticated, operator-only
+workflow using the same `ChannelActivationService` action plans and canonical
+host authority as KWA-01C6A. Operators can provide a **numeric Meta phone-number
+ID** and an **existing opaque Vault handle** to provision a disabled connection,
+inspect the tenant's persisted connections, activate after the real Meta Graph
+identity probe, or durably deactivate with an exact expected revision. The
+frontend submits neither actor identity nor runtime policy grants.
+
+`GET /api/channels/operator/whatsapp/connections` first mints a fresh
+`channel.inspect` plan, then the host verifies the installed canonical
+adapter and live operator entitlement before delegating to
+`SqlChannelRepository.list_whatsapp_operator_connections`. The SQL executes
+inside the existing tenant-scoped transaction/RLS boundary, filters
+`installation_id='whatsapp-cloud'`, returns **only** UUID, persisted revision
+and enabled flag, and refuses an inventory larger than 50 records. It never
+selects Vault handles, token values or Meta phone identifiers. The UI rejects
+malformed/unexpected response shapes, clears previous tenant state on identity
+changes, and gives no fake empty or connected state when backend inspection
+fails.
+
+The UI text deliberately distinguishes **persisted Karen enablement** from
+live Meta webhook health or message delivery. Successful activation may confirm
+a Meta phone identity check, but never changes the displayed webhook,
+signed-inbound or delivery indicators to verified. Failed or uncertain
+mutations do not synthesize saved/connected state and require a fresh backend
+read. No localStorage or browser credential persistence is added.
+
+Dedicated proof includes
+`pytest -q tests/extensions/test_whatsapp_operator_api.py`,
+the disposable `tests/integration/test_channel_claim_concurrency_postgres.py`,
+and frontend `tests/settings/whatsapp-cloud-settings.test.tsx`. Production
+acceptance still needs a real signed-in browser walkthrough, a configured
+Meta sandbox, public callback handshake, verified identity binding and
+provider-observed signed delivery/read receipts. Source-only UI/API success
+is **not** a WhatsApp shipping approval.
+
+
+## KWA-01C6C1: canonical admin reachability and opt-in real-browser observer
+
+The existing `WhatsAppCloudSettings` is now reachable through the authenticated
+dashboard's administrator-only **Admin settings** link and Karen's canonical
+`/admin` → **WhatsApp Cloud** tab, not only from a
+`SettingsDialog(adminMode=true)` configuration that the consumer dashboard
+does not use. This mounts the already governed component and its authenticated
+operator endpoints; it adds no second API, provider selector, credential owner,
+installation path, policy grant, or lifecycle implementation.
+
+`tests/settings/whatsapp-cloud-admin-navigation.test.tsx` guards the actual
+admin tab integration in the ordinary frontend test suite. The read-only
+`e2e/whatsapp-cloud-admin-acceptance.spec.ts` is separately **opt-in** for an
+approved HTTPS deployment with a dedicated, authorized, sanitized operator.
+The real browser tests exercise **390, 768 and 1440 px** widths, sign in through
+Karen, follow the administrator navigation link into the actual admin tab,
+and require an HTTP 200 for canonical
+`channel.inspect` inventory. They reject unexpected inventory fields, ensure
+the UI distinguishes locally enabled connections from provider health, and
+verify that observing the screen issues no channel mutations. No route mocks
+or synthetic connection state are used.
+
+From `src/ui_launchers/Karen-AI-Theme` on an approved deployment, export
+`KAREN_BASE_URL` (exact approved HTTPS origin),
+`KAREN_WHATSAPP_DEPLOYMENT_REVISION` (exact reviewed 40-character SHA),
+`KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` through the operator's secure
+environment, then run:
+
+```bash
+KAREN_WHATSAPP_ADMIN_ACCEPTANCE_REQUIRED=true \
+npx playwright test e2e/whatsapp-cloud-admin-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium --retries=0
+```
+
+The URL in this command denotes an operator-selected, authorized HTTPS
+deployment, **not** an existing or verified installation. Keep actual secrets
+outside source control and CI artifacts. This suite disables Playwright traces,
+screenshots and video; the approved login helper refuses untrusted origins.
+Without explicit opt-in it skips, and a skipped test is never a passing live
+browser acceptance receipt. With opt-in, missing credentials, denied inventory,
+unavailable host, unexpected backend fields, or unreachable admin navigation
+fail the test.
+
+**Not certified by this slice:** a real Meta webhook challenge response, Meta
+subscription, signed native message, identity link, ChatRuntime turn, outbound
+provider message ID or delivered/read receipt. Those require separately
+reviewed, credential-governed provider-side evidence on the exact deployed
+commit and cannot be inferred from this browser observation or green CI.
+
+
+## KWA-01C6C2A: revision-fenced real HTTPS callback challenge
+
+The opt-in `e2e/whatsapp-cloud-webhook-handshake.spec.ts` exercises Karen's
+**actual public HTTPS** `GET /api/channels/webhooks/{tenant_id}/{connection_id}`
+route with an operator-approved, already enabled tenant connection and its
+existing Vault-managed `webhook_verify_token`. It creates no new callback,
+Vault secret, channel state, runtime selection, test account, or provider
+adapter.
+
+Both live-browser suites now reuse
+`e2e/fixtures/whatsapp-acceptance-deployment.ts`: the candidate must be a
+clean HTTPS origin and its real `/api/deployment-revision` response must match
+exactly the operator-reviewed commit SHA. Mismatches, redirects and missing
+deployment proof stop acceptance. This is deployment identity checking against
+the configured target, not independent binary attestation.
+
+From `src/ui_launchers/Karen-AI-Theme`, export these using an approved
+operator secret-injection mechanism (never place tokens in CLI arguments,
+checked-in `.env` files, test reports or browser storage):
+
+- `KAREN_BASE_URL`: reviewed deployed HTTPS origin, no path or query
+- `KAREN_WHATSAPP_DEPLOYMENT_REVISION`: reviewed 40-character commit SHA
+- `KAREN_WHATSAPP_ACCEPTANCE_TENANT_ID`: actual isolated tenant UUID
+- `KAREN_WHATSAPP_ACCEPTANCE_CONNECTION_ID`: its **enabled** connection UUID
+- `KAREN_WHATSAPP_ACCEPTANCE_VERIFY_TOKEN`: the real Vault-approved callback
+  verification token associated with that connection
+
+Then execute the explicit, isolated live probe:
+
+```bash
+KAREN_WHATSAPP_WEBHOOK_HANDSHAKE_REQUIRED=true \
+npx playwright test e2e/whatsapp-cloud-webhook-handshake.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium --retries=0
+```
+
+The test makes four **read-only, unauthenticated** requests to the approved
+host: valid subscription returns HTTP 200 and the *exact numeric challenge*
+with `Cache-Control: no-store`; a well-formed but changed token, a missing
+token and an invalid mode must each return HTTP 403. Network errors are
+redacted. Traces, screenshots, video and secret-bearing test attachments are
+disabled; do not turn on verbose HTTP debug or request URL logging because
+Meta's GET verification protocol necessarily places the verify token in the
+query string. Refuse unknown or unreviewed public hosts.
+
+**Evidence boundaries and mandatory follow-up:**
+
+1. A green source CI or skipped opt-in test is **not** a live host proof. The
+   opt-in test must run against the exact approved deployed SHA, producing a
+   passing Playwright job on that deployment.
+2. A successful operator-originated host GET is **not** a verified Meta
+   subscription. Independently configure the HTTPS callback in Meta's
+   WhatsApp test app, subscribe its `messages` field, and observe an actual
+   provider-side verified subscription. Retain redacted provider confirmation
+   metadata, never a raw token or unmasked phone identifier.
+3. A Meta GET handshake is **not** signed inbound ChatRuntime success.
+   Independently observe a real provider-originated POST authenticated by
+   `X-Hub-Signature-256`, tenant/identity binding, durable inbox admission,
+   one authorized ChatRuntime turn and a provider-identified outbound send.
+4. A Meta API response saying `sent` is **not** delivered/read. Observe signed
+   provider receipts and their bounded, monotonic PostgreSQL reconciliation,
+   including replay, out-of-order and deactivation behavior.
+5. Do not publish `free_plugins/essential/whatsapp-cloud` or claim consumer
+   readiness until all operator, provider, RBAC, retention and recovery gates
+   have independent exact-deployment evidence.
+
+Never forge a Meta signature with a local test token and label that provider
+acceptance. Source-only signed fixtures remain useful security regressions,
+but do not substitute for provider traffic.
+
+## KWA-01C6C2B1: authenticated self-link proof and live RBAC configuration
+
+The active Meta inbound acceptance path requires a verified Karen identity
+binding before normal WhatsApp text can enter ChatRuntime. The existing
+`ChannelLinkService` and PostgreSQL `channel_link_challenges` already issue
+256-bit one-time token digests and accept only signed, unexpired native
+`/link` commands. Before this slice, that issuance service was not wired to
+the active channel host or an authenticated API, and `channel.link` was
+absent from the canonical channel action allowlist.
+
+The central RBAC registry now defines `channel.link` for verified Karen
+users. The checked-in effective role configuration also explicitly grants
+admins the already implemented channel operator actions, which the old
+checked-in admin map omitted. Regular users gain **only** `channel.link`,
+not provision, activation, send, retention or inspection authority. The
+`channel.link` exception to the manifest's operator-only role gate is
+limited to fresh, tenant-scoped account self-linking: the normal RBAC
+`Permission.CHANNEL_LINK`, RuntimePolicy, approved execution plan and
+`ActionExecutionGate` still all apply.
+
+The new authenticated endpoint:
+
+```text
+POST /api/channels/identity/whatsapp/connections/{connection_uuid}/challenge
+```
+
+takes no user-supplied identity, tenant, permission, provider account, secret,
+sender or TTL. With a live verified session, the host verifies the installed
+canonical WhatsApp adapter and the original link service verifies the enabled
+tenant connection before issuing a short-lived, one-use `/link <token>`
+command. Only the digest is persisted; the command is returned once with
+`Cache-Control: no-store, private`. Follow the approved operator workflow to
+send that command **from the actual WhatsApp test sender** to the configured
+business test number. The inbound POST must be Meta-signed and bound to the
+exact existing tenant connection to consume the challenge. Failed, used,
+expired, foreign-tenant and revoked credentials never create a sender binding
+or ChatRuntime message.
+
+**Source proof:**
+
+```bash
+pytest -q tests/extensions/test_whatsapp_self_link_api.py \
+  tests/extensions/test_channel_provision_and_link_service.py \
+  tests/extensions/test_channel_verified_link_ingress.py \
+  tests/extensions/test_whatsapp_operator_api.py \
+  tests/extensions/test_channel_runtime_policy_permissions.py
+```
+
+These are source and policy regressions, **not** Meta sender or signed-inbound
+certification. An approved, observed provider-originated signed `/link`
+message, then a separate ordinary signed text with a durable Inbox →
+ChatRuntime → outbox → provider-receipt chain are still necessary. The
+one-time proof is a bearer credential: never publish or paste it into bug
+reports, browser logs, screenshots, telemetry or CI.
+
+The standalone issuance endpoint intentionally does not invent a linked
+status in the UI; that must be derived from future bounded, tenant-scoped
+backend evidence rather than optimistic client state.

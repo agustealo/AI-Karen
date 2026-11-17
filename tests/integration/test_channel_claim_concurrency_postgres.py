@@ -8,6 +8,7 @@ It executes the checked-in channel migration and the actual repository SQL.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,11 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
             / "supabase/migrations/20261017010000_31_channel_gateway_durable_admission.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(migration)
+        link_proof_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261017020000_32_channel_link_proof.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(link_proof_migration)
         consent_migration = (
             Path(__file__).resolve().parents[2]
             / "supabase/migrations/20261018010000_33_channel_personal_pairing_consent.sql"
@@ -179,6 +185,247 @@ async def test_live_postgres_outbound_race_and_unknown_quarantine(monkeypatch):
                     yield session
 
         monkeypatch.setattr(module, "async_transaction_scope", real_scope)
+
+        # KWA-01C6B: the operator inventory must read only the scoped
+        # WhatsApp connection, never disclose its Vault handle or another
+        # tenant's account, and never infer live provider availability.
+        operator_a_id = str(uuid.uuid4())
+        operator_b_id = str(uuid.uuid4())
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id,
+                provider_account_id, credential_handle, enabled, revision)
+               VALUES ($1,$2,'whatsapp-cloud','990000000000001',
+                       'vault://tenant-a-private',false,1),
+                      ($3,$4,'whatsapp-cloud','990000000000002',
+                       'vault://tenant-b-private',true,2)""",
+            operator_a_id, tenant_a, operator_b_id, tenant_b,
+        )
+        operator_repository = SqlChannelRepository()
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(tenant_a),
+        ) == [{
+            "connection_id": operator_a_id,
+            "connection_revision": 1,
+            "enabled": False,
+        }]
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(tenant_b),
+        ) == [{
+            "connection_id": operator_b_id,
+            "connection_revision": 2,
+            "enabled": True,
+        }]
+        assert await operator_repository.list_whatsapp_operator_connections(
+            tenant_id=str(uuid.uuid4()),
+        ) == []
+        # Keep the existing multi-scenario test isolated. Later WhatsApp
+        # acceptance cases deliberately reuse a known Meta account identity,
+        # and PostgreSQL must continue enforcing its account uniqueness index.
+        assert await raw.execute(
+            """DELETE FROM public.channel_connections
+               WHERE (tenant_id=$1 AND connection_id=$2)
+                  OR (tenant_id=$3 AND connection_id=$4)""",
+            tenant_a, operator_a_id, tenant_b, operator_b_id,
+        ) == "DELETE 2"
+
+        # KWA-01C6C2C1: actual SQL/RLS read projection of one scoped
+        # *fixture-only* WhatsApp inbox -> ChatRuntime outbox -> status chain.
+        # Never interpret manually inserted fixture rows as live Meta evidence.
+        trial_connection = str(uuid.uuid4())
+        trial_inbox, trial_binding, trial_delivery, trial_correlation = [
+            uuid.uuid4() for _ in range(4)
+        ]
+        trial_event = f"wamid.fixture-{uuid.uuid4().hex}"
+        trial_provider_id = f"wamid.fixture-outbound-{uuid.uuid4().hex}"
+        trial_sender = "15551234444"
+        await raw.execute(
+            """INSERT INTO public.channel_connections
+               (connection_id, tenant_id, installation_id,
+                provider_account_id, credential_handle, enabled, revision)
+               VALUES ($1,$2,'whatsapp-cloud',$3,'vault://trial-fixture',
+                       true,4)""",
+            trial_connection, tenant_a, f"trial-{uuid.uuid4().hex}",
+        )
+        # KWA-01C6C2C3: independently query the actual enabled-only tenant
+        # choices with RLS and verified principal. Never fetch provider IDs.
+        self_link_repository = SqlChannelRepository()
+        choices = await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_a), user_id=str(user),
+        )
+        assert choices == [{
+            "connection_id": trial_connection, "connection_revision": 4,
+        }]
+        assert await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_b), user_id=str(user),
+        ) == []
+        assert await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_a), user_id=str(uuid.uuid4()),
+        ) == []
+        assert "vault://trial-fixture" not in str(choices)
+        await raw.execute(
+            """INSERT INTO public.channel_identity_bindings
+               (binding_id, tenant_id, connection_id, external_sender_id,
+                user_id, verified_at)
+               VALUES ($1,$2,$3,$4,$5,now())""",
+            trial_binding, tenant_a, trial_connection, trial_sender, user,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_inbox
+               (inbox_id, tenant_id, connection_id, connection_revision,
+                external_event_id, external_sender_id,
+                external_conversation_id, message_kind, message_text,
+                event_digest, status, binding_id, user_id,
+                correlation_id, provider_event_at)
+               VALUES ($1,$2,$3,4,$4,$5,$5,'text','fixture prompt',
+                       $6,'completed',$7,$8,$9,now())""",
+            trial_inbox, tenant_a, trial_connection, trial_event,
+            trial_sender, "a" * 64, trial_binding, user, trial_correlation,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_outbox
+               (delivery_id, tenant_id, connection_id, inbox_id,
+                destination_id, idempotency_key, message_kind,
+                message_text, status, provider_message_id)
+               VALUES ($1,$2,$3,$4,$5,$6,'text','fixture reply',
+                       'read',$7)""",
+            trial_delivery, tenant_a, trial_connection,
+            trial_inbox, trial_sender, str(trial_inbox), trial_provider_id,
+        )
+        await raw.execute(
+            """INSERT INTO public.channel_provider_status_events
+               (tenant_id, connection_id, connection_revision,
+                provider_message_id, recipient_id, state,
+                provider_timestamp, receipt_id, event_digest)
+               VALUES ($1,$2,4,$3,$4,'delivered',1770000000,$5,$6),
+                      ($1,$2,4,$3,$4,'read',1770000001,$7,$8),
+                      ($1,$2,3,$3,$4,'sent',1770000002,$9,$10)""",
+            tenant_a, trial_connection, trial_provider_id, trial_sender,
+            "1" * 64, "2" * 64, "3" * 64, "4" * 64,
+            "5" * 64, "6" * 64,
+        )
+        observed = await SqlChannelRepository().inspect_whatsapp_trial(
+            tenant_id=str(tenant_a), connection_id=trial_connection,
+            external_event_id=trial_event,
+        )
+        assert observed is not None
+        assert observed.inbox_id == str(trial_inbox)
+        assert observed.correlation_id == str(trial_correlation)
+        assert observed.inbox_status == "completed"
+        assert observed.outbound_status == "read"
+        assert observed.provider_receipt_states == ("delivered", "read")
+        assert observed.outbound_provider_message_sha256 is not None
+        assert trial_provider_id not in str(observed)
+        assert trial_sender not in str(observed)
+        assert "fixture prompt" not in str(observed)
+        assert await SqlChannelRepository().inspect_whatsapp_trial(
+            tenant_id=str(tenant_b), connection_id=trial_connection,
+            external_event_id=trial_event,
+        ) is None
+        assert await SqlChannelRepository().inspect_whatsapp_trial(
+            tenant_id=str(tenant_a), connection_id=trial_connection,
+            external_event_id="wamid.missing-event",
+        ) is None
+        # KWA-01C6C2C2: actual digest-only issuance and one-use binding
+        # consumption, queried via tenant-RLS under the original principal.
+        # Fixture consumption is NOT independent Meta signature evidence.
+        proof_store = SqlChannelRepository()
+        proof_digest = hashlib.sha256(b"fixture-sender-proof-a").hexdigest()
+        proof_issued = await proof_store.issue_link_challenge(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection,
+            proof_digest=proof_digest, ttl_seconds=600,
+        )
+        assert proof_issued is not None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) == "pending"
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_b), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) is None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(uuid.uuid4()),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) is None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=connection_id, challenge_id=proof_issued,
+        ) is None
+        # Consume through the exact canonical repository transaction. A
+        # second proof use cannot mint a new sender identity.
+        original_connection = await proof_store.get_enabled_connection(
+            tenant_id=str(tenant_a), connection_id=trial_connection,
+        )
+        assert original_connection is not None
+        new_sender = "15551234555"
+        consumed = await proof_store.consume_verified_link(
+            connection=original_connection,
+            external_sender_id=new_sender,
+            proof_digest=proof_digest,
+        )
+        assert consumed is not None and consumed.user_id == str(user)
+        assert await proof_store.consume_verified_link(
+            connection=original_connection,
+            external_sender_id=new_sender,
+            proof_digest=proof_digest,
+        ) is None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) == "consumed"
+
+        superseded = await proof_store.issue_link_challenge(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection,
+            proof_digest=hashlib.sha256(b"fixture-sender-proof-b").hexdigest(),
+            ttl_seconds=600,
+        )
+        expiring = await proof_store.issue_link_challenge(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection,
+            proof_digest=hashlib.sha256(b"fixture-sender-proof-c").hexdigest(),
+            ttl_seconds=600,
+        )
+        assert superseded is not None and expiring is not None
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=superseded,
+        ) == "revoked"
+        await raw.execute(
+            """UPDATE public.channel_link_challenges
+               SET created_at = clock_timestamp() - interval '20 minutes',
+                   expires_at = clock_timestamp() - interval '10 minutes'
+               WHERE challenge_id = $1 AND tenant_id = $2""",
+            uuid.UUID(expiring), tenant_a,
+        )
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=expiring,
+        ) == "expired"
+        # Preserve the consumed historical status even after connection
+        # deactivation/rotation; never assert current binding availability.
+        await raw.execute(
+            """UPDATE public.channel_connections
+               SET enabled = false, revision = revision + 1
+               WHERE tenant_id = $1 AND connection_id = $2""",
+            tenant_a, trial_connection,
+        )
+        assert await proof_store.inspect_link_challenge_status(
+            tenant_id=str(tenant_a), user_id=str(user),
+            connection_id=trial_connection, challenge_id=proof_issued,
+        ) == "consumed"
+        assert await self_link_repository.list_whatsapp_self_link_connections(
+            tenant_id=str(tenant_a), user_id=str(user),
+        ) == []
+
+        # Isolate this fixture before the rest of the integration scenario.
+        assert await raw.execute(
+            "DELETE FROM public.channel_connections WHERE tenant_id=$1 AND connection_id=$2",
+            tenant_a, trial_connection,
+        ) == "DELETE 1"
+
         # KWA-01D: actual PostgreSQL row locking and durable claim uniqueness.
         # A separate connection avoids changing the existing outbox assertions.
         webhook_connection = f"telegram-lease-{uuid.uuid4().hex}"

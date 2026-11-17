@@ -22,7 +22,14 @@ evidence. Memory promotion is never model-training permission.
 | KCM-02B2: scoped independently reviewed verification-policy decision evidence | [PR #951](https://github.com/agustealo/AI-Karen/pull/951), merge `c8544ef54afbebfd8ed99bccbbf76c8527ec1b67` | Merged; 8/8 exact-head checks passed |
 | KCM-02B3A: exact ML task benchmark artifact and evaluated case projection | [PR #953](https://github.com/agustealo/AI-Karen/pull/953), merge `7abce8006c973906ba3e90aa3b4915cfb8550a2a` | Merged; 11/11 exact-head checks passed |
 | KCM-02B3B: conditioned curated-oracle source and assessment expiry | [PR #956](https://github.com/agustealo/AI-Karen/pull/956), merge `a1188e594201e0713cc6a16833a5acc1f4ae40ae` | Merged; 19/19 exact-head checks passed; source integrity and issuer freshness only |
-| KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961) · [25 — Runner observation](25-run-observation-and-freshness.md) | In review; no independently signed runtime or general-skill certification |
+| KCM-02B3C1: runner-observed inference window and receipt replay fencing | [PR #961](https://github.com/agustealo/AI-Karen/pull/961), merge `69d62965550f79f964cc9850283dfcb868cc1f4f` · [25 — Runner observation](25-run-observation-and-freshness.md) | Merged; 18/18 exact-head checks passed; runner observation is not signed production attestation |
+| KCM-02B3C2A: owner-scoped curated-oracle reviewer observation | [PR #963](https://github.com/agustealo/AI-Karen/pull/963), merge `25ee6b58a38e4f49049db201072f1a588cf77705` · [26 — Reviewer observations](26-reviewed-curated-oracle-observations.md) | Merged; 24/24 exact-head checks passed, no independent group/ground truth/execution claim |
+| KCM-02B3C2B: append-only original-reviewer withdrawal and revocation-aware reads | [PR #968](https://github.com/agustealo/AI-Karen/pull/968), merge `24621fccd0f7d5b065408f406ecc0f82d02d8573` · [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Merged; 25/25 exact-head checks passed; no administrative override or training permission |
+| KCM-02B3C3A: owner-scoped training-job to model artifact verification | [PR #973](https://github.com/agustealo/AI-Karen/pull/973), merge `c300198f1eee6b6775ed46f1eb51c51a8ba9b5c4` · [28 — Model/job provenance](28-model-training-job-lineage.md) | Merged; 11/11 exact-head checks passed; no example-inventory or benchmark-independence claim |
+| KCM-02B3C3B1: keyed sklearn fit-membership observation | [PR #981](https://github.com/agustealo/AI-Karen/pull/981), merge `c2025a5abb7d9246b9853e7f1a4989d19ef5a67d` · [29 — Sklearn fit observation](29-sklearn-fit-observation.md) | Merged; 18/18 exact-head checks passed; bounded default-off worker assertion only, no KCM training inventory |
+| KCM-02B3C3B2: owner-scoped model-job-bound fit receipt | [PR #984](https://github.com/agustealo/AI-Karen/pull/984), merge `7b1cf8d78e402fe32c14029dccd521f6aa05af7b` · [30 — Owner-scoped fit binding](30-owner-scoped-fit-artifact-binding.md) | Merged; 11/11 exact-head checks passed; no verified KCM inventory or source ancestry |
+| KCM-02B3C3B3A: frozen assessment to sklearn row alignment | [PR #987](https://github.com/agustealo/AI-Karen/pull/987), merge `26c6d76ac51a0dd69a6d5d2dfd836c698bbf322b` · [31 — Frozen assessment-to-JSONL alignment](31-frozen-assessment-to-sklearn-jsonl.md) | Merged; 9/9 exact-head checks passed; structural train UUID alignment with current rights/epoch evidence only |
+| KCM-02B3C3B3B: keyed fit-to-input commitment concordance | [32 — Fit input commitments](32-observed-fit-input-commitments.md) | Candidate; private, read-only worker fit receipt HMAC equality to a caller-supplied snapshot; no independently attested input provenance or permission |
 
 ## Configuration
 
@@ -71,11 +78,13 @@ held-out evaluation, rollback and erasure/unlearning governance. Do not treat
 documentation, tool mocks, or independently verified subset tests as live
 database or production readiness proof.
 
-**Next controlled slice:** Complete KCM-02B3C1's canonical runner-observed
-inference timestamps and run replay fencing, preserving the separate legacy
-receipt-issuance freshness label. Its in-process timestamp claims do not
-independently certify a live engine, environment, held-out oracle or task-group
-independence. KCM-02B3C2 must introduce reviewer-admitted exact task-family,
-oracle split/leakage and revocation evidence before any independently verified
-proficiency policy. Training rights, checkpoint ancestry and transactional
-training-start/promotion fencing remain separately blocked.
+**Next controlled slice:** Compare existing keyed worker-observed fit
+HMAC member/content commitments to an exact supplied input snapshot, using
+the canonical serialization and HMAC implementation. This **does not**
+authenticate snapshot provenance or prove which file was consumed during
+training. Frozen KCM train assessment-ID alignment and owner-bound model/job
+artifact receipts exist separately; the still-unbuilt higher-assurance stage
+must bind independently reviewed source-to-feature/target transformations
+to immutable bytes consumed by the actual worker, under a durable
+revocation-fenced training/promotion lease. Independent benchmark overlap
+exclusion and training authorization remain disabled.

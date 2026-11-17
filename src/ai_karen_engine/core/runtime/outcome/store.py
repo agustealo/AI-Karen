@@ -81,6 +81,16 @@ class OutcomeStore(ABC):
         """Read exact receipts for one principal. No unscoped fallback."""
         raise OutcomeStoreError("Scoped receipt lookup is not available")
 
+    def list_scoped_ml_predictor_outcomes(
+        self, tenant_id: str, *, user_id: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        """Return ONLY evaluated predictor rows, bounded after schema filtering.
+
+        A missing specialized store implementation cannot silently fall back
+        to an unfiltered shared evidence window.
+        """
+        raise OutcomeStoreError("Scoped predictor-only evidence query unavailable")
+
     @abstractmethod
     def get_for_trajectory(
         self,
@@ -242,6 +252,28 @@ class InMemoryOutcomeStore(OutcomeStore):
             and row.get("source") == source
             and row.get("outcome_id") in wanted
         ]
+
+    def list_scoped_ml_predictor_outcomes(
+        self, tenant_id: str, *, user_id: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        if (
+            not isinstance(tenant_id, str) or not tenant_id.strip()
+            or tenant_id == "default"
+            or not isinstance(user_id, str) or not user_id.strip()
+            or type(limit) is not int or not 1 <= limit <= 1000
+        ):
+            raise OutcomeStoreError("Exact scoped numeric evidence query required")
+        from copy import deepcopy
+
+        rows = [
+            row for row in reversed(self._records)
+            if row.get("tenant_id") == tenant_id
+            and row.get("user_id") == user_id
+            and row.get("source") == "intelligence.ml"
+            and isinstance(row.get("metadata"), dict)
+            and row["metadata"].get("schema_version") == "ml_predictor_evidence_v1"
+        ]
+        return [deepcopy(row) for row in rows[:limit]]
 
     def list_for_tenant(
         self,
@@ -429,6 +461,140 @@ class PostgresOutcomeStore(OutcomeStore):
             )
 
     @staticmethod
+    def _validate_curated_oracle_review(
+        payload: dict[str, Any], metadata: dict[str, Any],
+    ) -> None:
+        """Validate a redacted scoped KCM reviewer receipt at the store edge.
+
+        Reviewer authentication and case integrity are enforced by the
+        canonical evaluation adapter. This owns only the persisted contract.
+        """
+        required = {
+            "schema_version", "receipt_id", "model_id", "reviewer_user_id",
+            "reviewer_session_present", "reviewed_at",
+            "exact_snapshot_sha256", "review_acknowledged",
+            "review_phase", "proposal_outcome_id",
+        }
+        receipt = metadata.get("receipt_id")
+        subject = payload.get("user_id")
+        reviewer = metadata.get("reviewer_user_id")
+        digest = metadata.get("exact_snapshot_sha256")
+        identifier = payload.get("outcome_id")
+        phase = metadata.get("review_phase")
+        proposed_id = metadata.get("proposal_outcome_id")
+        if (
+            set(metadata) != required
+            or phase not in {"proposed", "confirmed"}
+            or not isinstance(proposed_id, str)
+            or not proposed_id.startswith("kcm_curated_review_")
+            or len(proposed_id) != len("kcm_curated_review_") + 64
+            or any(ch not in "0123456789abcdef"
+                   for ch in proposed_id[len("kcm_curated_review_"):])
+            or (phase == "proposed" and identifier != proposed_id)
+            or (phase == "confirmed" and identifier == proposed_id)
+            or not isinstance(subject, str) or not subject.strip()
+            or not isinstance(reviewer, str) or not reviewer.strip()
+            or reviewer == subject
+            or not isinstance(receipt, str) or len(receipt) != 32
+            or any(ch not in "0123456789abcdef" for ch in receipt)
+            or not isinstance(metadata.get("model_id"), str)
+            or not 1 <= len(metadata["model_id"]) <= 256
+            or not isinstance(identifier, str)
+            or not identifier.startswith("kcm_curated_review_")
+            or len(identifier) != len("kcm_curated_review_") + 64
+            or any(ch not in "0123456789abcdef"
+                   for ch in identifier[len("kcm_curated_review_"):])
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)
+            or metadata.get("reviewer_session_present") is not True
+            or metadata.get("review_acknowledged") is not (phase == "confirmed")
+            or not isinstance(metadata.get("reviewed_at"), str)
+            or not isinstance(payload.get("recorded_at"), str)
+        ):
+            raise OutcomeStoreError("Malformed scoped KCM oracle review receipt")
+        try:
+            reviewed = datetime.fromisoformat(
+                metadata["reviewed_at"].replace("Z", "+00:00")
+            )
+            recorded = datetime.fromisoformat(
+                payload["recorded_at"].replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError) as exc:
+            raise OutcomeStoreError("Invalid KCM reviewer timestamp") from exc
+        if (
+            reviewed.utcoffset() is None
+            or recorded.utcoffset() is None
+            or reviewed.astimezone(timezone.utc) != recorded.astimezone(timezone.utc)
+        ):
+            raise OutcomeStoreError("KCM reviewer receipt timestamps disagree")
+
+    @staticmethod
+    def _validate_curated_oracle_withdrawal(
+        payload: dict[str, Any], metadata: dict[str, Any],
+    ) -> None:
+        """Strict restrictive reviewer withdrawal in the canonical ML ledger.
+
+        Only the evaluation review authority may issue a withdrawal. The store
+        checks the exact redacted shape, review reference and timestamp; it
+        never grants authority from an outcome row.
+        """
+        required = {
+            "schema_version", "receipt_id", "model_id",
+            "reviewer_user_id", "review_confirmed_outcome_id",
+            "review_snapshot_sha256", "revoked_at",
+            "reason_code", "review_withdrawn",
+        }
+        identifier = payload.get("outcome_id")
+        reviewer = metadata.get("reviewer_user_id")
+        digest = metadata.get("review_snapshot_sha256")
+        confirmation = metadata.get("review_confirmed_outcome_id")
+        receipt_id = metadata.get("receipt_id")
+        if (
+            set(metadata) != required
+            or not isinstance(payload.get("user_id"), str)
+            or not payload["user_id"].strip()
+            or not isinstance(reviewer, str) or not reviewer.strip()
+            or reviewer == payload["user_id"]
+            or not isinstance(identifier, str)
+            or not identifier.startswith("kcm_curated_withdrawal_")
+            or len(identifier) != len("kcm_curated_withdrawal_") + 64
+            or any(ch not in "0123456789abcdef"
+                   for ch in identifier[len("kcm_curated_withdrawal_"):])
+            or not isinstance(confirmation, str)
+            or not confirmation.startswith("kcm_curated_review_")
+            or len(confirmation) != len("kcm_curated_review_") + 64
+            or any(ch not in "0123456789abcdef"
+                   for ch in confirmation[len("kcm_curated_review_"):])
+            or not isinstance(receipt_id, str)
+            or len(receipt_id) != 32
+            or any(ch not in "0123456789abcdef" for ch in receipt_id)
+            or not isinstance(metadata.get("model_id"), str)
+            or not 1 <= len(metadata["model_id"]) <= 256
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)
+            or metadata.get("reason_code") != "reviewer_withdrawal"
+            or metadata.get("review_withdrawn") is not True
+            or not isinstance(payload.get("recorded_at"), str)
+            or not isinstance(metadata.get("revoked_at"), str)
+        ):
+            raise OutcomeStoreError("Malformed KCM oracle review withdrawal")
+        try:
+            revoked = datetime.fromisoformat(
+                metadata["revoked_at"].replace("Z", "+00:00")
+            )
+            recorded = datetime.fromisoformat(
+                payload["recorded_at"].replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError) as exc:
+            raise OutcomeStoreError("Malformed KCM withdrawal timestamp") from exc
+        if (
+            revoked.utcoffset() is None
+            or recorded.utcoffset() is None
+            or revoked.astimezone(timezone.utc) != recorded.astimezone(timezone.utc)
+        ):
+            raise OutcomeStoreError("KCM withdrawal timestamps disagree")
+
+    @staticmethod
     def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
         tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
@@ -443,6 +609,24 @@ class PostgresOutcomeStore(OutcomeStore):
                 and metadata.get("schema_version") == "ml_verification_review_v1"
             ):
                 PostgresOutcomeStore._validate_verification_review(payload, metadata)
+                return tenant_id, source
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("schema_version")
+                == "kcm_curated_oracle_reviewer_observation_v1"
+            ):
+                PostgresOutcomeStore._validate_curated_oracle_review(
+                    payload, metadata,
+                )
+                return tenant_id, source
+            if (
+                isinstance(metadata, dict)
+                and metadata.get("schema_version")
+                == "kcm_curated_oracle_reviewer_withdrawal_v1"
+            ):
+                PostgresOutcomeStore._validate_curated_oracle_withdrawal(
+                    payload, metadata,
+                )
                 return tenant_id, source
             if (
                 not payload.get("user_id")
@@ -791,6 +975,45 @@ class PostgresOutcomeStore(OutcomeStore):
                        "error_type": type(exc).__name__},
             )
             raise OutcomeStoreError("Scoped outcome receipts unavailable") from exc
+
+    def list_scoped_ml_predictor_outcomes(
+        self, tenant_id: str, *, user_id: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        tenant = self._require_tenant(tenant_id)
+        if (
+            not isinstance(user_id, str) or not user_id.strip()
+            or type(limit) is not int or not 1 <= limit <= 1000
+        ):
+            raise OutcomeStoreError("Exact scoped numeric evidence query required")
+        try:
+            with transaction_scope(tenant) as session:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND source = 'intelligence.ml'
+                          AND payload->'metadata'->>'schema_version'
+                              = 'ml_predictor_evidence_v1'
+                        ORDER BY recorded_at DESC, outcome_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {"tenant_id": tenant, "user_id": user_id, "limit": limit},
+                ).mappings().all()
+            return [self._payload_from_row(row["payload"]) for row in rows]
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.scoped_numeric_ml_read_failed",
+                extra={
+                    "tenant_id": tenant, "user_id": user_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise OutcomeStoreError("Scoped predictor evidence unavailable") from exc
 
     def list_for_tenant(
         self,

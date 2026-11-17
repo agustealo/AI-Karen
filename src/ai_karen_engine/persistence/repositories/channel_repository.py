@@ -75,6 +75,23 @@ class ChannelDeliveryPreflight:
     external_conversation_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class WhatsAppTrialEvidence:
+    """Redacted original inbox/outbox ledger facts, not Meta-origin attestation."""
+
+    connection_revision: int
+    current_connection_revision: int
+    connection_enabled: bool
+    inbox_id: str
+    correlation_id: str
+    inbox_status: str
+    binding_currently_active: bool
+    outbound_delivery_id: str | None
+    outbound_status: str | None
+    outbound_provider_message_sha256: str | None
+    provider_receipt_states: tuple[str, ...]
+
+
 class ChannelAdmissionConflict(ValueError):
     """A native event ID was reused with different content."""
 
@@ -913,6 +930,55 @@ class SqlChannelRepository:
             )).mappings().one_or_none()
         return self._connection_from_row(row) if row is not None else None
 
+    async def inspect_link_challenge_status(
+        self, *, tenant_id: str, user_id: str, connection_id: str,
+        challenge_id: str,
+    ) -> str | None:
+        """Inspect one caller-owned one-use proof, without exposing its secret.
+
+        A 'consumed' challenge is a historical acknowledgment of the existing
+        signed-ingress transaction, not a claim about today's active binding,
+        provider delivery, or consumer readiness. Database clock and persisted
+        revision are the exclusive authorities for other statuses.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        principal = str(uuid.UUID(user_id))
+        challenge = str(uuid.UUID(challenge_id))
+        if not isinstance(connection_id, str) or not connection_id.strip():
+            raise ValueError("Link challenge connection is required")
+        async with async_transaction_scope(tenant_id) as session:
+            value = (await session.execute(
+                text("""
+                    SELECT CASE
+                             WHEN p.consumed_at IS NOT NULL THEN 'consumed'
+                             WHEN p.revoked_at IS NOT NULL THEN 'revoked'
+                             WHEN c.enabled = false
+                               OR c.revision <> p.connection_revision
+                               THEN 'invalidated'
+                             WHEN p.expires_at <= clock_timestamp() THEN 'expired'
+                             ELSE 'pending'
+                           END AS challenge_status
+                    FROM public.channel_link_challenges p
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = p.tenant_id
+                     AND c.connection_id = p.connection_id
+                     AND c.installation_id = 'whatsapp-cloud'
+                    WHERE p.tenant_id = CAST(:tenant AS uuid)
+                      AND p.user_id = CAST(:user AS uuid)
+                      AND p.connection_id = :connection
+                      AND p.challenge_id = CAST(:challenge AS uuid)
+                """),
+                {"tenant": tenant_id, "user": principal,
+                 "connection": connection_id, "challenge": challenge},
+            )).scalar_one_or_none()
+        if value is None:
+            return None
+        if value not in {
+            "pending", "consumed", "revoked", "expired", "invalidated",
+        }:
+            raise RuntimeError("Invalid persisted link challenge status")
+        return value
+
     async def issue_link_challenge(
         self, *, tenant_id: str, connection_id: str, user_id: str,
         proof_digest: str, ttl_seconds: int,
@@ -1049,6 +1115,88 @@ class SqlChannelRepository:
             external_sender_id=str(row["external_sender_id"]),
             revision=int(row["revision"]),
         )
+
+    async def list_whatsapp_self_link_connections(
+        self, *, tenant_id: str, user_id: str,
+    ) -> list[dict[str, str | int]]:
+        """Bounded enabled-only tenant inventory for an authorized self-linker.
+
+        The host enforces the canonical channel.link policy. SQL additionally
+        checks the same active verified tenant user, enabled canonical provider
+        and RLS. No provider account IDs, phone numbers or secrets are read.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        principal_id = str(uuid.UUID(user_id))
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT c.connection_id, c.revision
+                    FROM public.channel_connections c
+                    JOIN public.auth_users u
+                      ON u.tenant_id = c.tenant_id
+                     AND u.user_id = CAST(:user AS uuid)
+                    WHERE c.tenant_id = CAST(:tenant AS uuid)
+                      AND c.installation_id = 'whatsapp-cloud'
+                      AND c.enabled = true
+                      AND u.is_active = true
+                      AND u.is_verified = true
+                    ORDER BY c.connection_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id, "user": principal_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise ChannelAdmissionDenied(
+                "WhatsApp self-link connection inventory exceeds safe limit"
+            )
+        result: list[dict[str, str | int]] = []
+        for row in rows:
+            revision = row["revision"]
+            if type(revision) is not int or revision < 1:
+                raise ChannelAdmissionDenied("Invalid self-link connection revision")
+            result.append({
+                "connection_id": str(uuid.UUID(str(row["connection_id"]))),
+                "connection_revision": revision,
+            })
+        return result
+
+    async def list_whatsapp_operator_connections(
+        self, *, tenant_id: str,
+    ) -> list[dict[str, str | int | bool]]:
+        """Bounded, tenant-RLS operator inventory with zero provider secrets.
+
+        Auth and RBAC are enforced by ChannelActivationService before the host
+        may call this repository. SQL still selects only the exact tenant and
+        canonical WhatsApp installation; credential handles, phone numbers
+        and Vault contents are never fetched or serialized for the UI.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        async with async_transaction_scope(tenant_id) as session:
+            rows = (await session.execute(
+                text("""
+                    SELECT connection_id, revision, enabled
+                    FROM public.channel_connections
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND installation_id = 'whatsapp-cloud'
+                    ORDER BY connection_id
+                    LIMIT 51
+                """),
+                {"tenant": tenant_id},
+            )).mappings().all()
+        if len(rows) > 50:
+            raise ChannelAdmissionDenied("WhatsApp operator inventory exceeds safe limit")
+        result: list[dict[str, str | int | bool]] = []
+        for row in rows:
+            revision = row["revision"]
+            enabled = row["enabled"]
+            if type(revision) is not int or revision < 1 or type(enabled) is not bool:
+                raise ChannelAdmissionDenied("WhatsApp operator inventory invalid")
+            result.append({
+                "connection_id": str(uuid.UUID(str(row["connection_id"]))),
+                "connection_revision": revision,
+                "enabled": enabled,
+            })
+        return result
 
     async def get_connection(
         self, *, tenant_id: str, connection_id: str,
@@ -1493,6 +1641,145 @@ class SqlChannelRepository:
                  "revision": expected_revision, "enabled": enabled},
             )).mappings().one_or_none()
         return self._connection_from_row(row) if row is not None else None
+
+    async def inspect_whatsapp_trial(
+        self, *, tenant_id: str, connection_id: str, external_event_id: str,
+    ) -> WhatsAppTrialEvidence | None:
+        """Read one real persisted WhatsApp inbound-to-delivery lineage.
+
+        Authorization is exclusively host-owned; this repository enforces
+        tenant RLS and exact connection, provider event, binding and revision.
+        It never returns text, phone numbers, credential handles, native bodies
+        or raw provider message IDs. A row is NOT proof of Meta-side origin.
+        """
+        tenant_id = _tenant_uuid(tenant_id)
+        if (
+            not connection_id or len(connection_id) > 256
+            or not isinstance(external_event_id, str)
+            or not 7 <= len(external_event_id) <= 256
+            or not external_event_id.startswith("wamid.")
+            or any(
+                not char.isascii() or not (char.isalnum() or char in "._+=/-")
+                for char in external_event_id
+            )
+        ):
+            raise ValueError("Invalid WhatsApp trial evidence scope")
+
+        args = {
+            "tenant": tenant_id, "connection": connection_id,
+            "event": external_event_id,
+        }
+        async with async_transaction_scope(tenant_id) as session:
+            origin = (await session.execute(
+                text("""
+                    SELECT i.inbox_id, i.correlation_id,
+                           i.status AS inbox_status, i.connection_revision,
+                           c.revision AS current_connection_revision,
+                           c.enabled AS connection_enabled,
+                           (b.revoked_at IS NULL) AS binding_currently_active
+                    FROM public.channel_inbox i
+                    JOIN public.channel_connections c
+                      ON c.tenant_id = i.tenant_id
+                     AND c.connection_id = i.connection_id
+                     AND c.installation_id = 'whatsapp-cloud'
+                    JOIN public.channel_identity_bindings b
+                      ON b.tenant_id = i.tenant_id
+                     AND b.connection_id = i.connection_id
+                     AND b.binding_id = i.binding_id
+                     AND b.user_id = i.user_id
+                     AND b.external_sender_id = i.external_sender_id
+                    WHERE i.tenant_id = CAST(:tenant AS uuid)
+                      AND i.connection_id = :connection
+                      AND i.external_event_id = :event
+                      AND i.message_kind = 'text'
+                      AND i.provider_event_at IS NOT NULL
+                """), args,
+            )).mappings().one_or_none()
+            if origin is None:
+                return None
+
+            outbound_rows = (await session.execute(
+                text("""
+                    SELECT o.delivery_id, o.status, o.provider_message_id,
+                           o.destination_id
+                    FROM public.channel_outbox o
+                    WHERE o.tenant_id = CAST(:tenant AS uuid)
+                      AND o.connection_id = :connection
+                      AND o.inbox_id = CAST(:inbox AS uuid)
+                    ORDER BY o.created_at, o.delivery_id
+                    LIMIT 2
+                """),
+                {**args, "inbox": str(origin["inbox_id"])},
+            )).mappings().all()
+            # ChannelExecutionService stages exactly one reply per inbox.
+            # Never silently pick a favorable one from contradictory rows.
+            if len(outbound_rows) > 1:
+                raise RuntimeError("Ambiguous WhatsApp trial delivery lineage")
+            outbound = outbound_rows[0] if outbound_rows else None
+
+            states: tuple[str, ...] = ()
+            message_digest: str | None = None
+            if outbound is not None and outbound["provider_message_id"]:
+                message_id = str(outbound["provider_message_id"])
+                message_digest = hashlib.sha256(
+                    message_id.encode("utf-8")
+                ).hexdigest()
+                status_rows = (await session.execute(
+                    text("""
+                        SELECT s.state
+                        FROM public.channel_provider_status_events s
+                        WHERE s.tenant_id = CAST(:tenant AS uuid)
+                          AND s.connection_id = :connection
+                          AND s.connection_revision = :revision
+                          AND s.provider_message_id = :provider_message
+                          AND s.recipient_id = :recipient
+                        ORDER BY s.created_at, s.receipt_id
+                        LIMIT 101
+                    """), {
+                        "tenant": tenant_id, "connection": connection_id,
+                        "revision": int(origin["connection_revision"]),
+                        "provider_message": message_id,
+                        "recipient": str(outbound["destination_id"]),
+                    },
+                )).mappings().all()
+                if len(status_rows) > 100:
+                    raise RuntimeError("WhatsApp trial receipt inventory exceeded limit")
+                found: set[str] = set()
+                for row in status_rows:
+                    state = row["state"]
+                    if state not in {"sent", "delivered", "read", "failed"}:
+                        raise RuntimeError("Invalid WhatsApp persisted status evidence")
+                    found.add(str(state))
+                states = tuple(
+                    state for state in ("sent", "delivered", "read", "failed")
+                    if state in found
+                )
+
+        inbox_status = str(origin["inbox_status"])
+        if inbox_status not in {"pending", "processing", "completed", "failed"}:
+            raise RuntimeError("Invalid WhatsApp persisted inbox state")
+        outbox_status = str(outbound["status"]) if outbound else None
+        if outbox_status is not None and outbox_status not in {
+            "accepted", "sent", "delivered", "read", "failed", "unknown",
+        }:
+            raise RuntimeError("Invalid WhatsApp persisted outbox state")
+        if outbound and inbox_status != "completed":
+            raise RuntimeError("WhatsApp outbox lacks completed ChatRuntime lineage")
+        return WhatsAppTrialEvidence(
+            connection_revision=int(origin["connection_revision"]),
+            current_connection_revision=int(origin["current_connection_revision"]),
+            connection_enabled=origin["connection_enabled"] is True,
+            inbox_id=str(origin["inbox_id"]),
+            correlation_id=str(origin["correlation_id"]),
+            inbox_status=inbox_status,
+            binding_currently_active=origin["binding_currently_active"] is True,
+            outbound_delivery_id=(
+                str(outbound["delivery_id"]) if outbound is not None else None
+            ),
+            outbound_status=outbox_status,
+            outbound_provider_message_sha256=message_digest,
+            provider_receipt_states=states,
+        )
 
     async def get_verified_binding(
         self, *, tenant_id: str, connection_id: str, external_sender_id: str,

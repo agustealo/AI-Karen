@@ -45,7 +45,7 @@ import {
 import pluginStoreService from '@/lib/PluginStoreService';
 import { usePluginStore } from '@/stores/PluginStore';
 import { usePluginRegistry } from '@/plugin_host/registry';
-import { VOICE_STUDIO_DASHBOARD_HREF } from '@/lib/voice-studio-navigation';
+import { POCKET_TTS_DASHBOARD_HREF, VOICE_STUDIO_DASHBOARD_HREF } from '@/lib/voice-studio-navigation';
 import type { PluginCategory } from '@/types/plugin';
 
 import { CategoryFilter } from './CategoryFilter';
@@ -143,6 +143,14 @@ export default function PluginStorePage() {
     !extensionCatalogError &&
     selectedPlugin?.installed &&
     selectedExtension?.supportsVoiceOutput,
+  );
+  const canOpenPocketTts = Boolean(
+    !extensionCatalogLoading &&
+    !extensionCatalogError &&
+    selectedPlugin?.installed &&
+    selectedPlugin?.plugin?.id === "pocket-tts" &&
+    selectedExtension?.id === "pocket-tts" &&
+    selectedExtension.supportsVoiceOutput,
   );
 
   const safeCategories = useMemo(() => (Array.isArray(categories) ? categories : []), [categories]);
@@ -672,6 +680,12 @@ export default function PluginStorePage() {
           setDetailsOpen(false);
           clearSelectedPlugin();
           router.push(VOICE_STUDIO_DASHBOARD_HREF);
+        } : undefined}
+        onOpenPocketTts={canOpenPocketTts ? () => {
+          // Navigate only; never claim an enabled model or invoke synthesis.
+          setDetailsOpen(false);
+          clearSelectedPlugin();
+          router.push(POCKET_TTS_DASHBOARD_HREF);
         } : undefined}
       />
     </div>

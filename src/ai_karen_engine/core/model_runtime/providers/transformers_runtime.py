@@ -140,14 +140,18 @@ class TransformersRuntime(LLMProviderBase):
                         low_cpu_mem_usage=True,
                         local_files_only=offline_mode,
                     )
-                    self._pipeline = pipeline(
+                    prepared_pipeline = pipeline(
                         "text-generation",
                         model=model,
                         tokenizer=tokenizer,
                         device=device_idx,
                     )
-                    self.model_path = resolved_path
-                    self._model_name = self._resolve_model_name(resolved_path)
+                    # Publish pipeline and loaded-model identity together,
+                    # excluding concurrent generations while switching.
+                    with self._generation_lock:
+                        self._pipeline = prepared_pipeline
+                        self.model_path = resolved_path
+                        self._model_name = self._resolve_model_name(resolved_path)
                     logger.info("Transformers pipeline warmed for %s", self._model_name)
                     return True
                 except Exception as exc:
@@ -179,7 +183,8 @@ class TransformersRuntime(LLMProviderBase):
             raise ProviderNotAvailable("Transformers model is not warmed")
         return self._pipeline.model, self._pipeline.tokenizer, self._generation_lock
 
-    def generate(self, prompt: str, **kwargs: Any) -> str:
+    def generate_text_with_model(self, prompt: str, **kwargs: Any) -> tuple[str, str]:
+        """Observe text and the actual loaded model inside one generation lock."""
         if not self._pipeline and self._transformers_available:
             self.warm(self.model_path)
 
@@ -188,12 +193,16 @@ class TransformersRuntime(LLMProviderBase):
                 max_new_tokens = kwargs.get("max_new_tokens") or kwargs.get("max_tokens") or 128
                 temperature = float(kwargs.get("temperature", 0.7))
                 with self._generation_lock:
-                    result = self._pipeline(
+                    active_pipeline = self._pipeline
+                    active_model = str(self.model_path or "").strip()
+                    if active_pipeline is None or not active_model or active_model == "auto":
+                        raise ProviderNotAvailable("native_execution_model_unobserved")
+                    result = active_pipeline(
                         prompt,
                         max_new_tokens=max_new_tokens,
                         temperature=temperature,
                         do_sample=temperature > 0,
-                        pad_token_id=self._pipeline.tokenizer.eos_token_id,
+                        pad_token_id=active_pipeline.tokenizer.eos_token_id,
                     )
                 if result and isinstance(result, list) and "generated_text" in result[0]:
                     generated = str(result[0]["generated_text"])
@@ -201,13 +210,22 @@ class TransformersRuntime(LLMProviderBase):
                         generated = generated[len(prompt):].strip()
                     elif prompt in generated:
                         generated = generated.split(prompt)[-1].strip()
-                    return generated or str(result[0]["generated_text"]).strip()
+                    return (
+                        generated or str(result[0]["generated_text"]).strip(),
+                        active_model,
+                    )
+            except (ProviderNotAvailable, GenerationFailed):
+                raise
             except Exception as exc:
                 raise GenerationFailed(f"Transformers generation failed: {exc}") from exc
 
         if not self._transformers_available:
             raise ProviderNotAvailable("Transformers runtime is not available")
         raise GenerationFailed("Transformers generation failed")
+
+    def generate(self, prompt: str, **kwargs: Any) -> str:
+        text, _ = self.generate_text_with_model(prompt, **kwargs)
+        return text
 
     def stream(self, prompt: str, **kwargs: Any) -> Iterator[str]:
         text = self.generate(prompt, **kwargs)

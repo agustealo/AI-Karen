@@ -216,7 +216,10 @@ class DeepAgentsResearchSpecialist:
                 self, serialized: dict, messages: list, **kwargs: Any
             ) -> None:
                 del serialized, messages, kwargs
-                if not await meter.check_duration() or not await meter.consume_model_call():
+                # The canonical KarenGovernedChatModel reserves the actual
+                # transport, including nested calls. Charging here would double
+                # count and SDK callback omission could otherwise bypass quota.
+                if not await meter.check_duration():
                     raise RuntimeError("Deep Agents model execution exceeded RuntimePolicy budget")
 
             async def _emit_activity(
@@ -336,7 +339,10 @@ class DeepAgentsResearchSpecialist:
             checkpointer=checkpointer,
         )
         limit = max(6, min(128, budget.max_reasoning_steps * 4))
-        timeout_seconds = max(0.001, budget.max_duration_ms / 1000.0)
+        remaining_ms = await meter.remaining_duration_ms()
+        if remaining_ms <= 0:
+            raise RuntimeError("Deep Agents original RuntimePolicy deadline exhausted")
+        timeout_seconds = remaining_ms / 1000.0
 
         # Disable ambient external LangSmith tracing for a local-first worker.
         from langsmith import tracing_context

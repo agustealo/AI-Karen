@@ -10,17 +10,20 @@ never imports their implementations to execute a model request.
 import asyncio
 import json
 import os
+import ipaddress
+import socket
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import UUID
 
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
 from ai_karen_engine.core.model_runtime.runtime_engine import (
     EndpointKind,
     EndpointProtocol,
+    Locality,
     RuntimeEngine,
 )
 
@@ -161,8 +164,65 @@ class _RejectProviderRedirect(HTTPRedirectHandler):
 
 
 def _open_provider_request(request: Request, timeout: float):
-    """Use a fresh no-redirect opener without modifying global urllib state."""
-    return build_opener(_RejectProviderRedirect()).open(request, timeout=timeout)
+    """Use a fresh, no-redirect and metadata-safe provider HTTP opener."""
+    # External RuntimePolicy authorization is not permission to contact cloud
+    # instance metadata or interface-local addresses. Reject these wire targets
+    # even for an otherwise authorized external provider attempt. This is an
+    # IP-literal guard; DNS resolution and socket pinning require separate proof.
+    # urllib.Request decodes percent-escaped authority text when setting
+    # request.host, while urlsplit(request.full_url).hostname leaves it encoded.
+    # Never classify one host and connect to another. Reject encoded
+    # authorities and mismatched Request hosts before opener construction.
+    try:
+        parsed = urlsplit(request.full_url)
+        parsed_hostname = parsed.hostname
+    except ValueError:
+        raise ProviderExecutionError("provider_destination_not_allowed") from None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed_hostname
+        or "%" in parsed.netloc
+        # libc's IDNA conversion can normalize Unicode digits/dot lookalikes
+        # into a forbidden numeric IP, bypassing ipaddress and inet_aton.
+        # Configured IDN servers must use their canonical ASCII/punycode host.
+        or not parsed.netloc.isascii()
+        or parsed.username is not None
+        or parsed.password is not None
+        or request.host.lower() != parsed.netloc.lower()
+    ):
+        raise ProviderExecutionError("provider_destination_not_allowed")
+    try:
+        destination = ipaddress.ip_address(parsed_hostname)
+    except ValueError:
+        # libc's IPv4 parser accepts noncanonical numeric aliases that
+        # ipaddress rejects (decimal dword, hexadecimal and octal forms).
+        # urllib's resolver can send those directly to metadata addresses.
+        # Reject every such alias before constructing an HTTP opener, even
+        # for otherwise authorized external provider execution. inet_aton
+        # parses numeric IPv4 only; it performs no DNS lookup.
+        try:
+            socket.inet_aton(parsed.hostname)
+        except OSError:
+            destination = None
+        else:
+            raise ProviderExecutionError("provider_destination_not_allowed")
+    if isinstance(destination, ipaddress.IPv6Address) and destination.ipv4_mapped:
+        destination = destination.ipv4_mapped
+    if destination is not None and (
+        destination.is_link_local
+        or destination.is_unspecified
+        or destination.is_multicast
+    ):
+        raise ProviderExecutionError("provider_destination_not_allowed")
+
+    # urllib otherwise installs its default ProxyHandler, which honors
+    # ambient HTTP(S)_PROXY / ALL_PROXY. An apparently local approved
+    # endpoint could therefore egress through an unapproved proxy and
+    # disclose prompt text or an endpoint-specific bearer credential.
+    # Explicit governed proxy configuration must be a separate policy owner.
+    return build_opener(_RejectProviderRedirect(), ProxyHandler({})).open(
+        request, timeout=timeout
+    )
 
 
 def _inherit_registered_api_path(
@@ -223,6 +283,64 @@ def _resolve_base_url(endpoint: ProviderEndpoint) -> str | None:
     if endpoint.base_url:
         return endpoint.base_url.rstrip("/")
     return defaults.get(endpoint.runtime_engine)
+
+
+# A configured OpenAI-compatible endpoint is not necessarily local. Use
+# the effective transport URL (including approved host environment overrides),
+# not registry defaults or self-described endpoint locality, to classify it.
+# Named Docker host bridges are trusted installation-local aliases; other DNS
+# names require RuntimePolicy external execution permission unless separately
+# admitted by a future governed destination inventory.
+_LOCAL_PROVIDER_HOSTS = frozenset({
+    "localhost", "host.docker.internal", "gateway.docker.internal",
+    "host.containers.internal",
+})
+# Never classify link-local destinations as trusted local model servers.
+# IPv4 169.254/16 includes cloud instance metadata; IPv6 fe80::/10 is
+# interface-scoped and must not bypass RuntimePolicy merely for being local.
+_LOCAL_PROVIDER_NETWORKS = tuple(ipaddress.ip_network(net) for net in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    "::1/128", "fc00::/7",
+))
+
+
+def provider_endpoint_requires_external_permission(endpoint: ProviderEndpoint) -> bool:
+    """Classify the actual model transport destination, failing closed.
+
+    Kind/locality describe configured intent; the effective URL is the wire
+    destination. An endpoint labeled local with a public/unknown host must not
+    bypass installation external opt-out or authenticated administrator RBAC.
+    Return True for unknown or malformed targets, never infer cloud permission.
+    """
+    if (
+        endpoint.kind is EndpointKind.CLOUD_PROVIDER
+        or endpoint.locality is Locality.CLOUD
+        or endpoint.runtime_engine is RuntimeEngine.REMOTE_API
+    ):
+        return True
+    try:
+        url = _resolve_base_url(endpoint)
+        parsed = urlsplit(url) if isinstance(url, str) else None
+        if (
+            parsed is None
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            return True
+        host = parsed.hostname.rstrip(".").lower()
+        if host in _LOCAL_PROVIDER_HOSTS:
+            return False
+        address = ipaddress.ip_address(host)
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return not any(address in network for network in _LOCAL_PROVIDER_NETWORKS)
+    except (ValueError, TypeError):
+        # Unknown DNS hostnames and invalid URLs never imply local authority.
+        return True
 
 
 def _resolve_api_key(endpoint: ProviderEndpoint) -> str | None:
@@ -708,7 +826,9 @@ async def stream_provider_endpoint(
     data_lines: list[str] = []
     try:
         async with asyncio.timeout(total_seconds):
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout, follow_redirects=False, trust_env=False
+            ) as client:
                 async with client.stream(
                     "POST", f"{base_url}/chat/completions",
                     json=payload, headers=headers,

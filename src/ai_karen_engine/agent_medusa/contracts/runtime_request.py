@@ -29,6 +29,8 @@ class RuntimeRequest:
     # Pre-built authorized inputs from CORTEX/RuntimePolicy
     authorized_plan: Optional[Dict[str, Any]] = None
     execution_requirements: Optional[Dict[str, Any]] = None
+    # Trusted in-process ChatRuntime meter, never serialized to agent payloads.
+    runtime_budget_meter: Optional[Any] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         tenant_id = self.tenant_id

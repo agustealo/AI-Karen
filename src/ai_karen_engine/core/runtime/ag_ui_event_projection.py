@@ -10,6 +10,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+from ai_karen_engine.core.runtime.plugin_management_contract import (
+    validate_plugin_management_preflight,
+)
 from typing import Any
 
 
@@ -379,6 +382,22 @@ class AGUIEventProjection:
             if type(fallback_level) is int and 0 <= fallback_level <= 100:
                 execution_receipt["fallback_level"] = fallback_level
             events = self._finish_message()
+            # The canonical direct runtime may expose a non-executable plugin
+            # management preview. Project only the bounded status contract,
+            # never its surrounding catalog or caller-controlled tool data.
+            structured = meta.get("structured_content")
+            if (
+                meta.get("response_source") == "plugin_catalog"
+                and meta.get("capability_executor") == "plugin.inspect"
+                and isinstance(structured, Mapping)
+            ):
+                preflight = validate_plugin_management_preflight(
+                    structured.get("plugin_management_preflight")
+                )
+                if preflight is not None:
+                    events.append(self._custom(
+                        "karen.plugin_management_preflight.v1", preflight,
+                    ))
             if execution_receipt.get("actual_provider") and execution_receipt.get("actual_model") and execution_receipt.get("response_source"):
                 events.append(self._custom("karen.execution_receipt.v1", execution_receipt))
             if receipt["output_truncated"] or "personal_recall_grounded" in receipt:

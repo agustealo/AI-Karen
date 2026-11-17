@@ -130,6 +130,7 @@ type PluginHealthCardProps = {
   supportsVoiceOutput: boolean;
   rawStatus?: string;
   onOpenVoiceStudio?: () => void;
+  onOpenPocketTts?: () => void;
 };
 
 type OperationOverrideState = {
@@ -543,6 +544,7 @@ function PluginHealthCard({
   supportsVoiceOutput,
   rawStatus,
   onOpenVoiceStudio,
+  onOpenPocketTts,
 }: PluginHealthCardProps) {
   const { refresh } = usePluginRegistry();
   const health = usePluginHealth(pluginId);
@@ -835,7 +837,11 @@ function PluginHealthCard({
           {hasUiCapabilities ? (
             <FrontendStateBadge state={frontendDisplayState} />
           ) : (
-            <span className="text-muted-foreground">not required (backend-only)</span>
+            <span className="text-muted-foreground">
+              {pluginId === "pocket-tts"
+                ? "Host-owned user workspace (no separate plugin bundle)"
+                : "not required (backend-only)"}
+            </span>
           )}
         </div>
 
@@ -864,9 +870,9 @@ function PluginHealthCard({
 
       {supportsVoiceOutput && !hasUiCapabilities && (
         <p className="text-xs text-muted-foreground" role="note">
-          Speech controls belong to Karen&apos;s Voice Studio. Backend-only
-          means this extension does not ship a separate frontend; it does not
-          establish model installation, voice availability or playback readiness.
+          {pluginId === "pocket-tts"
+            ? "Pocket TTS has its own user workspace in the Plugins menu. Karen’s VoiceRuntime still owns audio execution, and live voices are shown only after licensed model installation and readiness checks."
+            : "Speech controls belong to Karen’s Voice Studio. Backend-only means this extension does not ship a separate frontend; it does not establish model installation, voice availability or playback readiness."}
         </p>
       )}
 
@@ -915,8 +921,15 @@ function PluginHealthCard({
             {showModelSetup ? 'Hide model setup' : 'Download recommended model'}
           </Button>
         )}
-        {supportsVoiceOutput && onOpenVoiceStudio && (
+        {pluginId === "pocket-tts" && onOpenPocketTts && (
           <Button type="button" size="sm" variant="default"
+            onClick={onOpenPocketTts} aria-label="Open Pocket TTS workspace">
+            <Settings2 className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            Open Pocket TTS
+          </Button>
+        )}
+        {supportsVoiceOutput && onOpenVoiceStudio && (
+          <Button type="button" size="sm" variant="outline"
             onClick={onOpenVoiceStudio} aria-label={`Open Voice Studio for ${displayName}`}>
             <Settings2 className="mr-1.5 h-4 w-4" aria-hidden={true} />
             Open Voice Studio
@@ -1023,7 +1036,8 @@ function PluginHealthCard({
 
 export default function PluginOverviewPage({
   onOpenVoiceStudio,
-}: { onOpenVoiceStudio?: () => void } = {}) {
+  onOpenPocketTts,
+}: { onOpenVoiceStudio?: () => void; onOpenPocketTts?: () => void } = {}) {
   const { plugins, loading, error } = usePluginRegistry();
 
   return (
@@ -1115,6 +1129,7 @@ export default function PluginOverviewPage({
                   supportsVoiceOutput={plugin.supportsVoiceOutput === true}
                   rawStatus={plugin.rawStatus}
                   onOpenVoiceStudio={onOpenVoiceStudio}
+                  onOpenPocketTts={onOpenPocketTts}
                 />
               ))}
             </div>

@@ -119,6 +119,54 @@ describe("CK-07D governed CopilotKit history and reconnect", () => {
     expect(called).toEqual([AUTH, FLAGS, HISTORY]);
   });
 
+  it("forwards the canonical saved plugin preflight event but never privileged source metadata", async () => {
+    const preflight = {
+      installation_id: "time-query",
+      requested_action: "disable",
+      operation_scope: "application_global",
+      required_permission: "admin.plugins:manage",
+      permission_verified: true,
+      approval_granted: false,
+      mutation_performed: false,
+      action_receipt: null,
+      status: "needs_explicit_confirmation",
+      current_state: "enabled",
+      next_action: "plugin.open_admin_management",
+      confirmation_channel: "authenticated_plugin_management_ui",
+    };
+    setup(() => Response.json(ownedHistory({
+      replayEvents: [{
+        type: "CUSTOM",
+        name: "karen.plugin_management_preflight.v1",
+        messageId: "a1",
+        value: preflight,
+      }],
+      secret: "do-not-forward",
+    })));
+    const response = await GET(req("history"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.replayEvents).toEqual([{
+      type: "CUSTOM",
+      name: "karen.plugin_management_preflight.v1",
+      messageId: "a1",
+      value: preflight,
+    }]);
+    expect(JSON.stringify(body)).not.toContain("do-not-forward");
+
+    setup(() => Response.json(ownedHistory({
+      replayEvents: [{
+        type: "CUSTOM",
+        name: "karen.plugin_management_preflight.v1",
+        messageId: "u1",
+        value: preflight,
+      }],
+    })));
+    const rejected = await GET(req("history"));
+    expect(rejected.status).toBe(502);
+    expect(JSON.stringify(await rejected.json())).not.toContain("time-query");
+  });
+
   it("issues an explicit owner-attested text-only continuation without replaying rich events", async () => {
     const called = setup(() => Response.json(ownedHistory({
       text_only: true, continuation_authorized: true,

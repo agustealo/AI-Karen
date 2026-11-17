@@ -24,11 +24,16 @@ import {
   KarenResponseIntegrity,
   KarenRestoredExecutionReceipt,
 } from "@/components/chat/KarenVerifiedReceipts";
+import {
+  KarenPluginManagementPreflight,
+  parsePluginManagementPreflight,
+} from "@/components/chat/KarenPluginManagementPreflight";
 
 type VerifiedPart =
   | { type: "presentation"; value: KarenPresentationEnvelope }
   | { type: "receipt"; value: Record<string, unknown> }
   | { type: "integrity"; value: Record<string, unknown> }
+  | { type: "plugin_management"; value: Record<string, unknown> }
   | { type: "agent_step"; value: AgentStepEvent; sequence: number };
 export type VerifiedHistoryParts = ReadonlyMap<string, readonly VerifiedPart[]>;
 
@@ -160,7 +165,7 @@ export function parseKarenVerifiedHistory(
   const assistantIds = new Set(messages.filter(m => m.role === "assistant").map(m => m.id));
   const parts = new Map<string, VerifiedPart[]>();
   const counters = new Map<string, {
-    presentation: number; receipt: number; integrity: number;
+    presentation: number; receipt: number; integrity: number; pluginManagement: number;
     steps: number; lastStepSequence: number; stepRunId: string | null;
     presentationIds: Set<string>;
   }>();
@@ -174,7 +179,7 @@ export function parseKarenVerifiedHistory(
     const name = candidate.name;
     const id = candidate.messageId;
     const seen = counters.get(id) || {
-      presentation: 0, receipt: 0, integrity: 0,
+      presentation: 0, receipt: 0, integrity: 0, pluginManagement: 0,
       steps: 0, lastStepSequence: 0, stepRunId: null,
       presentationIds: new Set<string>(),
     };
@@ -197,6 +202,12 @@ export function parseKarenVerifiedHistory(
         throw new Error("Unsupported verified response integrity");
       }
       part = { type: "integrity", value: candidate.value };
+    } else if (name === "karen.plugin_management_preflight.v1") {
+      if (!parsePluginManagementPreflight(candidate.value) ||
+          ++seen.pluginManagement > 1) {
+        throw new Error("Unsupported verified plugin management status");
+      }
+      part = { type: "plugin_management", value: candidate.value };
     } else if (name === "karen.agent_step.v1") {
       const observed = parseSavedAgentStep(candidate.value);
       if (!observed || ++seen.steps > 100 ||
@@ -321,6 +332,8 @@ export function KarenCopilotAssistantMessage(
             <KarenRestoredExecutionReceipt data={part.value} />}
           {part.type === "integrity" &&
             <KarenResponseIntegrity data={part.value} />}
+          {part.type === "plugin_management" &&
+            <KarenPluginManagementPreflight data={part.value} />}
         </div>
       ))}
     </div>

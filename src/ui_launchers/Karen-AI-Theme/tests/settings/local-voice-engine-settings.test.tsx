@@ -329,4 +329,54 @@ describe("governed local engine voice settings", () => {
     expect(revokeUrl).toHaveBeenCalledWith("blob:authorized-audio");
     vi.unstubAllGlobals();
   });
+  it("scopes the plugin workspace to Pocket TTS even if another engine is saved", async () => {
+    const other = {
+      ...catalog.engines[0],
+      engine_id: "other-tts",
+      display_name: "Another engine",
+    };
+    api.getVoiceEngineCatalog.mockResolvedValue({
+      contract_version: "1.0.0", engines: [other, catalog.engines[0]],
+    });
+    api.getVoiceSelection
+      .mockResolvedValueOnce({
+        voice: { engine_id: "other-tts", voice_id: "alba" }, available: true,
+      })
+      .mockResolvedValueOnce({
+        voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+      });
+    render(<LocalVoiceEngineSettings engineFilter="pocket-tts" />);
+    await screen.findByText("Pocket TTS Voice Lab");
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    expect(screen.getByTestId("pocket-tts-engine-scope").textContent).toContain("Pocket TTS");
+    expect(screen.queryByText("Another engine")).toBeNull();
+    expect(screen.queryByText("Browser speech (device-dependent)")).toBeNull();
+    expect(screen.getByRole("button", { name: "Choose Alba local voice" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save speech engine" }));
+    await waitFor(() => expect(api.setVoiceSelection).toHaveBeenCalledWith("pocket-tts", "alba"));
+    await waitFor(() => expect(api.toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Speech engine preference saved",
+    })));
+  });
+
+  it("disables Pocket synthesis and saving when the live catalog has no Pocket engine", async () => {
+    api.getVoiceEngineCatalog.mockResolvedValue({
+      contract_version: "1.0.0",
+      engines: [{
+        ...catalog.engines[0],
+        engine_id: "another-tts",
+        display_name: "Another engine",
+      }],
+    });
+    render(<LocalVoiceEngineSettings engineFilter="pocket-tts" />);
+    await screen.findByText("Pocket TTS Not Ready");
+    expect(screen.queryByRole("button", { name: "Preview local voice" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Save speech engine" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(screen.getByTestId("pocket-tts-engine-scope")).toBeTruthy();
+    expect(api.setVoiceSelection).not.toHaveBeenCalled();
+    expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
+  });
+
 });

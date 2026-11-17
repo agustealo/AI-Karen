@@ -1152,6 +1152,106 @@ class PluginService:
         return list(plugins)
 
 
+
+    async def preview_conversational_management(
+        self, *, plugin_id: str, action: str, principal: Any,
+    ) -> Dict[str, Any]:
+        """Read the canonical global lifecycle state without changing it.
+
+        Installation-state mutations are application-global and protected by
+        ADMIN_PLUGINS_MANAGE at the existing plugin management API. Conversational
+        inspection must not turn an authenticated ordinary user into an admin,
+        or turn approval prose into an executable lifecycle grant.
+        """
+        from ai_karen_engine.auth.models import UserData
+        from ai_karen_engine.auth.rbac_middleware import (
+            Permission, get_rbac_manager,
+        )
+
+        if (
+            not isinstance(principal, UserData)
+            or not principal.user_id or not principal.tenant_id
+            or principal.is_active is not True
+            or principal.is_verified is not True
+        ):
+            raise PermissionError("Verified plugin management principal required")
+        if (
+            not isinstance(plugin_id, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_-]{0,49}", plugin_id)
+            or not isinstance(action, str)
+            or not re.fullmatch(r"[a-z]{3,15}", action)
+        ):
+            raise ValueError("Invalid plugin management request")
+
+        request = {
+            "installation_id": plugin_id,
+            "requested_action": action,
+            "operation_scope": "application_global",
+            "required_permission": Permission.ADMIN_PLUGINS_MANAGE.value,
+            "permission_verified": False,
+            "approval_granted": False,
+            "mutation_performed": False,
+            "action_receipt": None,
+            "next_action": None,
+        }
+        if action not in {"enable", "disable"}:
+            return {**request, "status": "unsupported_action"}
+
+        record = self._get_kernel().get_record(plugin_id)
+        manifest = record.get("manifest") if isinstance(record, dict) else None
+        if (
+            manifest is None
+            or getattr(manifest, "name", None) != plugin_id
+            or record.get("is_valid") is not True
+            or record.get("activation_blocked_reason")
+        ):
+            return {**request, "status": "unavailable_installation"}
+        capabilities = getattr(manifest, "capabilities", None)
+        channel = getattr(capabilities, "communication_channel", None)
+        voice = getattr(capabilities, "voice_modality", None)
+        if channel is not None:
+            return {
+                **request, "status": "delegated_to_channel_host",
+                "next_action": "channel.inspect_and_request_operator_authorization",
+            }
+        if voice is not None:
+            return {
+                **request, "status": "delegated_to_voice_runtime",
+                "next_action": "voice.inspect_and_request_operator_authorization",
+            }
+
+        # This is a fresh, read-only eligibility check. The actual mutation
+        # must still run through the existing authenticated and audited admin
+        # management endpoint with its own authorization and confirmation.
+        authorized = get_rbac_manager().has_permission(
+            principal, Permission.ADMIN_PLUGINS_MANAGE,
+        )
+        state = str(getattr(record.get("status"), "value", record.get("status") or "unknown"))
+        if not authorized:
+            return {
+                **request, "status": "permission_denied",
+                "current_state": state,
+            }
+        if state not in {"enabled", "disabled", "active", "loaded", "registered"}:
+            return {
+                **request, "status": "unsupported_state",
+                "permission_verified": True, "current_state": state,
+            }
+        enabled = state in {"enabled", "active", "loaded", "registered"}
+        requested_enabled = action == "enable"
+        if enabled == requested_enabled:
+            return {
+                **request, "status": "already_satisfied",
+                "permission_verified": True, "current_state": state,
+                "next_action": "plugin.verify_runtime_state",
+            }
+        return {
+            **request, "status": "needs_explicit_confirmation",
+            "permission_verified": True, "current_state": state,
+            "next_action": "plugin.open_admin_management",
+            "confirmation_channel": "authenticated_plugin_management_ui",
+        }
+
     @staticmethod
     def _inspection_key(value: object) -> str:
         """Canonical comparison of catalog names; no fuzzy execution aliases."""

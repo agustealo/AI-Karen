@@ -245,6 +245,8 @@ async def test_health_monitor_fault_never_changes_valid_model_answer(monkeypatch
 async def test_kcon768_verified_engine_attempt_timing_survives_fallback_without_faking_cold_start():
     settings = ExpressionSettings(active_engine="local", engine_fallback_order=["cloud"])
     settings.policies.allow_external_engines = True
+    # These engine receipts exercise routing provenance with explicit authorization.
+    settings.policies.require_admin_for_external = False
     settings.engines["local"] = EngineConfig(
         enabled=True, type="builtin_provider_engine", fallback_eligible=True,
     )
@@ -312,6 +314,8 @@ async def test_kcon768_verified_engine_attempt_timing_survives_fallback_without_
 async def test_kcon768_invalid_output_attempt_is_distinct_from_verified_model():
     settings = ExpressionSettings(active_engine="local", engine_fallback_order=["cloud"])
     settings.policies.allow_external_engines = True
+    # These engine receipts exercise routing provenance with explicit authorization.
+    settings.policies.require_admin_for_external = False
     settings.engines["local"] = EngineConfig(
         enabled=True, type="builtin_provider_engine", fallback_eligible=True,
     )

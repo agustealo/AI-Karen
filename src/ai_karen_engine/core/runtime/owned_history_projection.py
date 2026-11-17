@@ -21,6 +21,9 @@ from ai_karen_engine.core.runtime.attested_agent_activity import (
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import ConversationSnapshot
 from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+from ai_karen_engine.core.runtime.plugin_management_contract import (
+    validate_plugin_management_preflight,
+)
 from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
 
 _MAX_MESSAGES = 500
@@ -238,16 +241,39 @@ def project_owned_history(
         # Runtime attestation and the digest check below still govern both.
         structured = metadata.get("structured_content")
         if _carries_value(structured) and not text_continuation:
-            captured = metadata.get("verified_presentations_v1")
-            if (
-                not isinstance(structured, Mapping)
-                or not set(structured).issubset(_VERIFIED_PRESENTATION_CONTEXT_KEYS)
-                or not isinstance(captured, list)
-                or len(captured) != 1
-                or "presentation" not in structured
-                or structured["presentation"] != captured[0]
-            ):
-                raise UnreplayableHistory("unsupported_rich_history")
+            management = (
+                validate_plugin_management_preflight(
+                    structured.get("plugin_management_preflight")
+                ) if isinstance(structured, Mapping) else None
+            )
+            if management is not None:
+                # A separate, immutable, bounded status is allowed only for a
+                # confirmed plugin.inspect response. It cannot import catalog
+                # candidates, tool arguments, secrets or a mutation receipt.
+                if (
+                    set(structured) != {
+                        "status", "plugin_management_preflight",
+                        "requested_action_executed", "next_action",
+                    }
+                    or structured["status"] != "found"
+                    or structured["requested_action_executed"] is not False
+                    or structured["next_action"] != management["next_action"]
+                    or metadata.get("response_source") != "plugin_catalog"
+                    or metadata.get("capability_executor") != "plugin.inspect"
+                    or metadata.get("verified_presentations_v1") is not None
+                ):
+                    raise UnreplayableHistory("unsupported_rich_history")
+            else:
+                captured = metadata.get("verified_presentations_v1")
+                if (
+                    not isinstance(structured, Mapping)
+                    or not set(structured).issubset(_VERIFIED_PRESENTATION_CONTEXT_KEYS)
+                    or not isinstance(captured, list)
+                    or len(captured) != 1
+                    or "presentation" not in structured
+                    or structured["presentation"] != captured[0]
+                ):
+                    raise UnreplayableHistory("unsupported_rich_history")
         incomplete_presentation = metadata.get("presentation_replay_incomplete") is True
         if incomplete_presentation and not text_continuation:
             raise UnreplayableHistory("incomplete_presentation_capture")
@@ -354,6 +380,7 @@ def project_owned_history(
                 if event.get("type") == "CUSTOM":
                     if event.get("name") not in {
                         "karen.execution_receipt.v1", "karen.response_integrity.v1",
+                        "karen.plugin_management_preflight.v1",
                     }:
                         raise UnreplayableHistory("unexpected_replay_event")
                     events.append({**event, "messageId": identifier})

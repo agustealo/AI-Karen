@@ -10,6 +10,7 @@ from ...model_runtime.provider_execution import (
     execute_provider_endpoint,
     stream_provider_endpoint,
     ProviderExecutionError,
+    provider_endpoint_requires_external_permission,
 )
 from ...model_runtime.provider_policy import evaluate_provider_policy
 from ...model_runtime.runtime_engine import EndpointKind
@@ -54,6 +55,37 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 provider=provider_id,
                 requested_provider=requested_provider,
             )
+
+        # Endpoint type and configured locality are not sufficient network
+        # evidence. Custom and env-overridden "local" endpoints may resolve to
+        # remote URLs; require the original RuntimePolicy-bound approval before
+        # sending either a streaming or non-streaming model request.
+        if provider_endpoint_requires_external_permission(endpoint):
+            try:
+                approved = (
+                    await task.authorize_external_engine_attempt()
+                    if task.authorize_external_engine_attempt is not None
+                    else False
+                )
+            except Exception:
+                approved = False
+            if approved is not True:
+                logger.info(
+                    "expression.external_transport_rejected",
+                    extra={
+                        "engine_id": self.engine_id,
+                        "provider_id": provider_id,
+                        "correlation_id": task.correlation_id,
+                        "reason": "external_transport_not_authorized",
+                    },
+                )
+                return self._failure_result(
+                    task,
+                    started,
+                    "external_transport_not_authorized",
+                    provider=provider_id,
+                    requested_provider=requested_provider,
+                )
 
         model = task.preferred_model
         if model == "auto":

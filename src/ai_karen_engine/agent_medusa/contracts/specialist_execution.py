@@ -9,7 +9,10 @@ Carries the authorization + identity needed for canonical routing:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from ...core.runtime.chat_runtime_contract import ChatExecutionContext
 
 from ...core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter
 
@@ -24,6 +27,8 @@ class SpecialistExecutionContext:
     correlation_id: str = ""
     step_id: str = ""
     budget_meter: Optional[Any] = None
+    # Original authenticated ingress context, never reconstructed from agent IDs.
+    authenticated_chat_context: Optional["ChatExecutionContext"] = None
     event_emitter: Optional[Any] = None
     session_id: Optional[str] = None
     # Trusted transport preferences are validated against the canonical

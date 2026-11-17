@@ -42,6 +42,8 @@ def _settings() -> ExpressionSettings:
         enabled=True, type="openai_compatible", fallback_eligible=True,
     )
     settings.policies.allow_external_engines = True
+    # Streaming tests isolate the partial-output fallback fence, not RBAC.
+    settings.policies.require_admin_for_external = False
     return settings
 
 

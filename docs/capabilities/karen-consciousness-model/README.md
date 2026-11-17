@@ -1,8 +1,8 @@
 # Karen Consciousness-Model (KCM) | Developer Wiki
 
-**Status:** Governed learning-admission, memory revocation and self-model foundation merged (PRs #915, #924, #930, #931, #938, #940, #946, #951, #953 and #956). Conditioned task-benchmark provenance and source expiry merged in #956. Runner-time inference provenance is under review in #961. Independent oracle/group review, production environment certification and neural training remain disabled.  
+**Status:** Governed learning-admission, memory revocation and self-model foundations merged. KCM benchmark provenance, task conditioning and runner-time freshness are merged through PR #961. Scoped curated-oracle reviewer acknowledgment is merged in PR #963. Reviewer withdrawal is merged in PR #968. Owner-scoped model-to-training-job provenance is under review in PR #973; independently verified training-example inventory, ground truth, held-out task-group separation, production environment certification and neural training remain disabled.  
 **Research cutoff:** 2026-11-16  
-**Repository baseline audited:** `agustealo/AI-Karen` `main` at `e570d950501915a9fce9e089ac91e583a71eb80e`  
+**Repository baseline audited:** `agustealo/AI-Karen` `main` at `24621fccd0f7d5b065408f406ecc0f82d02d8573` (read-only model/job provenance branch base)  
 **Target documentation location:** `docs/capabilities/karen-consciousness-model/`  
 **Primary decision:** Memory retention **does not** confer training eligibility.
 
@@ -50,6 +50,13 @@ KCM is Karen's **operational self-model**: a governed, evidence-backed projectio
 | [23 — Task-specific benchmark assessment](23-task-specific-benchmark-assessment.md) | Exact model/feature/case provenance, observed test accuracy and uncertainty |
 | [24 — Conditioned benchmark and expiry](24-conditioned-task-evidence.md) | Canonical curated oracle integrity, group limits, environment truth and required freshness |
 | [25 — Runner observation and evidence age](25-run-observation-and-freshness.md) | Runner-observed inference window, receipt replay fencing, freshness-bound diagnostics |
+| [26 — Reviewed oracle observations](26-reviewed-curated-oracle-observations.md) | Tenant-scoped authorized reviewer acknowledgment, exact source snapshot, no independent group certification |
+| [27 — Reviewer withdrawal](27-reviewer-withdrawal-and-revocation.md) | Append-only reviewer withdrawal and revocation-aware task evidence without permission grants |
+| [28 — Model/job artifact provenance](28-model-training-job-lineage.md) | Exact owner-scoped training job and registry hash link, explicitly not held-out evidence |
+| [29 — sklearn fit observation](29-sklearn-fit-observation.md) | Keyed tenant-scoped observation of actual sklearn fit members, explicitly not verified KCM source inventory |
+| [30 — Owner-scoped observed-fit artifact binding](30-owner-scoped-fit-artifact-binding.md) | Read-only successful job, registered artifact and keyed sklearn fit-observation reconciliation; no source-ancestry claim |
+| [31 — Frozen assessment to sklearn JSONL alignment](31-frozen-assessment-to-sklearn-jsonl.md) | Live rights/epoch rechecked, exact frozen train-ID-to-canonical-JSONL structural matching; no verified transformation or training membership |
+| [32 — Observed fit to supplied input commitments](32-observed-fit-input-commitments.md) | Read-only keyed row content HMAC concordance for supplied snapshots; no independent byte or model/source ancestry |
 
 ### Machine-readable proposed contracts
 

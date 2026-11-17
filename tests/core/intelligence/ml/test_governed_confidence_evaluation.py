@@ -68,20 +68,28 @@ class PrincipalScopedStore:
     rows: list[dict]
     failure: bool = False
 
-    def list_for_tenant(
+    def list_scoped_ml_predictor_outcomes(
         self,
         tenant_id: str,
         *,
         limit: int,
         user_id: str,
-        source: str,
     ) -> list[dict]:
-        assert (tenant_id, user_id, source) == (
-            "tenant-a", "user-a", "intelligence.ml"
-        )
+        assert (tenant_id, user_id) == ("tenant-a", "user-a")
         if self.failure:
             raise RuntimeError("OutcomeStore unavailable")
-        return self.rows[:limit]
+        # This fixture implements the production store's predicate-before-limit
+        # guarantee. The loader independently revalidates returned records.
+        rows = [
+            row for row in self.rows
+            if row.get("tenant_id") == tenant_id
+            and row.get("user_id") == user_id
+            and row.get("source") == "intelligence.ml"
+            and isinstance(row.get("metadata"), dict)
+            and row["metadata"].get("schema_version")
+            == "ml_predictor_evidence_v1"
+        ]
+        return rows[:limit]
 
 
 def evaluator(rows: list[dict], *, failure: bool = False) -> GovernedMLLearningEvidence:

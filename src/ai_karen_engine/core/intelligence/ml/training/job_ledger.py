@@ -74,11 +74,29 @@ class TrainingJobLedger:
         return {"job_id": job.job_id, "status": TrainingJobStatus.QUEUED.value,
                 "submitted_at": stamp}
 
-    def get(self, job_id: str, *, tenant_id: str) -> dict[str, Any] | None:
+    def get(
+        self, job_id: str, *, tenant_id: str,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Read a scoped job. Supplying user_id enforces exact owner membership.
+
+        Existing internal tenant-scoped workers retain their current contract;
+        user-facing evidence inspection MUST request the narrower owner scope.
+        """
+        if user_id is not None and (
+            not isinstance(user_id, str) or not user_id.strip()
+        ):
+            raise ValueError("Explicit owner identity is required")
+        owner_clause = " AND user_id = ?" if user_id is not None else ""
+        parameters = (
+            (job_id, tenant_id, user_id) if user_id is not None
+            else (job_id, tenant_id)
+        )
         with self._connect() as db:
             row = db.execute(
                 "SELECT job_id, state, body, submitted_at, updated_at FROM training_jobs "
-                "WHERE job_id = ? AND tenant_id = ?", (job_id, tenant_id),
+                "WHERE job_id = ? AND tenant_id = ?" + owner_clause,
+                parameters,
             ).fetchone()
         if row is None:
             return None

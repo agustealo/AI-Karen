@@ -271,7 +271,10 @@ jobs:
           pytest tests/core/runtime/test_authorized_semantic_context_handoff.py -q
           pytest tests/core/runtime/test_direct_live_capabilities.py -q
           pytest tests/core/runtime/test_conversational_plugin_inspection.py -q
+          pytest tests/core/cortex/test_plugin_capability_precedence.py -q
           pytest tests/core/runtime/test_conversational_plugin_action.py -q
+          pytest tests/core/runtime/test_plugin_management_preflight_projection.py -q
+          pytest tests/core/runtime/test_plugin_lifecycle_policy_gate.py tests/services/test_approval_service.py -q
           # Source observations need an attested surface but must not invent
           # an LLM receipt. This invariant is part of release quality.
           pytest tests/core/runtime/test_direct_capability_provenance.py -q

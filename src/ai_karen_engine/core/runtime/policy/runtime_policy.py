@@ -283,6 +283,45 @@ class RuntimePolicyEnforcer:
             RuntimeLevel.EMERGENCY: [RuntimeLevel.SAFE],
         }
 
+    @staticmethod
+    def authorize_external_provider_execution(
+        *,
+        context: "ChatExecutionContext",
+        plan: AuthorizedExecutionPlan,
+        expression_policies: object,
+    ) -> bool:
+        """Verify a cloud attempt against the original authenticated chat plan.
+
+        RuntimePolicy is the only authority. This is called immediately before
+        every eligible cloud-engine attempt, including fallback, so a forged
+        request role, detached task, or revoked permission cannot act as a grant.
+        No model, endpoint, or credential selection occurs here.
+        """
+        if (
+            not plan.policy_decision_id
+            or not plan.matches_execution_scope(
+                user_id=str(context.user_id),
+                tenant_id=str(context.tenant_id),
+                session_id=context.session_id,
+            )
+            or getattr(expression_policies, "allow_external_engines", None) is not True
+        ):
+            return False
+        try:
+            principal = context.require_authenticated_user()
+        except (PermissionError, AttributeError):
+            return False
+        require_admin = getattr(expression_policies, "require_admin_for_external", None)
+        if require_admin is False:
+            return True
+        if require_admin is not True:
+            return False
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+        return get_rbac_manager().has_permission(
+            principal, Permission.ADMIN_PROVIDERS_MANAGE,
+        )
+
     async def probe_optional_verification(
         self,
         request: PolicyEvaluationRequest,
@@ -402,6 +441,36 @@ class RuntimePolicyEnforcer:
                 reason_codes=[PolicyReasonCode.MISSING_IDENTITY],
                 denied_capabilities=["all"],
                 denied_reasoning_modes=list(request.requested_reasoning_modes),
+                evaluated_at=evaluated_at,
+            )
+
+        # An ordinary PolicyEvaluationRequest is not a trusted plugin
+        # lifecycle approval. Roles, permissions and capability identifiers in
+        # this input may originate from ingress. Until the separate, server-
+        # bound revision-fenced lifecycle grant is implemented, fail closed.
+        # Do not infer authority from admin roles, plugin name or chat prose.
+        lifecycle_requested = (
+            isinstance(request.action, str)
+            and request.action.startswith("plugin.lifecycle.")
+        ) or any(
+            isinstance(capability, str)
+            and capability.startswith("plugin.lifecycle.")
+            for capability in request.requested_capabilities
+        )
+        if lifecycle_requested:
+            return PolicyDecision(
+                decision_id=decision_id,
+                policy_version=policy_version,
+                allowed=False,
+                reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                denied_capabilities=[
+                    cap
+                    for cap in request.requested_capabilities
+                    if isinstance(cap, str) and cap.startswith("plugin.lifecycle.")
+                ] or [str(request.action)],
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
+                requires_human_gate=True,
+                risk_level="high",
                 evaluated_at=evaluated_at,
             )
 

@@ -18,6 +18,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.plugin_lifecycle_approval import PluginLifecycleApprovalScope
 from ai_karen_engine.persistence.repositories.approval_repository import (
     SqlApprovalRepository,
     get_approval_repository,
@@ -48,7 +49,11 @@ def _identity(user: UserData) -> tuple[str, str]:
     return user_id, tenant_id
 
 
-def request_fingerprint(request: ChatExecutionRequest) -> str:
+def request_fingerprint(
+    request: ChatExecutionRequest,
+    *,
+    lifecycle_scope: Optional[PluginLifecycleApprovalScope] = None,
+) -> str:
     """Stable digest over execution-relevant request content.
 
     Correlation/request IDs and the approval token itself are intentionally
@@ -66,6 +71,8 @@ def request_fingerprint(request: ChatExecutionRequest) -> str:
         "temperature": request.temperature,
         "max_tokens": request.max_tokens,
     }
+    if lifecycle_scope is not None:
+        payload["plugin_lifecycle_scope"] = lifecycle_scope.to_record()
     encoded = json.dumps(
         payload,
         sort_keys=True,
@@ -76,9 +83,13 @@ def request_fingerprint(request: ChatExecutionRequest) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def serialize_request(request: ChatExecutionRequest) -> Dict[str, Any]:
-    """Persist only the canonical normalized request needed for audited resume."""
-    return {
+def serialize_request(
+    request: ChatExecutionRequest,
+    *,
+    lifecycle_scope: Optional[PluginLifecycleApprovalScope] = None,
+) -> Dict[str, Any]:
+    """Persist normalized request plus immutable server-bound action identity."""
+    payload = {
         "messages": request.messages,
         "context": {
             "user_id": request.context.user_id,
@@ -92,6 +103,51 @@ def serialize_request(request: ChatExecutionRequest) -> Dict[str, Any]:
         "max_tokens": request.max_tokens,
         "stream": request.stream,
     }
+    if lifecycle_scope is not None:
+        payload["plugin_lifecycle_scope"] = lifecycle_scope.to_record()
+    return payload
+
+
+_LIFECYCLE_INTENTS = frozenset({"plugin.lifecycle.enable", "plugin.lifecycle.disable"})
+
+
+def _require_lifecycle_scope(
+    request: ChatExecutionRequest,
+    decision: ExecutionDecision,
+    scope: Optional[PluginLifecycleApprovalScope],
+) -> None:
+    """Reject untrusted or unscoped lifecycle approvals before SQL writes."""
+    if (
+        isinstance(decision.intent, str)
+        and decision.intent.startswith("plugin.lifecycle.")
+        and decision.intent not in _LIFECYCLE_INTENTS
+    ):
+        raise ApprovalScopeError("Unsupported plugin lifecycle approval action")
+    if decision.intent not in _LIFECYCLE_INTENTS:
+        if scope is not None:
+            raise ApprovalScopeError("Lifecycle scope does not match the policy intent")
+        return
+    if not isinstance(scope, PluginLifecycleApprovalScope):
+        raise ApprovalScopeError("Plugin lifecycle approval requires a bound scope")
+    if decision.intent != "plugin.lifecycle." + scope.action:
+        raise ApprovalScopeError("Lifecycle action and policy intent differ")
+    try:
+        principal = request.context.require_authenticated_user()
+        scope.require_matching_context(request.context)
+    except (PermissionError, ValueError) as exc:
+        raise ApprovalScopeError("Plugin lifecycle approval identity is unverified") from exc
+    if (
+        not decision.requires_human_gate
+        or str(getattr(decision.risk_level, "value", decision.risk_level))
+        not in {"high", "critical"}
+        or not str(decision.policy_decision_id or "").strip()
+        or decision.policy_constraints.get("authorization_status") != "allowed"
+    ):
+        raise ApprovalScopeError("Plugin lifecycle approval requires fresh policy and human gate")
+    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+    if not get_rbac_manager().has_permission(principal, Permission.ADMIN_PLUGINS_MANAGE):
+        raise ApprovalScopeError("Plugin lifecycle management permission required")
 
 
 class ApprovalService:
@@ -108,13 +164,16 @@ class ApprovalService:
         self,
         request: ChatExecutionRequest,
         decision: ExecutionDecision,
+        *,
+        lifecycle_scope: Optional[PluginLifecycleApprovalScope] = None,
     ) -> Dict[str, Any]:
+        _require_lifecycle_scope(request, decision, lifecycle_scope)
         risk_level = getattr(decision.risk_level, "value", decision.risk_level)
         record = await self._repository.create(
             tenant_id=request.context.tenant_id,
             user_id=request.context.user_id,
             conversation_id=request.context.conversation_id,
-            request_fingerprint=request_fingerprint(request),
+            request_fingerprint=request_fingerprint(request, lifecycle_scope=lifecycle_scope),
             policy_decision_id=decision.policy_decision_id,
             intent=decision.intent,
             risk_level=str(risk_level),
@@ -126,7 +185,7 @@ class ApprovalService:
                     ]
                 )
             ),
-            request_payload=serialize_request(request),
+            request_payload=serialize_request(request, lifecycle_scope=lifecycle_scope),
         )
         self._audit.log_audit_event(
             {
@@ -151,6 +210,8 @@ class ApprovalService:
         self,
         request: ChatExecutionRequest,
         decision: ExecutionDecision,
+        *,
+        lifecycle_scope: Optional[PluginLifecycleApprovalScope] = None,
     ) -> Optional[Dict[str, Any]]:
         """Return a pending approval record or consume an approved one.
 
@@ -158,11 +219,14 @@ class ApprovalService:
         never grants policy by itself: it only enforces the human gate already
         required by the current CORTEX/RuntimePolicy decision.
         """
+        _require_lifecycle_scope(request, decision, lifecycle_scope)
         approval_id = str(request.metadata.get("approval_id") or "").strip()
         if not decision.requires_human_gate and not approval_id:
             return None
         if not approval_id:
-            return await self.create_for_request(request, decision)
+            return await self.create_for_request(
+                request, decision, lifecycle_scope=lifecycle_scope,
+            )
         try:
             uuid.UUID(approval_id)
         except (TypeError, ValueError, AttributeError) as exc:
@@ -176,7 +240,7 @@ class ApprovalService:
         if current is None:
             raise ApprovalNotFoundError("Approval not found")
 
-        fingerprint = request_fingerprint(request)
+        fingerprint = request_fingerprint(request, lifecycle_scope=lifecycle_scope)
         if current["request_fingerprint"] != fingerprint:
             raise ApprovalScopeError("Approval does not match this request")
 
@@ -192,7 +256,15 @@ class ApprovalService:
             )
 
         if current["status"] == "approved":
-            await self.consume_for_request(approval_id, request=request)
+            if decision.intent in _LIFECYCLE_INTENTS:
+                # Until PluginKernel supplies a verified durable CAS/claim,
+                # approval is evidence of consent, not execution authority.
+                raise ApprovalStateError(
+                    "Plugin lifecycle execution remains revision-fenced and unavailable"
+                )
+            await self.consume_for_request(
+                approval_id, request=request, lifecycle_scope=lifecycle_scope,
+            )
             return None
         if current["status"] == "pending":
             return current
@@ -230,6 +302,13 @@ class ApprovalService:
         if record["status"] != "approved":
             raise ApprovalStateError(
                 f"Approval cannot resume from status {record['status']}"
+            )
+
+        if str(record.get("intent") or "").startswith("plugin.lifecycle."):
+            # Generic resume cannot reconstruct an independently verified
+            # current manifest/revision: never replay a stored lifecycle plan.
+            raise ApprovalStateError(
+                "Plugin lifecycle approval requires fresh revision-verified admission"
             )
 
         payload = dict(record.get("request_payload") or {})
@@ -344,12 +423,20 @@ class ApprovalService:
         approval_id: str,
         *,
         request: ChatExecutionRequest,
+        lifecycle_scope: Optional[PluginLifecycleApprovalScope] = None,
     ) -> Dict[str, Any]:
+        if lifecycle_scope is not None:
+            lifecycle_scope.require_matching_context(request.context)
+            # No current kernel revision authority exists yet. This public
+            # method may not be mistaken for an executable approval grant.
+            raise ApprovalStateError(
+                "Plugin lifecycle execution remains revision-fenced and unavailable"
+            )
         record = await self._repository.consume_approved(
             approval_id,
             tenant_id=request.context.tenant_id,
             user_id=request.context.user_id,
-            request_fingerprint=request_fingerprint(request),
+            request_fingerprint=request_fingerprint(request, lifecycle_scope=lifecycle_scope),
         )
         if record is None:
             current = await self._repository.get(
@@ -359,7 +446,9 @@ class ApprovalService:
             )
             if current is None:
                 raise ApprovalNotFoundError("Approval not found")
-            if current["request_fingerprint"] != request_fingerprint(request):
+            if current["request_fingerprint"] != request_fingerprint(
+                request, lifecycle_scope=lifecycle_scope,
+            ):
                 raise ApprovalScopeError("Approval does not match this request")
             raise ApprovalStateError(
                 f"Approval cannot be consumed from status {current['status']}"
@@ -401,6 +490,7 @@ __all__ = [
     "ApprovalScopeError",
     "ApprovalService",
     "ApprovalStateError",
+    "PluginLifecycleApprovalScope",
     "get_approval_service",
     "request_fingerprint",
     "serialize_request",

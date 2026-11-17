@@ -13,7 +13,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
     ChatStreamChunk as _SharedChatStreamChunk,
 )
-from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
 logger = get_logger(__name__)
@@ -41,13 +41,17 @@ class WorkflowRuntime:
         request: ChatExecutionRequest,
         decision: Optional[ExecutionDecision] = None,
         plan: Optional[AuthorizedExecutionPlan] = None,
+        *,
+        budget_meter: ExecutionBudgetMeter | None = None,
     ) -> Tuple[str, Dict[str, Any]]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
         config = self._build_config(request, ctx, conversation_id, decision, plan)
 
         if self._use_deepagents(request, decision, plan):
-            result = await self._run_deepagents(request, decision, plan, config)
+            result = await self._run_deepagents(
+                request, decision, plan, config, budget_meter=budget_meter,
+            )
             return result
 
         orchestrator = await self._get_orchestrator()
@@ -73,6 +77,8 @@ class WorkflowRuntime:
         request: ChatExecutionRequest,
         decision: Optional[ExecutionDecision] = None,
         plan: Optional[AuthorizedExecutionPlan] = None,
+        *,
+        budget_meter: ExecutionBudgetMeter | None = None,
     ) -> AsyncIterator[_SharedChatStreamChunk]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
@@ -93,7 +99,9 @@ class WorkflowRuntime:
 
             run_task = asyncio.create_task(
                 self._run_deepagents(
-                    request, decision, plan, config, event_sink=receive_event
+                    request, decision, plan, config,
+                    budget_meter=budget_meter,
+                    event_sink=receive_event
                 )
             )
             try:
@@ -481,6 +489,7 @@ class WorkflowRuntime:
         config: Dict[str, Any],
         *,
         event_sink: Optional[Callable[[Any], None]] = None,
+        budget_meter: ExecutionBudgetMeter | None = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Use Medusa's existing run manager directly, not a second graph owner."""
         from ai_karen_engine.agent_medusa.contracts.runtime_request import RuntimeRequest
@@ -558,6 +567,7 @@ class WorkflowRuntime:
             },
             authorized_plan=_serialize_plan(plan),
             execution_requirements=requirements,
+            runtime_budget_meter=budget_meter,
         )
         coordinator = MedusaCoordinator()
         if event_sink is not None:

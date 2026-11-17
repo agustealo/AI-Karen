@@ -12,6 +12,9 @@ from ai_karen_engine.core.cortex.routing_intents import (
     parse_plugin_inspection_request,
 )
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.plugin_management_contract import (
+    validate_plugin_management_preflight,
+)
 from ai_karen_engine.core.runtime.contracts import (
     ActionExecutionGate,
     AuthorizedExecutionPlan,
@@ -74,10 +77,33 @@ class DirectCapabilityResult:
                 "missing_fields",
                 "plugin_inspection",
                 "plugin_action_receipt",
+                "plugin_management_preflight",
                 "requested_action_executed",
             )
             if self.payload.get(key) is not None
         }
+        if (
+            self.source_id == "plugin.inspect"
+            and self.payload.get("requested_operation") == "manage"
+        ):
+            # Never persist the entire plugin catalog as a mutation receipt.
+            # A bounded validated status may be replayed after durable run
+            # attestation; unsupported management verbs remain text-only.
+            preflight = validate_plugin_management_preflight(
+                self.payload.get("plugin_management_preflight")
+            )
+            presentation_payload = (
+                {
+                    "status": "found",
+                    "plugin_management_preflight": preflight,
+                    "requested_action_executed": False,
+                    "next_action": preflight["next_action"],
+                }
+                if preflight is not None
+                and self.payload.get("status") == "found"
+                and self.payload.get("requested_action_executed") is False
+                else {}
+            )
         payload_metadata = self.payload.get("metadata")
         payload_metadata = (
             payload_metadata if isinstance(payload_metadata, dict) else {}
@@ -875,6 +901,65 @@ class DirectCapabilityExecutor:
 
         status = str(result.get("status") or "unavailable")
         matches = list(result.get("matches") or ())
+        management_preflight: Optional[Dict[str, Any]] = None
+        if (
+            parsed.operation == "manage"
+            and parsed.requested_action
+            and status == "found"
+            and len(matches) == 1
+        ):
+            try:
+                management_preflight = (
+                    await service.preview_conversational_management(
+                        plugin_id=str(matches[0]["installation_id"]),
+                        action=parsed.requested_action,
+                        principal=principal,
+                    )
+                )
+                if not isinstance(management_preflight, dict):
+                    raise ValueError("Invalid lifecycle preflight")
+                if (
+                    management_preflight.get("installation_id")
+                    != matches[0]["installation_id"]
+                    or management_preflight.get("requested_action")
+                    != parsed.requested_action
+                    or management_preflight.get("mutation_performed") is not False
+                    or management_preflight.get("approval_granted") is not False
+                    or management_preflight.get("action_receipt") is not None
+                    or management_preflight.get("status") not in {
+                        "unsupported_action", "unavailable_installation",
+                        "delegated_to_channel_host", "delegated_to_voice_runtime",
+                        "permission_denied", "unsupported_state",
+                        "already_satisfied", "needs_explicit_confirmation",
+                    }
+                ):
+                    raise ValueError("Invalid lifecycle preflight evidence")
+                logger.info(
+                    "plugin.conversation.lifecycle_preflight",
+                    extra={
+                        "tenant_id": request.context.tenant_id,
+                        "user_id": request.context.user_id,
+                        "session_id": request.context.session_id,
+                        "correlation_id": request.context.correlation_id,
+                        "request_id": request.context.request_id,
+                        "plugin_id": matches[0]["installation_id"],
+                        "requested_action": parsed.requested_action,
+                        "status": management_preflight["status"],
+                        "mutation_performed": False,
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "plugin.conversation.lifecycle_preview_unavailable",
+                    extra={
+                        "tenant_id": request.context.tenant_id,
+                        "user_id": request.context.user_id,
+                        "correlation_id": request.context.correlation_id,
+                        "plugin_id": matches[0].get("installation_id"),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                management_preflight = None
         if (
             parsed.operation == "use" and parsed.goal
             and status == "found" and len(matches) == 1
@@ -978,7 +1063,45 @@ class DirectCapabilityExecutor:
         elif matches:
             plugin = matches[0]
             name = str(plugin.get("display_name") or plugin.get("installation_id"))
-            if parsed.operation in {"manage", "use"}:
+            if parsed.operation == "manage":
+                action = str(parsed.requested_action or "manage")
+                preview_status = (
+                    str(management_preflight.get("status"))
+                    if management_preflight else "inspection_unavailable"
+                )
+                if preview_status == "needs_explicit_confirmation":
+                    text = (
+                        f"{name} is eligible for an administrator-reviewed "
+                        f"{action} request. This changes application-wide "
+                        "plugin availability. Confirm it using authenticated "
+                        "Plugins & Tools management. Karen did not perform "
+                        "the action or grant an approval."
+                    )
+                elif preview_status == "already_satisfied":
+                    text = (
+                        f"{name}'s registered lifecycle state already satisfies "
+                        f"the requested {action} operation. No change was "
+                        "performed, and runtime health remains unverified."
+                    )
+                elif preview_status == "permission_denied":
+                    text = (
+                        f"Your account is not authorized to {action} {name}. "
+                        "Plugin administration permission is required. "
+                        "No action was performed."
+                    )
+                elif preview_status.startswith("delegated_to_"):
+                    text = (
+                        f"{name} is managed by its dedicated canonical host, "
+                        "not the generic plugin lifecycle executor. "
+                        "No action was performed."
+                    )
+                else:
+                    text = (
+                        f"The requested {action} operation for {name} is "
+                        f"not available for conversational lifecycle execution "
+                        f"(state: {preview_status}). No action was performed."
+                    )
+            elif parsed.operation == "use":
                 action = str(parsed.requested_action or "execute")
                 role_notice = (
                     " Your account does not match the plugin's declared "
@@ -1049,6 +1172,7 @@ class DirectCapabilityExecutor:
             payload={
                 "status": status,
                 "plugin_inspection": result,
+                "plugin_management_preflight": management_preflight,
                 "requested_operation": parsed.operation,
                 "requested_action": parsed.requested_action,
                 "requested_action_executed": False,
@@ -1056,7 +1180,9 @@ class DirectCapabilityExecutor:
                     "setup", "resume", "manage", "use",
                 },
                 "next_action": (
-                    matches[0]["next_action"] if len(matches) == 1
+                    management_preflight.get("next_action")
+                    if management_preflight is not None
+                    else matches[0]["next_action"] if len(matches) == 1
                     else "select_plugin" if status == "ambiguous" else None
                 ),
             },

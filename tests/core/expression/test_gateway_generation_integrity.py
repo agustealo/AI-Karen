@@ -33,6 +33,8 @@ def _settings(*, fallback: bool) -> ExpressionSettings:
         fallback_eligible=True,
     )
     settings.policies.allow_external_engines = fallback
+    # Fallback scenarios isolate generation provenance, not user RBAC.
+    settings.policies.require_admin_for_external = False
     return settings
 
 

@@ -150,6 +150,7 @@ async def test_direct_chat_gateway_receives_authorized_completion_budget(monkeyp
     gateway.generate.assert_awaited_once()
     assert gateway.generate.await_args.args[0].max_tokens == 384
     assert gateway.generate.await_args.args[0].reserve_additional_model_call is meter.consume_model_call
+    assert callable(gateway.generate.await_args.args[0].authorize_external_engine_attempt)
 
 
 @pytest.mark.asyncio
@@ -220,6 +221,7 @@ async def test_grounded_search_synthesis_receives_authorized_plan(monkeypatch):
     gateway.generate.assert_awaited_once()
     assert gateway.generate.await_args.args[0].max_tokens == 256
     assert gateway.generate.await_args.args[0].reserve_additional_model_call is meter.consume_model_call
+    assert callable(gateway.generate.await_args.args[0].authorize_external_engine_attempt)
 
     # Invalid or cross-plan result receipts may carry realistic inline source
     # text, but must never trigger the model or spend another model call.

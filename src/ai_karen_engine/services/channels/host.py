@@ -24,9 +24,10 @@ from ai_karen_engine.config.channels import ChannelHostSettings
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.persistence.repositories.channel_repository import SqlChannelRepository
-from ai_karen_engine.services.channels.activation import ChannelActivationService
+from ai_karen_engine.services.channels.activation import ChannelActivationConflict, ChannelActivationService
 from ai_karen_engine.services.channels.credentials import ChannelVaultSecretResolver
 from ai_karen_engine.services.channels.ingress import ChannelIngressService
+from ai_karen_engine.services.channels.linking import ChannelLinkService, IssuedChannelLink
 from ai_karen_engine.services.channels.execution import ChannelExecutionService
 from ai_karen_engine.services.channels.delivery import ChannelDeliveryService
 from ai_karen_engine.services.channels.worker import ChannelInboxWorker
@@ -63,6 +64,7 @@ class ChannelHostServices:
         self._chat_runtime = chat_runtime
         self.ingress: ChannelIngressService | None = None
         self.activation: ChannelActivationService | None = None
+        self.linking: ChannelLinkService | None = None
         self.execution: ChannelExecutionService | None = None
         self.delivery: ChannelDeliveryService | None = None
         self.worker: ChannelInboxWorker | None = None
@@ -105,6 +107,9 @@ class ChannelHostServices:
             self.activation = ChannelActivationService(
                 kernel=self.kernel, repository=self.repository,
                 credential_authorizer=self.authorize_reference,
+            )
+            self.linking = ChannelLinkService(
+                kernel=self.kernel, repository=self.repository,
             )
             # A worker is permitted only after the canonical ChatRuntime has
             # been attached. It starts empty; webhook admission supplies only
@@ -173,6 +178,213 @@ class ChannelHostServices:
             connection=connection, verify_token=verify_token,
         )
         return verified is True
+
+    async def _whatsapp_operator_adapter(self):
+        """Resolve the only installed WhatsApp transport, never a caller adapter.
+
+        This checks local installation authority; account identity and Vault
+        entitlement remain owned by ChannelActivationService and the adapter.
+        """
+        if not self._initialized or self._closed or self.activation is None:
+            raise PermissionError("WhatsApp operator host unavailable")
+        installation_id = "whatsapp-cloud"
+        adapter = self._installed.get(installation_id)
+        if (
+            adapter is None
+            or self.kernel.get_channel_activation_manifest(installation_id) is None
+            or not self.kernel.is_canonical_channel_adapter(installation_id, adapter)
+        ):
+            raise PermissionError("Canonical WhatsApp transport unavailable")
+        return adapter
+
+    async def list_whatsapp_operator_connections(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> list[dict[str, str | int | bool]]:
+        """Inspect only this tenant's persisted WhatsApp state after fresh policy."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.inspect", plan=authorized_plan,
+        )
+        return await self.repository.list_whatsapp_operator_connections(
+            tenant_id=tenant_id,
+        )
+
+    async def inspect_whatsapp_trial_evidence(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        connection_id: str, external_event_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ):
+        """Project one redacted durable trial after canonical inspector RBAC."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.inspect", plan=authorized_plan,
+        )
+        evidence = await self.repository.inspect_whatsapp_trial(
+            tenant_id=tenant_id, connection_id=connection_id,
+            external_event_id=external_event_id,
+        )
+        if evidence is not None:
+            logger.info(
+                "channel.whatsapp_operator.trial_inspected",
+                extra={
+                    "tenant_id": tenant_id, "user_id": user_id,
+                    "connection_id": connection_id,
+                    "correlation_id": evidence.correlation_id,
+                    "inbox_status": evidence.inbox_status,
+                    "outbound_status": evidence.outbound_status,
+                    "provider_receipt_count": len(evidence.provider_receipt_states),
+                    "policy_decision_id": authorized_plan.policy_decision_id,
+                },
+            )
+        return evidence
+
+    async def list_whatsapp_self_link_connections(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> list[dict[str, str | int]]:
+        """Read enabled tenant connections after the existing channel.link gate."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.link", plan=authorized_plan,
+        )
+        rows = await self.repository.list_whatsapp_self_link_connections(
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        logger.info(
+            "channel.identity.self_link_connections_listed",
+            extra={
+                "tenant_id": tenant_id, "user_id": user_id,
+                "connection_count": len(rows),
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            },
+        )
+        return rows
+
+    async def inspect_whatsapp_self_link_status(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        connection_id: str, challenge_id: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ) -> str | None:
+        """Read only the signed-in principal's durable link proof status."""
+        await self._whatsapp_operator_adapter()
+        await self.activation._authorize(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            action="channel.link", plan=authorized_plan,
+        )
+        status = await self.repository.inspect_link_challenge_status(
+            tenant_id=tenant_id, user_id=user_id,
+            connection_id=connection_id, challenge_id=challenge_id,
+        )
+        if status is not None:
+            logger.info(
+                "channel.identity.challenge_status_inspected",
+                extra={
+                    "tenant_id": tenant_id, "user_id": user_id,
+                    "connection_id": connection_id,
+                    "challenge_id": challenge_id,
+                    "challenge_status": status,
+                    "policy_decision_id": authorized_plan.policy_decision_id,
+                },
+            )
+        return status
+
+    async def issue_whatsapp_self_link_challenge(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        connection_id: str, authorized_plan: AuthorizedExecutionPlan,
+    ) -> IssuedChannelLink:
+        """Issue the current principal's single-use native identity proof.
+
+        The installed transport and tenant-scoped connection are host-owned;
+        only the canonical link service generates the token and stores a digest.
+        """
+        await self._whatsapp_operator_adapter()
+        if self.linking is None:
+            raise PermissionError("Channel identity linking is unavailable")
+        return await self.linking.issue_challenge(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            connection_id=connection_id, authorized_plan=authorized_plan,
+        )
+
+    async def provision_whatsapp_connection(
+        self, *, tenant_id: str, user_id: str, session_id: str,
+        provider_account_id: str, credential_handle: str,
+        authorized_plan: AuthorizedExecutionPlan,
+    ):
+        """Persist a disabled tenant account; never imply Meta activation."""
+        await self._whatsapp_operator_adapter()
+        return await self.activation.provision(
+            tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+            installation_id="whatsapp-cloud",
+            provider_account_id=provider_account_id,
+            credential_handle=credential_handle,
+            authorized_plan=authorized_plan,
+        )
+
+    async def activate_whatsapp_connection(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ):
+        """Activate only the exact disabled revision after live Graph phone proof.
+
+        Provider subscription, signed callback and delivery are separate proofs.
+        """
+        adapter = await self._whatsapp_operator_adapter()
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Expected WhatsApp connection revision required")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "whatsapp-cloud"
+        ):
+            raise PermissionError("WhatsApp connection unavailable for activation")
+        if connection.enabled or connection.revision != expected_revision:
+            raise ChannelActivationConflict("WhatsApp connection revision changed")
+        return await self.activation.activate(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan, adapter=adapter,
+            settings={"private_text_only": True},
+            expected_revision=expected_revision,
+        )
+
+    async def deactivate_whatsapp_connection(
+        self, *, tenant_id: str, connection_id: str, user_id: str,
+        session_id: str, authorized_plan: AuthorizedExecutionPlan,
+        expected_revision: int,
+    ):
+        """Disable durably before stopping transport, with an exact revision."""
+        adapter = await self._whatsapp_operator_adapter()
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Expected WhatsApp connection revision required")
+        connection = await self.repository.get_connection(
+            tenant_id=tenant_id, connection_id=connection_id,
+        )
+        if (
+            connection is None or connection.tenant_id != tenant_id
+            or connection.connection_id != connection_id
+            or connection.installation_id != "whatsapp-cloud"
+        ):
+            raise PermissionError("WhatsApp connection unavailable for deactivation")
+        if not connection.enabled or connection.revision != expected_revision:
+            raise ChannelActivationConflict("WhatsApp connection revision changed")
+        return await self.activation.deactivate(
+            tenant_id=tenant_id, connection_id=connection_id,
+            user_id=user_id, session_id=session_id,
+            authorized_plan=authorized_plan, adapter=adapter,
+            expected_revision=expected_revision,
+        )
 
     async def activate_telegram_connection(
         self, *, tenant_id: str, connection_id: str, user_id: str,
@@ -1407,6 +1619,7 @@ class ChannelHostServices:
         self._initialized = False
         self.ingress = None
         self.activation = None
+        self.linking = None
         worker = self.worker
         self.worker = None
         # A failed or cancelled worker join must not skip shutting down the

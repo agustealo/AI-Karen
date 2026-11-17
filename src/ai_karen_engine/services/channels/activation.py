@@ -96,7 +96,7 @@ class ChannelActivationService:
             str(getattr(role, "value", role))
             for role in (catalog.rbac.allowed_roles or ())
         }
-        if action != "channel.consent" and (
+        if action not in {"channel.consent", "channel.link"} and (
             not declared_roles or not principal_roles.intersection(declared_roles)
         ):
             raise ChannelActivationDenied("Operator role is not permitted by channel manifest")
@@ -127,6 +127,7 @@ class ChannelActivationService:
         if action not in {
             "channel.send", "channel.recover", "channel.provision",
             "channel.activate", "channel.deactivate", "channel.consent",
+            "channel.link",
             "channel.inspect", "channel.webhook.register",
             "channel.status_prune",
         }:
@@ -160,7 +161,7 @@ class ChannelActivationService:
             str(getattr(role, "value", role))
             for role in (catalog.rbac.allowed_roles or ())
         }
-        if action != "channel.consent" and not roles.intersection(catalog_roles):
+        if action not in {"channel.consent", "channel.link"} and not roles.intersection(catalog_roles):
             raise ChannelActivationDenied("Channel manifest denies operator role")
         granted = get_rbac_manager().get_user_permissions({
             "user_id": user_id, "tenant_id": tenant_id,
@@ -264,13 +265,21 @@ class ChannelActivationService:
         authorized_plan: AuthorizedExecutionPlan,
         adapter: ChannelAdapter,
         settings: Mapping[str, Any],
+        expected_revision: int | None = None,
     ) -> ChannelConnection:
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ChannelActivationDenied("Valid expected revision required")
         async with self._lock:
             connection = await self._repository.get_connection(
                 tenant_id=tenant_id, connection_id=connection_id,
             )
-            if connection is None or connection.enabled:
-                raise ChannelActivationDenied("Channel connection is absent or already active")
+            if (
+                connection is None or connection.enabled
+                or (expected_revision is not None and connection.revision != expected_revision)
+            ):
+                raise ChannelActivationDenied("Channel connection is absent, changed, or already active")
             await self._authorize(
                 tenant_id=tenant_id, user_id=user_id, session_id=session_id,
                 installation_id=connection.installation_id,
@@ -341,13 +350,21 @@ class ChannelActivationService:
         user_id: str, session_id: str,
         authorized_plan: AuthorizedExecutionPlan,
         adapter: ChannelAdapter,
+        expected_revision: int | None = None,
     ) -> ChannelConnection:
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 1
+        ):
+            raise ChannelActivationDenied("Valid expected revision required")
         async with self._lock:
             connection = await self._repository.get_connection(
                 tenant_id=tenant_id, connection_id=connection_id,
             )
-            if connection is None or not connection.enabled:
-                raise ChannelActivationDenied("Channel connection is absent or inactive")
+            if (
+                connection is None or not connection.enabled
+                or (expected_revision is not None and connection.revision != expected_revision)
+            ):
+                raise ChannelActivationDenied("Channel connection is absent, changed, or inactive")
             await self._authorize(
                 tenant_id=tenant_id, user_id=user_id, session_id=session_id,
                 installation_id=connection.installation_id,

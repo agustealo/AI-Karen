@@ -35,6 +35,8 @@ from ai_karen_engine.api_routes.chat.conversation import router as conversation_
 from ai_karen_engine.api_routes.chat.copilot import router as copilot_router
 from ai_karen_engine.api_routes.chat.runtime import router as chat_runtime_router
 from ai_karen_engine.api_routes.chat.websocket import router as websocket_router
+from ai_karen_engine.api_routes.channels.operator import router as whatsapp_operator_router
+from ai_karen_engine.api_routes.channels.identity import router as whatsapp_identity_router
 from ai_karen_engine.api_routes.channels.personal_consent import router as personal_channel_consent_router
 from ai_karen_engine.api_routes.channels.retention import router as channel_status_retention_router
 from ai_karen_engine.api_routes.channels.webhooks import (
@@ -125,6 +127,8 @@ CORE_ROUTERS: tuple[RouterSpec, ...] = (
     RouterSpec(auth_router, "/api", ("authentication",)),
     RouterSpec(native_channel_webhook_router, tags=("communication-channels",)),
     RouterSpec(personal_channel_consent_router, tags=("communication-channels",)),
+    RouterSpec(whatsapp_operator_router, tags=("communication-channels",)),
+    RouterSpec(whatsapp_identity_router, tags=("communication-channels",)),
     RouterSpec(channel_status_retention_router, tags=("communication-channels",)),
     RouterSpec(events_router, "/api/events", ("events",)),
     RouterSpec(websocket_router, "/api/ws", ("websocket",)),

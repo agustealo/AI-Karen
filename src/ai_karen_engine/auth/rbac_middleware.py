@@ -51,6 +51,9 @@ class Permission(str, Enum):
     # Independent review of frozen verification-policy decisions. Unlike
     # TRAINING_EXECUTE, this never grants model or live-policy activation.
     VERIFICATION_REVIEW = "intelligence.ml.verification_review"
+    # Scoped human acknowledgment of a canonical held-out oracle cohort.
+    # Does not grant training, model promotion or capability execution.
+    BENCHMARK_ORACLE_REVIEW = "intelligence.ml.benchmark_oracle_review"
 
     TRAINING_DATA_READ = "training_data:read"
     TRAINING_DATA_WRITE = "training_data:write"
@@ -137,6 +140,7 @@ class Permission(str, Enum):
     # Channel transport effects. Central RBAC owns entitlement resolution;
     # transport plugins, prompts and API request bodies cannot grant these.
     CHANNEL_CONSENT = "channel.consent"
+    CHANNEL_LINK = "channel.link"
     CHANNEL_PROVISION = "channel.provision"
     CHANNEL_ACTIVATE = "channel.activate"
     CHANNEL_DEACTIVATE = "channel.deactivate"
@@ -226,6 +230,7 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
             "inherits_from": Role.READONLY.value,
             "permissions": [
                 Permission.CHANNEL_CONSENT.value,
+                Permission.CHANNEL_LINK.value,
                 Permission.BROWSER.value,
                 Permission.DATA_READ.value,
                 Permission.PLANNER_READ.value,
