@@ -194,3 +194,79 @@ def test_real_canonical_tenant_jsonl_importer_roundtrip_is_concordant(tmp_path):
     assert not proof.independently_attested_input_bytes
     assert not proof.actual_model_artifact_bound
     assert not proof.training_authorized
+
+
+
+@pytest.mark.parametrize("mutation", [
+    "huge_feature_string", "huge_feature_name", "huge_target",
+    "huge_feature_version", "too_many_features", "huge_integer",
+])
+def test_oversized_supplied_content_rejected_before_hmac_serialization(
+    monkeypatch, mutation,
+):
+    """A small valid receipt must not cause unbounded sample JSON work."""
+    from ai_karen_engine.core.intelligence.ml.training import (
+        consumption_evidence,
+    )
+
+    source = rows()
+    if mutation == "huge_feature_string":
+        source[0].features["confidence"] = "x" * (16 * 1024 * 1024)
+    elif mutation == "huge_feature_name":
+        source[0].features["y" * (16 * 1024 * 1024)] = 1
+    elif mutation == "huge_target":
+        source[0] = replace(source[0], target="z" * (2 * 1024 * 1024))
+    elif mutation == "huge_feature_version":
+        source[0] = replace(
+            source[0], feature_version="v" * (2 * 1024 * 1024),
+        )
+    elif mutation == "too_many_features":
+        source[0].features = {str(i): i for i in range(129)}
+    else:
+        source[0].features["confidence"] = 1 << 10000
+
+    def disallow_hmac_serialization(*args, **kwargs):
+        raise AssertionError("unbounded input reached HMAC serialization")
+
+    monkeypatch.setattr(
+        consumption_evidence, "_members", disallow_hmac_serialization,
+    )
+    assert inspect(encoded=seal(), examples=source) is None
+
+
+def test_aggregate_snapshot_budget_enforced_before_commitment_build(
+    monkeypatch,
+):
+    from ai_karen_engine.core.intelligence.ml.training import (
+        consumption_evidence,
+    )
+
+    feature_names = {
+        f"{index:04d}_" + "k" * 123: index
+        for index in range(128)
+    }
+    many = [
+        TopologyTrainingExample(
+            example_id=f"snapshot-row-{index}",
+            feature_version="v1",
+            features=feature_names,
+            target="class-a" if index < 30 else "class-b",
+        )
+        for index in range(60)
+    ]
+    encoded = create_sklearn_fit_observation(
+        tenant_id=_TENANT, job_id=_JOB, model_id=_MODEL,
+        model_version=_VERSION, dataset_version=_DATASET,
+        feature_version="v1", seed=7, examples=many,
+        train_indices=list(range(45)),
+        holdout_indices=list(range(45, 60)),
+        key_id=_KEY_ID, key=_KEY,
+    )
+
+    def disallow_hmac_serialization(*args, **kwargs):
+        raise AssertionError("oversized aggregate reached HMAC serialization")
+
+    monkeypatch.setattr(
+        consumption_evidence, "_members", disallow_hmac_serialization,
+    )
+    assert inspect(encoded=encoded, examples=many) is None
