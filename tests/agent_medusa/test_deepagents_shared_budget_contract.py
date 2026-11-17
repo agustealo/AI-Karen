@@ -166,6 +166,43 @@ async def test_medusa_refuses_invalid_shared_meter_before_any_planning(invalid):
     planner.create_plan.assert_not_awaited()
 
 
+def test_empty_root_allowlists_cannot_register_new_child_permissions():
+    request, root, meter, context = _request(allowed_agents=[])
+    assert root.allowed_tools == []
+    assert root.allowed_plugins == []
+    assert root.allowed_agents == []
+    for attribute, value in (
+        ("allowed_tools", ["unapproved-tool"]),
+        ("allowed_plugins", ["unapproved-plugin"]),
+        ("allowed_agents", ["unapproved-agent"]),
+    ):
+        forged = replace(root, **{attribute: value})
+        with pytest.raises(
+            PermissionError, match="runtime_model_execution_authority_invalid",
+        ):
+            context.register_runtime_model_child_plan(forged, meter)
+        assert not context.is_runtime_model_plan_authorized(forged, meter)
+    assert meter.model_calls == 0
+    assert request.runtime_budget_meter is meter
+
+
+@pytest.mark.asyncio
+async def test_empty_root_allowlists_reject_serialized_handoff_widening():
+    request, root, meter, context = _request(allowed_agents=[])
+    request.authorized_plan = asdict(
+        replace(root, allowed_tools=["unapproved-tool"]),
+    )
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.planner = SimpleNamespace(create_plan=AsyncMock())
+    with pytest.raises(
+        PermissionError, match="medusa_shared_budget_authority_invalid",
+    ):
+        await coordinator._handle_request(request)
+    coordinator.planner.create_plan.assert_not_awaited()
+    assert context.original_runtime_model_plan(meter) is root
+    assert meter.model_calls == 0
+
+
 @pytest.mark.asyncio
 async def test_shared_medusa_restricts_serialized_handoff_to_one_specialist():
     request, root, meter, context = _request(
