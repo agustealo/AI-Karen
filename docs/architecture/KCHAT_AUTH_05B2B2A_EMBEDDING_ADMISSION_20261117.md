@@ -73,20 +73,39 @@ provenance data become dictionaries in the transfer payload. An empty root
 allowlist retains its existing unspecified semantics; nonempty root lists
 cannot be widened by specialist child registration.
 
-### Runtime request-lineage replay containment
+### RuntimePolicy-issued model-execution provenance
 
-The original plan, meter and authenticated `ChatExecutionContext` are bound
-by **request identity**, not by a copyable budget object. The existing Core
-context owner maintains an ephemeral, weak-value mapping keyed by the real
-user/tenant/session/request/correlation/policy/execution identifiers. An
-independent `dataclasses.replace` of the plan, budget and context with the
-same runtime identity cannot register a second model budget or re-execute an
-embedding after the original meter is exhausted. Original execution budgets
-remain slotted and serialize only their declared, bounded policy fields.
+A fresh request/execution ID is **not** proof of permission. The former weak
+registry of context IDs was inadequate: callers could change the execution ID,
+copy the plan and budget, and reset the model quota. It has been removed.
 
-This registry is an in-process lineage defense, **not a policy-decision issuer**.
-Only existing ChatRuntime and a validated standalone Medusa handoff may
-register an authenticated plan/meter. It does not certify arbitrary in-process
-Python execution as a security boundary or replace ingress RBAC checks.
-The full 05B2B authorization migration and host-level network containment
-remain outstanding.
+The *existing* `RuntimePolicyEnforcer.evaluate` retains the exact allowed
+`PolicyDecision` object it actually returned. `RuntimeDecisionPipeline.decide`
+can attach that identity to the **original authenticated context** only after
+a successful, scope-matching policy evaluation. The policy object is bound to
+that context once. The identity proof is private runtime state, not a
+serialized or caller-provided ID, signing key, SDK option or UI permission.
+
+On both direct and stream chat paths, original plan/meter binding requires
+that issuer proof, the same original policy decision, request principal,
+tenant/session/correlation scope, and an allowed model-call budget no greater
+than the policy decision permits. The existing Core admission gate then
+enforces exact plan and meter object identities and accounts all accepted
+model attempts against the single original meter. `dataclasses.replace`
+of a context or policy decision does not carry private issuer provenance;
+copying or renaming the plan and budget cannot register a new allowance.
+
+The existing Medusa handoff continues to reconstruct a serialized plan only
+for *comparison*, then uses the exact original authorized plan and meter.
+Authenticated standalone Medusa execution requires the same verified
+RuntimePolicy-issued decision and may establish its own first meter only
+against its original policy-bound context; standalone caller-supplied plan
+dictionaries alone do not grant model execution.
+
+**Not yet certified:** this is a source candidate with an updated
+real-evaluator regression plus the exact-head CI and independent security
+review gates outstanding. Its issuer provenance does not replace the ingress
+principal, authorize arbitrary untrusted in-process Python code, migrate
+the remaining raw model invocation paths, or constitute host-level egress
+attestation. The separate mandatory governed chat-generation and fallback
+migration remains open.
