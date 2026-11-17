@@ -76,7 +76,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.admin = true;
   getImpl();
-  mocks.post.mockImplementation(async (path: string) => {
+  mocks.post.mockImplementation(async (path: string, payload?: { download_method?: string }) => {
     if (path === '/api/models/download/validate') {
       return {
         allowed: true,
@@ -90,6 +90,7 @@ beforeEach(() => {
       return {
         job_id: 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335',
         status: 'queued',
+        download_method: payload?.download_method || 'hf_hub',
       };
     }
     throw new Error('Unexpected download route: ' + path);
