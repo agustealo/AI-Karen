@@ -332,3 +332,67 @@ def test_canonical_listing_unchanged_after_duplicate_cleanup(tmp_path):
     assert {x["sha256"] for x in result} == {
         first["sha256"], second["sha256"],
     }
+
+
+
+def test_ancestor_symlink_swap_after_resolver_is_rejected(tmp_path, monkeypatch):
+    """Reproduces prior P2: full-path open followed a substituted root."""
+    root, _, raw, receipt = publish(tmp_path)
+    external = tmp_path / "external-storage"
+    external_tenant = tenant_dataset_directory(external, _TENANT)
+    external_tenant.mkdir(parents=True)
+    (external_tenant / (_VERSION + ".jsonl")).write_bytes(raw)
+    archived = tmp_path / "archived-original"
+    original_resolve = dataset_import.tenant_dataset_directory
+    swapped = False
+
+    def swap_after_guard(path, tenant_id):
+        nonlocal swapped
+        answer = original_resolve(path, tenant_id)
+        if not swapped:
+            swapped = True
+            root.rename(archived)
+            root.symlink_to(external, target_is_directory=True)
+        return answer
+
+    monkeypatch.setattr(
+        dataset_import, "tenant_dataset_directory", swap_after_guard,
+    )
+    with pytest.raises(DatasetImportError):
+        snapshot(root, receipt["sha256"])
+    assert swapped
+
+
+def test_ancestor_swap_between_nofollow_openat_calls_is_rejected(
+    tmp_path, monkeypatch,
+):
+    """Every directory component must be opened relative to a pinned fd."""
+    root, _, raw, receipt = publish(tmp_path)
+    external = tmp_path / "outside-tmp-root"
+    external_tenant = tenant_dataset_directory(external, _TENANT)
+    external_tenant.mkdir(parents=True)
+    (external_tenant / (_VERSION + ".jsonl")).write_bytes(raw)
+    archived = tmp_path / "old-canonical-datasets"
+    original_open = dataset_import.os.open
+    swapped = False
+
+    def swap_before_root_component(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if path == root.name and kwargs.get("dir_fd") is not None and not swapped:
+            swapped = True
+            root.rename(archived)
+            root.symlink_to(external, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(dataset_import.os, "open", swap_before_root_component)
+    with pytest.raises(DatasetImportError):
+        snapshot(root, receipt["sha256"])
+    assert swapped
+
+
+def test_relative_dataset_root_fails_closed(tmp_path, monkeypatch):
+    root, _, _, receipt = publish(tmp_path)
+    relative = Path(os.path.relpath(root, start=tmp_path))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(DatasetImportError, match="contract invalid"):
+        snapshot(relative, receipt["sha256"])
