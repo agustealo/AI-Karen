@@ -541,7 +541,9 @@ class GovernedCuratedOracleReviewEvidence:
             outcome_ids=[withdrawal_id],
         )
         self._require_same_subject(subject, subject_authority)
-        if withdrawn:
+        # An empty exact-scoped list proves absence. A missing/malformed
+        # store response is *not* evidence that withdrawal never occurred.
+        if not isinstance(withdrawn, list) or withdrawn:
             return None
         if self._snapshot(model_id=model_id, receipt_id=receipt_id) != snapshot:
             return None

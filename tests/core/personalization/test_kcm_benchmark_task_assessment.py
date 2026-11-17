@@ -1601,3 +1601,52 @@ def test_canonical_store_fences_malformed_reviewer_withdrawal_receipts():
     bad["metadata"]["execution_authorized"] = True
     with pytest.raises(OutcomeStoreError):
         PostgresOutcomeStore._validated_identity(bad)
+
+
+@pytest.mark.asyncio
+async def test_unknown_withdrawal_lookup_never_returns_active_review(tmp_path):
+    from ai_karen_engine.core.intelligence.ml.evaluation.reviewed_oracle_evidence import (
+        GovernedCuratedOracleReviewEvidence,
+    )
+
+    manifest, receipt, original_store = await _actual_runner_scoped_review_fixture(
+        tmp_path,
+    )
+    issuer = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=original_store,
+    )
+    await issuer.record_review(
+        subject=identity(), reviewer=_authorized_curated_reviewer(),
+        model_id=manifest.model_id, receipt_id=receipt,
+    )
+    assert await issuer.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is not None
+
+    class UnreliableWithdrawalRead(InMemoryOutcomeStore):
+        def list_scoped_outcomes_by_ids(
+            self, tenant_id, *, user_id, outcome_ids, source,
+        ):
+            if (
+                len(outcome_ids) == 1
+                and outcome_ids[0].startswith("kcm_curated_withdrawal_")
+            ):
+                # A partial/incorrect ledger adapter must not manufacture a
+                # favorable reviewer acknowledgment from an unknown read.
+                return None
+            return super().list_scoped_outcomes_by_ids(
+                tenant_id, user_id=user_id, outcome_ids=outcome_ids,
+                source=source,
+            )
+
+    unreadable = UnreliableWithdrawalRead()
+    for row in original_store._records:
+        unreadable.save_outcome(row)
+    consumer = GovernedCuratedOracleReviewEvidence(
+        tenant_id=TENANT, subject_user_id=USER, registry_dir=tmp_path,
+        store=unreadable,
+    )
+    assert await consumer.inspect_review(
+        subject=identity(), model_id=manifest.model_id, receipt_id=receipt,
+    ) is None
