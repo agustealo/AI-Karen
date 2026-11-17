@@ -11,6 +11,28 @@ const SHA = /^[0-9a-f]{40}$/i;
 
 type Target = Readonly<{ origin: string; revision: string }>;
 
+function isNonPublicHost(host: string): boolean {
+  const name = host.toLowerCase().replace(/\.$/, '');
+  if (name === 'localhost' || name.endsWith('.localhost') ||
+      name.endsWith('.local') || name.endsWith('.internal') ||
+      name === '[::1]' || name === '[::]') {
+    return true;
+  }
+
+  // The HTTP probe must never leak a Vault verify token to loopback, link-local
+  // or RFC1918 infrastructure even if its URL happens to use TLS.
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(name);
+  if (!ipv4) return false;
+  const octets = ipv4.slice(1).map(Number);
+  const [first, second] = octets;
+  return octets.some((part) => part > 255) ||
+    first === 0 || first === 10 || first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168);
+}
+
 export function requireWhatsAppAcceptanceTarget(): Target {
   const configured = process.env.KAREN_BASE_URL;
   const revision = process.env.KAREN_WHATSAPP_DEPLOYMENT_REVISION;
@@ -28,7 +50,7 @@ export function requireWhatsAppAcceptanceTarget(): Target {
 
   if (
     url.protocol !== 'https:' || url.port !== '' ||
-    !url.hostname || url.hostname === 'localhost' ||
+    !url.hostname || isNonPublicHost(url.hostname) ||
     url.username !== '' || url.password !== '' ||
     url.pathname !== '/' || url.search !== '' || url.hash !== ''
   ) {
