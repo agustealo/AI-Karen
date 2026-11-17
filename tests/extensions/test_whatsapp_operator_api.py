@@ -43,6 +43,11 @@ def operator_api():
     )
     host = object.__new__(ChannelHostServices)
     host.activation = SimpleNamespace(issue_action_plan=AsyncMock(return_value=object()))
+    host.list_whatsapp_operator_connections = AsyncMock(
+        return_value=[
+            {"connection_id": CONNECTION, "connection_revision": 1, "enabled": False}
+        ]
+    )
     host.provision_whatsapp_connection = AsyncMock(
         return_value=_connection(enabled=False, revision=1)
     )
@@ -313,3 +318,94 @@ async def test_host_never_executes_stale_or_foreign_whatsapp_connection():
     with pytest.raises(ChannelActivationConflict):
         await host.deactivate_whatsapp_connection(**{**args, "expected_revision": 2})
     host.activation.deactivate.assert_not_awaited()
+
+
+def test_authenticated_operator_inventory_uses_fresh_inspect_policy(operator_api):
+    client, host, _ = operator_api
+    response = client.get("/api/channels/operator/whatsapp/connections")
+    assert response.status_code == 200
+    assert response.json() == {
+        "connections": [{
+            "connection_id": CONNECTION, "connection_revision": 1,
+            "enabled": False,
+        }],
+    }
+    plan_kwargs = host.activation.issue_action_plan.await_args.kwargs
+    assert plan_kwargs["action"] == "channel.inspect"
+    assert plan_kwargs["tenant_id"] == TENANT
+    assert plan_kwargs["user_id"] == USER
+    assert host.list_whatsapp_operator_connections.await_args.kwargs == {
+        "tenant_id": TENANT,
+        "user_id": USER,
+        "session_id": plan_kwargs["session_id"],
+        "authorized_plan": host.activation.issue_action_plan.return_value,
+    }
+    assert "credential_handle" not in response.text
+    assert "provider_account_id" not in response.text
+
+
+def test_operator_inventory_denies_unverified_actor_without_database_read(operator_api):
+    client, host, user = operator_api
+    user.is_verified = False
+    response = client.get("/api/channels/operator/whatsapp/connections")
+    assert response.status_code == 403
+    host.activation.issue_action_plan.assert_not_awaited()
+    host.list_whatsapp_operator_connections.assert_not_awaited()
+
+
+def test_operator_inventory_policy_denial_does_not_call_host_listing(operator_api):
+    client, host, _ = operator_api
+    host.activation.issue_action_plan.side_effect = PermissionError("not operator")
+    response = client.get("/api/channels/operator/whatsapp/connections")
+    assert response.status_code == 403
+    host.list_whatsapp_operator_connections.assert_not_awaited()
+
+
+def test_operator_inventory_fails_closed_when_host_returns_secrets(operator_api):
+    client, host, _ = operator_api
+    host.list_whatsapp_operator_connections.return_value = [{
+        "connection_id": CONNECTION, "connection_revision": 1,
+        "enabled": False, "credential_handle": "vault://never-serialize",
+    }]
+    response = client.get("/api/channels/operator/whatsapp/connections")
+    assert response.status_code == 503
+    assert "vault://" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_host_inventory_gate_must_authorize_before_repository_read():
+    adapter = object()
+    host = object.__new__(ChannelHostServices)
+    host._initialized = True
+    host._closed = False
+    host._installed = {"whatsapp-cloud": adapter}
+    host.kernel = SimpleNamespace(
+        get_channel_activation_manifest=lambda _name: object(),
+        is_canonical_channel_adapter=lambda name, instance: (
+            name == "whatsapp-cloud" and instance is adapter
+        ),
+    )
+    host.activation = SimpleNamespace(_authorize=AsyncMock())
+    host.repository = SimpleNamespace(
+        list_whatsapp_operator_connections=AsyncMock(return_value=[])
+    )
+    plan = object()
+    result = await host.list_whatsapp_operator_connections(
+        tenant_id=TENANT, user_id=USER, session_id="scoped-session",
+        authorized_plan=plan,
+    )
+    assert result == []
+    host.activation._authorize.assert_awaited_once_with(
+        tenant_id=TENANT, user_id=USER, session_id="scoped-session",
+        installation_id="whatsapp-cloud", action="channel.inspect", plan=plan,
+    )
+    host.repository.list_whatsapp_operator_connections.assert_awaited_once_with(
+        tenant_id=TENANT,
+    )
+    host.activation._authorize.side_effect = PermissionError("rbac")
+    with pytest.raises(PermissionError):
+        await host.list_whatsapp_operator_connections(
+            tenant_id=TENANT, user_id=USER,
+            session_id="scoped-session", authorized_plan=plan,
+        )
+    assert host.repository.list_whatsapp_operator_connections.await_count == 1
