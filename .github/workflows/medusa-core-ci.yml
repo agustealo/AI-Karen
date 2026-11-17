@@ -240,6 +240,7 @@ jobs:
         run: |
           python -m pytest \
             tests/agent_medusa/test_deepagents_research_harness.py \
+            tests/agent_medusa/test_deepagents_shared_budget_contract.py \
             tests/agent_medusa/test_deepagents_factory_ownership.py \
             tests/agent_medusa/test_deepagents_checkpoint_saver.py \
             tests/core/runtime/test_deepagents_primary_routing.py \
