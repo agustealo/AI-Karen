@@ -110,6 +110,20 @@ async def test_chat_runtime_records_durable_topology_decision_lineage() -> None:
     assert strategy.ope_ineligible_reason == OpeEligibilityReason.MISSING_PROPENSITY.value
     assert "verification_policy_snapshot" not in strategy.metadata
     assert strategy.metadata["selection_source"] == "runtime_authorized_plan"
+    # B2C3B: separately persisted strategy observation is frozen by the
+    # canonical runtime while preserving the original topology return ID.
+    link = stored_trajectory.metadata["selected_strategy_decision_observation_v1"]
+    assert link == {
+        "schema_version": "selected_strategy_decision_observation_v1",
+        "decision_observation_id": strategy.decision_observation_id,
+        "trajectory_id": trajectory.trajectory_id,
+        "feature_snapshot_id": snapshots[0].feature_snapshot_id,
+        "policy_decision_id": "policy_live",
+        "policy_version": "v7",
+        "selected_action": "verify_then_respond",
+        "ope_eligible": False,
+    }
+    assert observation_id != link["decision_observation_id"]
     assert observation.chosen_action == ExecutionTopology.REASONING.value
     assert observation.ope_eligible is False
     assert (
