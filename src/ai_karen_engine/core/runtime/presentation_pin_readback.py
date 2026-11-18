@@ -64,6 +64,10 @@ class PresentationPinReadback:
     async def list_authorized(
         self, *, context: ChatExecutionContext
     ) -> tuple[ReauthorizedPresentationPin, ...]:
+        # The IDs carried by ChatExecutionContext alone are not a grant. The
+        # canonical ingress principal must still match both scopes and remain
+        # active and verified before ANY persisted pin reference is read.
+        context.require_authenticated_user()
         if not context.tenant_id or not context.user_id:
             raise PermissionError("Authenticated pin context required")
 
