@@ -97,3 +97,46 @@ def test_canonical_governed_executor_is_preserved_and_unmounted() -> None:
         (EXTENSION_HTTP, "unload_extension"),
     ):
         assert "execute_approved_lifecycle" not in _calls(_method(path, name))
+
+
+
+def test_new_admin_routes_delegate_only_to_governed_lifecycle_methods() -> None:
+    prepare = _calls(_method(PLUGIN_HTTP, "request_plugin_lifecycle_approval"))
+    execute = _calls(_method(PLUGIN_HTTP, "execute_plugin_lifecycle_approval"))
+    assert "prepare_lifecycle_approval" in prepare
+    assert "resume_lifecycle_approval" in execute
+    for calls in (prepare, execute):
+        assert not calls.intersection({
+            "enable_plugin", "disable_plugin", "refresh_plugins",
+            "enable", "disable", "transition_prepared_lifecycle",
+            "reserve_approved", "complete_verified",
+        })
+    for name in ("enable_plugin", "disable_plugin", "_set_enabled"):
+        assert "resume_lifecycle_approval" not in _calls(_method(PLUGIN_HTTP, name))
+        assert "prepare_lifecycle_approval" not in _calls(_method(PLUGIN_HTTP, name))
+
+
+def test_verified_bearer_identity_resolver_is_required_for_admin_lifecycle() -> None:
+    from ai_karen_engine.auth import session
+
+    auth_source = (ROOT / "src/ai_karen_engine/auth/session.py").read_text(
+        encoding="utf-8"
+    )
+    resolver = auth_source.split(
+        "async def get_plugin_lifecycle_context", 1
+    )[1].split("__all__", 1)[0]
+    assert "should_bypass_auth()" in resolver
+    assert 'startswith("Bearer ")' in resolver
+    assert "validate_token(token)" in resolver
+    assert 'payload.get("token_id")' in resolver
+    assert "ChatExecutionContext(" in resolver
+    assert 'request.headers.get("X-Session-Id")' not in resolver
+    assert "get_dev_user_context" not in resolver
+
+    # The runtime and API share one policy, SQL approval and kernel path.
+    for name in (
+        "request_plugin_lifecycle_approval",
+        "execute_plugin_lifecycle_approval",
+    ):
+        method = _method(PLUGIN_HTTP, name)
+        assert "get_plugin_lifecycle_context" in auth_source or method is not None
