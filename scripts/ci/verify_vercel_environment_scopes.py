@@ -44,12 +44,41 @@ BACKEND_ONLY_KEYS = frozenset({
 })
 
 
+# The frontend may have presentation settings and exactly one backend origin.
+# All other names require an explicit, reviewed frontend ownership decision.
+# In particular, unknown/new backend settings cannot silently become admissible.
+FRONTEND_ENV_KEYS = frozenset({
+    "APP_URL",
+    "COPILOTKIT_TELEMETRY_DISABLED",
+    "HOSTNAME",
+    "IS_DOCKER",
+    "KAREN_APP_URL",
+    "KAREN_BACKEND_URL",
+    "KAREN_DEPLOYED_COMMIT_SHA",
+    "KAREN_DOCKER",
+    "NEXT_TELEMETRY_DISABLED",
+    "NODE_ENV",
+})
+
+# Public names are not inherently safe: credentials must never be promoted
+# into browser-exposed NEXT_PUBLIC_* configuration.
+_UNSAFE_NAME_PART = re.compile(
+    r"(?:^|_)(?:AUTH|CREDENTIAL|DATABASE|DB|HF|KEY|MODEL|PASSWORD|"
+    r"POSTGRES|PRIVATE|REDIS|SECRET|SERVICE_ROLE|SUPABASE|TOKEN|"
+    r"VLLM)(?:_|$)"
+)
+
+
 def _is_backend_owned(name: str) -> bool:
-    return (
-        name in BACKEND_ONLY_KEYS
-        or name.startswith("SUPABASE_SERVICE_ROLE_")
-        or name.endswith("_DATABASE_PASSWORD")
-    )
+    if name in BACKEND_ONLY_KEYS or _UNSAFE_NAME_PART.search(name):
+        return True
+    if name in FRONTEND_ENV_KEYS:
+        return False
+    # Public presentation settings are allowed only when their key does not
+    # imply sensitive backend ownership; they are publicly bundle-visible.
+    if name.startswith("NEXT_PUBLIC_"):
+        return False
+    return True
 
 
 def _validate_entries(entries: list[object]) -> tuple[int, tuple[str, ...]]:
@@ -137,6 +166,12 @@ def verify_vercel_frontend_environment(
             raise RevisionVerificationError("Malformed Vercel environment metadata") from exc
         if not isinstance(document, dict) or not isinstance(document.get("envs"), list):
             raise RevisionVerificationError("Malformed Vercel environment metadata")
+        # A partial inventory is not evidence that production credentials
+        # were removed. Some Vercel response variants surface an explicit
+        # hidden-production count; this must be zero when present.
+        hidden = document.get("hiddenProductionEnvCount", 0)
+        if isinstance(hidden, bool) or not isinstance(hidden, int) or hidden != 0:
+            raise RevisionVerificationError("Vercel environment inventory incomplete")
         page = document["envs"]
         if not page or len(entries) + len(page) > MAX_VARIABLES:
             raise RevisionVerificationError("Vercel environment inventory incomplete")
