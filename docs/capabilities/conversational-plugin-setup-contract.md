@@ -701,6 +701,55 @@ See `docs/architecture/KPLUG_CONV_02C3B3A_MUTATION_INGRESS_AUDIT_20261117.md`
 for exact ingress classifications, remaining owners, acceptance tests and
 B3B/B3C continuation.
 
+## Durable lifecycle consent preparation (KPLUG-CONV-02C3B3B1)
+
+A new **backend-only** `PluginService.prepare_lifecycle_approval(context,
+plugin_id, action)` method requests consent without executing the plugin.
+It uses `ChatExecutionContext.require_authenticated_user` and canonical
+`ADMIN_PLUGINS_MANAGE` RBAC before discovering installation state. It then
+obtains a SHA-256 manifest and terminal state through
+`PluginKernel.observe_lifecycle_for_finalization`, registers or compares
+the global PostgreSQL observation without overwriting drift, and constructs
+the immutable action, installation, revision, actor, tenant, session and
+conversation `PluginLifecycleApprovalScope` from **host-verified data**.
+Malformed IDs, special modalities, active executions, inconsistent markers,
+missing trusted session, unresolved revisions and database outages fail
+closed before a consent receipt can be created.
+
+`RuntimePolicyEnforcer.authorize_plugin_lifecycle_preflight` shares the
+same identity, RBAC, runtime-level and state/revision checks used by its
+post-approval authorization. It returns `requires_human_gate=true` and
+`risk_level=high` but **zero `allowed_capabilities`**: no
+`ActionExecutionGate` can turn preparation into a mutation. On fresh
+policy approval, `ApprovalService.create_for_request` persists a standard,
+fingerprinted, actor/tenant/conversation-bound pending human approval with
+the original policy decision ID and the exact canonical scope. This
+administrative consent is represented by an empty chat message list,
+not a fabricated chat turn. The result is explicitly `pending` with
+`execution_performed=false` and a bounded scope/expiry for later review.
+
+The existing `ApprovalService.decide` is the sole human decision authority.
+The previously merged `PluginService.execute_approved_lifecycle` remains
+the only general plugin host executor, re-reading approved actor-scoped
+receipt, re-authorizing current policy, reserving the one-use PostgreSQL
+revision, executing under the PG fence and committing the verified receipt.
+Generic `plugin.lifecycle.*` policy requests, ordinary generic approval
+resume and all legacy admin/Plugin Store activation routes **remain
+unavailable**, with their explicit B3A approval-required denials. No
+frontend or HTTP endpoint is added by this slice.
+
+Tests cover non-executable preapproval, missing/forged identity and
+role claims, manifest/revision/disposition drift, and an actual restricted-
+role PostgreSQL pending -> approved -> terminal CAS -> consumed sequence.
+This is not proof of a future browser or multi-host installation workflow.
+
+**B3B2 next:** one trusted session-bound HTTP/UX handoff that does not accept
+request-supplied policy, scope, cookie-derived phantom sessions or approval
+records. UI must display pending/approved/rejected/expired/unknown/committed
+truth and allow human confirmation. Preserve the existing scoped approval
+repository, then migrate old HTTP activation routes into that backend owner
+only after independent browser and end-to-end tests.
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and

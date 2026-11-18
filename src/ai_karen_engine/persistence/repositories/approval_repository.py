@@ -203,12 +203,12 @@ class SqlApprovalRepository:
                 text(
                     """
                     UPDATE public.runtime_approval_requests
-                    SET status = :decision,
+                    SET status = CAST(:decision AS varchar(16)),
                         decision_reason = :reason,
                         decided_by = CAST(:decided_by AS uuid),
                         decided_at = now(),
                         request_payload = CASE
-                            WHEN :decision = 'rejected' THEN '{}'::jsonb
+                            WHEN CAST(:decision AS varchar(16)) = 'rejected' THEN '{}'::jsonb
                             ELSE request_payload
                         END,
                         updated_at = now()
