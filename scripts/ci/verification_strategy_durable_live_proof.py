@@ -106,7 +106,11 @@ def verify_persisted_chain(
             "committed_transcript_identity_mismatch",
         )
     require(
-        messages[1].metadata.get("trajectory_id") == trajectory.trajectory_id,
+        messages[1].metadata.get("trajectory_id") == trajectory.trajectory_id
+        and messages[1].metadata.get("actual_provider") == trajectory.actual_provider
+        and messages[1].metadata.get("actual_model") == trajectory.actual_model
+        and messages[1].metadata.get("fallback_level") == 0
+        and messages[1].metadata.get("degraded_mode") is False,
         "committed_transcript_trajectory_mismatch",
     )
 
@@ -124,6 +128,11 @@ def verify_persisted_chain(
         and strategy.feature_snapshot_id == topology.feature_snapshot_id
         and strategy.decision_id == trajectory.policy_decision_id
         and strategy.chosen_action in {"respond_direct", "verify_then_respond"}
+        and topology.chosen_action == trajectory.executed_topology
+        and trajectory.executed_topology == (
+            "direct" if strategy.chosen_action == "respond_direct"
+            else "reasoning"
+        )
         and strategy.eligible_actions == (strategy.chosen_action,)
         and strategy.ope_eligible is False
         and strategy.chosen_probability is None
