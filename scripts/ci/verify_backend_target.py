@@ -53,7 +53,7 @@ def verify(base_url: str) -> None:
         headers = _request_headers(base_url, bypass_secret)
     except RevisionVerificationError:
         raise ValueError(
-            "Expected a clean HTTPS deployment origin and approved protection target"
+            "Expected an HTTPS deployment origin with clean URL and approved protection target"
         ) from None
 
     opener = build_opener(NoRedirects())
