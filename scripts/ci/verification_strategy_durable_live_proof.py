@@ -1,9 +1,9 @@
-"""KCOG-01C1B2C3C: read back one real authenticated, durable strategy outcome.
+"""KCOG C3C/C3D: inspect real authenticated durable strategy lineage.
 
-Run only inside the disposable production first-boot/Ollama CI API container
-after the existing authenticated /api/chat call. This module never performs
-inference, chooses a response strategy, writes learning evidence, or grants OPE.
-It reads the original canonical owners and reports only bounded result codes.
+C3C reads the original authenticated /api/chat records. C3D executes two
+policy-authorized requests inside the disposable production-image CI container.
+Neither path mints learning labels, selects an experimental policy, or grants OPE.
+Only bounded evidence counts and error classes are emitted.
 """
 
 from __future__ import annotations
@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
+import re
 import sys
 import uuid
 from typing import Any
@@ -29,6 +31,31 @@ from ai_karen_engine.persistence.postgres.transactions import transaction_scope
 
 class DurableLineageProofError(RuntimeError):
     """A required durable runtime fact is absent or contradictory."""
+
+
+class _ScopedMemoryFailureTypeCapture(logging.Handler):
+    """Observe only an already-redacted runtime error class inside CI.
+
+    Do not copy message content, exception arguments, principal identifiers,
+    prompt text, or provider outputs into the proof's diagnostics.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.error_type: str | None = None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if (
+            record.name != "ai_karen_engine.core.runtime.chat_runtime"
+            or record.msg != "Memory persistence failed"
+        ):
+            return
+        candidate = getattr(record, "error_type", None)
+        if (
+            isinstance(candidate, str)
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", candidate)
+        ):
+            self.error_type = candidate
 
 
 def require(condition: bool, code: str) -> None:
@@ -444,7 +471,16 @@ async def prove_verified_durable_runtime(
             answer = "".join(fragments)
             response_meta = completion[0].metadata or {}
         else:
-            result = await runtime.execute(request)
+            from ai_karen_engine.core.runtime.chat_runtime import (
+                logger as runtime_logger,
+            )
+
+            memory_failure = _ScopedMemoryFailureTypeCapture()
+            runtime_logger.addHandler(memory_failure)
+            try:
+                result = await runtime.execute(request)
+            finally:
+                runtime_logger.removeHandler(memory_failure)
             response_meta = result.metadata.to_dict()
             if result.status != ChatExecutionStatus.OK or not result.answer.strip():
                 # Fixed, bounded source codes only. Never reveal user text,
@@ -461,7 +497,9 @@ async def prove_verified_durable_runtime(
                     failure_code = "nonstream_runtime_error"
                 else:
                     failure_code = "nonstream_response_missing"
-                raise DurableLineageProofError(failure_code)
+                failure = DurableLineageProofError(failure_code)
+                failure.observed_error_type = memory_failure.error_type
+                raise failure
             answer = result.answer
 
         require(
@@ -568,11 +606,20 @@ def main() -> int:
         )
         # Never emit database errors, credentials, user identities, text, or
         # provider exception arguments from the CI container.
+        diagnostics = {
+            "status": "failed",
+            "code": code,
+            "error_type": type(exc).__name__,
+        }
+        observed = getattr(exc, "observed_error_type", None)
+        if (
+            isinstance(exc, DurableLineageProofError)
+            and isinstance(observed, str)
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", observed)
+        ):
+            diagnostics["memory_exception_type"] = observed
         print(
-            json.dumps(
-                {"status": "failed", "code": code, "error_type": type(exc).__name__},
-                sort_keys=True,
-            ),
+            json.dumps(diagnostics, sort_keys=True),
             file=sys.stderr,
         )
         return 1
