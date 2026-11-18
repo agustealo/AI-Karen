@@ -8,6 +8,8 @@ on:
     paths:
       - "scripts/ci/ollama_settings_live_proof.py"
       - "scripts/ci/verification_strategy_pair_live_proof.py"
+      - "scripts/ci/verification_strategy_durable_live_proof.py"
+      - "tests/core/runtime/test_verification_strategy_durable_live_proof.py"
       - "scripts/ci/production-first-boot-smoke.sh"
       - "src/ai_karen_engine/api_routes/models/settings.py"
       - "src/ai_karen_engine/api_routes/models/runtime_api.py"
@@ -20,6 +22,8 @@ on:
     paths:
       - "scripts/ci/ollama_settings_live_proof.py"
       - "scripts/ci/verification_strategy_pair_live_proof.py"
+      - "scripts/ci/verification_strategy_durable_live_proof.py"
+      - "tests/core/runtime/test_verification_strategy_durable_live_proof.py"
       - "scripts/ci/production-first-boot-smoke.sh"
       - "src/ai_karen_engine/api_routes/models/settings.py"
       - "src/ai_karen_engine/api_routes/models/runtime_api.py"
@@ -52,6 +56,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python -m py_compile scripts/ci/ollama_settings_live_proof.py
           python -m py_compile scripts/ci/verification_strategy_pair_live_proof.py
+          python -m py_compile scripts/ci/verification_strategy_durable_live_proof.py
           bash -n scripts/ci/production-first-boot-smoke.sh
 
       # This job builds the full API image *and* runs a model daemon on a
@@ -118,6 +123,7 @@ jobs:
           KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS: "120"
           KAREN_SMOKE_ONLY_OLLAMA_SETTINGS: "true"
           KAREN_SMOKE_DUAL_STRATEGY_LIVE_PROOF: "true"
+          KAREN_SMOKE_DURABLE_STRATEGY_LIVE_PROOF: "true"
         run: |
           set -euo pipefail
           export KAREN_SMOKE_LIVE_MODEL_NAME="$OLLAMA_CI_MODEL"

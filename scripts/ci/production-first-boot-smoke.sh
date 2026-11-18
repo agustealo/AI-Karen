@@ -471,18 +471,27 @@ echo "[smoke] authenticated composer draft save-clear and stale-write refusal pa
 
 if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "${LIVE_MODEL_PROVIDER}" == "ollama-local" ) ]]; then
   echo "[smoke] proving real Ollama Settings discovery, save, reload and unforced ChatRuntime execution"
+  c3c_session=""
+  c3c_args=()
+  if [[ "${KAREN_SMOKE_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
+    # Keep the original unforced HTTP inference; give its session a local,
+    # unique readback locator. The session never appears in CI output.
+    c3c_session="kcog_c3c_$("${PYTHON_BIN}" -c 'import uuid; print(uuid.uuid4().hex)')"
+    c3c_args=(--session-id "${c3c_session}")
+  fi
   "${PYTHON_BIN}" scripts/ci/ollama_settings_live_proof.py \
     --api-url "${BASE_URL}" \
     --ollama-url "${LIVE_MODEL_BASE_URL}" \
     --backend-ollama-url "${container_model_url}" \
     --cookie-file "${COOKIE_JAR}" \
     --model "${LIVE_MODEL_NAME}" \
-    --timeout "${LIVE_MODEL_TIMEOUT_SECONDS}" || {
+    --timeout "${LIVE_MODEL_TIMEOUT_SECONDS}" "${c3c_args[@]}" || {
       # Report only pre-redacted runtime callsite diagnostics, never full API logs.
       docker logs "${API_CONTAINER}" 2>&1 | grep -F "ChatRuntime.execute failed; attempting canonical fallback; error_type=" | tail -n 3 >&2 || true
       exit 1
     }
-  if [[ "${KAREN_SMOKE_DUAL_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
+  if [[ "${KAREN_SMOKE_DUAL_STRATEGY_LIVE_PROOF:-false}" == "true" ||
+        "${KAREN_SMOKE_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
     # /api/auth/me was read after the real session-cookie login and verified
     # by the first-boot harness. Bind the isolated internal executor proof
     # to this same authorized principal, never a guessed tenant identity.
@@ -496,6 +505,8 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
       echo "Live pair proof requires complete authenticated identity and installed model" >&2
       exit 1
     fi
+  fi
+  if [[ "${KAREN_SMOKE_DUAL_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
     echo "[smoke] proving both independently policy-authorized response paths on installed Ollama"
     # The proof module is streamed in from the exact checked-out CI source.
     # It is not installed as a production API route and never samples actions
@@ -508,6 +519,18 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
       "${API_CONTAINER}" python - \
       < scripts/ci/verification_strategy_pair_live_proof.py
     echo "INDEPENDENT RESPONSE STRATEGY REAL-MODEL PROOF PASSED"
+  fi
+  if [[ "${KAREN_SMOKE_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
+    echo "[smoke] reading back the original authenticated Ollama transcript, strategy and outcome"
+    docker exec -i \
+      -e KAREN_CI_C3C_LINEAGE_PROOF=enabled \
+      -e "KAREN_CI_C3C_USER_ID=${dual_identity[0]}" \
+      -e "KAREN_CI_C3C_TENANT_ID=${dual_identity[1]}" \
+      -e "KAREN_CI_C3C_SESSION_ID=${c3c_session}" \
+      -e "KAREN_CI_C3C_MODEL=${LIVE_MODEL_NAME}" \
+      "${API_CONTAINER}" python - \
+      < scripts/ci/verification_strategy_durable_live_proof.py
+    echo "REAL AUTHENTICATED DURABLE STRATEGY LINEAGE PROOF PASSED"
   fi
   if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" ]]; then
     echo "PRODUCTION OLLAMA SETTINGS-TO-RUNTIME LIVE PROOF PASSED"
