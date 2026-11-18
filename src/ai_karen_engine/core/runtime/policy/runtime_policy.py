@@ -434,6 +434,105 @@ class RuntimePolicyEnforcer:
             alternative_policy_version=alternative.policy_version,
         )
 
+    def _plugin_lifecycle_preflight_reason(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        scope: "PluginLifecycleApprovalScope",
+        observed_state: str,
+        manifest_checksum: str,
+        revision: int,
+        disposition: str,
+    ) -> PolicyReasonCode:
+        """One RuntimePolicy owner for both prepare and post-consent evidence."""
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+
+        if not isinstance(scope, PluginLifecycleApprovalScope):
+            return PolicyReasonCode.RESOURCE_SCOPE_DENIED
+        if self.config.default_level is not RuntimeLevel.FULL:
+            return PolicyReasonCode.RUNTIME_LEVEL_DENIED
+        try:
+            principal = context.require_authenticated_user()
+            scope.require_matching_context(context)
+        except (PermissionError, AttributeError, TypeError, ValueError):
+            return PolicyReasonCode.MISSING_IDENTITY
+        if not get_rbac_manager().has_permission(
+            principal, Permission.ADMIN_PLUGINS_MANAGE,
+        ):
+            return PolicyReasonCode.INSUFFICIENT_PERMISSION
+        if (
+            observed_state != scope.expected_state
+            or manifest_checksum != scope.manifest_checksum
+            or type(revision) is not int
+            or revision != scope.expected_revision
+            or disposition != "ready"
+        ):
+            return PolicyReasonCode.RESOURCE_SCOPE_DENIED
+        return PolicyReasonCode.ALLOWED
+
+    async def authorize_plugin_lifecycle_preflight(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        scope: "PluginLifecycleApprovalScope",
+        observed_state: str,
+        manifest_checksum: str,
+        revision: int,
+        disposition: str,
+    ) -> PolicyDecision:
+        """Authorize requesting consent, never executing a physical transition.
+
+        Host-only callers must first obtain scope from a verified kernel
+        observation and the global ledger. Deliberately grant zero executable
+        capabilities. ActionExecutionGate must deny this decision even when
+        RuntimePolicy allows asking a human for approval.
+        """
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+
+        reason = self._plugin_lifecycle_preflight_reason(
+            context=context,
+            scope=scope,
+            observed_state=observed_state,
+            manifest_checksum=manifest_checksum,
+            revision=revision,
+            disposition=disposition,
+        )
+        allowed = reason is PolicyReasonCode.ALLOWED
+        action = (
+            "plugin.lifecycle." + scope.action
+            if isinstance(scope, PluginLifecycleApprovalScope)
+            else "plugin.lifecycle.invalid"
+        )
+        return PolicyDecision(
+            decision_id=f"policy-plugin-lifecycle-preflight-{time.time_ns()}",
+            policy_version="v2-lifecycle-preflight",
+            allowed=allowed,
+            reason_codes=[reason],
+            # A preapproval is not a capability grant. Consent and a fresh
+            # post-approval decision are required before ActionExecutionGate.
+            allowed_capabilities=[],
+            denied_capabilities=[] if allowed else [action],
+            requires_human_gate=True,
+            risk_level="high",
+            evaluated_at=time.time(),
+            runtime_constraints=(
+                {
+                    "authorized_user_id": scope.user_id,
+                    "authorized_tenant_id": scope.tenant_id,
+                    "authorized_session_id": scope.session_id,
+                    "plugin_lifecycle_approval_only": True,
+                    "plugin_lifecycle_installation_id": scope.installation_id,
+                    "plugin_lifecycle_expected_revision": scope.expected_revision,
+                    "plugin_lifecycle_manifest_checksum": scope.manifest_checksum,
+                } if allowed else {}
+            ),
+        )
+
     async def authorize_approved_plugin_lifecycle(
         self,
         *,
@@ -453,7 +552,6 @@ class RuntimePolicyEnforcer:
         UI/chat permission claims and supplied receipt dictionaries are never
         an independent grant. PluginService owns the execution admission.
         """
-        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
         from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
             PluginLifecycleApprovalScope,
         )
@@ -468,17 +566,16 @@ class RuntimePolicyEnforcer:
         allowed = False
         reason = PolicyReasonCode.INSUFFICIENT_PERMISSION
         try:
-            if not isinstance(scope, PluginLifecycleApprovalScope):
-                raise PermissionError("Plugin lifecycle scope must be canonical")
-            if self.config.default_level is not RuntimeLevel.FULL:
-                reason = PolicyReasonCode.RUNTIME_LEVEL_DENIED
-                raise PermissionError("Plugin lifecycle runtime is restricted")
-            principal = context.require_authenticated_user()
-            scope.require_matching_context(context)
-            if not get_rbac_manager().has_permission(
-                principal, Permission.ADMIN_PLUGINS_MANAGE
-            ):
-                raise PermissionError("Plugin lifecycle management permission denied")
+            reason = self._plugin_lifecycle_preflight_reason(
+                context=context,
+                scope=scope,
+                observed_state=observed_state,
+                manifest_checksum=manifest_checksum,
+                revision=revision,
+                disposition=disposition,
+            )
+            if reason is not PolicyReasonCode.ALLOWED:
+                raise PermissionError("Plugin lifecycle preconditions no longer authorize execution")
             if (
                 not isinstance(approval, dict)
                 or approval.get("status") != "approved"
@@ -501,15 +598,6 @@ class RuntimePolicyEnforcer:
                 or expiry <= now
             ):
                 raise PermissionError("Plugin lifecycle approval expired")
-            if (
-                observed_state != scope.expected_state
-                or manifest_checksum != scope.manifest_checksum
-                or type(revision) is not int
-                or revision != scope.expected_revision
-                or disposition != "ready"
-            ):
-                reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
-                raise PermissionError("Plugin lifecycle state/revision drift")
             allowed = True
             reason = PolicyReasonCode.ALLOWED
         except (PermissionError, AttributeError, TypeError, ValueError):
