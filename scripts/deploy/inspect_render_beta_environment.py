@@ -185,7 +185,10 @@ def _origins_secure(value: str) -> bool:
                 address = ipaddress.ip_address(host)
             except ValueError:
                 labels = host.split(".")
-                if any(
+                # Browsers interpret some noncanonical numeric hostnames as
+                # IPv4 literals (e.g. 127.0.1 or octal forms). Reject those
+                # rather than reclassifying them as arbitrary public DNS.
+                if labels[-1].isdigit() or any(
                     not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
                     for label in labels
                 ):
