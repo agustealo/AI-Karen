@@ -6,6 +6,7 @@ or unverified token claims are not a lifecycle authorization credential.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -98,12 +99,17 @@ async def test_current_bearer_session_is_only_lifecycle_identity(
 
     assert context.user_id == claims["sub"]
     assert context.tenant_id == claims["tenant_id"]
-    assert context.session_id == claims["token_id"]
+    scoped_id = hashlib.sha256(
+        f"ai-karen:plugin-lifecycle:{claims['tenant_id']}:"
+        f"{claims['sub']}:{claims['token_id']}".encode("utf-8")
+    ).hexdigest()
+    assert context.session_id == scoped_id
+    assert claims["token_id"] not in context.session_id
     assert context.conversation_id == str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
             f"ai-karen:conversation:{claims['tenant_id']}:"
-            f"{normalize_session_id(str(claims['token_id']))}",
+            f"{normalize_session_id(scoped_id)}",
         )
     )
     assert context.request_id == "trusted-request-1"
