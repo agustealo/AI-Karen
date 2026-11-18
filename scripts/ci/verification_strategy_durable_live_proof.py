@@ -109,6 +109,7 @@ def _bounded_runtime_degradation(
             "memory_authorization_proof_rejected",
             "transcript_persistence_failed",
             "durable_learning_disabled_or_shadow",
+            "output_token_limit",
         }),
     }
     result: dict[str, Any] = {}
@@ -183,6 +184,18 @@ def _bounded_runtime_degradation(
             else "positive" if level > 0
             else "invalid"
         ) if type(level) is int else "unknown"
+
+        # ExpressionGateway marks a result as degraded when generation
+        # reaches its output-token limit. Never certify such a partial turn.
+        truncated = metadata.get("output_truncated")
+        result["output_truncated"] = (
+            truncated if type(truncated) is bool else "unknown"
+        )
+        finish = metadata.get("finish_reason")
+        result["finish_reason"] = (
+            finish if finish in {"length", "stop", "eos", "end_turn"}
+            else "other"
+        ) if isinstance(finish, str) else "unknown"
     return result
 
 

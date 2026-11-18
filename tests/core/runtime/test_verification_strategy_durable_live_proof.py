@@ -765,6 +765,8 @@ def test_c3d_diagnostic_tracks_executed_model_without_exposing_identity() -> Non
         "verification_strategy_executed": True,
         "reasoning_model_calls": "zero",
         "fallback_level": "zero",
+        "output_truncated": "unknown",
+        "finish_reason": "unknown",
     }
     assert "private" not in str(actual)
     assert "secret" not in str(actual)
@@ -802,6 +804,56 @@ def test_c3d_diagnostic_rejects_untrusted_provider_and_reasoning_fields() -> Non
         "verification_strategy_executed": "unknown",
         "reasoning_model_calls": "unknown",
         "fallback_level": "unknown",
+        "output_truncated": "unknown",
+        "finish_reason": "unknown",
     }
     assert "secret" not in str(actual)
     assert "private" not in str(actual)
+
+
+def test_c3d_diagnostic_reveals_only_bounded_token_limit() -> None:
+    """Truncated model output cannot silently satisfy C3D acceptance."""
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    output = _bounded_runtime_degradation(
+        {
+            "degradation_reason": "output_token_limit",
+            "actual_provider": "ollama",
+            "actual_model": "original-installed-model",
+            "reasoning_status": "completed",
+            "output_truncated": True,
+            "finish_reason": "length",
+            "fallback_level": 0,
+            "prompt": "do-not-expose-private-model-content",
+        },
+        expected_model="original-installed-model",
+    )
+    assert output["degradation_reason"] == "output_token_limit"
+    assert output["output_truncated"] is True
+    assert output["finish_reason"] == "length"
+    assert output["observed_provider"] == "ollama"
+    assert output["observed_model"] == "expected"
+    assert "do-not-expose" not in str(output)
+    assert "original-installed-model" not in str(output)
+
+
+def test_c3d_diagnostic_rejects_private_finish_reason() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    output = _bounded_runtime_degradation(
+        {
+            "output_truncated": "password=private-value",
+            "finish_reason": "SQL private parameters",
+            "degradation_reason": "private error",
+        },
+        expected_model="expected-model",
+    )
+    assert output["output_truncated"] == "unknown"
+    assert output["finish_reason"] == "other"
+    assert output["degradation_reason"] == "other"
+    assert "private" not in str(output)
+    assert "SQL" not in str(output)
