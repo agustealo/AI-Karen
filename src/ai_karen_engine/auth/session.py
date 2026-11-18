@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import uuid
@@ -176,10 +177,16 @@ async def get_plugin_lifecycle_context(request: Request):
             return value
         return str(uuid.uuid4())
 
+    # Keep the signed token identifier out of audit events and durable
+    # approval rows. High-entropy token IDs remain uniquely bound to this
+    # user/tenant/session through a one-way deterministic digest.
+    scoped_session_id = hashlib.sha256(
+        f"ai-karen:plugin-lifecycle:{tenant}:{actor}:{token_id}".encode("utf-8")
+    ).hexdigest()
     return ChatExecutionContext(
         user_id=actor,
         tenant_id=tenant,
-        session_id=token_id,
+        session_id=scoped_session_id,
         request_id=trace_id(
             getattr(request.state, "request_id", None)
             or request.headers.get("X-Request-Id")
