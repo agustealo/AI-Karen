@@ -26,3 +26,7 @@ Cognee's **base** dependency list is unusually broad: LiteLLM, LanceDB, Ladybug,
 
 **Gate:** No competing `cognify` pipeline or own database. KAREN's formation and NeuroVault remain single authorities.
 
+
+## KCR-02B pinned code findings
+
+[Source-reference removal](https://github.com/topoteretes/cognee/blob/5870f15d2488b99e80f71dd6e8e146b228749356/cognee/infrastructure/databases/unified/provenance_delete_planner.py#L1-L160) preserves shared derived records and seeks retry convergence for orphan vector/graph deletion. Karen uses NeuroVault and independent governed PostgreSQL consent checks. Adapt **test cases and failure-order principles**, not a second persistence engine. See [KCR-02B](../KCR02B_TEMPORAL_PROVENANCE.md).

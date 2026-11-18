@@ -17,18 +17,21 @@
 **Proof:** R03, R04, R09, R14; show memory/hop budget and how graph deletions propagate.
 
 ## A03 | Dual-clock temporal recall (P1)
+**Source/audit update:** [KCR-02B](KCR02B_TEMPORAL_PROVENANCE.md) identifies the historical as-of API gap and half-open claim validity boundary mismatch. Production changes require a scoped follow-on review.
 **Owns:** `MemoryTemporalEvolutionService`, `BeliefResolution`, governed PostgreSQL graph, NeuroVault writes.  
 **Inspect from:** Graphiti episodes, validity and invalidation; Semantica truth snapshots.  
 **Experiment:** Reconstruct `valid_at` and `known_at` from durable evidence; refuse unauthorized historical truth and do not conflate `created_at` with worldly validity.  
 **Proof:** R05, R06, R07, R08, R14.
 
 ## A04 | Evidence-linked knowledge extraction (P2)
+**Source/audit update:** [KCR-02B](KCR02B_TEMPORAL_PROVENANCE.md) documents Cognee's ownership-aware deletion planner and Karen's final consent-read gate; verify retries and shared evidence without importing Cognee.
 **Owns:** `MemoryFormationEvaluator` and canonical signal pipeline, PostgreSQL entity resolver, graph projection worker.  
 **Inspect from:** Cognee extraction graph pipeline; LightRAG incremental merge/rebuild; Semantica provenance schemas.  
 **Experiment:** Typed entity/relation candidates with confidence, source span, dedupe, life-cycle and error/abstain behavior. No alternate persisted text or graph.  
 **Proof:** R07, R08, R13, R14 plus ingestion cost and source coverage.
 
 ## A05 | Decision-to-evidence reconstruction (P2)
+**Source/audit update:** [KCR-02B](KCR02B_TEMPORAL_PROVENANCE.md) documents the distinction between recorded lineage and post-hoc causal explanation, and Semantica's optional own-store design.
 **Owns:** runtime outcome/decision ledger, governed memory event references, CORTEX policy scope; NeuroRecall can retrieve approved evidence.  
 **Inspect from:** Semantica decision provenance, PROV-O and explanation chains; Graphiti episodic lineage.  
 **Experiment:** Read-only chain `decision_id -> policy_version -> evidence_ids -> execution/outcome`; explain historical record without asserting causal identification. Optional standards export after authorization review.  
