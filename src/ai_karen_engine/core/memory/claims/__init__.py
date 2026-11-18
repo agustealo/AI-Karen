@@ -1,8 +1,9 @@
 """Cognitive memory claim store.
 
-The store remains an in-process cognitive utility, not a persistence authority.
-Temporal evolution decisions are delegated to MemoryTemporalEvolutionService so
-claim semantics match the durable ledger's validity model.
+The store is a single-tenant, single-owner in-process cognitive utility, not a
+persistence or authorization authority. Callers must derive scope from an
+authenticated runtime context, never from untrusted user input.
+Temporal decisions delegate to MemoryTemporalEvolutionService.
 """
 
 from __future__ import annotations
@@ -19,15 +20,32 @@ from ai_karen_engine.core.memory.temporal import (
 
 
 class MemoryClaimStore:
-    """Store cognitive claim versions and apply canonical temporal semantics."""
+    """Keep one tenant/owner's claim versions in one temporal snapshot scope."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, tenant_id: str, user_id: str | None) -> None:
+        if not isinstance(tenant_id, str) or not tenant_id.strip() or tenant_id == "default":
+            raise ValueError("memory claim store requires an explicit tenant")
+        if user_id is not None and (
+            not isinstance(user_id, str) or not user_id.strip()
+        ):
+            raise ValueError("memory claim store user scope is invalid")
+        self._tenant_id = tenant_id
+        self._user_id = user_id
         self._claims: dict[str, MemoryClaim] = {}
         self._by_subject: dict[str, list[str]] = {}
         self._temporal = MemoryTemporalEvolutionService()
 
+    def _require_scope(self, *, tenant_id: str, user_id: str | None) -> None:
+        """Reject accidental cross-scope access without disclosing scope IDs."""
+        if tenant_id != self._tenant_id or user_id != self._user_id:
+            raise ValueError("memory claim store scope mismatch")
+
+    def _require_claim_scope(self, claim: MemoryClaim) -> None:
+        self._require_scope(tenant_id=claim.tenant_id, user_id=claim.user_id)
+
     def add(self, claim: MemoryClaim) -> str:
-        """Add or replace the same logical claim value for compatibility."""
+        """Add only claims owned by this store's immutable tenant/user scope."""
+        self._require_claim_scope(claim)
         claim_id = f"{claim.subject}:{claim.predicate}:{claim.object}"
         self._claims[claim_id] = claim
         subject_claims = self._by_subject.setdefault(claim.subject, [])
@@ -35,12 +53,26 @@ class MemoryClaimStore:
             subject_claims.append(claim_id)
         return claim_id
 
-    def get(self, claim_id: str) -> MemoryClaim | None:
-        return self._claims.get(claim_id)
+    def get(
+        self, claim_id: str, *, tenant_id: str, user_id: str | None
+    ) -> MemoryClaim | None:
+        self._require_scope(tenant_id=tenant_id, user_id=user_id)
+        claim = self._claims.get(claim_id)
+        if claim is not None:
+            self._require_claim_scope(claim)
+        return claim
 
-    def get_by_subject(self, subject: str) -> list[MemoryClaim]:
-        claim_ids = self._by_subject.get(subject, [])
-        return [self._claims[cid] for cid in claim_ids if cid in self._claims]
+    def get_by_subject(
+        self, subject: str, *, tenant_id: str, user_id: str | None
+    ) -> list[MemoryClaim]:
+        self._require_scope(tenant_id=tenant_id, user_id=user_id)
+        claims: list[MemoryClaim] = []
+        for claim_id in self._by_subject.get(subject, []):
+            claim = self._claims.get(claim_id)
+            if claim is not None:
+                self._require_claim_scope(claim)
+                claims.append(claim)
+        return claims
 
     def evolve(
         self,
@@ -50,41 +82,56 @@ class MemoryClaimStore:
         recorded_at: datetime | None = None,
     ) -> TemporalEvolutionDecision:
         """Evolve an existing claim through the canonical temporal authority."""
+        self._require_claim_scope(incoming)
         previous = self._claims.get(claim_id)
         if previous is None:
             raise KeyError(f"unknown memory claim: {claim_id}")
+        self._require_claim_scope(previous)
         decision = self._temporal.evolve(
             previous,
             incoming,
             recorded_at=recorded_at,
         )
+        self._require_claim_scope(decision.previous)
+        self._require_claim_scope(decision.incoming)
         self._claims[claim_id] = decision.previous
         self.add(decision.incoming)
         return decision
 
     def supersede(self, claim_id: str, new_claim: MemoryClaim) -> None:
-        """Compatibility API for an explicit caller-directed supersession."""
+        """Compatibility API for explicit, same-owner supersession."""
+        self._require_claim_scope(new_claim)
         old = self._claims.get(claim_id)
         if old is None:
             return
+        self._require_claim_scope(old)
         now = datetime.now(tz=timezone.utc)
         new_effective = self._temporal.effective_time(new_claim)
         old.status = ClaimStatus.SUPERSEDED
         old.superseded_at = now
-        old.valid_until = min(old.valid_until, new_effective) if old.valid_until else new_effective
+        old.valid_until = (
+            min(old.valid_until, new_effective)
+            if old.valid_until
+            else new_effective
+        )
         new_claim.supersedes = self._temporal.claim_ref(old)
         if new_claim.valid_from is None:
             new_claim.valid_from = new_effective
         self.add(new_claim)
 
-    def detect_contradictions(self, claim_id: str) -> list[str]:
-        """Detect true temporal conflicts, excluding ordinary historical change."""
+    def detect_contradictions(
+        self, claim_id: str, *, tenant_id: str, user_id: str | None
+    ) -> list[str]:
+        """Detect same-owner temporal conflicts rather than historical changes."""
+        self._require_scope(tenant_id=tenant_id, user_id=user_id)
         claim = self._claims.get(claim_id)
         if claim is None:
             return []
+        self._require_claim_scope(claim)
 
         contradictions: list[str] = []
         for other_id, other in list(self._claims.items()):
+            self._require_claim_scope(other)
             if other_id == claim_id:
                 continue
             if claim.subject != other.subject or claim.predicate != other.predicate:
@@ -97,26 +144,60 @@ class MemoryClaimStore:
                 continue
             if decision.kind is not TemporalEvolutionKind.CONTRADICT:
                 continue
+            self._require_claim_scope(decision.previous)
+            self._require_claim_scope(decision.incoming)
             contradictions.append(other_id)
             self._claims[other_id] = decision.previous
             self._claims[claim_id] = decision.incoming
             claim = decision.incoming
         return contradictions
 
-    def update_confidence(self, claim_id: str, new_confidence: float) -> None:
-        if claim_id in self._claims:
-            self._claims[claim_id].confidence = max(0.0, min(1.0, new_confidence))
-            self._claims[claim_id].last_confirmed = datetime.now(tz=timezone.utc)
+    def update_confidence(
+        self,
+        claim_id: str,
+        new_confidence: float,
+        *,
+        tenant_id: str,
+        user_id: str | None,
+    ) -> None:
+        self._require_scope(tenant_id=tenant_id, user_id=user_id)
+        claim = self._claims.get(claim_id)
+        if claim is not None:
+            self._require_claim_scope(claim)
+            claim.confidence = max(0.0, min(1.0, new_confidence))
+            claim.last_confirmed = datetime.now(tz=timezone.utc)
 
-    def get_valid_claims(self, at: datetime | None = None) -> list[MemoryClaim]:
-        """Evaluate each claim against one coherent UTC snapshot instant."""
+    def get_valid_claims(
+        self,
+        at: datetime | None = None,
+        *,
+        tenant_id: str,
+        user_id: str | None,
+    ) -> list[MemoryClaim]:
+        """Use one coherent UTC snapshot for this authorized owner's claims."""
+        self._require_scope(tenant_id=tenant_id, user_id=user_id)
         snapshot_at = at if at is not None else datetime.now(timezone.utc)
-        return [
-            claim for claim in self._claims.values() if claim.is_valid(snapshot_at)
-        ]
+        claims: list[MemoryClaim] = []
+        for claim in self._claims.values():
+            self._require_claim_scope(claim)
+            if claim.is_valid(snapshot_at):
+                claims.append(claim)
+        return claims
 
-    def get_claims_by_status(self, status: ClaimStatus) -> list[MemoryClaim]:
-        return [claim for claim in self._claims.values() if claim.status == status]
+    def get_claims_by_status(
+        self,
+        status: ClaimStatus,
+        *,
+        tenant_id: str,
+        user_id: str | None,
+    ) -> list[MemoryClaim]:
+        self._require_scope(tenant_id=tenant_id, user_id=user_id)
+        claims: list[MemoryClaim] = []
+        for claim in self._claims.values():
+            self._require_claim_scope(claim)
+            if claim.status == status:
+                claims.append(claim)
+        return claims
 
 
 __all__ = ["ClaimStatus", "MemoryClaim", "MemoryClaimStore"]
