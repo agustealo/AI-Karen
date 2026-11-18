@@ -240,16 +240,6 @@ def test_foreign_confidence_update_is_rejected_before_mutation() -> None:
 
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("subject", "different-subject"),
-        ("predicate", "different-predicate"),
-        ("object", "different-object"),
-        ("asserted_at", START + timedelta(days=1)),
-    ],
-)
-
 def test_add_cannot_replace_existing_canonical_claim_version() -> None:
     store = MemoryClaimStore(**SCOPE_A)
     original = _claim()
@@ -272,6 +262,15 @@ def test_add_cannot_replace_existing_canonical_claim_version() -> None:
     assert store.get_by_subject("user", **SCOPE_A) == [original]
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("subject", "different-subject"),
+        ("predicate", "different-predicate"),
+        ("object", "different-object"),
+        ("asserted_at", START + timedelta(days=1)),
+    ],
+)
 def test_same_owner_identity_mutation_fails_closed(
     field: str, value: object
 ) -> None:
