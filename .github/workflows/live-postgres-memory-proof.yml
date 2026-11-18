@@ -216,6 +216,7 @@ jobs:
           pytest tests/core/memory/test_profile_reconciliation_policy.py -q -rs
           pytest tests/integration/test_live_profile_reconciliation.py -q -rs
           pytest tests/integration/test_live_memory_consent_revocation.py -q -rs
+          pytest tests/integration/test_live_automation_task_claims.py -q -rs
       - name: KCR-04A observe canonical durable SQL and NeuroRecall against PostgreSQL
         env:
           KCR04A_REPORT_PATH: kcr04a-live-retrieval-report.json
@@ -231,7 +232,6 @@ jobs:
             kcr04a-live-retrieval-junit.xml
           if-no-files-found: warn
           retention-days: 14
-          pytest tests/integration/test_live_automation_task_claims.py -q -rs
 
       - name: Prove persona activation/delete race against disposable PostgreSQL
         env:
