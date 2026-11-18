@@ -528,8 +528,64 @@ async def read_back(
     return proof
 
 
+def _principal_from_validated_session(
+    *, tenant_id: str, user_id: str, observed: Any,
+) -> Any:
+    """Admit only the identity and RBAC claims verified by the CI HTTP session.
+
+    The shell harness obtains this bounded envelope from the production
+    /api/auth/validate-session route with the same authenticated cookie.
+    Never manufacture elevated roles or permissions in this internal proof.
+    """
+    from ai_karen_engine.auth.models import UserData
+
+    require(
+        type(observed) is dict
+        and observed.get("user_id") == user_id
+        and observed.get("tenant_id") == tenant_id
+        and observed.get("authenticated") is True
+        and observed.get("session_valid") is True
+        and observed.get("is_active") is True,
+        "ci_authenticated_principal_unverified",
+    )
+    roles = observed.get("roles")
+    permissions = observed.get("permissions")
+    require(
+        type(roles) is list
+        and 0 < len(roles) <= 32
+        and type(permissions) is list
+        and len(permissions) <= 256
+        and all(
+            type(role) is str
+            and 0 < len(role) <= 128
+            and role.strip() == role
+            for role in roles
+        )
+        and len(set(roles)) == len(roles)
+        and all(
+            type(permission) is str
+            and 0 < len(permission) <= 128
+            and permission.strip() == permission
+            for permission in permissions
+        )
+        and len(set(permissions)) == len(permissions),
+        "ci_authenticated_principal_unverified",
+    )
+    # UserData's verification bit describes the already-validated runtime
+    # principal. It comes from session validation, never a hardcoded grant.
+    return UserData(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        roles=list(roles),
+        permissions=list(permissions),
+        is_active=observed["is_active"],
+        is_verified=observed["session_valid"],
+    )
+
+
 async def prove_verified_durable_runtime(
     *, tenant_id: str, user_id: str, model: str,
+    authenticated_context: Any,
 ) -> dict[str, Any]:
     """Run two genuine CORTEX -> RuntimePolicy -> ChatRuntime executions.
 
@@ -537,7 +593,6 @@ async def prove_verified_durable_runtime(
     decision and executed verifier receipt must independently confirm that
     policy actually permitted and Runtime executed the verification path.
     """
-    from ai_karen_engine.auth.models import UserData
     from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
     from ai_karen_engine.core.runtime.chat_runtime_contract import (
         ChatExecutionContext, ChatExecutionRequest, ChatExecutionStatus,
@@ -546,9 +601,10 @@ async def prove_verified_durable_runtime(
     uuid.UUID(tenant_id)
     uuid.UUID(user_id)
     require(bool(model), "expected_installed_model_missing")
-    principal = UserData(
-        tenant_id=tenant_id, user_id=user_id,
-        roles=["admin", "user"], is_active=True, is_verified=True,
+    principal = _principal_from_validated_session(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        observed=authenticated_context,
     )
     runtime = get_chat_runtime()
     observed: list[dict[str, Any]] = []
@@ -706,6 +762,9 @@ def main() -> int:
                     tenant_id=os.environ.get("KAREN_CI_C3D_TENANT_ID", ""),
                     user_id=os.environ.get("KAREN_CI_C3D_USER_ID", ""),
                     model=os.environ.get("KAREN_CI_C3D_MODEL", ""),
+                    authenticated_context=json.loads(
+                        os.environ.get("KAREN_CI_C3D_AUTH_CONTEXT", "null")
+                    ),
                 )
             )
         else:
@@ -721,6 +780,7 @@ def main() -> int:
         known = {
             "unapproved_acceptance_session",
             "expected_installed_model_missing",
+            "ci_authenticated_principal_unverified",
             "exactly_one_runtime_trajectory_required",
             "runtime_trajectory_unavailable",
             "trajectory_scope_or_execution_unverified",
