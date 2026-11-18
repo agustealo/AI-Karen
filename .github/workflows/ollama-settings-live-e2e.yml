@@ -17,6 +17,8 @@ on:
       - "src/ai_karen_engine/core/runtime/**"
       - "src/ai_karen_engine/core/memory/signals/memory_signal_extractor.py"
       - "tests/core/memory/test_signal_pipeline_async.py"
+      - "src/ai_karen_engine/platform/memory/postgres/graph_repository.py"
+      - "tests/core/memory/graph/test_postgres_graph_timestamp_contract.py"
       - ".github/workflows/ollama-settings-live-e2e.yml"
   push:
     branches:
@@ -33,6 +35,8 @@ on:
       - "src/ai_karen_engine/core/runtime/**"
       - "src/ai_karen_engine/core/memory/signals/memory_signal_extractor.py"
       - "tests/core/memory/test_signal_pipeline_async.py"
+      - "src/ai_karen_engine/platform/memory/postgres/graph_repository.py"
+      - "tests/core/memory/graph/test_postgres_graph_timestamp_contract.py"
       - ".github/workflows/ollama-settings-live-e2e.yml"
 
 permissions:
