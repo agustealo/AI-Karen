@@ -426,7 +426,7 @@ export default function AccountPage() {
 
   if (authLoading || isLoading) {
     return (
-      <section aria-label="My Account" className="space-y-6">
+      <section aria-label="My Account" className="karen-account space-y-6">
         <h2 className="karen-page-title">My Account</h2>
         <p role="status" className="text-sm text-muted-foreground">Loading your account securely...</p>
       </section>
@@ -435,10 +435,10 @@ export default function AccountPage() {
 
   if (!accountReady || !account) {
     return (
-      <section aria-label="My Account" className="space-y-5">
+      <section aria-label="My Account" className="karen-account space-y-5">
         <h2 className="karen-page-title">My Account</h2>
         <p className="text-sm text-muted-foreground">Manage your profile, display preferences, and security settings.</p>
-        <Card>
+        <Card className="karen-account-card">
           <CardHeader>
             <CardTitle>Account details unavailable</CardTitle>
             <CardDescription role="alert">{loadError || "Karen could not verify your active account."}</CardDescription>
@@ -455,18 +455,36 @@ export default function AccountPage() {
   }
 
   return (
-    <section aria-label="My Account" className="space-y-6">
-      <div className="space-y-1">
-        <h2 className="karen-page-title">My Account</h2>
-        <p className="text-sm text-muted-foreground">
-          Manage your profile, display preferences, and security settings.
-        </p>
-      </div>
-      <Separator />
+    <section aria-label="My Account" className="karen-account space-y-6">
+      <header className="karen-account-hero karen-surface relative overflow-hidden rounded-xl px-5 py-6 sm:px-7 sm:py-7">
+        <div className="relative z-10 flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-2xl space-y-3">
+            <p className="karen-metric uppercase tracking-[0.16em] text-primary">KARI OS / PERSONAL WORKSPACE</p>
+            <div className="flex items-start gap-3">
+              <span className="karen-account-emblem flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary" aria-hidden="true">
+                <UserRound className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="karen-page-title">My Account</h2>
+                <p className="karen-page-description mt-2">
+                  Manage your profile, display preferences, and security settings.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="karen-account-identity rounded-lg border border-border/70 bg-card/65 px-3 py-2">
+            <p className="karen-metric uppercase text-muted-foreground">Identity scope</p>
+            <p className="mt-1 flex items-center gap-2 text-xs font-medium text-foreground">
+              <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+              Authenticated account
+            </p>
+          </div>
+        </div>
+      </header>
 
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(260px,1fr)_minmax(0,2fr)]">
         <div className="min-w-0">
-          <Card>
+          <Card className="karen-account-card">
             <CardHeader className="items-center text-center">
               <Avatar className="mb-3 h-24 w-24">
                 <AvatarImage src={account.avatarUrl || ""} alt={account.full_name || account.username} />
@@ -498,7 +516,7 @@ export default function AccountPage() {
         </div>
 
         <div className="min-w-0 space-y-6">
-          <Card>
+          <Card className="karen-account-card">
             <CardHeader>
               <CardTitle>Profile information</CardTitle>
               <CardDescription>Changes are applied to your own account, not the workspace or other members.</CardDescription>
@@ -550,7 +568,7 @@ export default function AccountPage() {
             </form>
           </Card>
 
-          <Card>
+          <Card className="karen-account-card">
             <CardHeader>
               <CardTitle>Appearance</CardTitle>
               <CardDescription>Saved to this account and used when you sign in on another device.</CardDescription>
@@ -580,7 +598,7 @@ export default function AccountPage() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="karen-account-card">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <ShieldCheck className="h-5 w-5" aria-hidden="true" />
@@ -633,7 +651,7 @@ export default function AccountPage() {
             </form>
           </Card>
 
-          <Card>
+          <Card className="karen-account-card">
             <CardHeader>
               <CardTitle>Active sessions</CardTitle>
               <CardDescription>
