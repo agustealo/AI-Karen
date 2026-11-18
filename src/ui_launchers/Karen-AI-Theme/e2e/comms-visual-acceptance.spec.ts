@@ -68,7 +68,7 @@ async function openCommunications(page: Page): Promise<void> {
     await trigger.click();
     navigation = page.getByRole("button", { name: navName, exact: true });
   }
-  const visibleNav = navigation.filter({ visible: true }).last();
+  const visibleNav = navigation.last();
   await expect(visibleNav).toBeVisible();
   await visibleNav.click();
   await expect(page.getByTestId("comms-center")).toBeVisible({ timeout: 30_000 });
@@ -115,7 +115,7 @@ test("KUI-COMMS: live identity-scoped evidence and five responsive viewports", a
 
   const root = page.getByTestId("comms-center");
   await expect(root.getByRole("heading", { name: "Activity & Notifications" })).toBeVisible();
-  await expect(root.getByRole("status")).toContainText("Live snapshot");
+  await expect(root.locator("header [role=\"status\"]")).toContainText("Live snapshot");
   await expect(root.getByTestId("comms-metric-audit")).not.toHaveText("—");
   await expect(root.getByTestId("comms-metric-alerts")).not.toHaveText("—");
 
