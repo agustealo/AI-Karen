@@ -269,7 +269,7 @@ export function useKarenVerifiedResponseContext(): ReadonlyArray<{
   messageId: string;
   receipt: Record<string, unknown> | null;
   agentSteps: AgentStepEvent[];
-  presentationCount: number;
+  presentations: readonly KarenPresentationEnvelope[];
 }> {
   const verified = useContext(VerifiedHistoryContext);
   return Array.from(verified.entries()).map(([messageId, parts]) => {
@@ -285,7 +285,12 @@ export function useKarenVerifiedResponseContext(): ReadonlyArray<{
       messageId,
       receipt: receiptPart?.type === "receipt" ? receiptPart.value : null,
       agentSteps: Array.from(lifecycle.values()),
-      presentationCount: parts.filter(part => part.type === "presentation").length,
+      // Already admitted by parseKarenVerifiedHistory; preserve the exact
+      // bounded artifact envelope, its evidence_ref, and presentation_id.
+      presentations: parts.filter(
+        (part): part is Extract<VerifiedPart, { type: "presentation" }> =>
+          part.type === "presentation",
+      ).map(part => part.value),
     };
   });
 }
