@@ -28,8 +28,10 @@ describe("canonical agent stream surface", () => {
   });
 
   it("renders only backend-attested saved agent activity in the canonical context rail", () => {
-    expect(verifiedRail).toContain("useKarenLatestVerifiedAgentSteps()");
-    expect(verifiedRail).toContain("<ConversationContextRail metadata={receipt} agentSteps={agentSteps}");
+    expect(verifiedRail).toContain("useKarenVerifiedResponseContext()");
+    expect(verifiedRail).toContain("metadata={selected.receipt}");
+    expect(verifiedRail).toContain("agentSteps={selected.agentSteps}");
+    expect(verifiedHistory).toContain('name === "karen.agent_step.v1"');
     expect(verifiedRail).toContain("No attested agent steps are available");
     expect(verifiedRail).not.toContain("projectObservedAgentSteps");
     expect(verifiedHistory).toContain('name === "karen.agent_step.v1"');
