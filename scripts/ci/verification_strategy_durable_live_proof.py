@@ -244,8 +244,7 @@ def verify_persisted_chain(
             and trajectory.executed_topology == "reasoning"
             and isinstance(execution.get("reasoning_id"), str)
             and bool(execution["reasoning_id"])
-            and execution.get("reasoning_status")
-            in {"success", "completed", "partial", "abstained"}
+            and execution.get("reasoning_status") in {"success", "completed"}
             and execution.get("reason_codes") == []
             and execution.get("status") == "selected_runtime_path_observed"
             and execution.get("independent_verification_proven") is False,
