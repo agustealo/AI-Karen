@@ -51,7 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      OLLAMA_CI_MODEL: smollm2:135m-instruct-q2_K
+      # Instruction-following fixture for full verifier + synthesis; the former
+      # 135M model never terminated at 256, 512 or 1024 output tokens.
+      # Keep C3D truncation rejection strict instead of inflating budgets.
+      OLLAMA_CI_MODEL: qwen2.5:0.5b-instruct-q4_K_M
       OLLAMA_CI_IMAGE: ollama/ollama:latest
 
     steps:
