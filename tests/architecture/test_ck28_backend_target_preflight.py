@@ -1,6 +1,8 @@
 """Reject unverified production backend routes at the release boundary."""
 from pathlib import Path
 
+import pytest
+
 CHECK = Path(__file__).resolve().parents[2] / "scripts/ci/verify_backend_target.py"
 
 
