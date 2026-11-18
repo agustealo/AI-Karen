@@ -51,3 +51,9 @@ Source paths:
 ## KCR-01 executed-path research
 
 See [KCR-01 retrieval lineage](KCR01_RETRIEVAL_LINEAGE.md) for the verified **memory_items pgvector/FTS vs memory_assertion substring recall** split, test scope, and live-PostgreSQL evidence gate.
+
+## KCR-03 updated research status (2026-11-18)
+
+The initial snapshot above intentionally remains anchored to its original commit. Since then, `test_recall_quality.py` has been replaced by labeled **synthetic candidate** selection tests and Main Quality invokes the KCOG research suite. The earlier statement that quality benchmarking is still `assert True` therefore applies **only to the original snapshot**; recall latency, long-range recall and selective forgetting remain placeholders. No live pgvector/FTS, RLS, or full-query benchmark is established by this change.
+
+The [KCR-03 priority decision](KCR03_PRIORITY_ADR.md) records the research ranking without adopting any external framework.

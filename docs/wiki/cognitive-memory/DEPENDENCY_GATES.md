@@ -28,3 +28,9 @@ Pinned manifests: [LightRAG](https://github.com/HKUDS/LightRAG/blob/264b00ebfac6
 
 **Selection order:** (1) optimize existing KAREN algorithm; (2) reuse already installed approved library/API; (3) write a bounded pure-Python/Postgres algorithm; (4) consider new package only with objective evidence and written ADR. No install is automatically justified by vendor benchmark claims.
 
+
+## KCR-03 dependency-budget policy
+
+Read [KCR-03 ranked decision record](KCR03_PRIORITY_ADR.md) before proposing packages. Each candidate must report **UNKNOWN** when an SBOM, transitive wheel size, CPU/RAM footprint, or provider API conflict has not been measured. The default native research budget is **zero new production packages, zero new DB services, zero new hosted inference calls**.
+
+Do not compare a missing operational baseline with a vendor graph benchmark. Treat explicitly recorded `openai` resolver conflict for HippoRAG as a hard stop on wholesale installation, not a reason to bump KAREN's pinned SDK.
