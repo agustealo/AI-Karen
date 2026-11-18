@@ -14,6 +14,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from ai_karen_engine.auth import auth_middleware, rbac_middleware, session
+from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
 
 def _request(*, bearer: str | None = "verified-token", cookie: str | None = None) -> Request:
@@ -101,7 +102,8 @@ async def test_current_bearer_session_is_only_lifecycle_identity(
     assert context.conversation_id == str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
-            f"ai-karen:conversation:{claims['tenant_id']}:{claims['token_id']}",
+            f"ai-karen:conversation:{claims['tenant_id']}:"
+            f"{normalize_session_id(str(claims['token_id']))}",
         )
     )
     assert context.request_id == "trusted-request-1"
