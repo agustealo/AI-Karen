@@ -16,8 +16,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ai_karen_engine.core.services.dependencies import get_user_context
 from ai_karen_engine.core.services.service_registry import get_service_registry
-from ai_karen_engine.services.audit.audit_logging import get_audit_logger
-from ai_karen_engine.services.audit.training_audit_logger import get_training_audit_logger
+from ai_karen_engine.services.audit.audit_logging import AuditEventType, get_audit_logger
+from ai_karen_engine.services.audit.training_audit_logger import TrainingEventType, get_training_audit_logger
 
 
 logger = logging.getLogger(__name__)
@@ -52,9 +52,17 @@ def _event_timestamp(value: Any) -> str | None:
         return None
 
 
+# Display labels are sourced only from canonical event contracts. Arbitrary
+# producer-supplied type/subtype strings may contain secrets or internal paths.
+# Keep unrecognized events countable without reflecting their raw identifiers.
+_PUBLIC_EVENT_TYPES = frozenset(event.value for event in AuditEventType) | frozenset(
+    event.value for event in TrainingEventType
+) | {"training_operation"}
+
+
 def _event_type(value: Any) -> str:
     original = getattr(value, "value", value)
-    return str(original)[:100] if original is not None else "unknown"
+    return original if isinstance(original, str) and original in _PUBLIC_EVENT_TYPES else "unclassified_event"
 
 
 def _display_event(event: Any) -> Dict[str, Any]:
