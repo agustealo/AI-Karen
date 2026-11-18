@@ -1992,8 +1992,10 @@ class PluginService:
     ) -> Dict[str, Any]:
         """Execute one approved general-plugin lifecycle action, host-only.
 
-        This method is NOT connected to chat or admin API routes. RuntimePolicy
-        authorizes the exact approved action, ActionExecutionGate admits it,
+        This method is never exposed to generic chat or unapproved HTTP
+        actions. The trusted bearer-session admin route reaches it only
+        through resume_lifecycle_approval and its actor-scoped SQL receipt.
+        RuntimePolicy authorizes the exact approved action, ActionExecutionGate admits it,
         and the existing ledger keeps the global physical fence until the
         kernel observation and terminal CAS are both committed.
         """
