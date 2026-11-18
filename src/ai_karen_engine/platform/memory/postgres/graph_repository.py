@@ -98,7 +98,7 @@ class PostgresGraphRepository:
         observed_at = self._datetime(edge.observed_at, "observed_at")
         recorded_at = self._datetime(edge.recorded_at, "recorded_at") or datetime.now(
             timezone.utc
-        )
+        ).replace(tzinfo=None)
         if valid_from is not None and valid_to is not None and valid_to < valid_from:
             raise PostgresGraphScopeError("valid_to cannot precede valid_from")
 
@@ -345,9 +345,14 @@ class PostgresGraphRepository:
                 ) from exc
         else:
             raise PostgresGraphScopeError(f"{field_name} must be a datetime")
+        # MemoryRelation's temporal columns are PostgreSQL TIMESTAMP WITHOUT
+        # TIME ZONE (SQLAlchemy DateTime(timezone=False)). Convert aware
+        # instants to UTC *before* dropping tzinfo. Naive values are interpreted
+        # as UTC, consistent with the existing canonical graph contract. Do
+        # not pass offset-aware datetimes to asyncpg's naive timestamp codec.
         if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
+            return parsed
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
     @staticmethod
     def _unit_float(value: Any, field_name: str) -> float:

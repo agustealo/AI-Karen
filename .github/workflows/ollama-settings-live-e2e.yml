@@ -15,6 +15,10 @@ on:
       - "src/ai_karen_engine/api_routes/models/runtime_api.py"
       - "src/ai_karen_engine/core/model_runtime/**"
       - "src/ai_karen_engine/core/runtime/**"
+      - "src/ai_karen_engine/core/memory/signals/memory_signal_extractor.py"
+      - "tests/core/memory/test_signal_pipeline_async.py"
+      - "src/ai_karen_engine/platform/memory/postgres/graph_repository.py"
+      - "tests/core/memory/graph/test_postgres_graph_timestamp_contract.py"
       - ".github/workflows/ollama-settings-live-e2e.yml"
   push:
     branches:
@@ -29,6 +33,10 @@ on:
       - "src/ai_karen_engine/api_routes/models/runtime_api.py"
       - "src/ai_karen_engine/core/model_runtime/**"
       - "src/ai_karen_engine/core/runtime/**"
+      - "src/ai_karen_engine/core/memory/signals/memory_signal_extractor.py"
+      - "tests/core/memory/test_signal_pipeline_async.py"
+      - "src/ai_karen_engine/platform/memory/postgres/graph_repository.py"
+      - "tests/core/memory/graph/test_postgres_graph_timestamp_contract.py"
       - ".github/workflows/ollama-settings-live-e2e.yml"
 
 permissions:
@@ -43,7 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      OLLAMA_CI_MODEL: smollm2:135m-instruct-q2_K
+      # Instruction-following fixture for full verifier + synthesis; the former
+      # 135M model never terminated at 256, 512 or 1024 output tokens.
+      # Keep C3D truncation rejection strict instead of inflating budgets.
+      OLLAMA_CI_MODEL: qwen2.5:0.5b-instruct-q4_K_M
       OLLAMA_CI_IMAGE: ollama/ollama:latest
 
     steps:
@@ -124,6 +135,7 @@ jobs:
           KAREN_SMOKE_ONLY_OLLAMA_SETTINGS: "true"
           KAREN_SMOKE_DUAL_STRATEGY_LIVE_PROOF: "true"
           KAREN_SMOKE_DURABLE_STRATEGY_LIVE_PROOF: "true"
+          KAREN_SMOKE_VERIFIED_DURABLE_STRATEGY_LIVE_PROOF: "true"
         run: |
           set -euo pipefail
           export KAREN_SMOKE_LIVE_MODEL_NAME="$OLLAMA_CI_MODEL"
