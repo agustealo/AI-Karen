@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from "react";
 import ConversationContextRail from "@/components/chat/ConversationContextRail";
+import { KarenPresentationRegistry } from "@/components/chat/KarenPresentationRegistry";
 import { useKarenVerifiedResponseContext } from "./KarenCopilotVerifiedHistory";
 
 function ActivityReplayNotice() {
@@ -76,6 +77,30 @@ export function KarenCopilotVerifiedRail() {
     </div>
   ) : null;
 
+  const renderPresentations = () => selected && selected.presentations.length > 0 ? (
+    <section aria-label="Response-linked verified cards"
+      data-testid="karen-response-linked-presentations"
+      className="space-y-3 border-b border-border/60 px-3 py-3">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Generated cards · {selected.presentations.length}
+      </h3>
+      {selected.presentations.map(presentation => (
+        <article key={presentation.presentation_id}
+          data-presentation-id={presentation.presentation_id}
+          className="min-w-0 overflow-x-auto rounded-xl border border-border/70 bg-card p-2">
+          <p className="mb-2 break-all font-mono text-[11px] text-muted-foreground">
+            {presentation.component_type.replace(/\./g, " · ")}
+          </p>
+          <KarenPresentationRegistry data={presentation} />
+        </article>
+      ))}
+      <p className="text-xs text-muted-foreground">
+        These saved cards remain linked to their originating assistant response.
+        Persistent pinning is unavailable until authorized storage is verified.
+      </p>
+    </section>
+  ) : null;
+
   const context = selected?.receipt
     ? <><ConversationContextRail metadata={selected.receipt}
         agentSteps={selected.agentSteps} embedded />
@@ -91,6 +116,7 @@ export function KarenCopilotVerifiedRail() {
         </summary>
         <div className="max-h-[min(55dvh,28rem)] min-h-0 overflow-y-auto overscroll-contain border-t border-border/60">
           {renderSwitcher("karen-verified-response-mobile")}
+          {renderPresentations()}
           {context}
         </div>
       </details>
