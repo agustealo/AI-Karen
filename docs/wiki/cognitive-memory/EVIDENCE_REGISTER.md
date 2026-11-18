@@ -1,0 +1,22 @@
+# Version-pinned evidence ledger
+
+**Observed 2026-11-17 via GitHub connector and official web documentation.** These commit hashes are immutable research anchors; new upstream changes require an explicit review of differences and another dated evidence entry.
+
+| Subject | Pinned main commit | Inspection anchors | Evidence status |
+| --- | --- | --- | --- |
+| AI-Karen | `6b70128174aa76f8eda3700d9079f73a1849b62a` | [memory composition](https://github.com/agustealo/AI-Karen/blob/6b70128174aa76f8eda3700d9079f73a1849b62a/src/ai_karen_engine/core/memory/memory_runtime_manager.py), [recall SQL](https://github.com/agustealo/AI-Karen/blob/6b70128174aa76f8eda3700d9079f73a1849b62a/src/ai_karen_engine/platform/memory/postgres/recall_retriever.py), [memory policy](https://github.com/agustealo/AI-Karen/blob/6b70128174aa76f8eda3700d9079f73a1849b62a/docs/development/MEMORY.md) | INSPECTED/WIRED; production host unverified |
+| LightRAG | `264b00ebfac646b8366966f4705e36423088dc51` | [native PG graph](https://github.com/HKUDS/LightRAG/blob/264b00ebfac646b8366966f4705e36423088dc51/lightrag/kg/pgtable_impl.py), [retrieval/ingest](https://github.com/HKUDS/LightRAG/blob/264b00ebfac646b8366966f4705e36423088dc51/lightrag/operate.py), [deps](https://github.com/HKUDS/LightRAG/blob/264b00ebfac646b8366966f4705e36423088dc51/pyproject.toml), [README](https://github.com/HKUDS/LightRAG/blob/264b00ebfac646b8366966f4705e36423088dc51/README.md) | INSPECTED; comparative scores UNPROVEN |
+| Graphiti | `4ef979c74e1e68d08217cf0af4022ddbc89c257f` | [episodic engine](https://github.com/getzep/graphiti/blob/4ef979c74e1e68d08217cf0af4022ddbc89c257f/graphiti_core/graphiti.py), [hybrid search](https://github.com/getzep/graphiti/blob/4ef979c74e1e68d08217cf0af4022ddbc89c257f/graphiti_core/search/search.py), [deps](https://github.com/getzep/graphiti/blob/4ef979c74e1e68d08217cf0af4022ddbc89c257f/pyproject.toml) | INSPECTED; independent temporal correctness UNPROVEN |
+| Cognee | `5870f15d2488b99e80f71dd6e8e146b228749356` | [extraction](https://github.com/topoteretes/cognee/blob/5870f15d2488b99e80f71dd6e8e146b228749356/cognee/infrastructure/llm/extraction/knowledge_graph/extract_content_graph.py), [Postgres demo graph](https://github.com/topoteretes/cognee/blob/5870f15d2488b99e80f71dd6e8e146b228749356/cognee/infrastructure/databases/graph/postgres_demo/adapter.py), [deps](https://github.com/topoteretes/cognee/blob/5870f15d2488b99e80f71dd6e8e146b228749356/pyproject.toml) | INSPECTED; native PG graph production readiness UNPROVEN |
+| HippoRAG 2 | `d5c8329422e0a0b834a15874545cb6a74b4f9b26` | [engine](https://github.com/OSU-NLP-Group/HippoRAG/blob/d5c8329422e0a0b834a15874545cb6a74b4f9b26/src/hipporag/HippoRAG.py), [deps](https://github.com/OSU-NLP-Group/HippoRAG/blob/d5c8329422e0a0b834a15874545cb6a74b4f9b26/pyproject.toml), [README](https://github.com/OSU-NLP-Group/HippoRAG/blob/d5c8329422e0a0b834a15874545cb6a74b4f9b26/README.md) | INSPECTED; memory retrieval benchmark transfer UNPROVEN |
+| Semantica | `4d83266ca0d7f70185906bfce7c96ec71c6ebc04` | [decision recorder](https://github.com/semantica-agi/semantica/blob/4d83266ca0d7f70185906bfce7c96ec71c6ebc04/semantica/context/decision_recorder.py), [temporal truth](https://github.com/semantica-agi/semantica/blob/4d83266ca0d7f70185906bfce7c96ec71c6ebc04/semantica/reasoning/temporal_truth_maintenance.py), [deps](https://github.com/semantica-agi/semantica/blob/4d83266ca0d7f70185906bfce7c96ec71c6ebc04/pyproject.toml) | INSPECTED; advertised 6000x end-to-end significance UNPROVEN |
+
+## Research guardrails on claims
+- *Inspected source* proves a code path exists at this commit, **not that it works for KAREN, or is reachable on Karen's host**.
+- *Upstream claim* stays **DOCUMENTED**, never used as performance evidence without reproducing its benchmark conditions.
+- *Dependency cost* is only initial direct-manifest evidence until a full resolver/SBOM, native wheel inspection and runtime resource test.
+- *Vendor deployment guidance* must not override KAREN RLS, canonical session/engine, local-first model routing or consent policies.
+
+## Source research in the wiki
+The individual [project dossiers](README.md#navigation) record the specific mechanism to reproduce, read-only source anchors, default dependencies and blockers. Future research notes add a date, pinned commit, finding, test artifact and reviewer. No unsupported speedup numbers.
+
