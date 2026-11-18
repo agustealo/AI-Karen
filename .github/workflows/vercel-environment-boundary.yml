@@ -66,4 +66,4 @@ jobs:
           test "$TARGET_SHA" = "$GITHUB_SHA" || {
             echo "::error::Source identity changed"; exit 1;
           }
-          python scripts/ci/verify_vercel_environment_scopes.py
+          python -m scripts.ci.verify_vercel_environment_scopes
