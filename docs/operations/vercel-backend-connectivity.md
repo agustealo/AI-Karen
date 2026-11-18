@@ -126,9 +126,13 @@ The canonical inspection owner is
 `scripts/ci/verify_vercel_environment_scopes.py`, with offline regression
 tests in `tests/architecture/test_vercel_environment_scopes.py`.
 Source CI exercises its boundary contract without Vercel credentials.
-The on-demand protected workflow audits *real* project metadata. Any missing
-inventory, malformed scope, pagination ambiguity, inaccessible platform, or
-backend credential present in the frontend blocks the live inspection.
+The on-demand protected workflow audits *real* project metadata. The
+verifier admits only reviewed frontend-owned runtime names and presentation
+settings that use a safe `NEXT_PUBLIC_` name. Unknown application variables,
+credential-like public keys, hidden production inventory, malformed scope,
+pagination ambiguity, inaccessible platform, or backend credentials present
+in the frontend all block live inspection. This is a metadata ownership gate,
+not a replacement for code review or independent preview build inspection.
 
 ## Operator verification
 
