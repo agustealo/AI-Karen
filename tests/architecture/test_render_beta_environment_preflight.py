@@ -320,6 +320,7 @@ def test_rejects_malformed_job_encryption_key(m, bad):
     "*", "http://ai-karen.example.com", "https://localhost:3000",
     "https://ai-karen.example.com/path", "https://*.example.com",
     "https://127.0.0.1", "https://10.2.3.4:443",
+    "https://127.0.1", "https://0177.0.0.1", "https://0x7f.0.0.1",
     "https://192.168.1.4", "https://169.254.169.254",
     "https://dev.localhost", "https://host.home.arpa",
     "https://good..example.com", "https://-host.example.com",
