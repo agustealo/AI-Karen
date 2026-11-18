@@ -12,6 +12,15 @@ vi.mock('@/lib/auth-events', () => ({
 
 type MutationMethod = 'post' | 'put' | 'patch' | 'delete';
 
+type InternalClientForTests = {
+  getPreferredBaseUrl: () => string | null;
+  getFallbackBaseUrl: (preferred: string | null) => string | null;
+  hasFallbackBaseUrl: (fallback: string | null) => boolean;
+  refreshAccessToken: () => Promise<void>;
+};
+
+const clientInternals = apiClient as unknown as InternalClientForTests;
+
 const invokeMutation = (method: MutationMethod): Promise<unknown> => {
   const path = '/api/plugins/time-query/lifecycle/disable/execute';
   if (method === 'delete') return apiClient.delete(path);
@@ -23,9 +32,9 @@ describe('single-attempt authenticated mutations', () => {
     localStorage.clear();
     // Force a plausible browser backend fallback, so the test fails if a
     // retry is accidentally enabled for a state-changing HTTP method.
-    vi.spyOn(apiClient as never, 'getPreferredBaseUrl').mockReturnValue('');
-    vi.spyOn(apiClient as never, 'getFallbackBaseUrl').mockReturnValue('http://127.0.0.1:8000');
-    vi.spyOn(apiClient as never, 'hasFallbackBaseUrl').mockReturnValue(true);
+    vi.spyOn(clientInternals, 'getPreferredBaseUrl').mockReturnValue('');
+    vi.spyOn(clientInternals, 'getFallbackBaseUrl').mockReturnValue('http://127.0.0.1:8000');
+    vi.spyOn(clientInternals, 'hasFallbackBaseUrl').mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -83,7 +92,7 @@ describe('single-attempt authenticated mutations', () => {
 
   it('never refreshes and replays an already-sent mutation after HTTP 401', async () => {
     localStorage.setItem('refresh_token', 'present-only-to-detect-unsafe-replay');
-    const refreshSpy = vi.spyOn(apiClient as never, 'refreshAccessToken')
+    const refreshSpy = vi.spyOn(clientInternals, 'refreshAccessToken')
       .mockResolvedValue(undefined);
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ detail: 'Session expired' }), {
