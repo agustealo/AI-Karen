@@ -19,6 +19,7 @@ from ai_karen_engine.core.memory.temporal import (
 UTC = timezone.utc
 TENANT = "00000000-0000-0000-0000-000000000001"
 USER = "00000000-0000-0000-0000-000000000002"
+CLAIM_SCOPE = {"tenant_id": TENANT, "user_id": USER}
 
 
 def _claim(
@@ -134,7 +135,7 @@ def test_temporal_evolution_fails_closed_across_tenants() -> None:
 
 
 def test_claim_store_uses_temporal_evolution_for_change() -> None:
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     first_time = datetime(2026, 1, 1, tzinfo=UTC)
     second_time = datetime(2026, 2, 1, tzinfo=UTC)
     claim_id = store.add(_claim("vim", valid_from=first_time))
@@ -142,8 +143,8 @@ def test_claim_store_uses_temporal_evolution_for_change() -> None:
     decision = store.evolve(claim_id, _claim("vscode", valid_from=second_time))
 
     assert decision.kind is TemporalEvolutionKind.SUPERSEDE
-    assert store.get(claim_id) is not None
-    assert store.get(claim_id).valid_until == second_time
+    assert store.get(claim_id, **CLAIM_SCOPE) is not None
+    assert store.get(claim_id, **CLAIM_SCOPE).valid_until == second_time
 
 
 @pytest.mark.parametrize(
@@ -178,19 +179,19 @@ def test_canonical_claim_includes_start_instant_and_normalizes_utc_offsets() -> 
 def test_get_valid_claims_switches_at_one_exclusive_boundary() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     boundary = start + timedelta(days=1)
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     store.add(_claim("vim", valid_from=start, valid_until=boundary))
     store.add(_claim("vscode", valid_from=boundary))
-    assert {claim.object for claim in store.get_valid_claims(start)} == {"vim"}
-    assert {claim.object for claim in store.get_valid_claims(boundary)} == {"vscode"}
-    assert {claim.object for claim in store.get_valid_claims(boundary - timedelta(microseconds=1))} == {"vim"}
+    assert {claim.object for claim in store.get_valid_claims(start, **CLAIM_SCOPE)} == {"vim"}
+    assert {claim.object for claim in store.get_valid_claims(boundary, **CLAIM_SCOPE)} == {"vscode"}
+    assert {claim.object for claim in store.get_valid_claims(boundary - timedelta(microseconds=1), **CLAIM_SCOPE)} == {"vim"}
 
 
 def test_get_valid_claims_without_at_uses_one_utc_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start = datetime(2020, 1, 1, tzinfo=UTC)
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     store.add(_claim("vim", valid_from=start))
     store.add(_claim("vscode", valid_from=start))
 
@@ -202,7 +203,7 @@ def test_get_valid_claims_without_at_uses_one_utc_snapshot(
         return original_is_valid(self, at)
 
     monkeypatch.setattr(MemoryClaim, "is_valid", recording_is_valid)
-    assert {claim.object for claim in store.get_valid_claims()} == {"vim", "vscode"}
+    assert {claim.object for claim in store.get_valid_claims(**CLAIM_SCOPE)} == {"vim", "vscode"}
     assert len(observed) == 2
     assert observed[0] is not None
     assert observed[0] is observed[1]
@@ -214,7 +215,7 @@ def test_get_valid_claims_implicit_snapshot_respects_exact_end(
 ) -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     boundary = start + timedelta(days=1)
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     store.add(_claim("vim", valid_from=start, valid_until=boundary))
     store.add(_claim("vscode", valid_from=boundary))
     clock_reads: list[datetime] = []
@@ -227,7 +228,7 @@ def test_get_valid_claims_implicit_snapshot_respects_exact_end(
             return boundary
 
     monkeypatch.setattr("ai_karen_engine.core.memory.claims.datetime", FrozenClock)
-    assert {claim.object for claim in store.get_valid_claims()} == {"vscode"}
+    assert {claim.object for claim in store.get_valid_claims(**CLAIM_SCOPE)} == {"vscode"}
     assert clock_reads == [boundary]
 
 
