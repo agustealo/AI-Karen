@@ -38,6 +38,12 @@ This is intentionally an **API-breaking change** to an exported in-process utili
 
 Existing KCR-04B/04D temporal tests are migrated to pass the explicit owner context. `Main Quality Gate` now explicitly invokes the new security contract module.
 
+## Guarded caller compatibility
+
+`tests/architecture/test_memory_consumer_domain_migration.py::test_cognitive_claim_store_has_no_unreviewed_static_callers` extends the **existing canonical memory consumer migration suite**, rather than introducing another scanner or owner. It walks Python files in `src`, `tests`, `scripts`, `plugins`, and `extensions` of a complete checkout. Only the existing class definition, public export, and deliberately migrated architecture/security tests are reviewed references. Any additional literal `MemoryClaimStore` occurrence causes a test failure with the source path, requiring an explicit migration decision.
+
+This guard is committed and included in the already-existing Main Quality architecture suite. **It has not yet executed on this exact PR head**. The textual check is intentionally conservative: references in comments can require review, and unresolved alias/dynamic-import references still need an independent import/call census. A clean run would be evidence for static references in the scanned checkout, not end-to-end authorization or live production reachability.
+
 ## Acceptance not established by this PR
 
 - Actual production reachability, injection lifetime, and all direct/dynamic callers
