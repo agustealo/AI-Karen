@@ -68,6 +68,25 @@ def test_newer_overlapping_value_supersedes_without_deleting_history() -> None:
     assert decision.incoming.object == "vscode"
 
 
+def test_backdated_explicit_supersession_rejects_invalid_validity_window() -> None:
+    """Compatibility supersede cannot create an end before the old start."""
+    start = datetime(2026, 6, 1, tzinfo=UTC)
+    store = MemoryClaimStore(**CLAIM_SCOPE)
+    previous = _claim("vscode", valid_from=start)
+    claim_id = store.add(previous)
+    backdated = _claim("vim", valid_from=start - timedelta(days=1))
+
+    with pytest.raises(ValueError, match="backdated supersession"):
+        store.supersede(claim_id, backdated)
+
+    assert store.get(claim_id, **CLAIM_SCOPE) is previous
+    assert store.get_by_subject("user", **CLAIM_SCOPE) == [previous]
+    assert previous.status is ClaimStatus.OBSERVED
+    assert previous.valid_until is None
+    assert previous.superseded_at is None
+    assert backdated.supersedes is None
+
+
 def test_non_overlapping_historical_values_coexist() -> None:
     service = MemoryTemporalEvolutionService()
     first_start = datetime(2025, 1, 1, tzinfo=UTC)

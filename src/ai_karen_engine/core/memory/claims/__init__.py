@@ -133,6 +133,8 @@ class MemoryClaimStore:
         self._checked_replacement_id(new_claim)
         now = datetime.now(tz=UTC)
         new_effective = self._temporal.effective_time(new_claim)
+        if new_effective < self._temporal.effective_time(old):
+            raise ValueError("backdated supersession requires temporal evolution")
         old.status = ClaimStatus.SUPERSEDED
         old.superseded_at = now
         old.valid_until = (
