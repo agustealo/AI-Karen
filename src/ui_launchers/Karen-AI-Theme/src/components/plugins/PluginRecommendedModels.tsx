@@ -93,6 +93,57 @@ function downloadFailureGuidance(job: DownloadJob): string {
   }
 }
 
+type DownloadRequestStage = "validation" | "queue";
+
+/** Map only stable backend status and policy contract values to safe guidance. */
+function downloadRequestGuidance(
+  error: unknown,
+  stage: DownloadRequestStage,
+): string {
+  const fallback = "Karen could not verify or queue the selected model. Check the authenticated model job and backend status in Models & Runtime before retrying.";
+  if (error && typeof error === "object") {
+    const response = error as {
+      status?: unknown;
+      blocking_reasons?: unknown;
+    };
+    // A validation response's reasons are backend policy truth, but are not
+    // automatically safe for UI. Match known phrases; never render raw text.
+    if (stage === "validation" && Array.isArray(response.blocking_reasons)) {
+      const reasons = response.blocking_reasons.filter(
+        (reason): reason is string => typeof reason === "string",
+      );
+      if (reasons.some((reason) =>
+        reason.startsWith("Model access metadata could not be verified") ||
+        reason.startsWith("License acceptance is required")
+      )) {
+        return "Karen could not verify the model license or source access. Confirm the Hugging Face account has accepted the gated terms and the backend worker has authorized access. No job was queued.";
+      }
+      if (reasons.some((reason) =>
+        reason.startsWith("New downloads are blocked by policy") ||
+        reason.startsWith("Master downloads switch is off") ||
+        (reason.startsWith("Channel ") && reason.endsWith(" is disabled by policy"))
+      )) {
+        return "Karen's model-download policy or plugin_audio channel blocked this request. Ask an administrator to review Models & Runtime. No job was queued.";
+      }
+    }
+    switch (response.status) {
+      case 401:
+        return "Your authenticated Karen session is unavailable. Sign in again before requesting a model download.";
+      case 403:
+        return "Karen denied permission for this model download. Confirm your administrator and tenant permissions in Models & Runtime; a Hugging Face token does not grant Karen permissions.";
+      case 409:
+        return "Karen rejected a conflicting model download request. Inspect the existing authenticated jobs in Models & Runtime before retrying.";
+      case 429:
+        return "The model-download service is rate-limited. Review its status in Models & Runtime before retrying.";
+      case 502:
+      case 503:
+      case 504:
+        return "Karen's backend model-download service is unavailable. Check its connectivity and worker health in Models & Runtime.";
+    }
+  }
+  return fallback;
+}
+
 function isModelRecommendation(value: unknown): value is ModelRecommendation {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<ModelRecommendation>;
@@ -256,6 +307,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
     setBusyId(item.id);
     setProblem(null);
     setNotice(null);
+    let stage: DownloadRequestStage = "validation";
     try {
       // Revalidate pinned upstream terms after the user explicitly accepted
       // them. Never queue a moving branch head or permit remote-code execution.
@@ -273,9 +325,13 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       if (!validation.allowed || validation.model_id !== item.model_id ||
           validation.channel_id !== item.channel_id ||
           validation.metadata?.resolved_revision !== revision) {
+        if (!validation.allowed) {
+          throw validation;
+        }
         throw new Error("model_setup_validation_denied");
       }
 
+      stage = "queue";
       const receipt = await apiClient.post<DownloadReceipt>(
         "/api/models/download", {
           model_id: item.model_id,
@@ -313,8 +369,11 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         progress: 0,
       }, ...current]);
       setNotice(`Karen confirmed the ${item.label} download job is ${receipt.status}.`);
-    } catch {
-      setProblem("Karen could not verify or queue the selected model. Review its access terms and try again.");
+    } catch (error) {
+      // Never echo untrusted HTTP error details or worker exceptions. A failed
+      // attempt cannot carry license acknowledgment into the next request.
+      setAccepted({});
+      setProblem(downloadRequestGuidance(error, stage));
     } finally {
       submitting.current = false;
       setBusyId(null);

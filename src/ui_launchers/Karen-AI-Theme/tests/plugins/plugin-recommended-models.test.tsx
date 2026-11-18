@@ -208,6 +208,65 @@ describe('Governed plugin model setup', () => {
     expect(mocks.post).toHaveBeenCalledTimes(1);
   });
 
+  it('explains verified source-access denial without leaking backend text or queueing', async () => {
+    mocks.post.mockResolvedValueOnce({
+      allowed: false,
+      model_id: recommendation.model_id,
+      channel_id: recommendation.channel_id,
+      metadata: { resolved_revision: PINNED },
+      blocking_reasons: [
+        'Model access metadata could not be verified; retry when license/gating metadata is available',
+        'DO_NOT_EXPOSE_PRIVATE_BACKEND_DETAIL',
+      ],
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    const alert = await screen.findByText(/could not verify the model license or source access/i);
+    expect(alert.textContent).toContain('No job was queued');
+    expect(screen.queryByText(/DO_NOT_EXPOSE_PRIVATE_BACKEND_DETAIL/)).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole('checkbox') as HTMLButtonElement).getAttribute('data-state')).toBe('unchecked');
+    expect(screen.getByRole('button', { name: 'Download recommended model' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('classifies a tenant or administrator permission denial without leaking worker details', async () => {
+    mocks.post.mockResolvedValueOnce({
+      allowed: true,
+      model_id: recommendation.model_id,
+      channel_id: recommendation.channel_id,
+      metadata: { resolved_revision: PINNED },
+      blocking_reasons: [],
+    }).mockRejectedValueOnce({
+      status: 403,
+      details: { error: 'secret=PRIVATE_TOKEN_VALUE' },
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    await screen.findByText(/Karen denied permission for this model download/i);
+    expect(screen.queryByText(/PRIVATE_TOKEN_VALUE/)).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Download recommended model' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('classifies backend availability failures without displaying exception arguments', async () => {
+    mocks.post.mockRejectedValueOnce({
+      status: 503,
+      message: 'backend unavailable: /private/path?token=SECRET_VALUE',
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    await screen.findByText(/backend model-download service is unavailable/i);
+    expect(screen.queryByText(/SECRET_VALUE/)).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Download recommended model' }).hasAttribute('disabled')).toBe(true);
+  });
+
   it('fails closed when source verification is unavailable or pinned revision is mutable', async () => {
     getImpl(catalog({ metadata_verified: false, verification_state: 'unavailable', resolved_revision: 'main' }));
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
