@@ -77,6 +77,50 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.queryByTestId("karen-copilot-rail-unverified")).toBeNull();
   });
 
+  it("projects only the selected response's validated presentation cards", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-old", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-new", role: "assistant" },
+    ];
+    const makeCard = (messageId: string, presentationId: string, date: string) => ({
+      type: "CUSTOM",
+      name: "karen.presentation.v1",
+      messageId,
+      value: {
+        schema_version: 1,
+        presentation_id: presentationId,
+        component_type: "date.observation",
+        evidence_ref: "verified:" + presentationId,
+        data: { formatted: date },
+      },
+    });
+    // Presentation events arrive in reverse order. Canonical transcript
+    // order, not event delivery order, controls the context selection.
+    const events = [
+      makeCard("assistant-new", "card-new", "2026-11-18"),
+      makeCard("assistant-old", "card-old", "2026-11-17"),
+    ];
+    render(
+      <KarenVerifiedHistoryProvider parts={parseKarenVerifiedHistory(events, transcript)}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByTestId("karen-date-presentation")).toHaveLength(2);
+    expect(document.querySelectorAll('[data-presentation-id="card-new"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-presentation-id="card-old"]')).toHaveLength(0);
+    fireEvent.change(screen.getAllByLabelText("Inspect saved response")[0], {
+      target: { value: "assistant-old" },
+    });
+    expect(document.querySelectorAll('[data-presentation-id="card-old"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-presentation-id="card-new"]')).toHaveLength(0);
+    expect(screen.queryByText("Secure pinning not yet available")).toBeNull();
+    expect(() => parseKarenVerifiedHistory([
+      makeCard("user-1", "forged", "2026-11-16"),
+    ], transcript)).toThrow("Unsupported verified conversation event");
+  });
+
   it("rejects duplicate or malformed canonical message identities before event replay", () => {
     const receipt = {
       type: "CUSTOM",
