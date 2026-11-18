@@ -87,3 +87,42 @@ def test_runtime_gateway_resolves_but_does_not_construct_memory() -> None:
     assert "ai_karen_engine.integrations.memory" not in gateway
     assert "create_unified_memory_service" not in gateway
     assert "WebUIMemoryService" not in gateway
+
+
+def test_cognitive_claim_store_has_no_unreviewed_static_callers() -> None:
+    """Keep the new scoped API from silently breaking unreviewed consumers.
+
+    The complete checkout is scanned rather than trusting incomplete remote
+    code-search indexes. Nonliteral dynamic imports still require review.
+    """
+    owned = (
+        ROOT / "src" / "ai_karen_engine" / "core" / "memory" / "claims" / "__init__.py"
+    )
+    assert owned.is_file(), "canonical cognitive claim store must exist"
+
+    reviewed = {
+        "src/ai_karen_engine/core/memory/claims/__init__.py",
+        "src/ai_karen_engine/core/memory/__init__.py",
+        "tests/architecture/test_memory_temporal_evolution.py",
+        "tests/architecture/test_memory_claim_store_scope.py",
+        "tests/architecture/test_memory_consumer_domain_migration.py",
+    }
+    offenders: list[str] = []
+    for folder in ("src", "tests", "scripts", "plugins", "extensions"):
+        directory = ROOT / folder
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*.py"):
+            if path.is_symlink():
+                continue
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in reviewed:
+                continue
+            if "MemoryClaimStore" in path.read_text(encoding="utf-8"):
+                offenders.append(relative)
+
+    assert not offenders, (
+        "Unreviewed cognitive claim-store caller(s) must migrate to explicit "
+        "authenticated tenant/user scope before KCR-04E merge: "
+        + ", ".join(sorted(offenders))
+    )

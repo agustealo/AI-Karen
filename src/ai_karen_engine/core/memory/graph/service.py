@@ -314,7 +314,10 @@ class LeanGraphService:
             self._consecutive_failures += 1
             if self._consecutive_failures >= self._failure_threshold:
                 self._circuit_open_until = time.time() + self._cooldown_seconds
-            logger.exception(
+            # SQLAlchemy/asyncpg exceptions can stringify bound SQL parameters,
+            # including private memory content and tenant-scoped identifiers.
+            # Keep the exception type for observability, never its raw traceback.
+            logger.error(
                 "memory_graph_projection_failed",
                 extra={
                     "component": "memory_graph",
