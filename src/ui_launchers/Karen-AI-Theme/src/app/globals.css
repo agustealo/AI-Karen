@@ -310,3 +310,33 @@
     border-color: hsl(var(--primary) / 0.7);
   }
 }
+
+/* KUI-SETTINGS: scoped configuration workspace, canonical global token authority. */
+@layer components {
+  .karen-settings .karen-settings-hero {
+    background:
+      radial-gradient(ellipse at 3% 0%, hsl(var(--primary) / 0.11), transparent 28rem),
+      linear-gradient(145deg, hsl(var(--surface-2) / 0.6), hsl(var(--card) / 0.95) 65%);
+  }
+  .karen-settings .karen-settings-hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.2;
+    background-image:
+      linear-gradient(to right, hsl(var(--foreground) / 0.055) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--foreground) / 0.055) 1px, transparent 1px);
+    background-size: 26px 26px;
+    mask-image: linear-gradient(90deg, transparent, black 45%, black);
+  }
+  .karen-settings .karen-settings-categories {
+    box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.025);
+  }
+  .karen-settings .karen-settings-section-nav {
+    background: hsl(var(--card) / 0.89);
+  }
+  .karen-settings .karen-settings-active {
+    min-width: 0;
+  }
+}
