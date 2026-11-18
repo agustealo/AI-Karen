@@ -39,7 +39,7 @@ def _read_spec() -> dict[str, Any]:
     if (
         data.get("schema_version") != 1
         or data.get("plugin_id") != "pocket-tts"
-        or data.get("model_id") != "kyutai/pocket-tts"
+        or data.get("model_id") != "kyutai/pocket-tts-without-voice-cloning"
         or not re.fullmatch(r"[0-9a-f]{40}", str(data.get("revision", "")))
         or data.get("channel_id") != "plugin_audio"
         or data.get("runtime_version") != "4.0.1"

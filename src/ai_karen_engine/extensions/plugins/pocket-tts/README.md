@@ -7,8 +7,10 @@ voice is shown until an authorized runtime has actually loaded the model.
 **Upstream:** Kyutai [Pocket TTS v4.0.1](https://github.com/kyutai-labs/pocket-tts/releases/tag/v4.0.1).
 Runtime dependency: optional \`pocket-tts==4.0.1\` installed in the host's
 trusted environment; no new mandatory heavy Torch dependency at first boot.
-Model and weights licenses differ from package code; operators must separately
-accept the gated Hugging Face model terms and verify approved speaker states.
+Model and weights licenses differ from package code. The official, non-cloning
+18.2M REFL model is publicly downloadable from Kyutai under CC-BY-4.0 terms.
+Karen still verifies the source, tenant scope and licensing before queueing.
+Gated alternatives retain their own upstream approval requirements.
 
 ## Installation and operation
 
@@ -19,10 +21,12 @@ accept the gated Hugging Face model terms and verify approved speaker states.
    check. The default `runtime` image remains unchanged. On a bare-metal host,
    install the same pinned requirements using your approved deployment process.
    No plugin request may run pip or download its own runtime.
-2. Use Karen's **existing** Model Downloads flow to install
-   \`kyutai/pocket-tts\` at the pinned revision in \`model_spec.json\` using
-   channel \`plugin_audio\`. The model is gated and may require Hugging Face
-   enrollment before an operator can download it. Do not bypass that gate.
+2. Use Karen's **existing** Model Downloads flow to install the official
+   \`kyutai/pocket-tts-without-voice-cloning\` model at the pinned revision in
+   \`model_spec.json\` under channel \`plugin_audio\`. Its 18.2M REFL weights,
+   tokenizer and precomputed voice states match the reviewed loader.
+   No Hugging Face login, token, or gated upstream approval is required for
+   this source. Karen still verifies the license and immutable metadata.
 3. Verify that the installed snapshot includes
    \`languages/english_18m_refl_2026-10/model.safetensors\`,
    \`tokenizer.model\`, and approved precomputed \`embeddings/*.safetensors\`.
@@ -47,17 +51,19 @@ installable frontend bundle, and the plugin manifest correctly retains
 `provides_ui: false`.
 
 Ordinary authenticated users can select and preview authorized installed
-voices. Only a permitted administrator can accept gated model terms and queue
-a licensed download through the existing worker. A failed download is visible
+voices. Only a permitted administrator can queue a licensed model download
+through the existing worker. For public verified sources, a single Download
+click acknowledges the visible CC-BY-4.0 terms; gated or unknown sources
+continue to require separate explicit approval. A failed download is visible
 with redacted recovery guidance, not silently retried or treated as ready.
 Engine readiness must be verified by `GET /api/voice/engines` after the
 worker's completed installation; actual sample synthesis and playback
 establish the next level of readiness. If Pocket is missing, no browser or
 alternate-engine fallback is substituted inside its workspace.
 
-**Target deployment still needs independent operator proof:** approved gated
-model access, the actual completed model job, native CPU import/load, a
-non-silent authentic WAV and audible browser playback. Source CI and build
+**Target deployment still needs independent operator proof:** public source
+access, the actual completed model job, native CPU import/load, a nonsilent
+authentic WAV and audible browser playback. Source CI and build
 configuration alone cannot certify this.
 
 ## Download method selection
@@ -65,8 +71,9 @@ configuration alone cannot certify this.
 Karen provides two model-file transfer methods in the same existing
 **Plugins → Pocket TTS → Model installation** workflow:
 
-- **Hugging Face Hub SDK** (default): \`snapshot_download()\` uses the trusted
-  host's Hugging Face token and reviewed revision.
+- **Hugging Face Hub SDK** (default): \`snapshot_download()\` uses the reviewed
+  source revision. Public sources require no token; gated sources retain
+  authenticated access checks.
 - **Direct HTTPS**: transfer model assets by direct authenticated HTTPS
   \`/resolve/<sha>/<path>\` requests without calling the \`huggingface_hub\`
   Python SDK for file transfer. The backend discovers the immutable repository
@@ -78,9 +85,11 @@ admin authorization, explicit model-license acceptance, immutable revision,
 approved include patterns, persisted tenant/owner-scoped job, audited worker
 lease, staging, atomic publication/compensation and model registry. Model
 sources remain host-only; neither UI nor Pocket plugin sees credentials.
-Source-side gated access still requires a Hugging Face account that accepted
-the upstream conditions and a working host \`HF_TOKEN\` (or approved equivalent).
-**Direct HTTPS does not circumvent gated repositories.**
+The reviewed official source is ungated and does not require a Hugging Face
+account or \`HF_TOKEN\`. If the source changes or gating is enabled later, both
+transfer methods must honor upstream restrictions. Neither transfer method
+circumvents a gated source. Historical failed jobs for \`kyutai/pocket-tts\`
+cannot establish readiness of the new reviewed model revision.
 
 One job has one persisted \`download_method\` (\`hf_hub\` or \`direct_https\`).
 The worker never changes methods automatically after an error or retry.

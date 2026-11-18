@@ -79,7 +79,7 @@ function normalizedProgress(value: unknown): number {
 function downloadFailureGuidance(job: DownloadJob): string {
   switch (job.failure_category) {
     case "source_access":
-      return "Model source access was denied. Confirm your Hugging Face account has accepted the gated model terms and Karen’s backend has approved source access, then retry.";
+      return "The model source denied access. For gated models, verify upstream approval. For public models, inspect worker connectivity and source credentials in Models & Runtime before retrying.";
     case "network":
       return "The model worker could not reach or verify its source. Check backend network, proxy, TLS and source availability before retrying.";
     case "storage":
@@ -91,6 +91,72 @@ function downloadFailureGuidance(job: DownloadJob): string {
     default:
       return "Check the authenticated job details in Models & Runtime before retrying. A failed download is never a ready model.";
   }
+}
+
+type DownloadRequestStage = "validation" | "queue";
+
+/** Map only stable backend status and policy contract values to safe guidance. */
+function downloadRequestGuidance(
+  error: unknown,
+  stage: DownloadRequestStage,
+): string {
+  const fallback = "Karen could not verify or queue the selected model. Check the authenticated model job and backend status in Models & Runtime before retrying.";
+  if (error && typeof error === "object") {
+    const response = error as {
+      status?: unknown;
+      blocking_reasons?: unknown;
+    };
+    // A validation response's reasons are backend policy truth, but are not
+    // automatically safe for UI. Match known phrases; never render raw text.
+    if (stage === "validation" && Array.isArray(response.blocking_reasons)) {
+      const reasons = response.blocking_reasons.filter(
+        (reason): reason is string => typeof reason === "string",
+      );
+      if (reasons.some((reason) =>
+        reason.startsWith("Model access metadata could not be verified") ||
+        reason.startsWith("License acceptance is required")
+      )) {
+        return "Karen could not verify the model license or source access. Confirm the Hugging Face account has accepted the gated terms and the backend worker has authorized access. No job was queued.";
+      }
+      if (reasons.some((reason) =>
+        reason.startsWith("New downloads are blocked by policy") ||
+        reason.startsWith("Master downloads switch is off") ||
+        (reason.startsWith("Channel ") && reason.endsWith(" is disabled by policy"))
+      )) {
+        return "Karen's model-download policy or plugin_audio channel blocked this request. Ask an administrator to review Models & Runtime. No job was queued.";
+      }
+    }
+    switch (response.status) {
+      case 401:
+        return "Your authenticated Karen session is unavailable. Sign in again before requesting a model download.";
+      case 403:
+        return "Karen denied permission for this model download. Confirm your administrator and tenant permissions in Models & Runtime; a Hugging Face token does not grant Karen permissions.";
+      case 409:
+        return "Karen rejected a conflicting model download request. Inspect the existing authenticated jobs in Models & Runtime before retrying.";
+      case 429:
+        return "The model-download service is rate-limited. Review its status in Models & Runtime before retrying.";
+      case 502:
+      case 503:
+      case 504:
+        return "Karen's backend model-download service is unavailable. Check its connectivity and worker health in Models & Runtime.";
+    }
+  }
+  return fallback;
+}
+
+/**
+ * A verified public model uses one explicit Install click. Gated or unknown
+ * sources retain fresh per-revision checkbox consent.
+ */
+function licenseAcknowledged(
+  item: ModelRecommendation,
+  accepted: Record<string, boolean>,
+): boolean {
+  const revision = item.resolved_revision;
+  if (!item.license || !item.license_url || !revision ||
+      !IMMUTABLE_REVISION.test(revision)) return false;
+  return item.gated === false ||
+    accepted[item.id + ":" + revision] === true;
 }
 
 function isModelRecommendation(value: unknown): value is ModelRecommendation {
@@ -250,12 +316,13 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         item.installed || alreadyRunning ||
         item.metadata_verified !== true || item.verification_state !== "verified" ||
         !revision || !IMMUTABLE_REVISION.test(revision) ||
-        accepted[`${item.id}:${revision}`] !== true) return;
+        !licenseAcknowledged(item, accepted)) return;
 
     submitting.current = true;
     setBusyId(item.id);
     setProblem(null);
     setNotice(null);
+    let stage: DownloadRequestStage = "validation";
     try {
       // Revalidate pinned upstream terms after the user explicitly accepted
       // them. Never queue a moving branch head or permit remote-code execution.
@@ -273,9 +340,13 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       if (!validation.allowed || validation.model_id !== item.model_id ||
           validation.channel_id !== item.channel_id ||
           validation.metadata?.resolved_revision !== revision) {
+        if (!validation.allowed) {
+          throw validation;
+        }
         throw new Error("model_setup_validation_denied");
       }
 
+      stage = "queue";
       const receipt = await apiClient.post<DownloadReceipt>(
         "/api/models/download", {
           model_id: item.model_id,
@@ -313,8 +384,11 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         progress: 0,
       }, ...current]);
       setNotice(`Karen confirmed the ${item.label} download job is ${receipt.status}.`);
-    } catch {
-      setProblem("Karen could not verify or queue the selected model. Review its access terms and try again.");
+    } catch (error) {
+      // Never echo untrusted HTTP error details or worker exceptions. A failed
+      // attempt cannot carry license acknowledgment into the next request.
+      setAccepted({});
+      setProblem(downloadRequestGuidance(error, stage));
     } finally {
       submitting.current = false;
       setBusyId(null);
@@ -392,7 +466,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         const selectedMethod = downloadMethods[item.id] || "hf_hub";
         const canQueue = !item.installed && !activeJob && !blocked && verified &&
           availableMethods.includes(selectedMethod) &&
-          accepted[acceptanceKey] === true && busyId === null;
+          licenseAcknowledged(item, accepted) && busyId === null;
         return (
           <div key={item.id} className="space-y-3 rounded-lg border bg-background p-3">
             <div className="flex items-start justify-between gap-2">
@@ -433,7 +507,9 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                   <p role="status" className="text-xs text-destructive"
                     data-testid="plugin-last-download-failure">
                     Previous attempt: {lastFailedJob.status}. {downloadFailureGuidance(lastFailedJob)}
-                    {" "}A new attempt requires fresh explicit model-license acceptance.
+                    {" "}{item.gated === false
+                      ? "A new request will reverify the public model source."
+                      : "A new attempt requires fresh explicit model-license acceptance."}
                   </p>
                 )}
                 {blocked && (
@@ -453,19 +529,31 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                         No source terms link was returned. Verify the model terms before proceeding.
                       </p>
                     )}
-                    <label className="flex items-start gap-2 text-xs">
-                      <Checkbox checked={Boolean(accepted[acceptanceKey])}
-                        onCheckedChange={(value) => setAccepted((old) => ({
-                          ...old, [acceptanceKey]: value === true,
-                        }))} disabled={!item.license_url} />
-                      <span>I reviewed and accept the model license and any gated-access conditions
-                        for revision {revision?.slice(0, 12)}.</span>
-                    </label>
+                    {item.gated === false ? (
+                      <p className="text-xs text-muted-foreground" data-testid="public-model-one-click">
+                        Public model, no Hugging Face account or token needed.
+                        Selecting Download acknowledges the displayed {item.license}{" "}
+                        terms for this verified revision. Attribution still applies.
+                      </p>
+                    ) : (
+                      <label className="flex items-start gap-2 text-xs">
+                        <Checkbox checked={Boolean(accepted[acceptanceKey])}
+                          onCheckedChange={(value) => setAccepted((old) => ({
+                            ...old, [acceptanceKey]: value === true,
+                          }))} disabled={!item.license_url} />
+                        <span>I reviewed and accept the model license and any gated-access conditions
+                          for revision {revision?.slice(0, 12)}.</span>
+                      </label>
+                    )}
                   </div>
                 )}
                 {verified && !blocked && availableMethods.length > 1 && (
-                  <label className="block space-y-1 text-xs">
-                    <span className="font-medium">Download method</span>
+                  <details className="rounded-md border px-2 py-2">
+                    <summary className="cursor-pointer text-xs font-medium">
+                      Advanced download options
+                    </summary>
+                    <label className="mt-2 block space-y-1 text-xs">
+                      <span className="font-medium">Download method</span>
                     <select aria-label="Download method"
                       className="w-full rounded-md border bg-background px-2 py-2"
                       value={selectedMethod}
@@ -489,7 +577,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                       Both methods require the same reviewed license, backend authentication,
                       model revision, audited download worker and installation checks.
                     </span>
-                  </label>
+                    </label>
+                  </details>
                 )}
                 <Button type="button" size="sm" disabled={!canQueue}
                   onClick={() => void install(item)}>
