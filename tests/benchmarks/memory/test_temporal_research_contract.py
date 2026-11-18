@@ -138,16 +138,9 @@ def test_utc_and_half_open_interval_boundary_are_explicit() -> None:
     assert earlier.end == later.start
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known KCR-02B gap: MemoryClaim.is_valid treats valid_until as "
-        "inclusive, unlike TemporalInterval and PostgreSQL half-open predicates"
-    ),
-)
-def test_known_gap_claim_valid_until_should_be_exclusive() -> None:
-    # Deliberately expected to fail on current KAREN code. Do not hide or
-    # normalize the mismatch by asserting the current incorrect behavior.
+def test_memory_claim_valid_until_is_exclusive() -> None:
+    # KCR-04B: the canonical in-process check now agrees with the existing
+    # PostgreSQL valid_to > now predicate and TemporalInterval [start, end).
     claim = _claim(
         "vim", valid_from=_dt(1), asserted_at=_dt(1), valid_until=_dt(10)
     )

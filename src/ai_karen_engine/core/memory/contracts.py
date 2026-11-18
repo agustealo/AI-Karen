@@ -77,10 +77,11 @@ class MemoryClaim:
         self.confidence = max(0.0, min(1.0, self.confidence))
 
     def is_valid(self, at: datetime | None = None) -> bool:
+        """Check the half-open [valid_from, valid_until) effective interval."""
         check_time = _utc(at or datetime.now(timezone.utc))
         if self.valid_from and check_time < self.valid_from:
             return False
-        if self.valid_until and check_time > self.valid_until:
+        if self.valid_until is not None and check_time >= self.valid_until:
             return False
         return self.status not in {
             ClaimStatus.SUPERSEDED,

@@ -146,6 +146,53 @@ def test_claim_store_uses_temporal_evolution_for_change() -> None:
     assert store.get(claim_id).valid_until == second_time
 
 
+@pytest.mark.parametrize(
+    ("valid_offset", "expected"),
+    [
+        (timedelta(microseconds=-1), True),
+        (timedelta(0), False),
+        (timedelta(microseconds=1), False),
+    ],
+)
+def test_canonical_claim_excludes_end_instant_at_microsecond_resolution(
+    valid_offset: timedelta,
+    expected: bool,
+) -> None:
+    start = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    boundary = start + timedelta(days=2)
+    claim = _claim("vim", valid_from=start, valid_until=boundary)
+    assert claim.is_valid(boundary + valid_offset) is expected
+
+
+def test_canonical_claim_includes_start_instant_and_normalizes_utc_offsets() -> None:
+    start = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    claim = _claim("vim", valid_from=start, valid_until=end)
+    # Naive input is interpreted as UTC by the existing contract, not
+    # silently interpreted in the worker's local operating-system zone.
+    assert claim.is_valid(start.replace(tzinfo=None)) is True
+    eastern = timezone(timedelta(hours=-5))
+    assert claim.is_valid(datetime(2026, 1, 2, 7, tzinfo=eastern)) is False
+
+
+def test_get_valid_claims_switches_at_one_exclusive_boundary() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    boundary = start + timedelta(days=1)
+    store = MemoryClaimStore()
+    store.add(_claim("vim", valid_from=start, valid_until=boundary))
+    store.add(_claim("vscode", valid_from=boundary))
+    assert {claim.object for claim in store.get_valid_claims(start)} == {"vim"}
+    assert {claim.object for claim in store.get_valid_claims(boundary)} == {"vscode"}
+    assert {claim.object for claim in store.get_valid_claims(boundary - timedelta(microseconds=1))} == {"vim"}
+
+
+def test_retracted_claim_stays_invalid_within_time_window() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    claim = _claim("vim", valid_from=start, valid_until=start + timedelta(days=1))
+    claim.status = ClaimStatus.RETRACTED
+    assert claim.is_valid(start) is False
+
+
 def test_graph_edge_contract_carries_temporal_projection_fields() -> None:
     now = datetime(2026, 8, 27, tzinfo=UTC)
     edge = GraphEdge(
