@@ -446,13 +446,24 @@ async def prove_verified_durable_runtime(
             response_meta = completion[0].metadata or {}
         else:
             result = await runtime.execute(request)
-            require(
-                result.status == ChatExecutionStatus.OK
-                and bool(result.answer.strip()),
-                "nonstream_execution_unverified",
-            )
-            answer = result.answer
             response_meta = result.metadata.to_dict()
+            if result.status != ChatExecutionStatus.OK or not result.answer.strip():
+                # Fixed, bounded source codes only. Never reveal user text,
+                # provider exception text, model output or scoped identities.
+                if response_meta.get("transcript_persistence_status") not in {
+                    "persisted", "already_persisted",
+                }:
+                    failure_code = "nonstream_transcript_not_committed"
+                elif response_meta.get("memory_persistence_status") == "failed":
+                    failure_code = "nonstream_memory_formation_failed"
+                elif result.status == ChatExecutionStatus.DEGRADED:
+                    failure_code = "nonstream_runtime_degraded"
+                elif result.status == ChatExecutionStatus.ERROR:
+                    failure_code = "nonstream_runtime_error"
+                else:
+                    failure_code = "nonstream_response_missing"
+                raise DurableLineageProofError(failure_code)
+            answer = result.answer
 
         require(
             bool(answer.strip())
@@ -543,6 +554,11 @@ def main() -> int:
             "unsupported_expected_strategy",
             "stream_terminal_contract_unverified",
             "nonstream_execution_unverified",
+            "nonstream_transcript_not_committed",
+            "nonstream_memory_formation_failed",
+            "nonstream_runtime_degraded",
+            "nonstream_runtime_error",
+            "nonstream_response_missing",
             "runtime_generation_or_durability_unverified",
             "unlawful_learning_admission",
         }
