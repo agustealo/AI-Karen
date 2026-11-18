@@ -117,8 +117,6 @@ def test_new_admin_routes_delegate_only_to_governed_lifecycle_methods() -> None:
 
 
 def test_verified_bearer_identity_resolver_is_required_for_admin_lifecycle() -> None:
-    from ai_karen_engine.auth import session
-
     auth_source = (ROOT / "src/ai_karen_engine/auth/session.py").read_text(
         encoding="utf-8"
     )
@@ -133,10 +131,16 @@ def test_verified_bearer_identity_resolver_is_required_for_admin_lifecycle() -> 
     assert 'request.headers.get("X-Session-Id")' not in resolver
     assert "get_dev_user_context" not in resolver
 
-    # The runtime and API share one policy, SQL approval and kernel path.
-    for name in (
-        "request_plugin_lifecycle_approval",
-        "execute_plugin_lifecycle_approval",
+    # Both HTTP surfaces must depend on the verified bearer resolver and
+    # must never reconstruct a session or lifecycle scope in the route.
+    route_source = PLUGIN_HTTP.read_text(encoding="utf-8")
+    for name, tail in (
+        ("request_plugin_lifecycle_approval", "execute_plugin_lifecycle_approval"),
+        ("execute_plugin_lifecycle_approval", "enable_plugin"),
     ):
-        method = _method(PLUGIN_HTTP, name)
-        assert "get_plugin_lifecycle_context" in auth_source or method is not None
+        entry = route_source.split(f"async def {name}(", 1)[1].split(
+            f"async def {tail}(", 1
+        )[0]
+        assert "Depends(get_plugin_lifecycle_context)" in entry
+        assert "PluginLifecycleApprovalScope(" not in entry
+        assert "ChatExecutionContext(" not in entry
