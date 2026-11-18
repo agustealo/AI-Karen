@@ -43,6 +43,13 @@ class MemoryClaimStore:
     def _require_claim_scope(self, claim: MemoryClaim) -> None:
         self._require_scope(tenant_id=claim.tenant_id, user_id=claim.user_id)
 
+    def _verified_items(self) -> list[tuple[str, MemoryClaim]]:
+        """Prevalidate the full snapshot before any multi-claim operation."""
+        items = list(self._claims.items())
+        for _, claim in items:
+            self._require_claim_scope(claim)
+        return items
+
     def add(self, claim: MemoryClaim) -> str:
         """Add only claims owned by this store's immutable tenant/user scope."""
         self._require_claim_scope(claim)
@@ -130,8 +137,7 @@ class MemoryClaimStore:
         self._require_claim_scope(claim)
 
         contradictions: list[str] = []
-        for other_id, other in list(self._claims.items()):
-            self._require_claim_scope(other)
+        for other_id, other in self._verified_items():
             if other_id == claim_id:
                 continue
             if claim.subject != other.subject or claim.predicate != other.predicate:
@@ -178,8 +184,7 @@ class MemoryClaimStore:
         self._require_scope(tenant_id=tenant_id, user_id=user_id)
         snapshot_at = at if at is not None else datetime.now(timezone.utc)
         claims: list[MemoryClaim] = []
-        for claim in self._claims.values():
-            self._require_claim_scope(claim)
+        for _, claim in self._verified_items():
             if claim.is_valid(snapshot_at):
                 claims.append(claim)
         return claims
@@ -193,8 +198,7 @@ class MemoryClaimStore:
     ) -> list[MemoryClaim]:
         self._require_scope(tenant_id=tenant_id, user_id=user_id)
         claims: list[MemoryClaim] = []
-        for claim in self._claims.values():
-            self._require_claim_scope(claim)
+        for _, claim in self._verified_items():
             if claim.status == status:
                 claims.append(claim)
         return claims
