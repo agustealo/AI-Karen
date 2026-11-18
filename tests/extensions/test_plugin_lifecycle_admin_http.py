@@ -52,6 +52,13 @@ def _app(monkeypatch: pytest.MonkeyPatch):
         routes, "get_audit_logger",
         lambda: SimpleNamespace(log_audit_event=audits.append),
     )
+    monkeypatch.setattr(
+        routes, "get_rbac_manager",
+        lambda: SimpleNamespace(
+            has_permission=lambda _actor, _permission: True,
+            audit_access_attempt=lambda *_args, **_kwargs: None,
+        ),
+    )
     app = FastAPI()
     app.include_router(routes.router, prefix="/api/plugins")
     app.dependency_overrides[bypass_user_context_func] = lambda: principal
