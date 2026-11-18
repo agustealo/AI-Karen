@@ -31,6 +31,14 @@ transport-level `done` only after `complete`, not after `error`.
 SSE `[DONE]` denotes wire closure, **not** successful model completion.
 The existing runtime/HTTP routing authority and tenant identity guards remain.
 
+Import-level smoke also found an eager compatibility import in
+`services/streaming/__init__.py`: importing the WebSocket transport pulled
+the retired `AsyncStreamProcessor` and optional formatting metrics, causing
+`ModuleNotFoundError: psutil` during the lean Chat System Burn test collection.
+The existing legacy symbol remains available on explicit access, but is now
+resolved lazily. This changes no runtime execution policy or authorization.
+
+
 ## Deep smoke / proof
 
 `tests/core/runtime/test_chat_transport_terminal_parity.py` asserts the
