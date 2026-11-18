@@ -9,7 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Bell, Clock, FileText, Info, Server, AlertCircle, Workflow, Activity, ShieldAlert, BrainCircuit, RefreshCw, Radio, ChevronRight } from "lucide-react";
+import { Bell, Clock, FileText, Info, Server, AlertCircle, Workflow, Activity, ShieldAlert, BrainCircuit, RefreshCw, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format } from 'date-fns';
 
@@ -82,19 +82,45 @@ const isObservabilitySnapshot = (value: unknown): value is ObservabilitySnapshot
     return (
         typeof snapshot.generated_at === "string" &&
         Array.isArray(snapshot.alerts) &&
+        snapshot.alerts.every((alert) =>
+            !!alert && typeof alert.id === "string" &&
+            typeof alert.title === "string" &&
+            typeof alert.description === "string" &&
+            typeof alert.timestamp === "string" &&
+            ["info", "warning", "update"].includes(alert.type)
+        ) &&
         !!snapshot.audit &&
         Array.isArray(snapshot.audit.recent_events) &&
+        snapshot.audit.recent_events.every((event) =>
+            !!event && typeof event === "object" &&
+            (event.message === undefined || typeof event.message === "string") &&
+            (event.event_type === undefined || typeof event.event_type === "string")
+        ) &&
         !!snapshot.audit.event_counts &&
         typeof snapshot.audit.event_counts === "object" &&
+        Object.values(snapshot.audit.event_counts).every(
+            (count) => typeof count === "number" && Number.isFinite(count) && count >= 0
+        ) &&
         !!snapshot.training &&
         !!snapshot.training.event_counts &&
         typeof snapshot.training.event_counts === "object" &&
+        Object.values(snapshot.training.event_counts).every(
+            (count) => typeof count === "number" && Number.isFinite(count) && count >= 0
+        ) &&
         Array.isArray(snapshot.training.security_events) &&
+        snapshot.training.security_events.every((event) =>
+            !!event && typeof event === "object" &&
+            (event.message === undefined || typeof event.message === "string") &&
+            (event.event_type === undefined || typeof event.event_type === "string")
+        ) &&
         !!snapshot.memory &&
         typeof snapshot.memory.available === "boolean" &&
         typeof snapshot.memory.pending_writebacks === "number" &&
         Number.isFinite(snapshot.memory.pending_writebacks) &&
-        snapshot.memory.pending_writebacks >= 0
+        snapshot.memory.pending_writebacks >= 0 &&
+        typeof snapshot.memory.active_shard_links === "number" &&
+        Number.isFinite(snapshot.memory.active_shard_links) &&
+        snapshot.memory.active_shard_links >= 0
     );
 };
 
@@ -103,8 +129,14 @@ const isObservabilitySnapshot = (value: unknown): value is ObservabilitySnapshot
  * @description Communications Center backed by live API data only.
  */
 export default function CommsCenterPage() {
-    const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
-    const [observability, setObservability] = useState<ObservabilitySnapshot | null>(null);
+    const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
+    const principal = user?.tenant_id && user?.user_id
+        ? user.tenant_id + ":" + user.user_id
+        : null;
+    const [snapshot, setSnapshot] = useState<{ principal: string; value: ObservabilitySnapshot } | null>(null);
+    // Never render a previous principal's snapshot across an account switch.
+    const observability = principal && snapshot?.principal === principal
+        ? snapshot.value : null;
     const [observabilityError, setObservabilityError] = useState<string | null>(null);
     const [observabilityAuthRequired, setObservabilityAuthRequired] = useState(false);
     const [observabilityAccessDenied, setObservabilityAccessDenied] = useState(false);
@@ -115,8 +147,8 @@ export default function CommsCenterPage() {
     useEffect(() => {
         if (isAuthLoading) return;
 
-        if (!isAuthenticated) {
-            setObservability(null);
+        if (!isAuthenticated || !principal) {
+            setSnapshot(null);
             setObservabilityLoading(false);
             setObservabilityAuthRequired(true);
             setObservabilityAccessDenied(false);
@@ -126,7 +158,7 @@ export default function CommsCenterPage() {
 
         let active = true;
         setObservabilityLoading(true);
-        setObservability(null);
+        setSnapshot(null);
         setObservabilityError(null);
         setObservabilityAuthRequired(false);
         setObservabilityAccessDenied(false);
@@ -139,10 +171,10 @@ export default function CommsCenterPage() {
                 if (!isObservabilitySnapshot(result)) {
                     throw new Error("Live observability response did not match the backend contract");
                 }
-                if (active) setObservability(result);
+                if (active) setSnapshot({ principal, value: result });
             } catch (error) {
                 if (!active) return;
-                setObservability(null);
+                setSnapshot(null);
                 if (error instanceof ApiError && error.status === 401) {
                     setObservabilityAuthRequired(true);
                 } else if (error instanceof ApiError && error.status === 403) {
@@ -159,7 +191,7 @@ export default function CommsCenterPage() {
 
         void load();
         return () => { active = false; };
-    }, [isAuthenticated, isAuthLoading, refreshRevision]);
+    }, [isAuthenticated, isAuthLoading, principal, refreshRevision]);
 
     const getAlertIcon = (type: SystemAlert['type']) => {
         switch (type) {
@@ -565,8 +597,8 @@ export default function CommsCenterPage() {
                             <div className="space-y-4">
                                 {recentAuditEvents.length > 0 ? recentAuditEvents.map((event, index) => (
                                     <div key={`${event.timestamp ?? index}-${event.event_type ?? 'event'}`} className="flex items-center space-x-4 p-2 rounded-md border bg-muted/40">
-                                        <div className="flex-1 grid grid-cols-4 gap-4 items-center">
-                                            <div className="col-span-2">
+                                        <div className="min-w-0 flex-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                                            <div className="min-w-0 sm:flex-1">
                                                 <p className="font-semibold text-foreground truncate">{event.message || event.event_type || 'Audit event'}</p>
                                                 <Badge variant="secondary">Audit</Badge>
                                             </div>
