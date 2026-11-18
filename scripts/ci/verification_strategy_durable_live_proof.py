@@ -82,6 +82,59 @@ class _ScopedMemoryFailureTypeCapture(logging.Handler):
                 break
 
 
+def _bounded_runtime_degradation(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Emit only fixed runtime state enums and registered projection targets.
+
+    Never forward arbitrary model, provider, memory, SQL or failure strings.
+    This diagnoses real CI failures without changing the canonical runtime.
+    """
+    allowed: dict[str, frozenset[str]] = {
+        "memory_persistence_status": frozenset({
+            "persisted", "persisted_projection_degraded", "failed",
+            "skipped", "no_candidate", "disabled_or_shadow",
+            "denied_by_policy",
+        }),
+        "memory_formation_status": frozenset({
+            "success", "degraded", "failed", "rejected", "skipped",
+            "no_candidate", "noop",
+        }),
+        "transcript_persistence_status": frozenset({
+            "persisted", "already_persisted", "failed", "rejected",
+            "skipped",
+        }),
+        "degradation_reason": frozenset({
+            "memory_projection_failed", "memory_persistence_failed",
+            "memory_authorization_proof_rejected",
+            "transcript_persistence_failed",
+            "durable_learning_disabled_or_shadow",
+        }),
+    }
+    result: dict[str, Any] = {}
+    for key, values in allowed.items():
+        observed = metadata.get(key)
+        if isinstance(observed, str):
+            result[key] = observed if observed in values else "other"
+        else:
+            result[key] = "unknown"
+
+    failed_targets: set[str] = set()
+    targets = metadata.get("memory_projection_targets")
+    if isinstance(targets, list):
+        for item in targets[:32]:
+            if not isinstance(item, dict):
+                continue
+            target = item.get("target")
+            count = item.get("failure_count")
+            if (
+                target in {"stm", "memory_graph", "projection_pipeline"}
+                and type(count) is int
+                and count > 0
+            ):
+                failed_targets.add(target)
+    result["memory_failed_projection_targets"] = sorted(failed_targets)
+    return result
+
+
 def require(condition: bool, code: str) -> None:
     if not condition:
         raise DurableLineageProofError(code)
@@ -524,6 +577,9 @@ async def prove_verified_durable_runtime(
                 failure = DurableLineageProofError(failure_code)
                 failure.observed_error_type = memory_failure.error_type
                 failure.observed_error_origin = memory_failure.error_origin
+                failure.observed_runtime_diagnostics = _bounded_runtime_degradation(
+                    response_meta
+                )
                 raise failure
             answer = result.answer
 
@@ -653,6 +709,12 @@ def main() -> int:
             )
         ):
             diagnostics["memory_exception_origin"] = origin
+        if isinstance(exc, DurableLineageProofError):
+            runtime_diagnostics = getattr(
+                exc, "observed_runtime_diagnostics", None,
+            )
+            if isinstance(runtime_diagnostics, dict):
+                diagnostics["runtime_observation"] = runtime_diagnostics
         print(
             json.dumps(diagnostics, sort_keys=True),
             file=sys.stderr,
