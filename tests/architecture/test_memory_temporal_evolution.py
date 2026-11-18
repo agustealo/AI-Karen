@@ -68,6 +68,25 @@ def test_newer_overlapping_value_supersedes_without_deleting_history() -> None:
     assert decision.incoming.object == "vscode"
 
 
+def test_explicit_supersession_with_identical_reference_preserves_history() -> None:
+    """Same version cannot replace itself and erase the superseded claim."""
+    start = datetime(2026, 6, 1, tzinfo=UTC)
+    store = MemoryClaimStore(**CLAIM_SCOPE)
+    previous = _claim("vim", valid_from=start)
+    original_id = store.add(previous)
+    duplicate = _claim("vim", valid_from=start)
+
+    with pytest.raises(ValueError, match="distinct claim version"):
+        store.supersede(original_id, duplicate)
+
+    assert store.get(original_id, **CLAIM_SCOPE) is previous
+    assert store.get_by_subject("user", **CLAIM_SCOPE) == [previous]
+    assert previous.status is ClaimStatus.OBSERVED
+    assert previous.superseded_at is None
+    assert previous.valid_until is None
+    assert duplicate.supersedes is None
+
+
 def test_backdated_explicit_supersession_rejects_invalid_validity_window() -> None:
     """Compatibility supersede cannot create an end before the old start."""
     start = datetime(2026, 6, 1, tzinfo=UTC)

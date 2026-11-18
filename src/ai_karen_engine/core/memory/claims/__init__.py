@@ -133,7 +133,9 @@ class MemoryClaimStore:
         if old is None:
             return
         self._require_claim_scope(old)
-        self._checked_replacement_id(new_claim)
+        replacement_id = self._checked_replacement_id(new_claim)
+        if replacement_id == claim_id:
+            raise ValueError("supersession requires a distinct claim version")
         now = datetime.now(tz=UTC)
         new_effective = self._temporal.effective_time(new_claim)
         if new_effective < self._temporal.effective_time(old):
