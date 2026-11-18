@@ -103,7 +103,7 @@ export function KarenCopilotVerifiedRail() {
             {selected ? "Evidence linked to the selected saved response" : "Awaiting verified saved history"}
           </p>
         </div>
-        {switcher}
+        {renderSwitcher("karen-verified-response-desktop")}
         {selected?.receipt
           ? <><ConversationContextRail metadata={selected.receipt}
               agentSteps={selected.agentSteps} embedded />
