@@ -171,6 +171,41 @@ The opt-in Pocket CPU runtime profile is separate from the default API
 image; neither a successful API boot nor a `completed` download receipt
 proves voice playback.
 
+### Protected Render dispatch failure: 2026-11-12
+
+The most recent identified operator-dispatched [Render Beta Service Reconcile
+run #43310338481](https://github.com/agustealo/AI-Karen/actions/runs/43310338481)
+stopped in the **initial identity/selectors guard**. Its job log records
+`Existing Render beta service ID is missing`, and the `RENDER_BETA_SERVICE_ID`
+and `RENDER_BETA_WORKSPACE_ID` inputs visible to that job were empty.
+**Neither the Render inspection nor apply step executed.** This establishes
+a GitHub protected-workflow configuration blocker at the time of that run;
+it does **not** prove those variables remain missing today, and it is
+distinct from the earlier observed production boot/environment failures.
+
+Recovery must use the existing
+[`render-beta-service-reconcile.yml`](../../.github/workflows/render-beta-service-reconcile.yml)
+and its `beta-release` environment, on the **current exact reviewed main SHA**.
+The operator must explicitly confirm the intended Render workspace before
+account-scoped inspection. Verify the protected selectors
+`RENDER_BETA_SERVICE_ID`, `RENDER_BETA_WORKSPACE_ID`,
+`RENDER_BETA_POSTGRES_ID` and `RENDER_BETA_KEY_VALUE_ID`, and the
+`RENDER_API_KEY` secret privately. Never print their values, substitute
+hardcoded IDs/defaults, or infer a workspace from a single available entry.
+Run `inspect` then `inspect-env` and retain redacted run links. Only
+separately authorized `apply` may reconcile the existing service's Git branch,
+manual deploy policy and `/health/live` path; it does **not** deploy or
+repair production secrets. Obtain a genuinely live exact-SHA deployment and
+observe both `/health/live` and `/ready` before host and browser acceptance.
+
+The Pocket **native CPU image**, completed licensed model installations for
+both approved transfer methods, authenticated non-silent WAV, real target
+CPU/RAM/latency, and audible signed-in Voice Studio/Copilot playback remain
+separate gates. The merged source-level provenance and browser security
+contracts do not satisfy any missing host evidence. Do not call this
+acceptance complete from source CI, a configuration patch or a completed
+download job.
+
 ### Mandatory real acceptance sequence
 
 1. Establish a healthy supported target host at the reviewed revision,
