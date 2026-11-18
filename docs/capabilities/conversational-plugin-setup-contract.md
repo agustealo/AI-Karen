@@ -767,8 +767,10 @@ a narrow **administrator HTTP** handoff, not an automatic action endpoint:
    A pending or rejected receipt cannot be resumed.
 3. `POST /api/plugins/{plugin_name}/lifecycle/{enable|disable}/execute`
    accepts **only** an approval UUID. The trusted dependency derives
-   `session_id` from the current validated access token's server-issued
-   `token_id` and a deterministic tenant/session-scoped conversation ID.
+   `session_id` as a tenant/actor-scoped **SHA-256 digest** of the
+   current validated access token's server-issued `token_id`, and a
+   deterministic tenant/session-scoped conversation ID. The raw token
+   identifier must never enter approval rows or audit metadata.
    No body-supplied session, roles, manifest checksum, global revision,
    human decision or approved scope is trusted. The canonical
    `PluginService.resume_lifecycle_approval` reads the actor/tenant-scoped
