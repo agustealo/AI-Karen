@@ -9,6 +9,7 @@ It reads the original canonical owners and reports only bounded result codes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -46,6 +47,7 @@ def verify_persisted_chain(
     user_id: str,
     session_id: str,
     model: str,
+    expected_action: str | None = None,
 ) -> dict[str, Any]:
     """Validate existing PostgreSQL and conversation-owner records only.
 
@@ -128,6 +130,7 @@ def verify_persisted_chain(
         and strategy.feature_snapshot_id == topology.feature_snapshot_id
         and strategy.decision_id == trajectory.policy_decision_id
         and strategy.chosen_action in {"respond_direct", "verify_then_respond"}
+        and (expected_action is None or strategy.chosen_action == expected_action)
         and topology.chosen_action == trajectory.executed_topology
         and trajectory.executed_topology == (
             "direct" if strategy.chosen_action == "respond_direct"
@@ -230,6 +233,24 @@ def verify_persisted_chain(
         and execution.get("ope_eligible") is False,
         "selected_execution_provenance_unverified",
     )
+    if expected_action == "verify_then_respond":
+        # The verifier's own reasoned execution receipt is required in
+        # addition to the model call. An authorized hint is not execution.
+        reasoning_modes = (trajectory.cortex_decision or {}).get("reasoning_modes")
+        require(
+            isinstance(reasoning_modes, list)
+            and "verification" in reasoning_modes
+            and strategy.chosen_action == "verify_then_respond"
+            and trajectory.executed_topology == "reasoning"
+            and isinstance(execution.get("reasoning_id"), str)
+            and bool(execution["reasoning_id"])
+            and execution.get("reasoning_status")
+            in {"success", "completed", "partial", "abstained"}
+            and execution.get("reason_codes") == []
+            and execution.get("status") == "selected_runtime_path_observed"
+            and execution.get("independent_verification_proven") is False,
+            "verification_execution_receipt_unverified",
+        )
     return {
         "status": "passed",
         "scope": "one_authenticated_real_model_durable_selected_turn",
@@ -244,11 +265,24 @@ def verify_persisted_chain(
 
 async def read_back(
     *, tenant_id: str, user_id: str, session_id: str, model: str,
+    expected_session_prefix: str = "kcog_c3c_",
+    expected_action: str | None = None,
+    expected_assistant_digest: str | None = None,
 ) -> dict[str, Any]:
     """Read a single session's original committed records without mutation."""
     for value in (tenant_id, user_id):
         uuid.UUID(value)
-    require(session_id.startswith("kcog_c3c_"), "unapproved_acceptance_session")
+    require(
+        expected_session_prefix in {"kcog_c3c_", "kcog_c3d_"}
+        and session_id.startswith(expected_session_prefix)
+        and len(session_id) == len(expected_session_prefix) + 32
+        and all(character in "0123456789abcdef" for character in session_id[-32:]),
+        "unapproved_acceptance_session",
+    )
+    require(
+        expected_action in {None, "verify_then_respond"},
+        "unsupported_expected_strategy",
+    )
     require(bool(model), "expected_installed_model_missing")
 
     trajectory_store = PostgresTrajectoryStore()
@@ -275,6 +309,16 @@ async def read_back(
     snapshot = await get_conversation_runtime_gateway().get_owned_snapshot_by_session(
         context, message_limit=3,
     )
+    if expected_assistant_digest is not None:
+        require(
+            isinstance(expected_assistant_digest, str)
+            and len(expected_assistant_digest) == 64
+            and len(snapshot.messages) == 2
+            and hashlib.sha256(
+                snapshot.messages[-1].content.strip().encode("utf-8")
+            ).hexdigest() == expected_assistant_digest,
+            "delivered_answer_differs_from_committed_transcript",
+        )
     decisions = trajectory_store.list_decision_observations(
         trajectory.trajectory_id, tenant_id=tenant_id,
     )
@@ -300,6 +344,7 @@ async def read_back(
         user_id=user_id,
         session_id=session_id,
         model=model,
+        expected_action=expected_action,
     )
 
     # Exercise the same canonical readers under an unrelated, valid tenant
@@ -316,19 +361,164 @@ async def read_back(
     return proof
 
 
+async def prove_verified_durable_runtime(
+    *, tenant_id: str, user_id: str, model: str,
+) -> dict[str, Any]:
+    """Run two genuine CORTEX -> RuntimePolicy -> ChatRuntime executions.
+
+    A CI-only verification hint is advisory. The persisted original strategy
+    decision and executed verifier receipt must independently confirm that
+    policy actually permitted and Runtime executed the verification path.
+    """
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
+    from ai_karen_engine.core.runtime.chat_runtime_contract import (
+        ChatExecutionContext, ChatExecutionRequest, ChatExecutionStatus,
+    )
+
+    uuid.UUID(tenant_id)
+    uuid.UUID(user_id)
+    require(bool(model), "expected_installed_model_missing")
+    principal = UserData(
+        tenant_id=tenant_id, user_id=user_id,
+        roles=["admin", "user"], is_active=True, is_verified=True,
+    )
+    runtime = get_chat_runtime()
+    observed: list[dict[str, Any]] = []
+
+    for stream in (False, True):
+        session_id = f"kcog_c3d_{uuid.uuid4().hex}"
+        context = ChatExecutionContext(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+            request_id=str(uuid.uuid4()),
+            correlation_id=str(uuid.uuid4()),
+            roles=list(principal.roles),
+            permissions=list(principal.permissions),
+            authenticated_user=principal,
+        )
+        request = ChatExecutionRequest(
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Review this simple claim: A lighthouse helps ships navigate "
+                    "at night. Verify the reasoning and give one short conclusion."
+                ),
+            }],
+            context=context,
+            preferred_provider="ollama",
+            preferred_model=model,
+            temperature=0.0,
+            max_tokens=256,
+            stream=stream,
+            metadata={
+                "transport": "ci_verified_durable_runtime",
+                "reasoning_modes": ["verification"],
+                "max_model_calls": 2,
+                "max_steps": 6,
+                "time_budget_ms": 120000,
+                "token_budget": 4096,
+            },
+        )
+
+        if stream:
+            fragments: list[str] = []
+            completion: list[Any] = []
+            sequence: list[int] = []
+            observed_error = False
+            async for chunk in runtime.execute_stream(request):
+                kind = getattr(chunk.type, "value", chunk.type)
+                observed_error |= kind == "error"
+                if kind == "content":
+                    fragments.append(chunk.content)
+                if kind == "complete":
+                    completion.append(chunk)
+                if isinstance(chunk.sequence, int):
+                    sequence.append(chunk.sequence)
+            require(
+                not observed_error and len(completion) == 1
+                and sequence == sorted(set(sequence))
+                and completion[0].correlation_id == context.correlation_id,
+                "stream_terminal_contract_unverified",
+            )
+            answer = "".join(fragments)
+            response_meta = completion[0].metadata or {}
+        else:
+            result = await runtime.execute(request)
+            require(
+                result.status == ChatExecutionStatus.OK
+                and bool(result.answer.strip()),
+                "nonstream_execution_unverified",
+            )
+            answer = result.answer
+            response_meta = result.metadata.to_dict()
+
+        require(
+            bool(answer.strip())
+            and response_meta.get("actual_provider") in {"ollama", "ollama-local"}
+            and response_meta.get("actual_model") == model
+            and response_meta.get("fallback_level") == 0
+            and response_meta.get("degraded_mode") is False
+            and response_meta.get("transcript_persistence_status")
+            in {"persisted", "already_persisted"},
+            "runtime_generation_or_durability_unverified",
+        )
+        original_digest = hashlib.sha256(
+            answer.strip().encode("utf-8")
+        ).hexdigest()
+        proof = await read_back(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+            model=model,
+            expected_session_prefix="kcog_c3d_",
+            expected_action="verify_then_respond",
+            expected_assistant_digest=original_digest,
+        )
+        require(proof["ope_eligible"] is False, "unlawful_learning_admission")
+        observed.append({
+            "transport": "stream" if stream else "nonstream",
+            "committed_messages": proof["transcript_messages"],
+            "verified_strategy_receipts": proof["execution_receipts"],
+            "verification_executed": True,
+            "ope_eligible": False,
+        })
+
+    return {
+        "status": "passed",
+        "scope": "ci_policy_authorized_verified_durable_runtime",
+        "executions": observed,
+        "independent_quality_review": False,
+        "randomized_selection": False,
+        "ope_eligible": False,
+    }
+
+
 def main() -> int:
-    if os.environ.get("KAREN_CI_C3C_LINEAGE_PROOF") != "enabled":
+    c3c = os.environ.get("KAREN_CI_C3C_LINEAGE_PROOF") == "enabled"
+    c3d = os.environ.get("KAREN_CI_C3D_VERIFIED_DURABLE_PROOF") == "enabled"
+    if c3c == c3d:
         print(json.dumps({"status": "failed", "code": "ci_authorization_missing"}))
         return 1
     try:
-        result = asyncio.run(
-            read_back(
+        if c3d:
+            result = asyncio.run(
+                prove_verified_durable_runtime(
+                    tenant_id=os.environ.get("KAREN_CI_C3D_TENANT_ID", ""),
+                    user_id=os.environ.get("KAREN_CI_C3D_USER_ID", ""),
+                    model=os.environ.get("KAREN_CI_C3D_MODEL", ""),
+                )
+            )
+        else:
+            result = asyncio.run(
+                read_back(
                 tenant_id=os.environ.get("KAREN_CI_C3C_TENANT_ID", ""),
                 user_id=os.environ.get("KAREN_CI_C3C_USER_ID", ""),
                 session_id=os.environ.get("KAREN_CI_C3C_SESSION_ID", ""),
-                model=os.environ.get("KAREN_CI_C3C_MODEL", ""),
+                    model=os.environ.get("KAREN_CI_C3C_MODEL", ""),
+                )
             )
-        )
     except Exception as exc:
         known = {
             "unapproved_acceptance_session",
@@ -348,6 +538,13 @@ def main() -> int:
             "selected_execution_outcome_scope_mismatch",
             "selected_execution_provenance_unverified",
             "foreign_tenant_readback_exposed",
+            "verification_execution_receipt_unverified",
+            "delivered_answer_differs_from_committed_transcript",
+            "unsupported_expected_strategy",
+            "stream_terminal_contract_unverified",
+            "nonstream_execution_unverified",
+            "runtime_generation_or_durability_unverified",
+            "unlawful_learning_admission",
         }
         code = (
             str(exc)
