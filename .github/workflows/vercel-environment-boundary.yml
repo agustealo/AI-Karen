@@ -1,0 +1,69 @@
+name: Vercel Frontend Environment Boundary
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact reviewed 40-character main commit to inspect
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vercel-frontend-environment-boundary
+  cancel-in-progress: false
+
+jobs:
+  inspect-reviewed-vercel-frontend:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: beta-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify protected main identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || {
+            echo "::error::Reviewed main SHA missing or malformed"; exit 1;
+          }
+          test "$TARGET_SHA" = "$GITHUB_SHA" || {
+            echo "::error::Dispatch and checkout revision differ"; exit 1;
+          }
+          test "$TARGET_SHA" = "$(git rev-parse HEAD)" || {
+            echo "::error::Source checkout changed"; exit 1;
+          }
+          test "$TARGET_SHA" = "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')" || {
+            echo "::error::Main advanced during protected review"; exit 1;
+          }
+
+      - name: Audit frontend environment key ownership
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+        run: |
+          set -euo pipefail
+          test "$TARGET_SHA" = "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')" || {
+            echo "::error::Main advanced before credentialed inspection"; exit 1;
+          }
+          test "$TARGET_SHA" = "$GITHUB_SHA" || {
+            echo "::error::Source identity changed"; exit 1;
+          }
+          python -m scripts.ci.verify_vercel_environment_scopes
