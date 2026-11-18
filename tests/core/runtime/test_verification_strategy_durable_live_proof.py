@@ -431,3 +431,517 @@ def test_forged_topology_cannot_pass_as_original_strategy() -> None:
         match="original_strategy_not_proven_or_ope_ineligible",
     ):
         verify_persisted_chain(**evidence)
+
+
+# KCOG-01C1B2C3D: accepted verification must have original verifier evidence.
+def _verified_durable_evidence() -> dict:
+    evidence = _evidence(verify=True)
+    evidence["trajectory"].cortex_decision = {
+        "reasoning_modes": ["verification"],
+    }
+    evidence["outcomes"][0]["metadata"]["selected_strategy_execution"].update({
+        "reasoning_id": "original-executed-verifier",
+        "reasoning_status": "success",
+        "reason_codes": [],
+    })
+    return evidence
+
+
+def test_c3d_requires_original_verifier_receipt() -> None:
+    evidence = _verified_durable_evidence()
+    result = verify_persisted_chain(
+        **evidence, expected_action="verify_then_respond",
+    )
+    assert result["status"] == "passed"
+    assert result["ope_eligible"] is False
+    assert result["review_receipts"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reasoning_id", None),
+        ("reasoning_id", ""),
+        ("reasoning_status", "failed"),
+        ("reasoning_status", "partial"),
+        ("reasoning_status", "abstained"),
+        ("reasoning_status", "budget_exhausted"),
+        ("reasoning_status", "unknown"),
+        ("reason_codes", ["model_generation_receipt_unverified"]),
+        ("status", "unverified"),
+        ("independent_verification_proven", True),
+    ],
+)
+def test_c3d_rejects_unobserved_or_fabricated_verification(
+    field: str, value: object,
+) -> None:
+    evidence = _verified_durable_evidence()
+    execution = evidence["outcomes"][0]["metadata"]["selected_strategy_execution"]
+    execution[field] = value
+    with pytest.raises(
+        DurableLineageProofError,
+        match=(
+            "selected_execution_provenance_unverified"
+            if field in {"status", "independent_verification_proven"}
+            else "verification_execution_receipt_unverified"
+        ),
+    ):
+        verify_persisted_chain(
+            **evidence, expected_action="verify_then_respond",
+        )
+
+
+def test_c3d_rejects_direct_path_misreported_as_verification() -> None:
+    evidence = _evidence()
+    evidence["trajectory"].cortex_decision = {"reasoning_modes": []}
+    with pytest.raises(
+        DurableLineageProofError, match="original_strategy_not_proven_or_ope_ineligible",
+    ):
+        verify_persisted_chain(
+            **evidence, expected_action="verify_then_respond",
+        )
+
+
+def test_c3d_rejects_verification_without_original_cortex_mode() -> None:
+    evidence = _verified_durable_evidence()
+    evidence["trajectory"].cortex_decision["reasoning_modes"] = []
+    with pytest.raises(
+        DurableLineageProofError, match="verification_execution_receipt_unverified",
+    ):
+        verify_persisted_chain(
+            **evidence, expected_action="verify_then_respond",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_id,expected_prefix",
+    [
+        ("kcog_c3c_0123456789abcdef0123456789abcdef", "kcog_c3d_"),
+        ("kcog_c3d_bad", "kcog_c3d_"),
+        ("kcog_c3d_0123456789abcdef0123456789abcdeg", "kcog_c3d_"),
+        ("kcog_c3d_0123456789abcdef0123456789abcdef", "unapproved_"),
+    ],
+)
+async def test_c3d_readback_denies_unapproved_session_before_database(
+    session_id: str, expected_prefix: str,
+) -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import read_back
+
+    with pytest.raises(
+        DurableLineageProofError, match="unapproved_acceptance_session",
+    ):
+        await read_back(
+            tenant_id=TENANT, user_id=USER,
+            session_id=session_id, model=MODEL,
+            expected_session_prefix=expected_prefix,
+            expected_action="verify_then_respond",
+        )
+
+
+def test_c3d_ci_entrypoint_requires_exclusive_authorization(monkeypatch, capsys) -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import main
+
+    monkeypatch.setenv("KAREN_CI_C3C_LINEAGE_PROOF", "enabled")
+    monkeypatch.setenv("KAREN_CI_C3D_VERIFIED_DURABLE_PROOF", "enabled")
+    assert main() == 1
+    assert "ci_authorization_missing" in capsys.readouterr().out
+
+
+def test_c3d_memory_error_probe_exposes_only_bounded_exception_class() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    record = logging.LogRecord(
+        "ai_karen_engine.core.runtime.chat_runtime",
+        logging.WARNING, "chat_runtime.py", 1,
+        "Memory persistence failed", (), None,
+    )
+    record.error_type = "OperationalError"
+    record.prompt = "private-input-must-never-be-emitted"
+    probe.emit(record)
+    assert probe.error_type == "OperationalError"
+    assert "private-input" not in probe.error_type
+
+    record.error_type = "OperationalError\nsecret=private-input"
+    probe.emit(record)
+    assert probe.error_type == "OperationalError"
+
+    record.error_type = "X" * 65
+    probe.emit(record)
+    assert probe.error_type == "OperationalError"
+
+
+def test_c3d_memory_error_probe_ignores_other_log_records() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    different_logger = logging.LogRecord(
+        "ai_karen_engine.core.reasoning",
+        logging.WARNING, "reasoning.py", 1,
+        "Memory persistence failed", (), None,
+    )
+    different_logger.error_type = "RuntimeError"
+    probe.emit(different_logger)
+
+    different_event = logging.LogRecord(
+        "ai_karen_engine.core.runtime.chat_runtime",
+        logging.WARNING, "chat_runtime.py", 1,
+        "Other runtime warning", (), None,
+    )
+    different_event.error_type = "ValueError"
+    probe.emit(different_event)
+    assert probe.error_type is None
+
+
+def test_c3d_memory_error_origin_is_bounded_and_never_logs_exception_text() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    source = compile(
+        'raise AttributeError("password=very-sensitive-memory-content")',
+        "/opt/app/src/ai_karen_engine/core/memory/formation/evaluator.py",
+        "exec",
+    )
+    try:
+        exec(source, {})
+    except AttributeError:
+        record = logging.LogRecord(
+            "ai_karen_engine.core.runtime.chat_runtime",
+            logging.WARNING,
+            "chat_runtime.py",
+            1,
+            "Memory persistence failed",
+            (),
+            None,
+        )
+        record.error_type = "AttributeError"
+        probe.emit(record)
+
+    assert probe.error_type == "AttributeError"
+    assert probe.error_origin == "evaluator.py:1"
+    assert "password" not in probe.error_origin
+    assert "/opt/app" not in probe.error_origin
+
+
+def test_c3d_memory_error_origin_denies_arbitrary_external_tracebacks() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    source = compile(
+        'raise AttributeError("private value is never diagnostic")',
+        "/home/private-user-content/source.py",
+        "exec",
+    )
+    try:
+        exec(source, {})
+    except AttributeError:
+        record = logging.LogRecord(
+            "ai_karen_engine.core.runtime.chat_runtime",
+            logging.WARNING,
+            "chat_runtime.py",
+            1,
+            "Memory persistence failed",
+            (),
+            None,
+        )
+        record.error_type = "AttributeError"
+        probe.emit(record)
+
+    assert probe.error_type == "AttributeError"
+    assert probe.error_origin == "outside_memory"
+
+
+def test_c3d_runtime_degradation_diagnostic_is_allowlisted() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    sensitive = "database-secret-password-and-user-message"
+    evidence = _bounded_runtime_degradation({
+        "memory_persistence_status": "persisted_projection_degraded",
+        "memory_formation_status": "degraded",
+        "transcript_persistence_status": "persisted",
+        "degradation_reason": "memory_projection_failed",
+        "actual_model": sensitive,
+        "user_id": sensitive,
+        "memory_context": {"recall": [sensitive]},
+        "memory_projection_targets": [
+            {"target": "memory_graph", "failure_count": 1},
+            {"target": "stm", "failure_count": 0},
+            {"target": "projection_pipeline", "failure_count": 2},
+            {"target": sensitive, "failure_count": 4},
+            {"target": ["unhashable-private-value"], "failure_count": 5},
+            {"target": "stm", "failure_count": True},
+            {"target": "memory_graph", "failure_count": "secret-count"},
+        ],
+    })
+    assert evidence == {
+        "memory_persistence_status": "persisted_projection_degraded",
+        "memory_formation_status": "degraded",
+        "transcript_persistence_status": "persisted",
+        "degradation_reason": "memory_projection_failed",
+        "memory_failed_projection_targets": [
+            "memory_graph", "projection_pipeline",
+        ],
+    }
+    assert sensitive not in str(evidence)
+    assert "actual_model" not in evidence
+    assert "memory_context" not in evidence
+
+
+def test_c3d_runtime_degradation_diagnostic_rejects_arbitrary_state() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    evidence = _bounded_runtime_degradation({
+        "memory_persistence_status": "session=/private-secret",
+        "memory_formation_status": None,
+        "transcript_persistence_status": {"untrusted": "secret"},
+        "degradation_reason": "password=secret",
+        "memory_projection_targets": "invalid-list",
+    })
+    assert evidence == {
+        "memory_persistence_status": "other",
+        "memory_formation_status": "unknown",
+        "transcript_persistence_status": "unknown",
+        "degradation_reason": "other",
+        "memory_failed_projection_targets": [],
+    }
+    assert "secret" not in str(evidence)
+
+
+def test_c3d_diagnostic_tracks_executed_model_without_exposing_identity() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    actual = _bounded_runtime_degradation(
+        {
+            "memory_persistence_status": "persisted",
+            "memory_formation_status": "success",
+            "transcript_persistence_status": "persisted",
+            "degradation_reason": "provider returned private text: password=secret",
+            "actual_provider": "ollama-local",
+            "actual_model": "private-local-model-id",
+            "reasoning_status": "failed",
+            "reasoning_activation": "core_defaults",
+            "reasoning_generation_mode": "model_after_authorized_reasoning",
+            "reasoning_model_calls": 0,
+            "verification_strategy_executed": True,
+            "fallback_level": 0,
+            "user_id": "private-user-id",
+        },
+        expected_model="private-local-model-id",
+    )
+    assert actual == {
+        "memory_persistence_status": "persisted",
+        "memory_formation_status": "success",
+        "transcript_persistence_status": "persisted",
+        "degradation_reason": "other",
+        "memory_failed_projection_targets": [],
+        "observed_provider": "ollama",
+        "observed_model": "expected",
+        "reasoning_status": "failed",
+        "reasoning_activation": "core_defaults",
+        "reasoning_generation_mode": "model_after_authorized_reasoning",
+        "verification_strategy_executed": True,
+        "reasoning_model_calls": "zero",
+        "fallback_level": "zero",
+        "output_truncated": "unknown",
+        "finish_reason": "unknown",
+    }
+    assert "private" not in str(actual)
+    assert "secret" not in str(actual)
+
+
+def test_c3d_diagnostic_rejects_untrusted_provider_and_reasoning_fields() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    actual = _bounded_runtime_degradation(
+        {
+            "actual_provider": ["private", "untrusted"],
+            "actual_model": {"secret": "model"},
+            "reasoning_status": "password=secret",
+            "reasoning_activation": "private origin",
+            "reasoning_generation_mode": "private generation path",
+            "verification_strategy_executed": "yes",
+            "reasoning_model_calls": True,
+            "fallback_level": True,
+        },
+        expected_model="trusted-model",
+    )
+    assert actual == {
+        "memory_persistence_status": "unknown",
+        "memory_formation_status": "unknown",
+        "transcript_persistence_status": "unknown",
+        "degradation_reason": "unknown",
+        "memory_failed_projection_targets": [],
+        "observed_provider": "other",
+        "observed_model": "other",
+        "reasoning_status": "other",
+        "reasoning_activation": "other",
+        "reasoning_generation_mode": "other",
+        "verification_strategy_executed": "unknown",
+        "reasoning_model_calls": "unknown",
+        "fallback_level": "unknown",
+        "output_truncated": "unknown",
+        "finish_reason": "unknown",
+    }
+    assert "secret" not in str(actual)
+    assert "private" not in str(actual)
+
+
+def test_c3d_diagnostic_reveals_only_bounded_token_limit() -> None:
+    """Truncated model output cannot silently satisfy C3D acceptance."""
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    output = _bounded_runtime_degradation(
+        {
+            "degradation_reason": "output_token_limit",
+            "actual_provider": "ollama",
+            "actual_model": "original-installed-model",
+            "reasoning_status": "completed",
+            "output_truncated": True,
+            "finish_reason": "length",
+            "fallback_level": 0,
+            "prompt": "do-not-expose-private-model-content",
+        },
+        expected_model="original-installed-model",
+    )
+    assert output["degradation_reason"] == "output_token_limit"
+    assert output["output_truncated"] is True
+    assert output["finish_reason"] == "length"
+    assert output["observed_provider"] == "ollama"
+    assert output["observed_model"] == "expected"
+    assert "do-not-expose" not in str(output)
+    assert "original-installed-model" not in str(output)
+
+
+def test_c3d_diagnostic_rejects_private_finish_reason() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    output = _bounded_runtime_degradation(
+        {
+            "output_truncated": "password=private-value",
+            "finish_reason": "SQL private parameters",
+            "degradation_reason": "private error",
+        },
+        expected_model="expected-model",
+    )
+    assert output["output_truncated"] == "unknown"
+    assert output["finish_reason"] == "other"
+    assert output["degradation_reason"] == "other"
+    assert "private" not in str(output)
+    assert "SQL" not in str(output)
+
+
+def test_c3d_authenticated_principal_preserves_exact_validated_roles() -> None:
+    """A user-only validated session never becomes an admin in CI."""
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _principal_from_validated_session,
+    )
+
+    principal = _principal_from_validated_session(
+        tenant_id=TENANT,
+        user_id=USER,
+        observed={
+            "tenant_id": TENANT,
+            "user_id": USER,
+            "authenticated": True,
+            "session_valid": True,
+            "is_active": True,
+            "roles": ["user"],
+            "permissions": ["memory.read"],
+        },
+    )
+    assert principal.roles == ["user"]
+    assert principal.permissions == ["memory.read"]
+    assert principal.is_active is True
+    assert principal.is_verified is True
+    assert "admin" not in principal.roles
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("tenant_id", "another-tenant"),
+        ("user_id", "another-user"),
+        ("authenticated", False),
+        ("session_valid", False),
+        ("is_active", False),
+        ("roles", None),
+        ("roles", []),
+        ("roles", "admin"),
+        ("roles", ["user", "user"]),
+        ("roles", ["user", 7]),
+        ("roles", ["admin", "hidden role "]),
+        ("permissions", None),
+        ("permissions", "memory.write"),
+        ("permissions", ["memory.read", "memory.read"]),
+        ("permissions", ["memory.read", True]),
+    ],
+)
+def test_c3d_authenticated_principal_rejects_missing_or_forged_claims(
+    field: str, bad_value: object,
+) -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        DurableLineageProofError,
+        _principal_from_validated_session,
+    )
+
+    observed = {
+        "tenant_id": TENANT,
+        "user_id": USER,
+        "authenticated": True,
+        "session_valid": True,
+        "is_active": True,
+        "roles": ["user"],
+        "permissions": ["memory.read"],
+    }
+    observed[field] = bad_value
+    with pytest.raises(
+        DurableLineageProofError,
+        match="ci_authenticated_principal_unverified",
+    ):
+        _principal_from_validated_session(
+            tenant_id=TENANT, user_id=USER, observed=observed,
+        )
+
+
+def test_c3d_authenticated_principal_requires_envelope() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        DurableLineageProofError,
+        _principal_from_validated_session,
+    )
+
+    with pytest.raises(
+        DurableLineageProofError,
+        match="ci_authenticated_principal_unverified",
+    ):
+        _principal_from_validated_session(
+            tenant_id=TENANT, user_id=USER, observed=None,
+        )
