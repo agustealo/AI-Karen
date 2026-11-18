@@ -34,6 +34,7 @@ This is intentionally an **API-breaking change** to an exported in-process utili
 - Cross-owner insert, evolution and supersession cannot mutate existing records
 - Foreign confidence updates are denied before mutation
 - Mutated stored records cannot leak through any read path
+- Multi-claim contradiction evaluation validates every stored owner before modifying any claim, avoiding partial writes when a later entry has been corrupted
 - Tenant-level and user-level owner scopes are distinct
 
 Existing KCR-04B/04D temporal tests are migrated to pass the explicit owner context. `Main Quality Gate` now explicitly invokes the new security contract module.
