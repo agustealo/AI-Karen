@@ -535,6 +535,63 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
   fi
   if [[ "${KAREN_SMOKE_VERIFIED_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
     echo "[smoke] proving full authorized verification, stream and nonstream durable lineage"
+    # Read current privileges from the canonical, cookie-authenticated session,
+    # not from caller hints or the first-run role assumptions.
+    c3d_session_json="$(curl -fsS -b "${COOKIE_JAR}" "${BASE_URL}/api/auth/validate-session")"
+    c3d_principal_json="$("${PYTHON_BIN}" - "${me_after_restart}" "${c3d_session_json}" <<'PY'
+import json
+import sys
+
+def deny():
+    raise SystemExit("C3D authenticated principal contract unverified")
+
+try:
+    me = json.loads(sys.argv[1])
+    envelope = json.loads(sys.argv[2])
+    user = envelope.get("user")
+    if not isinstance(me, dict) or not isinstance(user, dict):
+        deny()
+    if not (
+        envelope.get("valid") is True
+        and envelope.get("authenticated") is True
+        and envelope.get("session_valid") is True
+        and user.get("is_active") is True
+        and me.get("is_active") is True
+        and user.get("user_id") == me.get("user_id")
+        and user.get("tenant_id") == me.get("tenant_id")
+        and user.get("user_id")
+        and user.get("tenant_id")
+    ):
+        deny()
+    roles = user.get("roles")
+    permissions = envelope.get("permissions")
+    if not (
+        type(roles) is list
+        and 0 < len(roles) <= 32
+        and type(permissions) is list
+        and len(permissions) <= 256
+        and type(me.get("roles")) is list
+        and sorted(me["roles"]) == sorted(roles)
+        and user.get("permissions") == permissions
+        and all(type(item) is str and item and item.strip() == item and len(item) <= 128 for item in roles)
+        and all(type(item) is str and item and item.strip() == item and len(item) <= 128 for item in permissions)
+        and len(set(roles)) == len(roles)
+        and len(set(permissions)) == len(permissions)
+    ):
+        deny()
+    print(json.dumps({
+        "user_id": user["user_id"],
+        "tenant_id": user["tenant_id"],
+        "roles": roles,
+        "permissions": permissions,
+        "is_active": user["is_active"],
+        "authenticated": envelope["authenticated"],
+        "session_valid": envelope["session_valid"],
+    }, separators=(",", ":")))
+except (KeyError, TypeError, ValueError, IndexError):
+    deny()
+PY
+)"
     # Exact checked-out source, isolated CI-only authenticated principal.
     # No new HTTP route, shadow selector, secondary store or synthetic receipt.
     docker exec -i \
@@ -542,6 +599,7 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
       -e "KAREN_CI_C3D_USER_ID=${dual_identity[0]}" \
       -e "KAREN_CI_C3D_TENANT_ID=${dual_identity[1]}" \
       -e "KAREN_CI_C3D_MODEL=${LIVE_MODEL_NAME}" \
+      -e "KAREN_CI_C3D_VALIDATED_PRINCIPAL=${c3d_principal_json}" \
       "${API_CONTAINER}" python - \
       < scripts/ci/verification_strategy_durable_live_proof.py
     echo "REAL AUTHORIZED VERIFIED DURABLE STRATEGY PROOF PASSED"

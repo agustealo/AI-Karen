@@ -857,3 +857,91 @@ def test_c3d_diagnostic_rejects_private_finish_reason() -> None:
     assert output["degradation_reason"] == "other"
     assert "private" not in str(output)
     assert "SQL" not in str(output)
+
+
+def test_c3d_authenticated_principal_preserves_exact_validated_roles() -> None:
+    """A user-only validated session never becomes an admin in CI."""
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _principal_from_validated_session,
+    )
+
+    principal = _principal_from_validated_session(
+        tenant_id=TENANT,
+        user_id=USER,
+        observed={
+            "tenant_id": TENANT,
+            "user_id": USER,
+            "authenticated": True,
+            "session_valid": True,
+            "is_active": True,
+            "roles": ["user"],
+            "permissions": ["memory.read"],
+        },
+    )
+    assert principal.roles == ["user"]
+    assert principal.permissions == ["memory.read"]
+    assert principal.is_active is True
+    assert principal.is_verified is True
+    assert "admin" not in principal.roles
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("tenant_id", "another-tenant"),
+        ("user_id", "another-user"),
+        ("authenticated", False),
+        ("session_valid", False),
+        ("is_active", False),
+        ("roles", None),
+        ("roles", []),
+        ("roles", "admin"),
+        ("roles", ["user", "user"]),
+        ("roles", ["user", 7]),
+        ("roles", ["admin", "hidden role "]),
+        ("permissions", None),
+        ("permissions", "memory.write"),
+        ("permissions", ["memory.read", "memory.read"]),
+        ("permissions", ["memory.read", True]),
+    ],
+)
+def test_c3d_authenticated_principal_rejects_missing_or_forged_claims(
+    field: str, bad_value: object,
+) -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        DurableLineageProofError,
+        _principal_from_validated_session,
+    )
+
+    observed = {
+        "tenant_id": TENANT,
+        "user_id": USER,
+        "authenticated": True,
+        "session_valid": True,
+        "is_active": True,
+        "roles": ["user"],
+        "permissions": ["memory.read"],
+    }
+    observed[field] = bad_value
+    with pytest.raises(
+        DurableLineageProofError,
+        match="ci_authenticated_principal_unverified",
+    ):
+        _principal_from_validated_session(
+            tenant_id=TENANT, user_id=USER, observed=observed,
+        )
+
+
+def test_c3d_authenticated_principal_requires_envelope() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        DurableLineageProofError,
+        _principal_from_validated_session,
+    )
+
+    with pytest.raises(
+        DurableLineageProofError,
+        match="ci_authenticated_principal_unverified",
+    ):
+        _principal_from_validated_session(
+            tenant_id=TENANT, user_id=USER, observed=None,
+        )
