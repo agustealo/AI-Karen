@@ -231,3 +231,43 @@
   font-family: var(--kari-font-display);
   letter-spacing: -0.01em;
 }
+
+/*
+ * KUI-002C stationary fourth region. This belongs to the canonical
+ * CopilotKit conversation shell and never displays synthetic pins.
+ * The owning chat remains horizontally flexible while context and dock
+ * retain their independent vertical scroll areas.
+ */
+[data-kari-root] .karen-pinned-dock {
+  display: none;
+  flex: 0 0 var(--kari-dock-width);
+  width: var(--kari-dock-width);
+  max-width: var(--kari-dock-width);
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--kari-line);
+  background: var(--kari-panel);
+}
+[data-kari-root] .karen-pinned-dock-header {
+  flex: 0 0 auto;
+  min-height: var(--kari-header-height);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--kari-line);
+  font-family: var(--kari-font-display);
+}
+[data-kari-root] .karen-pinned-dock-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--kari-line-strong) transparent;
+  padding: 16px 12px;
+}
+@media (min-width: 1600px) {
+  [data-kari-root] .karen-pinned-dock {
+    display: flex;
+  }
+}
