@@ -15,7 +15,6 @@ from ai_karen_engine.core.memory.temporal import (
     TemporalInterval,
 )
 
-
 TENANT = "00000000-0000-0000-0000-000000000001"
 USER = "00000000-0000-0000-0000-000000000002"
 CLAIM_SCOPE = {"tenant_id": TENANT, "user_id": USER}
