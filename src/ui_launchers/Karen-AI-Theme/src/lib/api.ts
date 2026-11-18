@@ -542,16 +542,9 @@ class ApiClient {
           body: JSON.stringify({ refresh_token: refreshToken }),
         });
 
-      const preferredBaseUrl = this.getPreferredBaseUrl();
-      const fallbackBaseUrl = this.getFallbackBaseUrl(preferredBaseUrl);
-
-      let response: Response;
-      try {
-        response = await sendRefresh(preferredBaseUrl);
-      } catch (error) {
-        if (!this.shouldRetryWithSameOrigin(error) || !fallbackBaseUrl) throw error;
-        response = await sendRefresh(fallbackBaseUrl);
-      }
+      // Refresh is a credential-rotating POST. A lost response may follow
+      // successful token rotation, so never replay it at a fallback origin.
+      const response = await sendRefresh(this.getPreferredBaseUrl());
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Token refresh failed');

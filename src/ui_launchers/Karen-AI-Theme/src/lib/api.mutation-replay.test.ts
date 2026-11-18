@@ -90,6 +90,32 @@ describe('single-attempt authenticated mutations', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('never retries a credential-rotating refresh after a lost response', async () => {
+    localStorage.setItem('refresh_token', 'refresh-credential-for-single-attempt-proof');
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(clientInternals.refreshAccessToken())
+      .rejects.toThrow('Failed to fetch');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' });
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/auth/refresh');
+  });
+
+  it('does not fall back when a refresh response is 503', async () => {
+    localStorage.setItem('refresh_token', 'refresh-credential-for-status-proof');
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('Unverified refresh outcome', { status: 503 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(clientInternals.refreshAccessToken())
+      .rejects.toThrow('Token refresh failed: 503');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('never refreshes and replays an already-sent mutation after HTTP 401', async () => {
     localStorage.setItem('refresh_token', 'present-only-to-detect-unsafe-replay');
     const refreshSpy = vi.spyOn(clientInternals, 'refreshAccessToken')
