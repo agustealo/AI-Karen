@@ -130,6 +130,7 @@ export function KarenCopilotVerifiedRail() {
           </p>
         </div>
         {renderSwitcher("karen-verified-response-desktop")}
+        {renderPresentations()}
         {selected?.receipt
           ? <><ConversationContextRail metadata={selected.receipt}
               agentSteps={selected.agentSteps} embedded />
