@@ -166,3 +166,26 @@ def test_tenant_level_scope_is_distinct_from_user_level_scope() -> None:
     assert store.get(key, tenant_id=TENANT_A, user_id=None) is claim
     with pytest.raises(ValueError, match="scope mismatch"):
         store.get(key, **SCOPE_A)
+
+
+def test_contradiction_scan_prevalidates_all_records_before_mutation() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    target = _claim(value="vim")
+    target_id = store.add(target)
+    overlapping = _claim(value="emacs")
+    overlapping.valid_from = START + timedelta(days=2)
+    overlapping.event_time = overlapping.valid_from
+    other_id = store.add(overlapping)
+    foreign = _claim(value="vscode")
+    store.add(foreign)
+    foreign.user_id = USER_B
+
+    with pytest.raises(ValueError, match="scope mismatch"):
+        store.detect_contradictions(target_id, **SCOPE_A)
+
+    assert store.get(target_id, **SCOPE_A) is target
+    assert store.get(other_id, **SCOPE_A) is overlapping
+    assert target.status is ClaimStatus.OBSERVED
+    assert overlapping.status is ClaimStatus.OBSERVED
+    assert target.contradiction_refs == []
+    assert overlapping.contradiction_refs == []
