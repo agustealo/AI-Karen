@@ -112,3 +112,8 @@ Before enabling pin/unpin: resolve canonical persistent ownership, versioned pin
 **Required proof before UI activation:** cross-tenant/user access denial, non-assistant/forged event rejection, revoked origin, deleted conversation, stale revision, conflicting writes, repeated pin/unpin, order limits, DB rollback, backend outage, audit receipt, reload and cross-device readback; authenticated real-browser keyboard/viewport acceptance.
 
 **Current code status:** the stationary dock is a truthful unavailable visual shell. No pin endpoints, DB migration, authenticated mutations, or artifact readback are implemented by PR #1032. KUI-002D must remain blocked until these contracts are code-verified. This page is not authorization to bypass the runtime or loosen saved-history replay checks.
+
+### Backend ownership audit: generated presentation versus uploaded file artifact
+
+The existing `src/ai_karen_engine/api_routes/artifacts.py` and `services/database/repositories/artifact_store.py` handle file-like artifact upload/download, archive and purge. They do **not** establish that a saved `karen.presentation.v1` envelope is an uploaded file artifact or grant cross-conversation restoration. Do not coerce verified cards into blob uploads merely to reuse the word “artifact”. The identity and authorization check for pinning a generated card must remain anchored to the canonical conversation/message and its admitted saved presentation, and only the **reference** belongs in a governed pin-record repository. Confirm whether an existing user-scoped preference or workspace persistence repository can own pin records before adding a new table.
+
