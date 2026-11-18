@@ -10,6 +10,7 @@
 **Proof:** R01, R02, R03, R09, R12; new services=0; new Python dependencies=0 unless an exact proven necessary gap.
 
 ## A02 | Association propagation (P1)
+**Independent method inspection:** [KCR-02A, pinned HippoRAG PPR and LightRAG mechanics](KCR02A_GRAPH_RETRIEVAL.md). The research-only comparator is *not* a runtime adaptation.
 **Owns:** `SpreadingActivation` compute over authorized `PostgresGraphRepository` neighborhoods; **NeuroRecall final ranking**.  
 **Inspect from:** HippoRAG 2 Personalized PageRank entity/passage links and LightRAG graph context extraction.  
 **Experiment:** Existing bounded-decay algorithm vs a dependency-free sparse Personalized PageRank implementation built only in isolated research code.  
