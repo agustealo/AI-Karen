@@ -222,6 +222,10 @@ jobs:
           KCR04A_REPORT_PATH: kcr04a-live-retrieval-report.json
         run: |
           pytest tests/integration/test_live_canonical_memory_recall_baseline.py -q -rs --junitxml=kcr04a-live-retrieval-junit.xml
+      - name: KCR-04F prove real half-open recall and scoped consent boundaries
+        run: |
+          pytest tests/integration/test_live_memory_recall_boundary_contract.py -q -rs
+
       - name: Preserve KCR-04A sanitized real PostgreSQL evidence
         if: always()
         uses: actions/upload-artifact@v4
