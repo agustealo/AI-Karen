@@ -28,13 +28,14 @@ def get_control_plane() -> AgentMedusaControlPlane:
 
 
 def _tenant_id(current_user: dict[str, Any]) -> str:
-    tenant_id = current_user.get("tenant_id")
-    if not tenant_id:
+    """Require a concrete verified tenant, never a placeholder workspace."""
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    if tenant_id.lower() in {"", "default", "dev-tenant"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Tenant context is required for Medusa run access",
+            detail="Verified tenant context is required for Medusa run access",
         )
-    return str(tenant_id)
+    return tenant_id
 
 
 def _actor_user_id(current_user: dict[str, Any]) -> str | None:
