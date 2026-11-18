@@ -600,3 +600,69 @@ def test_c3d_memory_error_probe_ignores_other_log_records() -> None:
     different_event.error_type = "ValueError"
     probe.emit(different_event)
     assert probe.error_type is None
+
+
+def test_c3d_memory_error_origin_is_bounded_and_never_logs_exception_text() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    source = compile(
+        'raise AttributeError("password=very-sensitive-memory-content")',
+        "/opt/app/src/ai_karen_engine/core/memory/formation/evaluator.py",
+        "exec",
+    )
+    try:
+        exec(source, {})
+    except AttributeError:
+        record = logging.LogRecord(
+            "ai_karen_engine.core.runtime.chat_runtime",
+            logging.WARNING,
+            "chat_runtime.py",
+            1,
+            "Memory persistence failed",
+            (),
+            None,
+        )
+        record.error_type = "AttributeError"
+        probe.emit(record)
+
+    assert probe.error_type == "AttributeError"
+    assert probe.error_origin == "evaluator.py:1"
+    assert "password" not in probe.error_origin
+    assert "/opt/app" not in probe.error_origin
+
+
+def test_c3d_memory_error_origin_denies_arbitrary_external_tracebacks() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    source = compile(
+        'raise AttributeError("private value is never diagnostic")',
+        "/home/private-user-content/source.py",
+        "exec",
+    )
+    try:
+        exec(source, {})
+    except AttributeError:
+        record = logging.LogRecord(
+            "ai_karen_engine.core.runtime.chat_runtime",
+            logging.WARNING,
+            "chat_runtime.py",
+            1,
+            "Memory persistence failed",
+            (),
+            None,
+        )
+        record.error_type = "AttributeError"
+        probe.emit(record)
+
+    assert probe.error_type == "AttributeError"
+    assert probe.error_origin == "outside_memory"
