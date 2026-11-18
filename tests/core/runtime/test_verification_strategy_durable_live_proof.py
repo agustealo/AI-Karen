@@ -666,3 +666,63 @@ def test_c3d_memory_error_origin_denies_arbitrary_external_tracebacks() -> None:
 
     assert probe.error_type == "AttributeError"
     assert probe.error_origin == "outside_memory"
+
+
+def test_c3d_runtime_degradation_diagnostic_is_allowlisted() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    sensitive = "database-secret-password-and-user-message"
+    evidence = _bounded_runtime_degradation({
+        "memory_persistence_status": "persisted_projection_degraded",
+        "memory_formation_status": "degraded",
+        "transcript_persistence_status": "persisted",
+        "degradation_reason": "memory_projection_failed",
+        "actual_model": sensitive,
+        "user_id": sensitive,
+        "memory_context": {"recall": [sensitive]},
+        "memory_projection_targets": [
+            {"target": "memory_graph", "failure_count": 1},
+            {"target": "stm", "failure_count": 0},
+            {"target": "projection_pipeline", "failure_count": 2},
+            {"target": sensitive, "failure_count": 4},
+            {"target": ["unhashable-private-value"], "failure_count": 5},
+            {"target": "stm", "failure_count": True},
+            {"target": "memory_graph", "failure_count": "secret-count"},
+        ],
+    })
+    assert evidence == {
+        "memory_persistence_status": "persisted_projection_degraded",
+        "memory_formation_status": "degraded",
+        "transcript_persistence_status": "persisted",
+        "degradation_reason": "memory_projection_failed",
+        "memory_failed_projection_targets": [
+            "memory_graph", "projection_pipeline",
+        ],
+    }
+    assert sensitive not in str(evidence)
+    assert "actual_model" not in evidence
+    assert "memory_context" not in evidence
+
+
+def test_c3d_runtime_degradation_diagnostic_rejects_arbitrary_state() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    evidence = _bounded_runtime_degradation({
+        "memory_persistence_status": "session=/private-secret",
+        "memory_formation_status": None,
+        "transcript_persistence_status": {"untrusted": "secret"},
+        "degradation_reason": "password=secret",
+        "memory_projection_targets": "invalid-list",
+    })
+    assert evidence == {
+        "memory_persistence_status": "other",
+        "memory_formation_status": "unknown",
+        "transcript_persistence_status": "unknown",
+        "degradation_reason": "other",
+        "memory_failed_projection_targets": [],
+    }
+    assert "secret" not in str(evidence)
