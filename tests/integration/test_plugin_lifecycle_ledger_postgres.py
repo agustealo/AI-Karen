@@ -26,7 +26,11 @@ from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.persistence.repositories import approval_repository as approval_repo_module
 from ai_karen_engine.services import approvals as approvals_module
-from ai_karen_engine.services.approvals import ApprovalService
+from ai_karen_engine.services.approvals import (
+    ApprovalNotFoundError,
+    ApprovalService,
+    ApprovalStateError,
+)
 from ai_karen_engine.persistence.repositories.approval_repository import SqlApprovalRepository
 from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
     PluginLifecycleApprovalScope,
@@ -768,7 +772,6 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 plugin_id="governed-request", action="enable",
                 approval_id=consent_id,
             )
-        from ai_karen_engine.services.approvals import ApprovalNotFoundError, ApprovalStateError
         with pytest.raises(ApprovalNotFoundError):
             await approved_service.get(
                 consent_id,
