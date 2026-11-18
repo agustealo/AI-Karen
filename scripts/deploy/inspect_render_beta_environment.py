@@ -163,7 +163,9 @@ def _origins_secure(value: str) -> bool:
     if not value:
         return False
     for origin in value.split(","):
-        origin = origin.strip()
+        # Only tolerate formatting spaces around comma-separated origins.
+        # Do not strip tabs/newlines before validating forbidden URL controls.
+        origin = origin.strip(" ")
         # urlsplit silently removes embedded tabs and newlines. An audit must
         # never accept a different origin than the operator actually supplied.
         if not origin or any(ord(c) <= 32 or ord(c) == 127 for c in origin):
