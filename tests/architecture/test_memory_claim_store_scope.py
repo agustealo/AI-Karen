@@ -58,7 +58,7 @@ def test_claim_store_rejects_ambiguous_user_scope(user_id: str) -> None:
         MemoryClaimStore(tenant_id=TENANT_A, user_id=user_id)
 
 
-def test_identical_claim_keys_are_isolated_by_store_owner() -> None:
+def test_identical_claim_values_have_distinct_owner_scoped_keys() -> None:
     first = MemoryClaimStore(**SCOPE_A)
     second = MemoryClaimStore(**SCOPE_B)
     first_claim = _claim()
@@ -66,7 +66,7 @@ def test_identical_claim_keys_are_isolated_by_store_owner() -> None:
 
     first_key = first.add(first_claim)
     second_key = second.add(second_claim)
-    assert first_key == second_key
+    assert first_key != second_key
 
     with pytest.raises(ValueError, match="scope mismatch"):
         first.add(second_claim)
@@ -74,6 +74,41 @@ def test_identical_claim_keys_are_isolated_by_store_owner() -> None:
     assert first.get(first_key, **SCOPE_A) is first_claim
     assert second.get(second_key, **SCOPE_B) is second_claim
     assert first.get_by_subject("user", **SCOPE_A) == [first_claim]
+
+
+
+def test_delimiter_alias_does_not_overwrite_a_different_subject() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    first = _claim()
+    first.subject, first.predicate = "topic:family", "preferred"
+    second = _claim()
+    second.subject, second.predicate = "topic", "family:preferred"
+
+    # These distinct triples collided under subject:predicate:object IDs.
+    assert (
+        f"{first.subject}:{first.predicate}:{first.object}"
+        == f"{second.subject}:{second.predicate}:{second.object}"
+    )
+    first_id = store.add(first)
+    second_id = store.add(second)
+    assert first_id != second_id
+    assert store.get(first_id, **SCOPE_A) is first
+    assert store.get(second_id, **SCOPE_A) is second
+    assert store.get_by_subject("topic:family", **SCOPE_A) == [first]
+    assert store.get_by_subject("topic", **SCOPE_A) == [second]
+
+
+def test_distinct_claim_version_timestamps_have_distinct_keys() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    earlier = _claim()
+    later = _claim()
+    later.asserted_at = START + timedelta(days=1)
+    earlier_id = store.add(earlier)
+    later_id = store.add(later)
+    assert earlier_id.startswith("claim:")
+    assert later_id.startswith("claim:")
+    assert earlier_id != later_id
+    assert store.get_by_subject("user", **SCOPE_A) == [earlier, later]
 
 
 @pytest.mark.parametrize(

@@ -59,7 +59,9 @@ class MemoryClaimStore:
 
     def _checked_replacement_id(self, claim: MemoryClaim) -> str:
         """Reject a changed-owner record before replacing its logical key."""
-        claim_id = f"{claim.subject}:{claim.predicate}:{claim.object}"
+        # Reuse the canonical owner-scoped and version-aware claim reference.
+        # Raw delimiter concatenation aliases unrelated subject/predicate pairs.
+        claim_id = self._temporal.claim_ref(claim)
         existing = self._claims.get(claim_id)
         if existing is not None:
             self._require_claim_scope(existing)
