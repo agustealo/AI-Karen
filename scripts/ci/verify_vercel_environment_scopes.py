@@ -58,6 +58,15 @@ FRONTEND_ENV_KEYS = frozenset({
     "KAREN_DOCKER",
     "NEXT_TELEMETRY_DISABLED",
     "NODE_ENV",
+    # Only reviewed browser-visible configuration is eligible; no wildcard
+    # NEXT_PUBLIC_* fallback. Adding a variable is a source-reviewed change.
+    "NEXT_PUBLIC_API_PROXY_LONG_TIMEOUT_MS",
+    "NEXT_PUBLIC_API_PROXY_TIMEOUT_MS",
+    "NEXT_PUBLIC_APP_URL",
+    "NEXT_PUBLIC_BASE_URL",
+    "NEXT_PUBLIC_DISABLE_MINIFICATION",
+    "NEXT_PUBLIC_KAREN_BACKEND_URL",
+    "NEXT_PUBLIC_USE_PROXY",
 })
 
 # Public names are not inherently safe: credentials must never be promoted
@@ -65,20 +74,17 @@ FRONTEND_ENV_KEYS = frozenset({
 _UNSAFE_NAME_PART = re.compile(
     r"(?:^|_)(?:AUTH|CREDENTIAL|DATABASE|DB|HF|KEY|MODEL|PASSWORD|"
     r"POSTGRES|PRIVATE|REDIS|SECRET|SERVICE_ROLE|SUPABASE|TOKEN|"
-    r"VLLM)(?:_|$)"
+    r"VLLM)(?:_|$)",
+    flags=re.IGNORECASE,
 )
 
 
 def _is_backend_owned(name: str) -> bool:
+    # No prefix-only exception. Exact allowlist membership is required even
+    # when a public name looks harmless or hides a secret in unusual casing.
     if name in BACKEND_ONLY_KEYS or _UNSAFE_NAME_PART.search(name):
         return True
-    if name in FRONTEND_ENV_KEYS:
-        return False
-    # Public presentation settings are allowed only when their key does not
-    # imply sensitive backend ownership; they are publicly bundle-visible.
-    if name.startswith("NEXT_PUBLIC_"):
-        return False
-    return True
+    return name not in FRONTEND_ENV_KEYS
 
 
 def _validate_entries(entries: list[object]) -> tuple[int, tuple[str, ...]]:
