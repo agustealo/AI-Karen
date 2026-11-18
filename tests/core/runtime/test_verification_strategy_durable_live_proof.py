@@ -726,3 +726,82 @@ def test_c3d_runtime_degradation_diagnostic_rejects_arbitrary_state() -> None:
         "memory_failed_projection_targets": [],
     }
     assert "secret" not in str(evidence)
+
+
+def test_c3d_diagnostic_tracks_executed_model_without_exposing_identity() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    actual = _bounded_runtime_degradation(
+        {
+            "memory_persistence_status": "persisted",
+            "memory_formation_status": "success",
+            "transcript_persistence_status": "persisted",
+            "degradation_reason": "provider returned private text: password=secret",
+            "actual_provider": "ollama-local",
+            "actual_model": "private-local-model-id",
+            "reasoning_status": "failed",
+            "reasoning_activation": "core_defaults",
+            "reasoning_generation_mode": "model_after_authorized_reasoning",
+            "reasoning_model_calls": 0,
+            "verification_strategy_executed": True,
+            "fallback_level": 0,
+            "user_id": "private-user-id",
+        },
+        expected_model="private-local-model-id",
+    )
+    assert actual == {
+        "memory_persistence_status": "persisted",
+        "memory_formation_status": "success",
+        "transcript_persistence_status": "persisted",
+        "degradation_reason": "other",
+        "memory_failed_projection_targets": [],
+        "observed_provider": "ollama",
+        "observed_model": "expected",
+        "reasoning_status": "failed",
+        "reasoning_activation": "core_defaults",
+        "reasoning_generation_mode": "model_after_authorized_reasoning",
+        "verification_strategy_executed": True,
+        "reasoning_model_calls": "zero",
+        "fallback_level": "zero",
+    }
+    assert "private" not in str(actual)
+    assert "secret" not in str(actual)
+
+
+def test_c3d_diagnostic_rejects_untrusted_provider_and_reasoning_fields() -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _bounded_runtime_degradation,
+    )
+
+    actual = _bounded_runtime_degradation(
+        {
+            "actual_provider": ["private", "untrusted"],
+            "actual_model": {"secret": "model"},
+            "reasoning_status": "password=secret",
+            "reasoning_activation": "private origin",
+            "reasoning_generation_mode": "private generation path",
+            "verification_strategy_executed": "yes",
+            "reasoning_model_calls": True,
+            "fallback_level": True,
+        },
+        expected_model="trusted-model",
+    )
+    assert actual == {
+        "memory_persistence_status": "unknown",
+        "memory_formation_status": "unknown",
+        "transcript_persistence_status": "unknown",
+        "degradation_reason": "unknown",
+        "memory_failed_projection_targets": [],
+        "observed_provider": "other",
+        "observed_model": "other",
+        "reasoning_status": "other",
+        "reasoning_activation": "other",
+        "reasoning_generation_mode": "other",
+        "verification_strategy_executed": "unknown",
+        "reasoning_model_calls": "unknown",
+        "fallback_level": "unknown",
+    }
+    assert "secret" not in str(actual)
+    assert "private" not in str(actual)

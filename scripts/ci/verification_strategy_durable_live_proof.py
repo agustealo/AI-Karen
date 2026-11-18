@@ -82,7 +82,9 @@ class _ScopedMemoryFailureTypeCapture(logging.Handler):
                 break
 
 
-def _bounded_runtime_degradation(metadata: dict[str, Any]) -> dict[str, Any]:
+def _bounded_runtime_degradation(
+    metadata: dict[str, Any], *, expected_model: str | None = None,
+) -> dict[str, Any]:
     """Emit only fixed runtime state enums and registered projection targets.
 
     Never forward arbitrary model, provider, memory, SQL or failure strings.
@@ -133,6 +135,54 @@ def _bounded_runtime_degradation(metadata: dict[str, Any]) -> dict[str, Any]:
             ):
                 failed_targets.add(target)
     result["memory_failed_projection_targets"] = sorted(failed_targets)
+
+    if expected_model:
+        # Compare executed provider/model IDs without emitting identities or
+        # untrusted provider/model/error text into the CI log.
+        provider = metadata.get("actual_provider")
+        actual_model = metadata.get("actual_model")
+        result["observed_provider"] = (
+            "ollama" if provider in {"ollama", "ollama-local"}
+            else "missing" if provider is None or provider == ""
+            else "other"
+        ) if isinstance(provider, (str, type(None))) else "other"
+        result["observed_model"] = (
+            "expected" if actual_model == expected_model
+            else "missing" if actual_model is None or actual_model == ""
+            else "other"
+        ) if isinstance(actual_model, (str, type(None))) else "other"
+
+        for key, choices in {
+            "reasoning_status": frozenset({
+                "success", "completed", "partial", "abstained",
+                "failed", "budget_exhausted", "not_applicable",
+            }),
+            "reasoning_activation": frozenset({"core_defaults"}),
+            "reasoning_generation_mode": frozenset({
+                "model_after_authorized_reasoning",
+            }),
+        }.items():
+            value = metadata.get(key)
+            result[key] = (
+                value if value in choices else "other"
+            ) if isinstance(value, str) else "unknown"
+
+        verification = metadata.get("verification_strategy_executed")
+        result["verification_strategy_executed"] = (
+            verification if type(verification) is bool else "unknown"
+        )
+        calls = metadata.get("reasoning_model_calls")
+        result["reasoning_model_calls"] = (
+            "zero" if calls == 0
+            else "positive" if calls > 0
+            else "invalid"
+        ) if type(calls) is int else "unknown"
+        level = metadata.get("fallback_level")
+        result["fallback_level"] = (
+            "zero" if level == 0
+            else "positive" if level > 0
+            else "invalid"
+        ) if type(level) is int else "unknown"
     return result
 
 
@@ -579,7 +629,7 @@ async def prove_verified_durable_runtime(
                 failure.observed_error_type = memory_failure.error_type
                 failure.observed_error_origin = memory_failure.error_origin
                 failure.observed_runtime_diagnostics = _bounded_runtime_degradation(
-                    response_meta
+                    response_meta, expected_model=model,
                 )
                 raise failure
             answer = result.answer
