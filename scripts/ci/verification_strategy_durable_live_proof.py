@@ -513,9 +513,9 @@ def main() -> int:
         else:
             result = asyncio.run(
                 read_back(
-                tenant_id=os.environ.get("KAREN_CI_C3C_TENANT_ID", ""),
-                user_id=os.environ.get("KAREN_CI_C3C_USER_ID", ""),
-                session_id=os.environ.get("KAREN_CI_C3C_SESSION_ID", ""),
+                    tenant_id=os.environ.get("KAREN_CI_C3C_TENANT_ID", ""),
+                    user_id=os.environ.get("KAREN_CI_C3C_USER_ID", ""),
+                    session_id=os.environ.get("KAREN_CI_C3C_SESSION_ID", ""),
                     model=os.environ.get("KAREN_CI_C3C_MODEL", ""),
                 )
             )
