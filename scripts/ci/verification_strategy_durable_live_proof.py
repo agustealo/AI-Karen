@@ -126,7 +126,8 @@ def _bounded_runtime_degradation(metadata: dict[str, Any]) -> dict[str, Any]:
             target = item.get("target")
             count = item.get("failure_count")
             if (
-                target in {"stm", "memory_graph", "projection_pipeline"}
+                isinstance(target, str)
+                and target in {"stm", "memory_graph", "projection_pipeline"}
                 and type(count) is int
                 and count > 0
             ):
