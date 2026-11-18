@@ -8,7 +8,7 @@ Temporal decisions delegate to MemoryTemporalEvolutionService.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ai_karen_engine.core.memory.contracts import ClaimStatus as ClaimStatus
 from ai_karen_engine.core.memory.contracts import MemoryClaim as MemoryClaim
@@ -112,7 +112,7 @@ class MemoryClaimStore:
         if old is None:
             return
         self._require_claim_scope(old)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         new_effective = self._temporal.effective_time(new_claim)
         old.status = ClaimStatus.SUPERSEDED
         old.superseded_at = now
@@ -171,7 +171,7 @@ class MemoryClaimStore:
         if claim is not None:
             self._require_claim_scope(claim)
             claim.confidence = max(0.0, min(1.0, new_confidence))
-            claim.last_confirmed = datetime.now(tz=timezone.utc)
+            claim.last_confirmed = datetime.now(tz=UTC)
 
     def get_valid_claims(
         self,
@@ -182,7 +182,7 @@ class MemoryClaimStore:
     ) -> list[MemoryClaim]:
         """Use one coherent UTC snapshot for this authorized owner's claims."""
         self._require_scope(tenant_id=tenant_id, user_id=user_id)
-        snapshot_at = at if at is not None else datetime.now(timezone.utc)
+        snapshot_at = at if at is not None else datetime.now(UTC)
         claims: list[MemoryClaim] = []
         for _, claim in self._verified_items():
             if claim.is_valid(snapshot_at):
