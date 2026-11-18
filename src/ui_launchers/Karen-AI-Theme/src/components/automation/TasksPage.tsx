@@ -445,16 +445,17 @@ export default function TasksPage() {
 
   return (
     <TooltipProvider>
-    <div className="space-y-8">
-      <div className="flex items-center space-x-3">
-        <ScrollText className="h-8 w-8 text-primary" />
-        <div>
-          <h2 className="karen-page-title">Task Management</h2>
-          <p className="text-sm text-muted-foreground">
-            Define specific, single-objective tasks for your agents and monitor execution.
-          </p>
-        </div>
-      </div>
+    <div className="karen-automation karen-automation-workflow space-y-6">
+      <header className="karen-automation-hero karen-surface relative overflow-hidden rounded-2xl px-5 py-6 sm:px-8 sm:py-8">
+          <div className="relative z-10 flex min-w-0 items-start gap-4">
+            <div className="rounded-xl border border-primary/20 bg-primary/10 p-3 text-primary"><ScrollText className="h-6 w-6" aria-hidden="true" /></div>
+            <div className="min-w-0 space-y-2">
+              <p className="karen-panel-label">KARI OS / AUTOMATIONS / TASK DEFINITIONS</p>
+              <h2 className="karen-page-title">Task Management</h2>
+              <p className="karen-page-description">Define specific, single-objective tasks for your agents and monitor execution.</p>
+            </div>
+          </div>
+        </header>
       
       {errorMsg && (
         <Alert variant="destructive">
@@ -471,9 +472,9 @@ export default function TasksPage() {
             </AlertDescription>
         </Alert>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-3">
         {/* Task List */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="min-w-0 space-y-4 xl:col-span-2">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold">Defined Tasks</h3>
             <Button variant="outline" size="sm" onClick={fetchLiveData} disabled={isAuthLoading || !isAuthenticated}>Refresh</Button>
@@ -486,19 +487,16 @@ export default function TasksPage() {
           ) : tasks.length === 0 ? (
             <div className="p-8 text-center border rounded-xl bg-muted/20 text-muted-foreground">No live task definitions yet.</div>
           ) : tasks.map((task: Task, index: number) => (
-            <Card key={task.id || index}>
+            <Card className="karen-automation-card" key={task.id || index}>
               <CardHeader>
-                <div className="flex justify-between items-start">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <CardTitle className="text-base">{task.name}</CardTitle>
                         <CardDescription className="text-xs">{task.description}</CardDescription>
                     </div>
-                    <div className="flex items-center space-x-1">
+                    <div className="flex flex-wrap items-center gap-1">
                         <Button variant="ghost" size="icon" onClick={() => handleExecuteTask(task.id)}>
                             <Play className="h-4 w-4 text-muted-foreground hover:text-green-500" />
-                        </Button>
-                        <Button variant="ghost" size="icon">
-                            <Settings className="h-4 w-4 text-muted-foreground" />
                         </Button>
                         <Button variant="ghost" size="icon"
                           aria-label={`Show review history for ${task.name}`}
@@ -696,8 +694,8 @@ export default function TasksPage() {
         </div>
 
         {/* Create New Task Form */}
-        <div className="lg:col-span-1">
-          <Card className="sticky top-20">
+        <div className="min-w-0 xl:col-span-1">
+          <Card className="karen-automation-card xl:sticky xl:top-20">
             <CardHeader>
             <CardTitle>Create New Task</CardTitle>
               <CardDescription>Configure an agent to perform a live task.</CardDescription>

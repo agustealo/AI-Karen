@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Workflow, PlusCircle, Trash2, Edit, Info, Play, GripVertical, FilePlus2, Bot, Settings, ScrollText } from "lucide-react";
+import { Workflow, PlusCircle, Trash2, Info, Play, GripVertical, FilePlus2, Bot, Settings, ScrollText } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 
@@ -208,16 +208,17 @@ export default function SequencesPage() {
 
   return (
     <>
-      <div className="space-y-8">
-        <div className="flex items-center space-x-3">
-          <Workflow className="h-8 w-8 text-primary" />
-          <div>
-            <h2 className="karen-page-title">Jobs</h2>
-            <p className="text-sm text-muted-foreground">
-              Orchestrate multiple tasks into a single persistent workflow.
-            </p>
+      <div className="karen-automation karen-automation-workflow space-y-6">
+        <header className="karen-automation-hero karen-surface relative overflow-hidden rounded-2xl px-5 py-6 sm:px-8 sm:py-8">
+          <div className="relative z-10 flex min-w-0 items-start gap-4">
+            <div className="rounded-xl border border-primary/20 bg-primary/10 p-3 text-primary"><Workflow className="h-6 w-6" aria-hidden="true" /></div>
+            <div className="min-w-0 space-y-2">
+              <p className="karen-panel-label">KARI OS / AUTOMATIONS / SEQUENCE WORKFLOWS</p>
+              <h2 className="karen-page-title">Jobs</h2>
+              <p className="karen-page-description">Orchestrate multiple tasks into a single persistent workflow.</p>
+            </div>
           </div>
-        </div>
+        </header>
         
         {errorMsg && (
           <Alert variant="destructive">
@@ -226,9 +227,9 @@ export default function SequencesPage() {
           </Alert>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-3">
           {/* Job List */}
-          <div className="lg:col-span-2 space-y-4">
+          <div className="min-w-0 space-y-4 xl:col-span-2">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold">Active Job Definitions</h3>
               <Button variant="outline" size="sm" onClick={fetchJobs} disabled={isAuthLoading || !isAuthenticated}>Refresh</Button>
@@ -241,9 +242,9 @@ export default function SequencesPage() {
             ) : jobs.length === 0 ? (
               <div className="p-8 text-center border rounded-xl bg-muted/20 text-muted-foreground">No jobs defined yet.</div>
             ) : jobs.map((job: Job, index: number) => (
-              <Card key={job.id || index}>
+              <Card className="karen-automation-card" key={job.id || index}>
                 <CardHeader>
-                  <div className="flex justify-between items-start">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2">
                         <CardTitle className="text-base">{job.name}</CardTitle>
@@ -251,12 +252,9 @@ export default function SequencesPage() {
                       </div>
                       <CardDescription className="text-xs">{job.description}</CardDescription>
                     </div>
-                    <div className="flex items-center space-x-1">
+                    <div className="flex flex-wrap items-center gap-1">
                         <Button variant="ghost" size="icon" onClick={() => handleExecuteJob(job.id)}>
                           <Play className="h-4 w-4 text-muted-foreground hover:text-green-500" />
-                        </Button>
-                        <Button variant="ghost" size="icon">
-                          <Edit className="h-4 w-4 text-muted-foreground" />
                         </Button>
                         <Button variant="ghost" size="icon" onClick={() => handleDeleteJob(job.id)}>
                           <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
@@ -296,8 +294,8 @@ export default function SequencesPage() {
           </div>
 
           {/* Create New Job Form */}
-          <div className="lg:col-span-1">
-            <Card className="sticky top-20">
+          <div className="min-w-0 xl:col-span-1">
+            <Card className="karen-automation-card xl:sticky xl:top-20">
               <CardHeader>
                 <CardTitle className="flex items-center"><FilePlus2 className="mr-2 h-5 w-5"/>Define New Job</CardTitle>
                 <CardDescription>Chain existing tasks into a sequence.</CardDescription>
