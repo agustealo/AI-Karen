@@ -577,7 +577,11 @@ async def prove_verified_durable_runtime(
             preferred_provider="ollama",
             preferred_model=model,
             temperature=0.0,
-            max_tokens=256,
+            # Match the existing authenticated Ollama Settings live proof.
+            # A truncated 256-token answer was observed, not a normal
+            # completed generation. Still reject any model output that
+            # remains truncated, degraded, or recovered through fallback.
+            max_tokens=512,
             stream=stream,
             metadata={
                 "transport": "ci_verified_durable_runtime",
