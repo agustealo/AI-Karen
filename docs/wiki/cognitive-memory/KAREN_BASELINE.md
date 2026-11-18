@@ -47,3 +47,7 @@ Source paths:
 3. Check graph projection -> committed event lineage -> traversal -> NeuroRecall -> prompt evidence.
 4. Replace empty benchmark tests with substantive measurements before comparing external techniques.
 
+
+## KCR-01 executed-path research
+
+See [KCR-01 retrieval lineage](KCR01_RETRIEVAL_LINEAGE.md) for the verified **memory_items pgvector/FTS vs memory_assertion substring recall** split, test scope, and live-PostgreSQL evidence gate.

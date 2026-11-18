@@ -8,7 +8,7 @@
 
 | ID | Day(s) | Workstream | Output | Initial state |
 | --- | --- | --- | --- | --- |
-| KCR-01 | 1 | Existing KAREN memory, graph, reasoning, evidence, and retrieval call graph | [Baseline](KAREN_BASELINE.md) + explicit gaps | Source-inspected; host unverified |
+| KCR-01 | 1 | Existing KAREN memory, graph, reasoning, evidence, and retrieval call graph | [Baseline](KAREN_BASELINE.md), [retrieval lineage](KCR01_RETRIEVAL_LINEAGE.md), executable query/candidate probes | Source-inspected; live DB proof outstanding |
 | KCR-02 | 2-4 | Five upstream studies: algorithms, algorithms' failure cases, license, manifests, storage, LLM/model costs | [Project dossiers](README.md#navigation) and [evidence](EVIDENCE_REGISTER.md) | Initial read complete; deep methods pending |
 | KCR-03 | 5 | Collapse overlaps, separate core technique from vendor platform | [Capability matrix](CAPABILITY_MATRIX.md) and [candidate backlog](ADAPTATION_BACKLOG.md) | First-pass draft |
 | KCR-04 | 6 | Fix definition of valid baseline (paraphrase, FTS, pgvector, temporal, graph, provenance) | [Benchmark contract](BENCHMARK_CONTRACT.md) | Specified; not executed |

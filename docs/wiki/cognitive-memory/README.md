@@ -8,6 +8,7 @@ This is the canonical **research wiki**, not a proposal to replace KAREN. It stu
 | Page | Purpose |
 | --- | --- |
 | [Sprint board](SPRINT.md) | Ten-working-day work packages, acceptance, artifacts, owners |
+| [KCR-01 retrieval evidence](KCR01_RETRIEVAL_LINEAGE.md) | Source-traced pgvector/FTS vs canonical ledger split | 
 | [Karen baseline](KAREN_BASELINE.md) | Existing implementation and integration-truth inventory |
 | [Capability matrix](CAPABILITY_MATRIX.md) | Framework strengths compared with existing KAREN components |
 | [Dependency gates](DEPENDENCY_GATES.md) | License, direct/transitive cost, Python conflicts, security |
