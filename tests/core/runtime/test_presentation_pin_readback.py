@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     ConversationSnapshot,
 )
@@ -38,6 +39,7 @@ def context():
         user_id=USER, tenant_id=TENANT,
         session_id=THREAD, conversation_id=THREAD,
         request_id=RUN, correlation_id=RUN,
+        authenticated_user=UserData(user_id=USER, tenant_id=TENANT),
     )
 
 
@@ -185,6 +187,31 @@ async def test_uses_one_verified_snapshot_and_attestation_lookup_per_conversatio
     assert len(entries) == 2
     gateway.get_owned_snapshot.assert_awaited_once()
     runs.completed_replay_attestations.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unsigned_context_ids_cannot_restore_pins():
+    reader, repo, _, _ = service([stored()])
+    forged = replace(context(), authenticated_user=None)
+    with pytest.raises(PermissionError, match="authenticated_principal_required"):
+        await reader.list_authorized(context=forged)
+    repo.read_unverified_references.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mismatched_or_inactive_authenticated_principal_is_denied():
+    reader, repo, _, _ = service([stored()])
+    for principal in (
+        UserData(user_id=FOREIGN, tenant_id=TENANT),
+        UserData(user_id=USER, tenant_id=FOREIGN),
+        UserData(user_id=USER, tenant_id=TENANT, is_active=False),
+        UserData(user_id=USER, tenant_id=TENANT, is_verified=False),
+    ):
+        with pytest.raises(PermissionError):
+            await reader.list_authorized(
+                context=replace(context(), authenticated_user=principal)
+            )
+    repo.read_unverified_references.assert_not_awaited()
 
 
 @pytest.mark.asyncio
