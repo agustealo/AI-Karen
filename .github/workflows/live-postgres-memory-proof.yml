@@ -217,6 +217,21 @@ jobs:
           pytest tests/integration/test_live_profile_reconciliation.py -q -rs
           pytest tests/integration/test_live_memory_consent_revocation.py -q -rs
           pytest tests/integration/test_live_automation_task_claims.py -q -rs
+      - name: KCR-04A observe canonical durable SQL and NeuroRecall against PostgreSQL
+        env:
+          KCR04A_REPORT_PATH: kcr04a-live-retrieval-report.json
+        run: |
+          pytest tests/integration/test_live_canonical_memory_recall_baseline.py -q -rs --junitxml=kcr04a-live-retrieval-junit.xml
+      - name: Preserve KCR-04A sanitized real PostgreSQL evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kcr04a-live-postgres-recall
+          path: |
+            kcr04a-live-retrieval-report.json
+            kcr04a-live-retrieval-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Prove persona activation/delete race against disposable PostgreSQL
         env:
