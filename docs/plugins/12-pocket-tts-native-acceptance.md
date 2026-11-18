@@ -521,3 +521,29 @@ When acceptance is complete, replace each **Not proven** cell with an
 evidence link and exact verified result. Update the voice modality chapter
 and release notes in the same pull request. Preserve the original unverified
 state here as the historical checkpoint, not a fabricated success claim.
+
+
+## 2026-11-18: Official non-gated default model candidate
+
+The earlier pinned `kyutai/pocket-tts` source was gated and required
+upstream account approval plus a backend token. The official Kyutai
+`kyutai/pocket-tts-without-voice-cloning` repository instead publicly
+reports `gated: false`, `cc-by-4.0` and revision
+`a7056f505a4a8ca72d8b5fb1440071d6f1a35739` (Hugging Face metadata,
+observed 2026-11-18). Its file inventory includes
+`languages/english_18m_refl_2026-10/model.safetensors`,
+`tokenizer.model` and `embeddings/*.safetensors`.
+
+The existing Pocket PR #1030 owns the new candidate. Its reviewed plugin
+model spec and central recommendation select this official non-cloning
+source. The Download button alone acknowledges the visible CC-BY-4.0 terms
+*only when* the backend independently verifies a non-gated source, license
+and immutable revision. Gated or unknown sources retain separate explicit
+acceptance. The UI never downloads weights; it reuses administrator RBAC,
+tenant-scoped receipts, the worker, integrity checks and atomic publication.
+
+The public file inventory is **not** proof of an installed model, native
+load, actual voice discovery, nonsilent audio, browser playback, cancellation
+or target-host CPU/memory measurements. Until those are observed on the
+target machine, Pocket TTS remains source-integrated but not consumer-ready.
+The old gated job's failure cannot be reused as a valid new-model receipt.
