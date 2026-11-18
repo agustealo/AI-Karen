@@ -25,3 +25,6 @@ LightRAG base pulls in networkx, nano-vectordb, google-genai, json_repair, pypin
 
 **Gate:** Reject a second graph schema/storage owner. A useful technique must outperform KAREN's native retrieval and preserve all governance.
 
+
+## Pinned mechanism deep dive
+See [KCR-02A](../KCR02A_GRAPH_RETRIEVAL.md) for the exact source functions behind local/global/mix retrieval, source-aware rebuild warnings, and cache identity. Nothing here constitutes measured improvement in Karen.
