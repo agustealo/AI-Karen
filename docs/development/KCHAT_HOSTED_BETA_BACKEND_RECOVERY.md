@@ -8,8 +8,9 @@ database, Redis instance, provider router, or frontend connection. The
 canonical API and model execution must remain owned by Karen's authenticated
 runtime; Vercel hosts the Next.js consumer ingress only.
 
-Last reviewed against connected accounts: **2026-11-04**.
-Recorded evidence is a point-in-time observation, not current availability.
+Last reviewed against connected Render and GitHub accounts: **2026-11-18**.
+Recorded evidence is a point-in-time observation, not future availability.
+Source CI and workflow readiness do **not** prove a successful hosted boot.
 
 ## Verified inventory and failure evidence
 
@@ -17,11 +18,11 @@ Recorded evidence is a point-in-time observation, not current availability.
 | --- | --- | --- |
 | Source | `agustealo/AI-Karen` | Main includes the native ChatRuntime streaming and immediate-Enter acceptance fixes |
 | Consumer frontend | Vercel project `ai-karen`, ID `prj_uAqBwgpUsdA0OEoomX4klWUYEWyg` | Production deploys can be READY while API calls fail |
-| Canonical beta API | Render `ai-karen-beta-api`, ID `srv-dbjmh78u01pc73ftse40` | Existing service tracks `feat/chat-consumer-conversation-management-20261031`, auto-deploy disabled |
+| Canonical beta API | Render `ai-karen-beta-api`, ID `srv-dbjmh78u01pc73ftse40` | Service now tracks `main`, auto-deploy disabled; HTTP health-check path is still empty |
 | API origin | `https://ai-karen-beta-api.onrender.com` | Not verified healthy; do **not** route consumers here yet |
-| Database | Render `ai-karen-beta-postgres`, ID `dpg-dbjme1tg1s2s7385svhg-a` | Existing Postgres reports available |
-| Redis | Render `ai-karen-beta-redis`, ID `red-dbjme2ijnfac738ehstg` | Existing Key Value reports available |
-| Render deployments | `dep-dbjmh7gu01pc73ftsg10`, `dep-dbjro5nlk1mc73a499u0`, `dep-dbjt05nlk1mc73a7ftig` | All reported `update_failed` on November 1 |
+| Database | Render `ai-karen-beta-postgres`, ID `dpg-dbjme1tg1s2s7385svhg-a` | Available on free plan; scheduled expiration December 1, 2026, unsuitable for durable consumer history |
+| Redis | Render `ai-karen-beta-redis`, ID `red-dbjme2ijnfac738ehstg` | Available free Key Value, persistence disabled; ephemeral STM cache only |
+| Render deployments | Latest `dep-dbsg38ui0phs73d1l90g` (November 15, 2026) | Latest and earlier observed deployments are `update_failed`; latest revision is not current `main` |
 | Vercel runtime | `/api/auth/[[...path]]` | 55 canonical backend configuration errors in the sampled 24-hour window |
 
 The Render container image **built successfully**, but the Python API
@@ -51,9 +52,9 @@ The only supported deployment branch for new beta releases is `main`.
 The checked-in Blueprint `deploy/render/render.yaml` now names `main`.
 
 The live Render service has a separate stored branch setting. Blueprint
-editing does **not** update that setting. It must also be switched to
-`main` under the existing `ai-karen-beta-api` service before starting
-a new reviewed deployment. Leave auto-deploy disabled while this release
+editing does **not** update that setting. As of November 18 the existing
+`ai-karen-beta-api` already tracks `main`, but its HTTP health-check path
+remains empty and requires reconciliation before release. Leave auto-deploy disabled while this release
 is unproven. Do not create or apply a second Blueprint: Render may create
 suffixed duplicate resources instead of adopting these existing ones.
 
@@ -70,23 +71,31 @@ policy. This route uses Render's official PATCH service endpoint:
 https://api-docs.render.com/reference/update-service .
 
 Configure the existing GitHub Actions protected `beta-release` environment
-with `RENDER_API_KEY` as a **secret** and the following **nonsecret variables**:
+with `RENDER_API_KEY` as a **secret**. Prefer nonsecret environment variables
 `RENDER_BETA_SERVICE_ID=srv-dbjmh78u01pc73ftse40` and
-`RENDER_BETA_WORKSPACE_ID=tea-dbjm53o473hc73a8s5ng`.
+`RENDER_BETA_WORKSPACE_ID=tea-dbjm53o473hc73a8s5ng` as the durable
+operator-approved selectors. **If these variables are absent**, the current
+workflow already supports explicit manual-dispatch `service_id` and
+`workspace_id` inputs for the same existing resources. Configured variables
+always take precedence and a conflicting input fails before Render access.
+Neither IDs nor dispatch inputs contain credentials.
 Use a least-privilege, authorized Render API key, and never commit, log,
 copy into issues or return its value.
 
-1. Choose the `main` branch in the workflow-dispatch UI.
-2. Supply the **exact current reviewed 40-character main SHA**.
-3. Run `inspect` first. A detected mismatch intentionally fails without mutation.
-4. After confirming the existing Render identity and reviewed revision, run
-   `apply` with the same current SHA. The workflow verifies GitHub main
-   has not moved, the Render service ID, owner, name, repo and type match
-   the checked-in Blueprint, and updates **only** `branch: main` and
-   `autoDeployTrigger: off`. It GET-verifies the result.
-5. Confirm service branch and manual deployment in the existing Render
-   Dashboard. The workflow **does not** deploy, create resources, set
-   secrets, edit environment groups, rotate keys, or change Vercel.
+1. Choose `main` in the [protected workflow](../../.github/workflows/render-beta-service-reconcile.yml)
+   and supply the **exact current reviewed 40-character main SHA** as `target_sha`.
+2. Select `mode=inspect`; if selector variables are absent, provide the
+   existing `service_id` and `workspace_id` listed above as dispatch inputs.
+   A missing selector fails before any Render request. A valid inspection
+   intentionally fails on actual source or health-check drift without mutation.
+3. After verifying the reviewed existing service identity, select `mode=apply`
+   on the **then-current** `main` SHA. The workflow checks owner, name, repo,
+   service type, revision and selectors. It only reconciles `branch: main`,
+   `autoDeployTrigger: off`, and `healthCheckPath: /health/live`, then GET-verifies.
+4. Confirm the branch, disabled auto-deploy, and health path in the existing
+   Render service. The workflow **never** deploys, creates resources, edits
+   secrets/datastores, rotates keys, or modifies Vercel. A successful apply
+   is configuration alignment, not proof of API or model health.
 
 Do not run a new API deploy until the required production environment is
 properly configured. The GitHub workflow deliberately refuses to treat a
@@ -94,6 +103,24 @@ source update as a successful backend deployment. The script is reusable
 locally through Python's standard library for an authorized operator, and
 its safety contract is tested in
 `tests/architecture/test_render_beta_service_reconcile.py`.
+
+
+#### Observed protected-workflow failure and nonbypass recovery
+
+GitHub Actions dispatch [43310338481](https://github.com/agustealo/AI-Karen/actions/runs/43310338481)
+on November 12, 2026 failed at `Require approved main identity and existing
+service selectors` with `Existing Render beta service ID is missing`.
+It **never** reached the Render API or modified any service. This is a
+selector-configuration blocker, separate from the real service's November 15
+production startup failure due to missing mandatory environment values.
+
+The current workflow's optional, validated dispatch-ID fallback is already
+implemented. Its exact bash preflight is exercised offline against missing,
+malformed, conflicting, stale-revision and valid-selector cases by
+`tests/architecture/test_render_beta_service_reconcile.py`. This proof
+cannot substitute for the protected host inspection and does not make the
+beta API or Pocket TTS consumer-ready. If GitHub `main` changes between
+inspection and apply, dispatch again against the latest reviewed SHA.
 
 ### 2. Establish real Render production settings without copying secrets into git
 
@@ -127,14 +154,17 @@ must remain fail-closed. Never make startup green by changing
 
 The existing [Render Beta Service Reconcile](../../.github/workflows/render-beta-service-reconcile.yml)
 workflow supports the explicitly selected `inspect-env` mode. Keep the same
-protected `beta-release` environment and `RENDER_API_KEY` secret, and add
+protected `beta-release` environment and `RENDER_API_KEY` secret. Prefer
 these nonsecret protected variables for the **existing** resources:
 
 - `RENDER_BETA_POSTGRES_ID=dpg-dbjme1tg1s2s7385svhg-a`
 - `RENDER_BETA_KEY_VALUE_ID=red-dbjme2ijnfac738ehstg`
 
-Dispatch on the reviewed `main` branch with its exact 40-character SHA
-and `mode=inspect-env`. The mode **only reads** service, PostgreSQL, Key
+If environment variables are absent, the workflow accepts the exact existing
+`postgres_id` and `key_value_id` as manual dispatch inputs alongside the
+service and workspace IDs. It never allows a dispatch input to override a
+configured selector. Dispatch on reviewed `main` using its exact 40-character
+SHA and `mode=inspect-env`. The mode **only reads** service, PostgreSQL, Key
 Value, direct environment variables, environment-group inventory and
 internal datastore connection metadata using Render's official API.
 
