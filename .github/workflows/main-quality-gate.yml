@@ -196,6 +196,7 @@ jobs:
           pytest tests/architecture/test_memory_formation_authority.py -q
           pytest tests/architecture/test_semantic_memory_formation_authority.py -q
           pytest tests/architecture/test_memory_temporal_evolution.py -q
+          pytest tests/architecture/test_memory_claim_store_scope.py -q
           pytest tests/architecture/test_memory_temporal_graph_persistence.py -q
           pytest tests/architecture/test_memory_temporal_graph_projection.py -q
           pytest tests/architecture/test_beta_conversation_reload_contract.py -q
