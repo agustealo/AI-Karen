@@ -99,6 +99,67 @@ def test_related_production_credentials_are_denied(name):
         proof([{"envs": [entry(name, ["preview"])]}])
 
 
+@pytest.mark.parametrize("name", [
+    "AUTH_DEV_MODE",
+    "AUTH_ALLOW_DEV_LOGIN",
+    "CORS_ORIGINS",
+    "GRAFANA_ADMIN_PASSWORD",
+    "KAREN_BUILTIN_VLLM_ENABLED",
+    "KAREN_FALLBACK_BACKEND_URLS",
+    "KAREN_MEDUSA_DURABLE_RUN_LEDGER_ENABLED",
+    "POSTGRES_DB",
+    "SUPABASE_ANON_KEY",
+    "UNREVIEWED_PLUGIN_SERVICE_URL",
+    "VLLM_CPU_KVCACHE_SPACE",
+])
+def test_unknown_or_backend_owned_names_never_pass_as_frontend_config(name):
+    with pytest.raises(RevisionVerificationError, match="Backend-owned variables"):
+        proof([{"envs": [entry("KAREN_BACKEND_URL"), entry(name)]}])
+
+
+@pytest.mark.parametrize("name", [
+    "NEXT_PUBLIC_AUTH_JWT_SECRET_KEY",
+    "NEXT_PUBLIC_DATABASE_URL",
+    "NEXT_PUBLIC_HF_TOKEN",
+    "NEXT_PUBLIC_PRIVATE_KEY",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_VLLM_MODEL_ID",
+])
+def test_browser_visible_key_prefix_cannot_disguise_backend_credentials(name):
+    with pytest.raises(RevisionVerificationError, match="Backend-owned variables"):
+        proof([{"envs": [entry(name, ["preview"])]}])
+
+
+def test_approved_frontend_environment_names_are_not_false_positive():
+    count, _ = proof([{"envs": [
+        entry("KAREN_BACKEND_URL"),
+        entry("KAREN_DEPLOYED_COMMIT_SHA"),
+        entry("NEXT_TELEMETRY_DISABLED"),
+        entry("NODE_ENV"),
+        entry("COPILOTKIT_TELEMETRY_DISABLED"),
+        entry("NEXT_PUBLIC_BASE_URL"),
+        entry("NEXT_PUBLIC_API_PROXY_TIMEOUT_MS"),
+    ]}])
+    assert count == 7
+
+
+@pytest.mark.parametrize("hidden", [1, 100, -1, True, "0", None])
+def test_hidden_or_ambiguous_production_inventory_denies_release(hidden):
+    with pytest.raises(RevisionVerificationError, match="inventory incomplete"):
+        proof([{
+            "envs": [entry("KAREN_BACKEND_URL")],
+            "hiddenProductionEnvCount": hidden,
+        }])
+
+
+def test_explicit_zero_hidden_production_records_is_valid():
+    count, _ = proof([{
+        "envs": [entry("KAREN_BACKEND_URL")],
+        "hiddenProductionEnvCount": 0,
+    }])
+    assert count == 1
+
+
 def test_paginated_inventory_must_be_complete_and_not_duplicated():
     count, opener = proof([
         {"envs": [entry("KAREN_BACKEND_URL")], "pagination": {"next": 1720000000000}},
