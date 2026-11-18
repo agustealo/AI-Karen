@@ -226,6 +226,16 @@ The shared Next.js proxy must return an explicit safe 503 when its
 canonical target is unavailable. It must never replay mutating POSTs to
 alternate hosts or fabricate generated responses.
 
+**Protected acceptance sequencing:** first independently attest the exact
+Vercel deployment via Karen's existing Vercel provider-metadata verifier
+using the operator-managed Vercel API credential; only then can the
+canonical revision and backend-target probes send an optional
+`VERCEL_AUTOMATION_BYPASS_SECRET` to that deployment. The backend-target
+probe reuses the canonical Vercel URL and protection-header validators.
+A generic HTTPS origin, unrelated Vercel deployment, or stale main revision
+must never receive the bypass header. This does not make the backend healthy
+without the later authenticated acceptance gates.
+
 ### 5. Consumer acceptance remains a separate release gate
 
 Run the existing protected browser workflow
@@ -256,7 +266,7 @@ python -m pytest tests/architecture/test_ck28_backend_target_preflight.py -q
 python -m pytest tests/architecture/test_production_deployment_contract.py -q
 
 # Requires the approved HTTPS production origin supplied by the operator.
-python scripts/ci/verify_backend_target.py --base-url "$KAREN_BASE_URL"
+python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
 ```
 
 The Production Deployment Contract workflow includes the Render Blueprint
