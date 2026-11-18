@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/useAuth";
 import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
 import { KarenCopilotControlledChat } from "./KarenCopilotControlledChat";
 import { KarenCopilotVerifiedRail } from "./KarenCopilotVerifiedRail";
+import { KarenCopilotPinnedDock } from "./KarenCopilotPinnedDock";
 import { KarenPersonaSelector } from "../KarenPersonaSelector";
 
 const CONVERSATION_UUID =
@@ -114,6 +115,7 @@ export function KarenCopilotChat({
               </div>
             </div>
             <KarenCopilotVerifiedRail />
+            <KarenCopilotPinnedDock />
           </div>
         </KarenCopilotHistoryGate>
       </CopilotKitProvider>
