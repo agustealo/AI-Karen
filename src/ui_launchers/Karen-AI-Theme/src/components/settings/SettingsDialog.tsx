@@ -333,24 +333,37 @@ export default function SettingsDialog({
   };
 
   return (
-    <div className={inSheet ? 'p-4' : 'space-y-8'}>
+    <div className={inSheet ? 'karen-settings p-4' : 'karen-settings space-y-6'}>
       {!inSheet && (
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <Cog className="h-6 w-6 text-primary" aria-hidden={true} />
-            <h2 className="text-3xl font-bold tracking-tight text-foreground">
-              Application Settings
-            </h2>
+        <header className="karen-settings-hero karen-surface relative overflow-hidden rounded-xl p-5 sm:p-7">
+          <div className="relative z-10 flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-2xl space-y-3">
+              <p className="karen-metric uppercase tracking-[0.16em] text-primary">
+                KARI OS / WORKSPACE CONFIGURATION
+              </p>
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary" aria-hidden="true">
+                  <Cog className="h-5 w-5" />
+                </span>
+                <div>
+                  <h2 className="karen-page-title">Application Settings</h2>
+                  <p className="karen-page-description mt-2">
+                    Fine-tune Karen&apos;s intelligence, manage your personal data, and
+                    configure system runtime parameters.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-border/70 bg-card/65 px-3 py-2">
+              <p className="karen-metric uppercase text-muted-foreground">Configuration authority</p>
+              <p className="mt-1 flex items-center gap-2 text-xs font-medium text-foreground">
+                <Shield className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                Backend-owned settings
+              </p>
+            </div>
           </div>
-
-          <p className="karen-page-description">
-            Fine-tune Karen&apos;s intelligence, manage your personal data, and
-            configure system runtime parameters.
-          </p>
-        </div>
+        </header>
       )}
-
-      {!inSheet && <Separator className="bg-border/40" />}
 
       <div className="space-y-6">
         <Tabs
@@ -360,7 +373,7 @@ export default function SettingsDialog({
         >
           <TabsList
             className={[
-              'grid h-auto w-full grid-cols-1 gap-2 rounded-2xl border border-border/40 bg-muted/30 p-1 text-foreground',
+              'karen-settings-categories grid h-auto w-full grid-cols-1 gap-2 rounded-xl border border-border/70 bg-card/80 p-1 text-foreground',
               adminMode
                 ? 'sm:grid-cols-2 lg:w-[760px] lg:grid-cols-4'
                 : 'sm:grid-cols-3 lg:w-[600px]',
@@ -380,7 +393,7 @@ export default function SettingsDialog({
 
         {activeCategory && (
           <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <div className="flex flex-col gap-3 rounded-2xl border border-border/40 bg-card/40 p-4 shadow-sm backdrop-blur-sm">
+            <div className="karen-settings-section-nav karen-surface flex flex-col gap-3 rounded-xl p-4 sm:p-5">
               <div className="flex items-center gap-2 px-1">
                 <div className="h-1 w-1 rounded-full bg-primary" />
                 <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80">
@@ -425,7 +438,7 @@ export default function SettingsDialog({
               </nav>
             </div>
 
-            <section id="settings-active-panel" aria-label={activeSection?.label || 'Settings'} className="min-w-0 space-y-6">
+            <section id="settings-active-panel" aria-label={activeSection?.label || 'Settings'} className="karen-settings-active min-w-0 space-y-6">
               {activeSection && (
                 <div className="animate-in fade-in duration-500">
                   <div className="mb-4 flex items-center justify-between">
