@@ -171,6 +171,59 @@ def test_foreign_evolution_and_supersession_do_not_mutate_existing_claim() -> No
     assert store.get(claim_id, **SCOPE_A) is original
 
 
+
+def test_evolve_replacement_denial_is_atomic() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    original = _claim(value="vim")
+    original_id = store.add(original)
+    changed_at = START + timedelta(days=1)
+    incoming = _claim(value="vscode")
+    incoming.asserted_at = changed_at
+    incoming.event_time = changed_at
+    incoming.valid_from = changed_at
+    blocked = _claim(value="vscode")
+    blocked.asserted_at = changed_at
+    blocked.event_time = changed_at
+    blocked.valid_from = changed_at
+    blocked_id = store.add(blocked)
+    blocked.user_id = USER_B
+
+    with pytest.raises(ValueError, match="scope mismatch"):
+        store.evolve(original_id, incoming, recorded_at=changed_at)
+
+    assert store.get(original_id, **SCOPE_A) is original
+    assert original.status is ClaimStatus.OBSERVED
+    assert original.valid_until is None
+    assert store._claims[blocked_id] is blocked
+
+
+def test_supersede_replacement_denial_is_atomic() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    original = _claim(value="vim")
+    original_id = store.add(original)
+    changed_at = START + timedelta(days=1)
+    incoming = _claim(value="vscode")
+    incoming.asserted_at = changed_at
+    incoming.event_time = changed_at
+    incoming.valid_from = changed_at
+    blocked = _claim(value="vscode")
+    blocked.asserted_at = changed_at
+    blocked.event_time = changed_at
+    blocked.valid_from = changed_at
+    blocked_id = store.add(blocked)
+    blocked.user_id = USER_B
+
+    with pytest.raises(ValueError, match="scope mismatch"):
+        store.supersede(original_id, incoming)
+
+    assert store.get(original_id, **SCOPE_A) is original
+    assert original.status is ClaimStatus.OBSERVED
+    assert original.superseded_at is None
+    assert original.valid_until is None
+    assert incoming.supersedes is None
+    assert store._claims[blocked_id] is blocked
+
+
 def test_foreign_confidence_update_is_rejected_before_mutation() -> None:
     store = MemoryClaimStore(**SCOPE_A)
     original = _claim()
