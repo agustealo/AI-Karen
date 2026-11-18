@@ -31,8 +31,15 @@ IMMUTABLE_REVISION = re.compile(r"^[0-9a-f]{40,64}$", re.IGNORECASE)
 
 @pytest.mark.asyncio
 async def test_curated_model_metadata_live_source_and_revision(tmp_path) -> None:
-    """Prove real source resolution, terms, and immutable revision per model."""
-    entries = load_model_download_recommendations()["recommendations"]
+    """Prove real source revision and ungated terms for default recommendations.
+
+    Optional gated models require their separate, licensed source proof.
+    """
+    entries = [
+        entry
+        for entry in load_model_download_recommendations()["recommendations"]
+        if entry.get("recommended") is True
+    ]
     assert {entry["id"] for entry in entries} == {
         "spacy-english-core",
         "distilbert-semantic-encoder",
