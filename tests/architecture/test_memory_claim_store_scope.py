@@ -403,3 +403,46 @@ def test_supersede_rejects_foreign_existing_destination_before_writes() -> None:
     assert original.superseded_at is None
     assert original.valid_until is None
     assert incoming.supersedes is None
+
+
+def test_evolve_existing_same_owner_destination_is_atomic() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    source = _claim(value="vim")
+    destination = _claim(value="vscode")
+    source_id = store.add(source)
+    destination_id = store.add(destination)
+
+    with pytest.raises(ValueError, match="destination version already exists"):
+        store.evolve(
+            source_id,
+            _claim(value="vscode"),
+            recorded_at=START + timedelta(days=1),
+        )
+
+    assert store.get(source_id, **SCOPE_A) is source
+    assert store.get(destination_id, **SCOPE_A) is destination
+    assert source.status is ClaimStatus.OBSERVED
+    assert source.valid_until is None
+    assert source.superseded_at is None
+    assert store.get_by_subject("user", **SCOPE_A) == [source, destination]
+
+
+def test_supersede_existing_same_owner_destination_is_atomic() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    source = _claim(value="vim")
+    destination = _claim(value="vscode")
+    source_id = store.add(source)
+    destination_id = store.add(destination)
+    incoming = _claim(value="vscode")
+
+    with pytest.raises(ValueError, match="destination version already exists"):
+        store.supersede(source_id, incoming)
+
+    assert store.get(source_id, **SCOPE_A) is source
+    assert store.get(destination_id, **SCOPE_A) is destination
+    assert source.status is ClaimStatus.OBSERVED
+    assert source.valid_until is None
+    assert source.superseded_at is None
+    assert incoming.supersedes is None
+    assert store.get_by_subject("user", **SCOPE_A) == [source, destination]
+

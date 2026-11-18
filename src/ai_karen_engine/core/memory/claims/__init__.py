@@ -73,6 +73,11 @@ class MemoryClaimStore:
             self._require_stored_identity(claim_id, existing)
         return claim_id
 
+    def _require_free_destination(self, destination_id: str, source_id: str) -> None:
+        """Deny version collisions before mutating a source claim."""
+        if destination_id != source_id and destination_id in self._claims:
+            raise ValueError("memory claim destination version already exists")
+
     def add(self, claim: MemoryClaim) -> str:
         """Add only claims owned by this store's immutable tenant/user scope."""
         self._require_claim_scope(claim)
@@ -134,6 +139,7 @@ class MemoryClaimStore:
         incoming_id = self._checked_replacement_id(decision.incoming)
         if incoming_id == claim_id and decision.kind is not TemporalEvolutionKind.REINFORCE:
             raise ValueError("non-reinforcement evolution cannot replace its source")
+        self._require_free_destination(incoming_id, claim_id)
         self._claims[claim_id] = decision.previous
         if incoming_id != claim_id:
             self.add(decision.incoming)
@@ -149,6 +155,7 @@ class MemoryClaimStore:
         replacement_id = self._checked_replacement_id(new_claim)
         if replacement_id == claim_id:
             raise ValueError("supersession requires a distinct claim version")
+        self._require_free_destination(replacement_id, claim_id)
         now = datetime.now(tz=UTC)
         new_effective = self._temporal.effective_time(new_claim)
         if new_effective < self._temporal.effective_time(old):
