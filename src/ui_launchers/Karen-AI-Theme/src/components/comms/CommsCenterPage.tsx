@@ -124,6 +124,94 @@ const isObservabilitySnapshot = (value: unknown): value is ObservabilitySnapshot
     );
 };
 
+type OwnedAgentRun = {
+    run_id: string;
+    user_id: string;
+    tenant_id: string;
+    status: "queued" | "running" | "cancelling" | "completed" | "succeeded" | "failed" | "cancelled" | "canceled" | "orphaned";
+    started_at?: string | null;
+    completed_at?: string | null;
+    durable?: boolean;
+};
+
+type OwnedRunResponse = {
+    runs: OwnedAgentRun[];
+    total: number;
+    generated_at: string;
+};
+
+const OWNED_RUN_STATUSES = new Set([
+    "queued", "running", "cancelling", "completed", "succeeded",
+    "failed", "cancelled", "canceled", "orphaned",
+]);
+
+const isOwnedRunResponse = (value: unknown, ownerId: string, tenantId: string): value is OwnedRunResponse => {
+    if (!value || typeof value !== "object") return false;
+    const response = value as Partial<OwnedRunResponse>;
+    return Array.isArray(response.runs) &&
+        typeof response.total === "number" &&
+        Number.isSafeInteger(response.total) &&
+        response.total >= response.runs.length &&
+        typeof response.generated_at === "string" &&
+        response.runs.every((run) =>
+            !!run && typeof run === "object" &&
+            typeof run.run_id === "string" && run.run_id.length > 0 && run.run_id.length <= 128 &&
+            run.user_id === ownerId && run.tenant_id === tenantId &&
+            typeof run.status === "string" && OWNED_RUN_STATUSES.has(run.status) &&
+            (run.started_at == null || typeof run.started_at === "string") &&
+            (run.completed_at == null || typeof run.completed_at === "string")
+        );
+};
+
+function OwnedRunFeed({ runs, loading, error }: {
+    runs: OwnedAgentRun[] | null;
+    loading: boolean;
+    error: string | null;
+}) {
+    if (loading) return (
+        <p className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+            Loading owner-verified execution history…
+        </p>
+    );
+    if (error) return (
+        <p role="alert" className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+            {error}
+        </p>
+    );
+    if (runs === null) return (
+        <p className="rounded-lg border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
+            Sign in to view your verified agent executions.
+        </p>
+    );
+    if (runs.length === 0) return (
+        <p className="rounded-lg border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
+            No owner-verified Medusa executions have been returned for this account.
+        </p>
+    );
+    return (
+        <ol className="divide-y divide-border/60" aria-label="Your recent agent executions">
+            {runs.slice(0, 6).map((run) => (
+                <li key={run.run_id} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                        <p className="text-sm font-semibold">Execution {run.run_id.slice(0, 8)}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">Started {formatEventTime(run.started_at ?? undefined)}</p>
+                    </div>
+                    <Badge variant={
+                        run.status === "failed" || run.status === "cancelled" || run.status === "canceled"
+                            ? "destructive"
+                            : run.status === "running" || run.status === "cancelling" || run.status === "queued"
+                                ? "secondary"
+                                : "outline"
+                    } className="w-fit capitalize">
+                        {run.status}
+                    </Badge>
+                </li>
+            ))}
+        </ol>
+    );
+}
+
+
 /**
  * @file CommsCenterPage.tsx
  * @description Communications Center backed by live API data only.
@@ -142,6 +230,11 @@ export default function CommsCenterPage() {
     const [observabilityAccessDenied, setObservabilityAccessDenied] = useState(false);
     const [observabilityLoading, setObservabilityLoading] = useState(true);
     const [refreshRevision, setRefreshRevision] = useState(0);
+    const [ownedRunSnapshot, setOwnedRunSnapshot] = useState<{ principal: string; value: OwnedRunResponse } | null>(null);
+    const [ownedRunsLoading, setOwnedRunsLoading] = useState(true);
+    const [ownedRunsError, setOwnedRunsError] = useState<string | null>(null);
+    const ownedRuns = principal && ownedRunSnapshot?.principal === principal
+        ? ownedRunSnapshot.value.runs : null;
 
     // Render only backend-confirmed observability, never synthetic metrics.
     useEffect(() => {
@@ -192,6 +285,41 @@ export default function CommsCenterPage() {
         void load();
         return () => { active = false; };
     }, [isAuthenticated, isAuthLoading, principal, refreshRevision]);
+
+
+    // Reuse the canonical Medusa consumer run projection. No execution or
+    // permission decision is performed in this UI, and no global run API is used.
+    useEffect(() => {
+        if (isAuthLoading) return;
+        if (!isAuthenticated || !principal || !user?.user_id) {
+            setOwnedRunSnapshot(null);
+            setOwnedRunsLoading(false);
+            setOwnedRunsError(null);
+            return;
+        }
+        let active = true;
+        setOwnedRunSnapshot(null);
+        setOwnedRunsLoading(true);
+        setOwnedRunsError(null);
+        const load = async () => {
+            try {
+                const response: unknown = await apiClient.get<unknown>("/api/agent-runtime/my-runs");
+                if (!isOwnedRunResponse(response, user.user_id, user.tenant_id)) {
+                    throw new Error("Invalid owner-scoped Medusa execution contract");
+                }
+                if (active) setOwnedRunSnapshot({ principal, value: response });
+            } catch {
+                if (active) {
+                    setOwnedRunSnapshot(null);
+                    setOwnedRunsError("Owner-verified agent execution history is unavailable.");
+                }
+            } finally {
+                if (active) setOwnedRunsLoading(false);
+            }
+        };
+        void load();
+        return () => { active = false; };
+    }, [isAuthenticated, isAuthLoading, principal, refreshRevision, user?.user_id]);
 
     const getAlertIcon = (type: SystemAlert['type']) => {
         switch (type) {
@@ -436,9 +564,33 @@ export default function CommsCenterPage() {
                         </CardContent>
                     </Card>
                 </section>
+                <section aria-label="Owned agent execution activity" data-testid="comms-owned-runs">
+                    <Card className="overflow-hidden border-border/70 bg-gradient-to-br from-card to-primary/5">
+                        <CardHeader className="border-b border-border/60 bg-muted/20">
+                            <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-start sm:gap-4">
+                                <div>
+                                    <CardTitle className="flex items-center gap-2 text-lg">
+                                        <BrainCircuit aria-hidden="true" className="h-5 w-5 text-primary" />
+                                        Recent agent executions
+                                    </CardTitle>
+                                    <CardDescription className="mt-1">
+                                        Read-only Medusa execution receipts, verified for your account by the runtime API.
+                                        A completed run does not imply an independently verified result or saved artifact.
+                                    </CardDescription>
+                                </div>
+                                <Badge variant="outline" className="w-fit" data-testid="comms-owned-run-count">
+                                    {ownedRuns === null ? "Unverified" : String(ownedRuns.length) + " recorded"}
+                                </Badge>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-5">
+                            <OwnedRunFeed runs={ownedRuns} loading={ownedRunsLoading || isAuthLoading} error={ownedRunsError} />
+                        </CardContent>
+                    </Card>
+                </section>
                 <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
                     <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                    <p>Automation execution history and generated notes require their own verified backend records. This view does not manufacture either from generic audit events.</p>
+                    <p>Agent execution history comes from the owner-verified Medusa run endpoint. Generated notes still require a separate governed backend source and are never manufactured from audit events.</p>
                 </div>
             </TabsContent>
 
