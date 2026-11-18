@@ -4,7 +4,7 @@ Tests for COG-BELIEF-1 belief / uncertainty / contradiction engine.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -267,6 +267,82 @@ class TestTemporalTruth:
         claim.temporal.valid_until = datetime.utcnow() - timedelta(hours=1)
         assert not reasoner.is_valid(claim)
         assert claim.temporal.is_expired()
+
+
+class TestHalfOpenBeliefTemporalValidity:
+    """KCR-04C: share UTC/validity policy within the native belief owner."""
+
+    @pytest.mark.parametrize(
+        ("offset", "valid"),
+        [
+            (timedelta(microseconds=-1), True),
+            (timedelta(0), False),
+            (timedelta(microseconds=1), False),
+        ],
+    )
+    def test_exact_expiry_boundary(self, offset: timedelta, valid: bool) -> None:
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        claim = make_claim()
+        claim.temporal.valid_from = start
+        claim.temporal.valid_until = end
+        now = end + offset
+        assert TemporalReasoner().is_valid(claim, now=now) is valid
+        assert claim.temporal.is_expired(now) is (not valid)
+
+    def test_inclusive_start_and_zero_length_window(self) -> None:
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        claim = make_claim()
+        claim.temporal.valid_from = start
+        claim.temporal.valid_until = start + timedelta(days=1)
+        assert TemporalReasoner().is_valid(claim, now=start)
+        assert not TemporalReasoner().is_valid(
+            claim, now=start - timedelta(microseconds=1)
+        )
+        claim.temporal.valid_until = start
+        assert not TemporalReasoner().is_valid(claim, now=start)
+
+    def test_naive_utc_and_equivalent_offset(self) -> None:
+        start = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        offset = timezone(timedelta(hours=5, minutes=30))
+        claim = make_claim()
+        claim.temporal.valid_from = start.replace(tzinfo=None)
+        claim.temporal.valid_until = end
+        assert TemporalReasoner().is_valid(claim, now=start.astimezone(offset))
+        assert not TemporalReasoner().is_valid(claim, now=end.astimezone(offset))
+        assert claim.temporal.is_expired(end.replace(tzinfo=None))
+
+    def test_distance_and_staleness_across_mixed_clocks(self) -> None:
+        start = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        a, b = make_claim(), make_claim()
+        a.temporal.observed_at = start.replace(tzinfo=None)
+        a.temporal.last_verified_at = None
+        b.temporal.observed_at = (start + timedelta(hours=3)).astimezone(
+            timezone(timedelta(hours=-5))
+        )
+        b.temporal.last_verified_at = None
+        reasoner = TemporalReasoner()
+        assert reasoner.temporal_distance(a, b) == pytest.approx(3)
+        assert not reasoner.is_stale(a, threshold_hours=4, now=start + timedelta(hours=3))
+        assert reasoner.is_stale(a, threshold_hours=2, now=start + timedelta(hours=3))
+
+    def test_consistency_and_open_ended_validity(self) -> None:
+        claim = make_claim()
+        claim.temporal.valid_from = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        claim.temporal.valid_until = None
+        evidence = make_evidence()
+        evidence.observed_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        evidence.expires_at = datetime(2020, 2, 1)
+        assert TemporalReasoner().is_valid(
+            claim, now=datetime(2030, 1, 1, tzinfo=timezone.utc)
+        )
+        assert not claim.temporal.is_expired(
+            datetime(2030, 1, 1, tzinfo=timezone.utc)
+        )
+        reasons = TemporalReasoner().validate_temporal_consistency(claim, [evidence])
+        assert "evidence_ev1_expired" in reasons
+        assert "claim_outside_valid_window" not in reasons
 
 
 class TestContradictionDetection:

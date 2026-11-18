@@ -8,12 +8,13 @@ equal fact validity time.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .contracts import (
     BeliefClaim,
     ClaimTemporalValidity,
     Evidence,
+    _utc,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,17 +29,12 @@ class TemporalReasoner:
         now: datetime | None = None,
     ) -> bool:
         """Check whether a claim is temporally valid at the given time."""
-        now = now or datetime.utcnow()
+        current = _utc(now or datetime.now(timezone.utc))
         tv = claim.temporal
 
-        if tv.valid_from is not None and now < tv.valid_from:
+        if tv.valid_from is not None and current < _utc(tv.valid_from):
             return False
-        if tv.valid_until is not None and now > tv.valid_until:
-            return False
-        if tv.is_expired(now):
-            return False
-
-        return True
+        return not tv.is_expired(current)
 
     def is_stale(
         self,
@@ -47,7 +43,7 @@ class TemporalReasoner:
         now: datetime | None = None,
     ) -> bool:
         """Check if a claim is stale (not verified recently enough)."""
-        now = now or datetime.utcnow()
+        now = _utc(now or datetime.now(timezone.utc))
         age = claim.temporal.age_seconds(now)
         return age > threshold_hours * 3600.0
 
@@ -75,7 +71,7 @@ class TemporalReasoner:
 
     def age_hours(self, claim: BeliefClaim, now: datetime | None = None) -> float:
         """Return the age of the claim in hours."""
-        now = now or datetime.utcnow()
+        now = _utc(now or datetime.now(timezone.utc))
         age = claim.temporal.age_seconds(now)
         if age == float("inf"):
             return float("inf")
@@ -99,7 +95,7 @@ class TemporalReasoner:
         tb = self.effective_time(claim_b)
         if ta is None or tb is None:
             return float("inf")
-        return abs((tb - ta).total_seconds()) / 3600.0
+        return abs((_utc(tb) - _utc(ta)).total_seconds()) / 3600.0
 
     def validate_temporal_consistency(
         self,
@@ -117,16 +113,8 @@ class TemporalReasoner:
             violations.append("claim_stale")
 
         for ev in evidence:
-            if ev.observed_at is None:
-                continue
-            if ev.expires_at is not None and now > ev.expires_at:
+            if ev.expires_at is not None and now >= _utc(ev.expires_at):
                 violations.append(f"evidence_{ev.evidence_id}_expired")
-
-        claim_time = self.effective_time(claim)
-        if claim_time is not None:
-            for ev in evidence:
-                if ev.observed_at is not None and ev.observed_at > claim_time:
-                    pass  # evidence can be after claim (supports revision)
 
         return violations
 
