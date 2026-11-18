@@ -60,16 +60,17 @@ def _event_type(value: Any) -> str:
 def _display_event(event: Any) -> Dict[str, Any]:
     if isinstance(event, dict):
         event_type = event.get("event_type")
-        message = event.get("message")
         timestamp = event.get("timestamp")
     else:
         event_type = getattr(event, "event_type", None)
-        message = getattr(event, "message", None)
         timestamp = getattr(event, "timestamp", None)
     label = _event_type(event_type)
+    # Audit messages are unrestricted producer strings, and can contain raw
+    # exception text or credentials. This consumer projection must not echo
+    # them, even when the original event belongs to the requesting principal.
     return {
         "event_type": label,
-        "message": message[:300] if isinstance(message, str) else label,
+        "message": "Audit event" if label == "unknown" else label,
         "timestamp": _event_timestamp(timestamp),
     }
 
