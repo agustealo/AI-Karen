@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 from pathlib import Path
 from urllib.error import HTTPError
 
@@ -401,3 +403,158 @@ def test_render_api_key_is_scoped_only_to_authorized_network_steps():
     assert "deploy/render/render.yaml" in steps
     assert "actions/checkout@v4" in steps
     assert "persist-credentials: false" in steps
+
+
+def _run_workflow_selector_preflight(tmp_path, *, mode="inspect", configured=None,
+                                     provided=None, sha_overrides=None):
+    """Execute the actual protected workflow bash preflight offline."""
+    text = (ROOT / ".github/workflows/render-beta-service-reconcile.yml").read_text()
+    name = "      - name: Require approved main identity and existing service selectors\n"
+    assert text.count(name) == 1
+    step = text.split(name, 1)[1].split(
+        "\n      - uses: actions/setup-python@v5", 1
+    )[0].split("        run: |\n", 1)[1]
+    lines = step.splitlines()
+    assert all(not line.strip() or line.startswith("          ") for line in lines)
+    script = "\n".join(line[10:] if line.strip() else "" for line in lines)
+
+    sha = "a" * 40
+    known = {
+        "SERVICE": SERVICE,
+        "WORKSPACE": WORKSPACE,
+        "POSTGRES": "dpg-dbjme1tg1s2s7385svhg-a",
+        "KEY_VALUE": "red-dbjme2ijnfac738ehstg",
+    }
+    configured = configured or {}
+    provided = known if provided is None else provided
+    stubs = {
+        "gh": (
+            '#!/bin/bash\nset -euo pipefail\n'
+            '[[ "$1" == "api" && "$2" == "repos/agustealo/AI-Karen/branches/main" '
+            '&& "$3" == "--jq" && "$4" == ".commit.sha" ]] || exit 91\n'
+            'printf "%s\\n" "$FAKE_LIVE_MAIN"\n'
+        ),
+        "git": (
+            '#!/bin/bash\nset -euo pipefail\n'
+            '[[ "$1" == "rev-parse" && "$2" == "HEAD" ]] || exit 92\n'
+            'printf "%s\\n" "$FAKE_CHECKOUT_SHA"\n'
+        ),
+    }
+    for command, body in stubs.items():
+        stub = tmp_path / command
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+
+    env = {
+        "PATH": str(tmp_path) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
+        "GITHUB_REPOSITORY": "agustealo/AI-Karen",
+        "TARGET_SHA": sha, "GITHUB_SHA": sha,
+        "FAKE_LIVE_MAIN": sha, "FAKE_CHECKOUT_SHA": sha,
+        "MODE": mode,
+    }
+    env.update(sha_overrides or {})
+    for kind in known:
+        approved = configured.get(kind, "")
+        input_id = provided.get(kind, "")
+        env[f"RENDER_CONFIG_{kind}_ID"] = approved
+        env[f"RENDER_INPUT_{kind}_ID"] = input_id
+        env[f"RENDER_BETA_{kind}_ID"] = approved or input_id
+    return subprocess.run(
+        ["bash", "-e", "-u", "-o", "pipefail", "-c", script],
+        env=env, cwd=tmp_path, capture_output=True, text=True,
+        timeout=10, check=False,
+    )
+
+
+@pytest.mark.parametrize("mode", ("inspect", "apply", "inspect-env", "inspect-consumer"))
+def test_render_preflight_approved_dispatch_fallback(tmp_path, mode):
+    result = _run_workflow_selector_preflight(tmp_path, mode=mode)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not result.stdout and not result.stderr
+
+
+def test_render_preflight_approved_environment_owned_ids(tmp_path):
+    configured = {
+        "SERVICE": SERVICE, "WORKSPACE": WORKSPACE,
+        "POSTGRES": "dpg-dbjme1tg1s2s7385svhg-a",
+        "KEY_VALUE": "red-dbjme2ijnfac738ehstg",
+    }
+    result = _run_workflow_selector_preflight(
+        tmp_path, mode="inspect-env", configured=configured, provided={},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("kind,value", (
+    ("SERVICE", ""), ("SERVICE", "srv-foreign/path"),
+    ("WORKSPACE", ""), ("WORKSPACE", "tea-foreign/path"),
+))
+def test_render_preflight_rejects_missing_or_malformed_required_ids(
+    tmp_path, kind, value,
+):
+    provided = {
+        "SERVICE": SERVICE, "WORKSPACE": WORKSPACE,
+        "POSTGRES": "dpg-dbjme1tg1s2s7385svhg-a",
+        "KEY_VALUE": "red-dbjme2ijnfac738ehstg",
+    }
+    provided[kind] = value
+    result = _run_workflow_selector_preflight(tmp_path, provided=provided)
+    assert result.returncode != 0
+    assert "missing or malformed" in result.stdout
+    assert value not in result.stdout if value else True
+
+
+@pytest.mark.parametrize("kind", ("POSTGRES", "KEY_VALUE"))
+def test_render_preflight_inspect_env_requires_both_datastore_ids(tmp_path, kind):
+    provided = {
+        "SERVICE": SERVICE, "WORKSPACE": WORKSPACE,
+        "POSTGRES": "dpg-dbjme1tg1s2s7385svhg-a",
+        "KEY_VALUE": "red-dbjme2ijnfac738ehstg",
+    }
+    provided[kind] = ""
+    assert _run_workflow_selector_preflight(
+        tmp_path, mode="inspect", provided=provided,
+    ).returncode == 0
+    result = _run_workflow_selector_preflight(
+        tmp_path, mode="inspect-env", provided=provided,
+    )
+    assert result.returncode != 0
+    assert "missing or malformed" in result.stdout
+
+
+@pytest.mark.parametrize("kind", ("SERVICE", "WORKSPACE", "POSTGRES", "KEY_VALUE"))
+def test_render_preflight_conflicting_operator_input_cannot_override_env(
+    tmp_path, kind,
+):
+    configured = {kind: {
+        "SERVICE": SERVICE, "WORKSPACE": WORKSPACE,
+        "POSTGRES": "dpg-dbjme1tg1s2s7385svhg-a",
+        "KEY_VALUE": "red-dbjme2ijnfac738ehstg",
+    }[kind]}
+    provided = {
+        "SERVICE": SERVICE, "WORKSPACE": WORKSPACE,
+        "POSTGRES": "dpg-dbjme1tg1s2s7385svhg-a",
+        "KEY_VALUE": "red-dbjme2ijnfac738ehstg",
+    }
+    provided[kind] = "tampered-resource-id"
+    result = _run_workflow_selector_preflight(
+        tmp_path, mode="inspect-env", configured=configured, provided=provided,
+    )
+    assert result.returncode != 0
+    assert "conflicts with reviewed environment configuration" in result.stdout
+    assert "tampered-resource-id" not in result.stdout
+
+
+@pytest.mark.parametrize("overrides", (
+    {"TARGET_SHA": "b" * 40}, {"GITHUB_SHA": "b" * 40},
+    {"FAKE_LIVE_MAIN": "b" * 40}, {"FAKE_CHECKOUT_SHA": "b" * 40},
+    {"TARGET_SHA": "invalid"},
+))
+def test_render_preflight_stale_main_or_unreviewed_identity_fails(
+    tmp_path, overrides,
+):
+    result = _run_workflow_selector_preflight(tmp_path, sha_overrides=overrides)
+    assert result.returncode != 0
+    assert "::error::" in result.stdout
+    assert not result.stderr
+
