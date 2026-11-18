@@ -7,6 +7,7 @@ This is the canonical **research wiki**, not a proposal to replace KAREN. It stu
 ## Navigation
 | Page | Purpose |
 | --- | --- |
+| [KCR-02A algorithm audit](KCR02A_GRAPH_RETRIEVAL.md) | Pinned HippoRAG PPR and LightRAG source analysis with dependency-free research tests |
 | [Sprint board](SPRINT.md) | Ten-working-day work packages, acceptance, artifacts, owners |
 | [KCR-01 retrieval evidence](KCR01_RETRIEVAL_LINEAGE.md) | Source-traced pgvector/FTS vs canonical ledger split | 
 | [Karen baseline](KAREN_BASELINE.md) | Existing implementation and integration-truth inventory |

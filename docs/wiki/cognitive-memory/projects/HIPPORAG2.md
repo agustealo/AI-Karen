@@ -26,3 +26,6 @@ The upstream base pins `torch==2.5.1`, `transformers==4.45.2`, `python_igraph==0
 
 **Gate:** Score improvements without added heavyweight ML dependencies or extra vector stores.
 
+
+## Pinned mechanism deep dive
+See [KCR-02A](../KCR02A_GRAPH_RETRIEVAL.md) for exact weighted undirected PPR execution, entity/passage seed formation, and source-aware graph deduplication. A zero-dependency synthetic comparator is proposed, not a production integration.
