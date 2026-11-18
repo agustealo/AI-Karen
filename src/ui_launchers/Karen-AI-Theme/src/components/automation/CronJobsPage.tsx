@@ -86,6 +86,7 @@ export default function CronJobsPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sequences, setSequences] = useState<Sequence[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
   
   // Form State
@@ -111,6 +112,7 @@ export default function CronJobsPage() {
 
   const fetchJobs = useCallback(async () => {
     if (!isAuthenticated) {
+      setFetchError(false);
       setJobs([]);
       setLoading(false);
       return;
@@ -119,8 +121,10 @@ export default function CronJobsPage() {
     try {
       setLoading(true);
       const res = await loadCronJobsWithRetry();
+      setFetchError(false);
       setJobs(res);
     } catch (error) {
+      setFetchError(true);
       if (error instanceof ApiError && (error.status === 401 || error.status === 404 || error.status === 429)) {
         setJobs([]);
       } else {
@@ -183,22 +187,23 @@ export default function CronJobsPage() {
   };
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center space-x-3">
-        <Clock className="h-8 w-8 text-primary" />
-        <div>
-          <h2 className="karen-page-title">Cron Job Assignments</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage live scheduled automations executing on the backend.
-          </p>
-        </div>
-      </div>
+    <div className="karen-automation karen-automation-workflow space-y-6">
+      <header className="karen-automation-hero karen-surface relative overflow-hidden rounded-2xl px-5 py-6 sm:px-8 sm:py-8">
+          <div className="relative z-10 flex min-w-0 items-start gap-4">
+            <div className="rounded-xl border border-primary/20 bg-primary/10 p-3 text-primary"><Clock className="h-6 w-6" aria-hidden="true" /></div>
+            <div className="min-w-0 space-y-2">
+              <p className="karen-panel-label">KARI OS / AUTOMATIONS / SCHEDULE CONTROL</p>
+              <h2 className="karen-page-title">Cron Job Assignments</h2>
+              <p className="karen-page-description">Manage live scheduled automations executing on the backend.</p>
+            </div>
+          </div>
+        </header>
       
       <Alert>
         <Clock className="h-4 w-4" />
-        <AlertTitle>Scheduler Connected</AlertTitle>
+        <AlertTitle>Scheduler Controls</AlertTitle>
         <AlertDescription>
-          Jobs created below are saved to backend memory and evaluated in real-time. Use the toggles to enable or disable live workflows.
+          Manage saved schedules through the authenticated backend. A visible schedule does not independently verify scheduler health or execution.
         </AlertDescription>
       </Alert>
 
@@ -212,17 +217,20 @@ export default function CronJobsPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-3">
         {/* Cron Job List */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="min-w-0 space-y-4 xl:col-span-2">
           <h3 className="text-lg font-semibold">Scheduled Jobs {loading && <span className="text-sm font-normal text-muted-foreground ml-2">(Syncing...)</span>}</h3>
-          {jobs.length === 0 && !loading && (
+          {fetchError && !loading && (
+             <Alert variant="destructive"><AlertTitle>Schedules unavailable</AlertTitle><AlertDescription>Could not verify the saved schedules with the backend. Retry after the connection is restored.</AlertDescription></Alert>
+          )}
+          {jobs.length === 0 && !loading && !fetchError && (
              <p className="text-sm text-muted-foreground">No cron jobs configured yet.</p>
           )}
-          {jobs.map((job, index) => (
-            <Card key={job.id || index}>
+          {!fetchError && jobs.map((job, index) => (
+            <Card className="karen-automation-card" key={job.id || index}>
               <CardHeader>
-                 <div className="flex justify-between items-start">
+                 <div className="flex flex-wrap items-start justify-between gap-3">
                    <div>
                      <CardTitle className="text-base flex items-center">
                          <Badge variant="outline" className="mr-3 text-sm font-mono">{job.schedule}</Badge>
@@ -233,11 +241,11 @@ export default function CronJobsPage() {
                          Next scheduled run: {job.nextRun || 'Not scheduled'}
                      </CardDescription>
                    </div>
-                  <div className="flex items-center space-x-1">
+                  <div className="flex flex-wrap items-center gap-1">
                       <Switch 
                         checked={job.enabled} 
                         onCheckedChange={() => handleToggle(job.id, job.enabled)}
-                        className="data-[state=checked]:bg-green-600"
+                        aria-label={`Toggle ${job.taskName || job.name} schedule`}
                       />
                       <Button variant="ghost" size="icon" onClick={() => handleDelete(job.id)}>
                         <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
@@ -250,8 +258,8 @@ export default function CronJobsPage() {
         </div>
 
         {/* Create New Cron Job Form */}
-        <div className="lg:col-span-1">
-           <Card className="sticky top-20">
+        <div className="min-w-0 xl:col-span-1">
+           <Card className="karen-automation-card xl:sticky xl:top-20">
             <CardHeader>
               <CardTitle>Schedule a New Job</CardTitle>
               <CardDescription>Assign a task or sequence to a schedule.</CardDescription>
@@ -327,7 +335,7 @@ export default function CronJobsPage() {
         <Info className="h-4 w-4" />
         <AlertTitle>Developer Insight</AlertTitle>
         <AlertDescription>
-         The backend scheduler evaluates due runs natively using `croniter`. Creating a job dynamically enqueues it to the live polling system without restarts. Future scope includes duckdb durability to survive restarts.
+         The backend scheduler evaluates due runs natively using `croniter`. Creating a job dynamically enqueues it to the live polling system without restarts. Execution and persistence guarantees must be verified through backend receipts.
         </AlertDescription>
       </Alert>
     </div>
