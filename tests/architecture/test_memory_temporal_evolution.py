@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -16,7 +16,6 @@ from ai_karen_engine.core.memory.temporal import (
 )
 
 
-UTC = timezone.utc
 TENANT = "00000000-0000-0000-0000-000000000001"
 USER = "00000000-0000-0000-0000-000000000002"
 CLAIM_SCOPE = {"tenant_id": TENANT, "user_id": USER}
