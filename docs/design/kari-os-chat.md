@@ -80,3 +80,11 @@ This draft PR introduces a scoped CSS contract and enables it only on the existi
 - Existing product mark: `public/brand/karen-mark.svg` and root metadata in `src/app/layout.tsx`. Do not silently overwrite until the full brand migration is approved.
 
 **Next implementation slice:** audit the underlying `KarenCopilotChat` component and artifact rendering pipeline; add response-aware context and user-pinned dock as a separately reviewed change. Preserve `SessionProvider` as conversation-identity owner, and keep all persistence and action permissions backend-authoritative.
+
+## KUI-002A: Response-linked verified context (draft integration)
+
+The existing `KarenCopilotVerifiedHistory` now exposes the canonical ordered assistant message identities, each with its own already-validated execution receipt and bounded agent-step evidence. `KarenCopilotVerifiedRail` renders a response picker for saved assistant turns. The default remains the latest saved assistant turn, even when it contains no receipt; older evidence is never relabeled as current. Selection does not write to the server, execute a tool, or change the SDK message list.
+
+**Remaining distinction:** This is an evidence-context selector, not yet a complete artifact workspace. Rich presentation cards still render through the canonical message presentation registry. Cross-message artifact navigation, scroll-follow selection, pinning, dock persistence and revision-aware artifact metadata are not implemented here and must remain gated until backend contracts and actual browser proof exist. At narrower viewports, verified context stays available through the existing disclosure.
+
+**Proof needed:** An authenticated saved conversation with multiple assistant turns (including one without receipt), selection of older and latest turns, no stale details after switching conversations, responsive keyboard inspection, CSS fidelity at 390/768/1024/1440/1920, and exact-head CI with E2E acceptance.
