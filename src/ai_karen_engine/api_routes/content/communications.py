@@ -1,39 +1,136 @@
+"""Owner-scoped Communications Center observability ingress.
+
+This view is a consumer projection, not the administrator audit reader. The
+underlying loggers buffer process-wide events, so nothing from those buffers may
+leave this route without an exact authenticated tenant and user match.
+"""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
-from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+from ai_karen_engine.core.services.dependencies import get_user_context
 from ai_karen_engine.core.services.service_registry import get_service_registry
 from ai_karen_engine.services.audit.audit_logging import get_audit_logger
 from ai_karen_engine.services.audit.training_audit_logger import get_training_audit_logger
 
+
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["communications-center"])
 
 
-get_current_user = bypass_user_context_func
+def _owned_by(event: Any, *, tenant_id: str, user_id: str) -> bool:
+    """Unattributed and cross-principal events are never consumer-readable."""
+    if isinstance(event, dict):
+        event_tenant = event.get("tenant_id")
+        event_user = event.get("user_id")
+    else:
+        event_tenant = getattr(event, "tenant_id", None)
+        event_user = getattr(event, "user_id", None)
+    return event_tenant == tenant_id and event_user == user_id
+
+
+def _event_timestamp(value: Any) -> str | None:
+    """Keep only valid, timezone-aware timestamps in the public projection."""
+    try:
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if isinstance(value, str)
+            else None
+        )
+        if parsed is None or parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _event_type(value: Any) -> str:
+    original = getattr(value, "value", value)
+    return str(original)[:100] if original is not None else "unknown"
+
+
+def _display_event(event: Any) -> Dict[str, Any]:
+    if isinstance(event, dict):
+        event_type = event.get("event_type")
+        message = event.get("message")
+        timestamp = event.get("timestamp")
+    else:
+        event_type = getattr(event, "event_type", None)
+        message = getattr(event, "message", None)
+        timestamp = getattr(event, "timestamp", None)
+    label = _event_type(event_type)
+    return {
+        "event_type": label,
+        "message": message[:300] if isinstance(message, str) else label,
+        "timestamp": _event_timestamp(timestamp),
+    }
 
 
 @router.get("/observability")
 async def get_communications_center_observability(
-    current_user: Dict[str, Any] = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(get_user_context),
 ) -> Dict[str, Any]:
-    """Backend-derived observability summary for the Communications Center UI."""
+    """Return identity-scoped audit evidence without leaking global diagnostics."""
+    user_id = str(current_user.get("user_id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    if not tenant_id or not user_id:
+        raise HTTPException(status_code=401, detail="Authenticated identity scope required")
+
     generated_at = datetime.now(timezone.utc).isoformat()
-    user_id = str(current_user.get("user_id") or "")
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
-    audit_logger = get_audit_logger()
-    training_audit_logger = get_training_audit_logger()
+    # The canonical AuditLogger buffer is process-wide. Filter before selection
+    # and derive counts from the same owned snapshot, never global counters.
+    raw_audit_events = get_audit_logger().get_recent_events(limit=1000)
+    scoped_audit_events = [
+        event
+        for event in raw_audit_events
+        if isinstance(event, dict)
+        and _owned_by(event, tenant_id=tenant_id, user_id=user_id)
+    ]
+    selected_audit = scoped_audit_events[-25:]
+    audit_events = [_display_event(event) for event in selected_audit]
+    audit_counts: Dict[str, int] = {}
+    for event in selected_audit:
+        key = _event_type(event.get("event_type"))
+        audit_counts[key] = audit_counts.get(key, 0) + 1
 
-    audit_events = audit_logger.get_recent_events(limit=25)
-    audit_event_counts = audit_logger.get_event_counts()
-    training_event_counts = training_audit_logger.get_event_counts(hours=24)
+    # TrainingAuditLogger's cumulative counts and security list are also
+    # process-wide. Only scoped audit receipts contribute to user-level counts.
+    training_counts: Dict[str, int] = {}
+    for event in scoped_audit_events:
+        if event.get("event_type") != "training_operation":
+            continue
+        timestamp = _event_timestamp(event.get("timestamp"))
+        if timestamp is None or datetime.fromisoformat(timestamp) < cutoff:
+            continue
+        metadata = event.get("metadata")
+        subtype = (
+            metadata.get("training_event_type")
+            if isinstance(metadata, dict)
+            else None
+        )
+        kind = _event_type(subtype) if subtype else "training_operation"
+        training_counts[kind] = training_counts.get(kind, 0) + 1
+
     training_security_events = [
-        event.to_dict() for event in training_audit_logger.get_security_events(hours=24)
+        _display_event(event)
+        for event in get_training_audit_logger().get_security_events(hours=24)
+        if _owned_by(event, tenant_id=tenant_id, user_id=user_id)
+        and (timestamp := _event_timestamp(getattr(event, "timestamp", None)))
+        and datetime.fromisoformat(timestamp) >= cutoff
     ]
 
+    # No user-level queue or shard-link counts are exposed by the canonical
+    # memory service. Never reuse process-wide service_metrics as personal data.
     memory_observability: Dict[str, Any] = {
         "available": False,
         "pending_writebacks": 0,
@@ -44,94 +141,48 @@ async def get_communications_center_observability(
     alerts: List[Dict[str, Any]] = []
 
     try:
-        registry = get_service_registry()
-        memory_service = await registry.get_service("memory_service")
-        if memory_service is not None:
-            service_metrics = (
-                memory_service.get_service_metrics()
-                if hasattr(memory_service, "get_service_metrics")
-                else {}
+        service = await get_service_registry().get_service("memory_service")
+        if service is not None and hasattr(service, "get_writeback_feedback_metrics"):
+            # This canonical method enforces user/org filters at retrieval.
+            metrics = await service.get_writeback_feedback_metrics(
+                user_id=user_id, org_id=tenant_id, time_window_hours=24,
             )
-            feedback_metrics = (
-                await memory_service.get_writeback_feedback_metrics(
-                    user_id=user_id or None,
-                    org_id=str(current_user.get("tenant_id") or "") or None,
-                    time_window_hours=24,
-                )
-                if hasattr(memory_service, "get_writeback_feedback_metrics")
-                else {}
-            )
-            writeback_metrics = (
-                service_metrics.get("writeback_system", {})
-                if isinstance(service_metrics, dict)
-                else {}
-            )
-            pending_writebacks = int(
-                writeback_metrics.get("pending_writebacks", 0) or 0
-            )
-            active_shard_links = int(
-                writeback_metrics.get("active_shard_links", 0) or 0
-            )
-
-            memory_observability = {
-                "available": True,
-                "pending_writebacks": pending_writebacks,
-                "active_shard_links": active_shard_links,
-                "feedback_metrics": feedback_metrics,
-                "service_metrics": service_metrics,
-            }
-
-            if pending_writebacks > 0:
-                alerts.append(
-                    {
-                        "id": "memory-writeback-backlog",
-                        "title": "Memory writeback backlog detected",
-                        "description": f"{pending_writebacks} response writebacks are still pending processing.",
-                        "type": "warning",
-                        "timestamp": generated_at,
-                    }
-                )
+            if is_dataclass(metrics) and not isinstance(metrics, type):
+                metrics = asdict(metrics)
+            if isinstance(metrics, dict):
+                memory_observability["feedback_metrics"] = metrics
     except Exception as exc:
-        alerts.append(
-            {
-                "id": "memory-observability-unavailable",
-                "title": "Memory observability unavailable",
-                "description": f"Unable to resolve memory service metrics: {exc}",
-                "type": "warning",
-                "timestamp": generated_at,
-            }
+        logger.warning(
+            "Communications Center scoped memory feedback unavailable: %s",
+            type(exc).__name__,
         )
+        alerts.append({
+            "id": "memory-feedback-unavailable",
+            "title": "Memory feedback unavailable",
+            "description": "Account-scoped memory feedback could not be verified.",
+            "type": "warning",
+            "timestamp": generated_at,
+        })
 
     if training_security_events:
-        alerts.append(
-            {
-                "id": "training-security-events",
-                "title": "Training security events present",
-                "description": f"{len(training_security_events)} training security event(s) were recorded in the last 24 hours.",
-                "type": "warning",
-                "timestamp": generated_at,
-            }
-        )
+        alerts.append({
+            "id": "training-security-events",
+            "title": "Training security events present",
+            "description": (
+                f"{len(training_security_events)} account-scoped training "
+                "security event(s) were recorded in the last 24 hours."
+            ),
+            "type": "warning",
+            "timestamp": generated_at,
+        })
 
-    if not alerts:
-        alerts.append(
-            {
-                "id": "observability-healthy",
-                "title": "Observability pipeline healthy",
-                "description": "Audit, training, and memory writeback surfaces are responding normally.",
-                "type": "info",
-                "timestamp": generated_at,
-            }
-        )
-
+    # Do not issue a blanket "system healthy" notification. Audit buffers,
+    # training counters and memory writeback status are not global health proof.
     return {
         "generated_at": generated_at,
-        "audit": {
-            "recent_events": audit_events,
-            "event_counts": audit_event_counts,
-        },
+        "audit": {"recent_events": audit_events, "event_counts": audit_counts},
         "training": {
-            "event_counts": training_event_counts,
+            "event_counts": training_counts,
             "security_events": training_security_events,
         },
         "memory": memory_observability,
