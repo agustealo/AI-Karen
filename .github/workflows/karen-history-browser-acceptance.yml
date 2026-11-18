@@ -333,23 +333,6 @@ jobs:
             *) echo "::error::Acceptance URL must use HTTPS"; exit 1 ;;
           esac
 
-      - name: Verify deployed revision before browser acceptance
-        shell: bash
-        env:
-          TARGET_SHA: ${{ inputs.target_sha }}
-          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: |
-          set -euo pipefail
-          python ../../../scripts/ci/verify_deployment_revision.py
-
-      - name: Verify canonical backend connectivity before CopilotKit browser acceptance
-        shell: bash
-        env:
-          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: |
-          set -euo pipefail
-          python ../../../scripts/ci/verify_backend_target.py --base-url "$KAREN_BASE_URL"
-
       - name: Verify independent Vercel deployment provenance before browser acceptance
         shell: bash
         env:
@@ -361,6 +344,25 @@ jobs:
         run: |
           set -euo pipefail
           python ../../../scripts/ci/verify_vercel_deployment.py
+
+
+      - name: Verify deployed revision before browser acceptance
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          python ../../../scripts/ci/verify_deployment_revision.py
+
+      - name: Verify canonical backend connectivity before CopilotKit browser acceptance
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
 
       - uses: actions/setup-node@v5
         with:
