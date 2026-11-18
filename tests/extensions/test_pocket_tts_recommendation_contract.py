@@ -39,6 +39,13 @@ def test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec() -> None:
     assert all(char in "0123456789abcdef" for char in curated["revision"])
     assert curated.get("recommended") is False
     assert curated["tier"] == "optional"
+    # Default live-source proof must never treat this gated optional model
+    # as an ungated recommendation; it has its own consented proof path.
+    default_ids = {
+        row["id"] for row in recommendations if row.get("recommended") is True
+    }
+    assert len(default_ids) == 3
+    assert curated["id"] not in default_ids
 
     base = spec["model_subdirectory"]
     included = curated["include_patterns"]

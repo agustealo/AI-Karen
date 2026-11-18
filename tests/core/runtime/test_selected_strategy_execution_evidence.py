@@ -409,3 +409,166 @@ def test_b2c1_registry_does_not_collapse_unrelated_provider_drift(
     assert observed["status"] == "unverified"
     assert observed["provider_receipt_observed"] is False
     assert observed["ope_eligible"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verification", [False, True])
+async def test_b2c3b_observed_outcome_links_actual_persisted_strategy(
+    verification: bool,
+) -> None:
+    """Typed selected execution binds the exact durable strategy, not topology."""
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._outcome_recorder = SimpleNamespace(
+        record_execution_outcome_async=AsyncMock(),
+    )
+    decision = _decision(verification=verification)
+    selected = "verify_then_respond" if verification else "respond_direct"
+    link = {
+        "schema_version": "selected_strategy_decision_observation_v1",
+        "decision_observation_id": "persisted-strategy-observation",
+        "trajectory_id": "trajectory-scope",
+        "feature_snapshot_id": "persisted-decision-features",
+        "policy_decision_id": decision.policy_decision_id,
+        "policy_version": decision.policy_version,
+        "selected_action": selected,
+        "ope_eligible": False,
+    }
+    token = set_correlation_context(CorrelationContext(
+        correlation_id=CORRELATION_ID,
+        tenant_id="tenant-scope",
+        user_id="user-scope",
+        request_id="request-scope",
+    ))
+    try:
+        await runtime._record_execution_outcome(
+            trajectory_id="trajectory-scope",
+            decision=decision,
+            decision_observation_id="topology-observation",
+            text="Observed response.",
+            start=time.time() - 0.01,
+            meter=SimpleNamespace(
+                model_calls=1, tool_calls=0, reasoning_steps=2,
+            ),
+            memory_meta={},
+            success=True,
+            transcript_meta={"transcript_persistence_status": "persisted"},
+            provider_meta=_receipt(verification=verification),
+            selected_strategy_decision=link,
+        )
+    finally:
+        reset_correlation_context(token)
+
+    written = runtime._outcome_recorder.record_execution_outcome_async.await_args.kwargs
+    assert written["decision_observation_id"] == "persisted-strategy-observation"
+    assert written["metadata"]["topology_decision_observation_id"] == "topology-observation"
+    assert written["metadata"]["selected_strategy_execution"]["selected_action"] == selected
+    assert written["metadata"]["selected_strategy_execution"]["ope_eligible"] is False
+    assert written["metadata"]["selected_strategy_execution"]["randomized_selection"] is False
+    assert "reward" not in written["metadata"]
+    assert "candidate_probabilities" not in written["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", [
+    "no_strategy_record",
+    "missing_strategy_id",
+    "same_as_topology_id",
+    "wrong_trajectory",
+    "missing_feature_snapshot",
+    "wrong_policy_decision",
+    "wrong_policy_version",
+    "wrong_selected_action",
+    "ope_eligible",
+    "wrong_schema",
+    "unexpected_metadata",
+    "unverified_provider",
+    "fallback",
+    "failed_transcript",
+    "no_model_calls",
+])
+async def test_b2c3b_noncomparable_or_unverified_path_retains_topology_link(
+    fault: str,
+) -> None:
+    """No arbitrary strategy reference, positive outcome or propensity."""
+    runtime = ChatRuntime.__new__(ChatRuntime)
+    runtime._outcome_recorder = SimpleNamespace(
+        record_execution_outcome_async=AsyncMock(),
+    )
+    decision = _decision(verification=True)
+    link = {
+        "schema_version": "selected_strategy_decision_observation_v1",
+        "decision_observation_id": "strategy-observation",
+        "trajectory_id": "trajectory-scope",
+        "feature_snapshot_id": "persisted-decision-features",
+        "policy_decision_id": decision.policy_decision_id,
+        "policy_version": decision.policy_version,
+        "selected_action": "verify_then_respond",
+        "ope_eligible": False,
+    }
+    provider_meta = _receipt(verification=True)
+    transcript_status = "persisted"
+    calls = 1
+    if fault == "no_strategy_record":
+        link = None
+    elif fault == "missing_strategy_id":
+        link["decision_observation_id"] = ""
+    elif fault == "same_as_topology_id":
+        link["decision_observation_id"] = "topology-observation"
+    elif fault == "wrong_trajectory":
+        link["trajectory_id"] = "other-trajectory"
+    elif fault == "missing_feature_snapshot":
+        link["feature_snapshot_id"] = ""
+    elif fault == "wrong_policy_decision":
+        link["policy_decision_id"] = "another-policy"
+    elif fault == "wrong_policy_version":
+        link["policy_version"] = "other-version"
+    elif fault == "wrong_selected_action":
+        link["selected_action"] = "respond_direct"
+    elif fault == "ope_eligible":
+        link["ope_eligible"] = True
+    elif fault == "wrong_schema":
+        link["schema_version"] = "not-strategy"
+    elif fault == "unexpected_metadata":
+        link["reward"] = 1.0
+    elif fault == "unverified_provider":
+        provider_meta["actual_provider"] = "contradictory-provider"
+    elif fault == "fallback":
+        provider_meta["fallback_level"] = 1
+    elif fault == "failed_transcript":
+        transcript_status = "failed"
+    elif fault == "no_model_calls":
+        calls = 0
+
+    token = set_correlation_context(CorrelationContext(
+        correlation_id=CORRELATION_ID,
+        tenant_id="tenant-scope",
+        user_id="user-scope",
+        request_id="request-scope",
+    ))
+    try:
+        await runtime._record_execution_outcome(
+            trajectory_id="trajectory-scope",
+            decision=decision,
+            decision_observation_id="topology-observation",
+            text="Possibly incomplete answer.",
+            start=time.time() - 0.01,
+            meter=SimpleNamespace(
+                model_calls=calls, tool_calls=0, reasoning_steps=2,
+            ),
+            memory_meta={},
+            success=True,
+            transcript_meta={"transcript_persistence_status": transcript_status},
+            provider_meta=provider_meta,
+            selected_strategy_decision=link,
+        )
+    finally:
+        reset_correlation_context(token)
+
+    written = runtime._outcome_recorder.record_execution_outcome_async.await_args.kwargs
+    assert written["decision_observation_id"] == "topology-observation"
+    assert "topology_decision_observation_id" not in written["metadata"]
+    assert "reward" not in written["metadata"]
+    observed = written["metadata"].get("selected_strategy_execution")
+    if observed is not None:
+        assert observed["ope_eligible"] is False
+        assert observed["randomized_selection"] is False

@@ -354,6 +354,18 @@ jobs:
           pytest tests/architecture/test_identity_vault_tenant_contract.py -q
           pytest tests/services/identity_vault/test_identity_vault.py -q -k 'owned_credential or owned_model_credential or personal_model_credential_resolution or personal_model_key_release or mutating_credential_locks or credential_metadata_read or personal_model_credential_candidate or owned_model_chat_consent or owned_model_candidate_checks or generic_owned_credential_update'
 
+      - name: KCR-04C belief temporal validity and reasoning contracts
+        run: |
+          pytest tests/core/reasoning/belief/test_belief.py -q
+
+      - name: KCOG memory recall and associative research proofs
+        run: |
+          pytest tests/benchmarks/memory/test_recall_query_contract.py -q
+          pytest tests/benchmarks/memory/test_recall_quality.py -q
+          pytest tests/benchmarks/memory/test_associative_rank_research.py -q
+          pytest tests/benchmarks/memory/test_temporal_research_contract.py -q
+          pytest tests/core/memory/test_spreading_activation.py -q
+
       - name: Reject retired provider authorities
         shell: bash
         run: |
