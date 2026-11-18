@@ -191,7 +191,7 @@ const PRIMARY_NAV: Array<{
     section: "Start here",
     items: [
       { key: "chat", label: "Chat", icon: MessageSquare },
-      { key: "commsCenter", label: "Messages & channels", icon: Bell },
+      { key: "commsCenter", label: "Activity & notifications", icon: Bell },
     ],
   },
   {

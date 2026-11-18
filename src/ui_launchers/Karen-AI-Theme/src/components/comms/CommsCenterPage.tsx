@@ -2,16 +2,15 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { KAREN_SUGGESTED_FACTS_LS_KEY } from '@/lib/constants';
 import apiClient, { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Bell, Bot, Clock, FileText, Info, MessageSquarePlus, Server, AlertCircle, Workflow, Lightbulb, Activity, ShieldAlert, BrainCircuit } from "lucide-react";
+import { Bell, Clock, FileText, Info, Server, AlertCircle, Workflow, Activity, ShieldAlert, BrainCircuit, RefreshCw, Radio } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { format } from 'date-fns';
 
 type SystemAlert = {
@@ -62,91 +61,143 @@ type ObservabilitySnapshot = {
     }>;
 };
 
+
+const formatEventTime = (
+    value: string | Date | undefined,
+    pattern = "MMM d, HH:mm",
+): string => {
+    if (!value) return "Time unavailable";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "Time unavailable" : format(date, pattern);
+};
+
+const metricValue = (count: number | null): string =>
+    count !== null && Number.isFinite(count) && count >= 0
+        ? count.toLocaleString()
+        : "—";
+
+const isObservabilitySnapshot = (value: unknown): value is ObservabilitySnapshot => {
+    if (!value || typeof value !== "object") return false;
+    const snapshot = value as Partial<ObservabilitySnapshot>;
+    return (
+        typeof snapshot.generated_at === "string" &&
+        Array.isArray(snapshot.alerts) &&
+        snapshot.alerts.every((alert) =>
+            !!alert && typeof alert.id === "string" &&
+            typeof alert.title === "string" &&
+            typeof alert.description === "string" &&
+            typeof alert.timestamp === "string" &&
+            ["info", "warning", "update"].includes(alert.type)
+        ) &&
+        !!snapshot.audit &&
+        Array.isArray(snapshot.audit.recent_events) &&
+        snapshot.audit.recent_events.every((event) =>
+            !!event && typeof event === "object" &&
+            (event.message === undefined || typeof event.message === "string") &&
+            (event.event_type === undefined || typeof event.event_type === "string")
+        ) &&
+        !!snapshot.audit.event_counts &&
+        typeof snapshot.audit.event_counts === "object" &&
+        Object.values(snapshot.audit.event_counts).every(
+            (count) => typeof count === "number" && Number.isFinite(count) && count >= 0
+        ) &&
+        !!snapshot.training &&
+        !!snapshot.training.event_counts &&
+        typeof snapshot.training.event_counts === "object" &&
+        Object.values(snapshot.training.event_counts).every(
+            (count) => typeof count === "number" && Number.isFinite(count) && count >= 0
+        ) &&
+        Array.isArray(snapshot.training.security_events) &&
+        snapshot.training.security_events.every((event) =>
+            !!event && typeof event === "object" &&
+            (event.message === undefined || typeof event.message === "string") &&
+            (event.event_type === undefined || typeof event.event_type === "string")
+        ) &&
+        !!snapshot.memory &&
+        typeof snapshot.memory.available === "boolean" &&
+        typeof snapshot.memory.pending_writebacks === "number" &&
+        Number.isFinite(snapshot.memory.pending_writebacks) &&
+        snapshot.memory.pending_writebacks >= 0 &&
+        typeof snapshot.memory.active_shard_links === "number" &&
+        Number.isFinite(snapshot.memory.active_shard_links) &&
+        snapshot.memory.active_shard_links >= 0
+    );
+};
+
 /**
  * @file CommsCenterPage.tsx
  * @description Communications Center backed by live API data only.
  */
 export default function CommsCenterPage() {
-    const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
-    const [suggestedFacts, setSuggestedFacts] = useState<string[]>([]);
-    const [observability, setObservability] = useState<ObservabilitySnapshot | null>(null);
+    const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
+    const principal = user?.tenant_id && user?.user_id
+        ? user.tenant_id + ":" + user.user_id
+        : null;
+    const [snapshot, setSnapshot] = useState<{ principal: string; value: ObservabilitySnapshot } | null>(null);
+    // Never render a previous principal's snapshot across an account switch.
+    const observability = principal && snapshot?.principal === principal
+        ? snapshot.value : null;
     const [observabilityError, setObservabilityError] = useState<string | null>(null);
     const [observabilityAuthRequired, setObservabilityAuthRequired] = useState(false);
     const [observabilityAccessDenied, setObservabilityAccessDenied] = useState(false);
+    const [observabilityLoading, setObservabilityLoading] = useState(true);
+    const [refreshRevision, setRefreshRevision] = useState(0);
 
-    // Load suggested facts from localStorage
+    // Render only backend-confirmed observability, never synthetic metrics.
     useEffect(() => {
-        try {
-            const storedFacts = localStorage.getItem(KAREN_SUGGESTED_FACTS_LS_KEY);
-            setSuggestedFacts(storedFacts ? JSON.parse(storedFacts) : []);
-        } catch (error) {
-            console.error("Failed to load suggested facts from localStorage:", error);
-            setSuggestedFacts([]);
+        if (isAuthLoading) return;
+
+        if (!isAuthenticated || !principal) {
+            setSnapshot(null);
+            setObservabilityLoading(false);
+            setObservabilityAuthRequired(true);
+            setObservabilityAccessDenied(false);
+            setObservabilityError(null);
+            return;
         }
-    }, []);
 
-    useEffect(() => {
-        let isMounted = true;
+        let active = true;
+        setObservabilityLoading(true);
+        setSnapshot(null);
+        setObservabilityError(null);
+        setObservabilityAuthRequired(false);
+        setObservabilityAccessDenied(false);
 
-        const loadObservability = async () => {
-            if (isAuthLoading || !isAuthenticated) {
-                return;
-            }
+        const load = async () => {
             try {
-                if (isMounted) {
-                    setObservabilityAuthRequired(false);
-                    setObservabilityAccessDenied(false);
+                const result: unknown = await apiClient.get<unknown>(
+                    "/api/communications-center/observability",
+                );
+                if (!isObservabilitySnapshot(result)) {
+                    throw new Error("Live observability response did not match the backend contract");
                 }
-                const snapshot = await apiClient.get<ObservabilitySnapshot>('/api/communications-center/observability');
-                if (isMounted) {
-                    setObservability(snapshot);
-                    setObservabilityError(null);
-                    setObservabilityAuthRequired(false);
-                    setObservabilityAccessDenied(false);
-                }
+                if (active) setSnapshot({ principal, value: result });
             } catch (error) {
-                if (isMounted) {
-                    if (error instanceof ApiError && error.status === 401) {
-                        setObservability(null);
-                        setObservabilityAuthRequired(true);
-                        setObservabilityAccessDenied(false);
-                        setObservabilityError(null);
-                    } else if (error instanceof ApiError && error.status === 403) {
-                        setObservability(null);
-                        setObservabilityAuthRequired(false);
-                        setObservabilityAccessDenied(true);
-                        setObservabilityError(null);
-                    } else {
-                        setObservability(null);
-                        setObservabilityAuthRequired(false);
-                        setObservabilityAccessDenied(false);
-                        setObservabilityError(error instanceof Error ? error.message : 'Failed to load observability data');
-                    }
+                if (!active) return;
+                setSnapshot(null);
+                if (error instanceof ApiError && error.status === 401) {
+                    setObservabilityAuthRequired(true);
+                } else if (error instanceof ApiError && error.status === 403) {
+                    setObservabilityAccessDenied(true);
+                } else {
+                    setObservabilityError(
+                        error instanceof Error ? error.message : "Live observability is unavailable",
+                    );
                 }
+            } finally {
+                if (active) setObservabilityLoading(false);
             }
         };
 
-        loadObservability();
-        return () => {
-            isMounted = false;
-        };
-    }, [isAuthenticated, isAuthLoading]);
-
-    const emitCommsDegradedTelemetry = (surface: string, reason: string) => {
-        console.warn(`[comms-center][degraded] ${surface}: ${reason}`);
-    };
-
-    useEffect(() => {
-        if (observabilityAuthRequired) emitCommsDegradedTelemetry('observability', 'auth_required');
-        if (observabilityAccessDenied) emitCommsDegradedTelemetry('observability', 'access_denied');
-        if (observabilityError) emitCommsDegradedTelemetry('observability', observabilityError);
-    }, [observabilityAuthRequired, observabilityAccessDenied, observabilityError]);
+        void load();
+        return () => { active = false; };
+    }, [isAuthenticated, isAuthLoading, principal, refreshRevision]);
 
     const getAlertIcon = (type: SystemAlert['type']) => {
         switch (type) {
-            case "info": return <Info className="h-4 w-4 text-blue-500" />;
-            case "warning": return <AlertCircle className="h-4 w-4 text-yellow-500" />;
-            case "update": return <Server className="h-4 w-4 text-primary" />;
+            case "info": return <Info aria-hidden="true" className="h-4 w-4 text-accent" />;
+            case "warning": return <AlertCircle aria-hidden="true" className="h-4 w-4 text-warning" />;
+            case "update": return <Server aria-hidden="true" className="h-4 w-4 text-primary" />;
         }
     };
 
@@ -163,169 +214,240 @@ export default function CommsCenterPage() {
     const trainingEventCounts = observability?.training.event_counts || {};
     const auditEventCounts = observability?.audit.event_counts || {};
     const trainingSecurityEvents = observability?.training.security_events || [];
+    const trainingSignalCount = observability
+        ? Object.values(trainingEventCounts).reduce(
+            (total, count) => total + (Number.isFinite(count) ? count : 0),
+            0,
+        )
+        : null;
+    const liveStatus = observabilityLoading || isAuthLoading
+        ? "Connecting"
+        : observability
+            ? "Live snapshot"
+            : observabilityAccessDenied
+                ? "Access restricted"
+                : observabilityAuthRequired
+                    ? "Sign in required"
+                    : "Unavailable";
 
   return (
-    <div className="space-y-6">
-        <div>
-            <h2 className="karen-page-title">Communications Center</h2>
-            <p className="text-sm text-muted-foreground">
-            A central hub for updates from KAREN, automation logs, system alerts, and generated notes.
-            </p>
-        </div>
-        <Separator />
-        
-        <Tabs defaultValue="overview" className="w-full">
-            <TabsList className="grid w-full grid-cols-5">
-                <TabsTrigger value="overview">
-                    <Bell className="mr-2 h-4 w-4" /> Overview
-                </TabsTrigger>
-                <TabsTrigger value="observability">
-                    <Activity className="mr-2 h-4 w-4" /> Observability
-                </TabsTrigger>
-                <TabsTrigger value="logs">
-                    <Bot className="mr-2 h-4 w-4" /> Automation Logs
-                </TabsTrigger>
-                <TabsTrigger value="notes">
-                    <FileText className="mr-2 h-4 w-4" /> Notes & Summaries
-                </TabsTrigger>
-                <TabsTrigger value="alerts">
-                    <Server className="mr-2 h-4 w-4" /> System Alerts
-                </TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="overview" className="mt-4 space-y-6">
-                {observabilityAuthRequired && (
-                    <Alert variant="default" className="border-primary/20 bg-primary/5">
-                        <ShieldAlert className="h-4 w-4 !text-primary" />
-                        <AlertTitle>Sign In Required</AlertTitle>
-                        <AlertDescription>
-                            Live Communications Center telemetry is available, but this session is not authenticated. Sign in to load backend observability data.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                {observabilityAccessDenied && (
-                    <Alert variant="default" className="border-primary/20 bg-primary/5">
-                        <ShieldAlert className="h-4 w-4 !text-primary" />
-                        <AlertTitle>Observability Access Restricted</AlertTitle>
-                        <AlertDescription>
-                            Live Communications Center telemetry is available from the backend, but this account does not have permission to view it.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                {observabilityError && (
-                    <Alert variant="default" className="border-yellow-500/30 bg-yellow-500/5">
-                        <AlertCircle className="h-4 w-4 !text-yellow-600" />
-                        <AlertTitle>Observability Fallback</AlertTitle>
-                        <AlertDescription>
-                            Live observability data could not be loaded. Showing local Communications Center content only.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* Suggested Facts */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center text-lg">
-                                <MessageSquarePlus className="mr-2 h-5 w-5 text-primary"/>
-                                Suggested Facts for Review
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                           {suggestedFacts.length > 0 ? (
-                                <>
-                                 <Alert variant="default" className="bg-primary/5 border-primary/20 mb-4">
-                                    <Lightbulb className="h-4 w-4 !text-primary/80" />
-                                    <AlertDescription className="text-xs text-primary/90">
-                                    KAREN has identified new information. Go to <strong>Settings &gt; Facts</strong> to confirm or dismiss these.
-                                    </AlertDescription>
-                                </Alert>
-                                <ScrollArea className="h-48">
-                                    <ul className="list-disc list-inside space-y-1 text-sm text-muted-foreground">
-                                        {suggestedFacts.map((fact, index) => (
-                                            <li key={index} className="truncate">{fact}</li>
-                                        ))}
-                                    </ul>
-                                </ScrollArea>
-                                </>
-                           ) : (
-                               <p className="text-sm text-muted-foreground text-center py-10">No new facts suggested by KAREN recently.</p>
-                           )}
-                        </CardContent>
-                    </Card>
-
-                     {/* Latest Automation Log */}
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center text-lg">
-                                <Bot className="mr-2 h-5 w-5 text-primary"/>
-                                Latest Automation Activity
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                             <ul className="space-y-3">
-                                {recentAuditEvents.slice(0, 4).map((event, index) => (
-                                    <li key={`${event.timestamp ?? index}-${event.event_type ?? 'event'}`} className="flex items-center space-x-3 text-sm">
-                                        <Badge variant="secondary" className="w-20 justify-center">Audit</Badge>
-                                        <span className="flex-1 truncate font-medium text-foreground">{event.message || event.event_type || 'Event'}</span>
-                                        <span className="text-xs text-muted-foreground">{event.timestamp ? format(new Date(event.timestamp), "HH:mm") : "Unknown"}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                        </CardContent>
-                    </Card>
+    <div data-kari-root className="space-y-6 pb-8" data-testid="comms-center">
+        <header className="karen-surface relative isolate overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-primary/10 p-5 shadow-lg md:p-8">
+            <div aria-hidden="true" className="karen-workspace-grid pointer-events-none absolute inset-0 opacity-35" />
+            <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-20 h-64 w-64 rounded-full bg-primary/10 blur-3xl" />
+            <div className="relative flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+                <div className="min-w-0 max-w-2xl">
+                    <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5 text-xs font-semibold tracking-wide text-primary">
+                        <Radio aria-hidden="true" className="h-3.5 w-3.5" />
+                        Communications Center
+                    </div>
+                    <h2 className="kari-display karen-page-title text-balance md:text-[2.25rem]">Activity &amp; Notifications</h2>
+                    <p className="karen-page-description mt-3">
+                        A clear view of backend audit activity, system alerts, memory operations and
+                        training signals. Only verified information is shown.
+                    </p>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center text-lg">
-                                <Workflow className="mr-2 h-5 w-5 text-primary" />
-                                Writeback Queue
-                            </CardTitle>
-                            <CardDescription>Governed memory retention status from the backend.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-2">
-                            <div className="text-2xl font-semibold">{memoryStats?.pending_writebacks ?? 0}</div>
-                            <p className="text-sm text-muted-foreground">Pending writebacks</p>
-                            <Badge variant={(memoryStats?.pending_writebacks ?? 0) > 0 ? "outline" : "secondary"}>
-                                {(memoryStats?.pending_writebacks ?? 0) > 0 ? "Needs Processing" : "Healthy"}
-                            </Badge>
+                <div className="flex shrink-0 flex-wrap items-center gap-3 lg:flex-col lg:items-end">
+                    <div role="status" className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card/80 px-3 py-2 text-xs font-medium text-foreground">
+                        <span aria-hidden="true" className={observability ? "h-2 w-2 rounded-full bg-success" : "h-2 w-2 rounded-full bg-muted-foreground/50"} />
+                        {liveStatus}
+                    </div>
+                    <span className="karen-metric">
+                        {observability ? "Updated " + formatEventTime(observability.generated_at) : "No verified snapshot"}
+                    </span>
+                    <Button type="button" size="sm" variant="outline" className="gap-2 bg-card/80" disabled={!isAuthenticated || isAuthLoading || observabilityLoading} onClick={() => setRefreshRevision((value) => value + 1)}>
+                        <RefreshCw aria-hidden="true" className="h-4 w-4" />
+                        Refresh
+                    </Button>
+                </div>
+            </div>
+        </header>
+
+        <Tabs defaultValue="overview" className="w-full">
+            <div className="overflow-x-auto pb-1" aria-label="Communications Center sections">
+                <TabsList className="flex h-auto w-max min-w-full items-center justify-start gap-1 border-border/70 bg-muted/50 p-1.5">
+                    <TabsTrigger value="overview" className="min-h-10 gap-2 px-3 sm:px-4">
+                        <Bell aria-hidden="true" className="h-4 w-4 shrink-0" /> Overview
+                    </TabsTrigger>
+                    <TabsTrigger value="observability" className="min-h-10 gap-2 px-3 sm:px-4">
+                        <Activity aria-hidden="true" className="h-4 w-4 shrink-0" /> Observability
+                    </TabsTrigger>
+                    <TabsTrigger value="logs" className="min-h-10 gap-2 px-3 sm:px-4">
+                        <Clock aria-hidden="true" className="h-4 w-4 shrink-0" /> Audit timeline
+                    </TabsTrigger>
+                    <TabsTrigger value="notes" className="min-h-10 gap-2 px-3 sm:px-4">
+                        <FileText aria-hidden="true" className="h-4 w-4 shrink-0" /> Notes
+                    </TabsTrigger>
+                    <TabsTrigger value="alerts" className="min-h-10 gap-2 px-3 sm:px-4">
+                        <ShieldAlert aria-hidden="true" className="h-4 w-4 shrink-0" /> System alerts
+                    </TabsTrigger>
+                </TabsList>
+            </div>
+
+            <TabsContent value="overview" className="mt-6 space-y-6">
+                {observabilityLoading && (
+                    <Alert role="status" className="border-primary/20 bg-primary/5">
+                        <Activity aria-hidden="true" className="h-4 w-4 text-primary" />
+                        <AlertTitle>Connecting to live operations</AlertTitle>
+                        <AlertDescription>Waiting for the authenticated backend snapshot. No estimated counts are shown.</AlertDescription>
+                    </Alert>
+                )}
+                {observabilityAuthRequired && !observabilityLoading && (
+                    <Alert className="border-border/70 bg-muted/40">
+                        <ShieldAlert aria-hidden="true" className="h-4 w-4" />
+                        <AlertTitle>Sign in required</AlertTitle>
+                        <AlertDescription>Sign in to access the backend audit and operational event feed.</AlertDescription>
+                    </Alert>
+                )}
+                {observabilityAccessDenied && !observabilityLoading && (
+                    <Alert className="border-border/70 bg-muted/40">
+                        <ShieldAlert aria-hidden="true" className="h-4 w-4" />
+                        <AlertTitle>Observability access restricted</AlertTitle>
+                        <AlertDescription>Your session is authenticated, but this account is not authorized to view these events.</AlertDescription>
+                    </Alert>
+                )}
+                {observabilityError && !observabilityLoading && (
+                    <Alert className="border-warning/30 bg-warning/5">
+                        <AlertCircle aria-hidden="true" className="h-4 w-4 text-warning" />
+                        <AlertTitle>Live activity unavailable</AlertTitle>
+                        <AlertDescription>{observabilityError}. No fallback or synthetic activity is displayed.</AlertDescription>
+                    </Alert>
+                )}
+
+                <section aria-label="Operational snapshot" className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
+                    <Card className="overflow-hidden border-primary/25 bg-gradient-to-br from-card to-primary/10">
+                        <CardContent className="space-y-4 p-5">
+                            <div className="flex items-center justify-between">
+                                <span className="karen-panel-label">Audit events</span>
+                                <span className="rounded-lg bg-primary/10 p-2 text-primary"><Activity aria-hidden="true" className="h-5 w-5" /></span>
+                            </div>
+                            <div className="text-3xl font-semibold tracking-tight tabular-nums" data-testid="comms-metric-audit">
+                                {metricValue(observability ? recentAuditEvents.length : null)}
+                            </div>
+                            <p className="text-sm text-muted-foreground">Events in the current backend snapshot</p>
                         </CardContent>
                     </Card>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center text-lg">
-                                <FileText className="mr-2 h-5 w-5 text-primary" />
-                                Audit Events
-                            </CardTitle>
-                            <CardDescription>Recent backend audit trail activity.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-2">
-                            <div className="text-2xl font-semibold">{recentAuditEvents.length}</div>
-                            <p className="text-sm text-muted-foreground">Buffered recent events</p>
-                            <Badge variant="secondary">{Object.keys(auditEventCounts).length} event types</Badge>
+                    <Card className="overflow-hidden bg-gradient-to-br from-card to-accent/5">
+                        <CardContent className="space-y-4 p-5">
+                            <div className="flex items-center justify-between">
+                                <span className="karen-panel-label">System alerts</span>
+                                <span className="rounded-lg bg-accent/10 p-2 text-accent"><Bell aria-hidden="true" className="h-5 w-5" /></span>
+                            </div>
+                            <div className="text-3xl font-semibold tracking-tight tabular-nums" data-testid="comms-metric-alerts">
+                                {metricValue(observability ? liveAlerts.length : null)}
+                            </div>
+                            <p className="text-sm text-muted-foreground">Alerts reported by the backend</p>
                         </CardContent>
                     </Card>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="flex items-center text-lg">
-                                <BrainCircuit className="mr-2 h-5 w-5 text-primary" />
-                                Training Signals
-                            </CardTitle>
-                            <CardDescription>Curated learning and training audit telemetry.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-2">
-                            <div className="text-2xl font-semibold">{Object.values(trainingEventCounts).reduce((sum, value) => sum + value, 0)}</div>
-                            <p className="text-sm text-muted-foreground">Training audit events</p>
-                            <Badge variant={trainingSecurityEvents.length > 0 ? "outline" : "secondary"}>
-                                {trainingSecurityEvents.length > 0 ? `${trainingSecurityEvents.length} security events` : "No security events"}
-                            </Badge>
+                    <Card className="overflow-hidden bg-gradient-to-br from-card to-primary/5">
+                        <CardContent className="space-y-4 p-5">
+                            <div className="flex items-center justify-between">
+                                <span className="karen-panel-label">Writeback queue</span>
+                                <span className="rounded-lg bg-primary/10 p-2 text-primary"><Workflow aria-hidden="true" className="h-5 w-5" /></span>
+                            </div>
+                            <div className="text-3xl font-semibold tracking-tight tabular-nums" data-testid="comms-metric-writebacks">
+                                {metricValue(observability && memoryStats?.available ? memoryStats.pending_writebacks : null)}
+                            </div>
+                            <p className="text-sm text-muted-foreground">{memoryStats?.available && observability ? "Pending governed memory writebacks" : "Memory service status not verified"}</p>
                         </CardContent>
                     </Card>
+                    <Card className="overflow-hidden bg-gradient-to-br from-card to-accent/5">
+                        <CardContent className="space-y-4 p-5">
+                            <div className="flex items-center justify-between">
+                                <span className="karen-panel-label">Training signals</span>
+                                <span className="rounded-lg bg-accent/10 p-2 text-accent"><BrainCircuit aria-hidden="true" className="h-5 w-5" /></span>
+                            </div>
+                            <div className="text-3xl font-semibold tracking-tight tabular-nums" data-testid="comms-metric-training">
+                                {metricValue(trainingSignalCount)}
+                            </div>
+                            <p className="text-sm text-muted-foreground">Reported training audit events</p>
+                        </CardContent>
+                    </Card>
+                </section>
+
+                <section className="grid gap-5 xl:grid-cols-12" aria-label="Recent operational activity">
+                    <Card className="overflow-hidden xl:col-span-7">
+                        <CardHeader className="border-b border-border/60 bg-muted/20">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <CardTitle className="text-lg">Recent audit activity</CardTitle>
+                                    <CardDescription className="mt-1">Backend audit events, not a substitute for automation run receipts.</CardDescription>
+                                </div>
+                                <span aria-hidden="true" className="rounded-lg bg-primary/10 p-2 text-primary"><Activity className="h-5 w-5" /></span>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-5">
+                            {recentAuditEvents.length > 0 ? (
+                                <ol className="space-y-4">
+                                    {recentAuditEvents.slice(0, 6).map((event, index) => (
+                                        <li key={String(event.timestamp || index) + "-" + String(event.event_type || "event")} className="flex gap-3">
+                                            <span aria-hidden="true" className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-primary shadow-[0_0_0_4px_hsl(var(--primary)/0.12)]" />
+                                            <div className="min-w-0 flex-1 border-b border-border/50 pb-3 last:border-b-0">
+                                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                                    <p className="break-words text-sm font-medium text-foreground">{event.message || event.event_type || "Audit event"}</p>
+                                                    <span className="karen-metric shrink-0">{formatEventTime(event.timestamp)}</span>
+                                                </div>
+                                                <p className="mt-1 text-xs text-muted-foreground">{event.event_type || "Audit"}</p>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ol>
+                            ) : (
+                                <div className="flex min-h-44 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/80 bg-muted/20 p-6 text-center">
+                                    <Activity aria-hidden="true" className="h-7 w-7 text-muted-foreground/60" />
+                                    <p className="text-sm font-medium">{observability ? "No audit events in this snapshot" : "Audit activity not available"}</p>
+                                    <p className="max-w-xs text-xs text-muted-foreground">{observability ? "The backend returned an empty recent-event buffer." : "An authenticated, authorized snapshot is required."}</p>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card className="overflow-hidden xl:col-span-5">
+                        <CardHeader className="border-b border-border/60 bg-muted/20">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <CardTitle className="text-lg">Latest system alerts</CardTitle>
+                                    <CardDescription className="mt-1">System-reported updates that may need attention.</CardDescription>
+                                </div>
+                                <span aria-hidden="true" className="rounded-lg bg-accent/10 p-2 text-accent"><Bell className="h-5 w-5" /></span>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="p-5">
+                            {liveAlerts.length > 0 ? (
+                                <ul className="space-y-3">
+                                    {liveAlerts.slice(0, 5).map((alert) => (
+                                        <li key={alert.id} className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/20 p-3">
+                                            <span className="mt-0.5">{getAlertIcon(alert.type)}</span>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-semibold">{alert.title}</p>
+                                                <p className="mt-1 break-words text-sm text-muted-foreground">{alert.description}</p>
+                                                <p className="karen-metric mt-2">{formatEventTime(alert.timestamp)}</p>
+                                            </div>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <div className="flex min-h-44 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border/80 bg-muted/20 p-6 text-center">
+                                    <Bell aria-hidden="true" className="h-7 w-7 text-muted-foreground/60" />
+                                    <p className="text-sm font-medium">{observability ? "No system alerts in this snapshot" : "System alerts not available"}</p>
+                                    <p className="max-w-xs text-xs text-muted-foreground">{observability ? "No alert records were returned by the backend." : "Live alerts require an authorized backend response."}</p>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                </section>
+                <div className="flex items-start gap-3 rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+                    <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <p>Automation execution history and generated notes require their own verified backend records. This view does not manufacture either from generic audit events.</p>
                 </div>
             </TabsContent>
 
-            <TabsContent value="observability" className="mt-4 space-y-6">
-                {observabilityAuthRequired ? (
+            <TabsContent value="observability" className="mt-6 space-y-6">
+                {observabilityLoading ? (
+                    <Card><CardHeader><CardTitle>Loading observability</CardTitle><CardDescription>Waiting for the authenticated backend snapshot.</CardDescription></CardHeader></Card>
+                ) : observabilityError ? (
+                    <Card><CardHeader><CardTitle>Observability unavailable</CardTitle><CardDescription>{observabilityError}</CardDescription></CardHeader></Card>
+                ) : observabilityAuthRequired ? (
                     <Card>
                         <CardHeader>
                             <CardTitle className="flex items-center gap-2">
@@ -365,34 +487,36 @@ export default function CommsCenterPage() {
                             </div>
                         </CardContent>
                     </Card>
+                ) : !observability ? (
+                    <Card><CardHeader><CardTitle>No verified observability</CardTitle><CardDescription>Live metrics are unavailable from the backend.</CardDescription></CardHeader></Card>
                 ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                     <Card className="xl:col-span-1">
                         <CardHeader>
                             <CardTitle>Memory Observability</CardTitle>
-                            <CardDescription>Writeback queue, shard linking, and feedback loop state.</CardDescription>
+                            <CardDescription>Account-scoped feedback and verified queue status only.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4 text-sm">
                             <div className="flex items-center justify-between">
-                                <span className="text-muted-foreground">Memory service</span>
+                                <span className="text-muted-foreground">Account-scoped queue metrics</span>
                                 <Badge variant={memoryStats?.available ? "secondary" : "outline"}>
-                                    {memoryStats?.available ? "Available" : "Unavailable"}
+                                    {memoryStats?.available ? "Verified" : "Not verified"}
                                 </Badge>
                             </div>
                             <div className="flex items-center justify-between">
                                 <span className="text-muted-foreground">Pending writebacks</span>
-                                <span className="font-medium">{memoryStats?.pending_writebacks ?? 0}</span>
+                                <span className="font-medium" data-testid="comms-observability-pending">{metricValue(memoryStats?.available ? memoryStats.pending_writebacks : null)}</span>
                             </div>
                             <div className="flex items-center justify-between">
                                 <span className="text-muted-foreground">Active shard links</span>
-                                <span className="font-medium">{memoryStats?.active_shard_links ?? 0}</span>
+                                <span className="font-medium" data-testid="comms-observability-shards">{metricValue(memoryStats?.available ? memoryStats.active_shard_links : null)}</span>
                             </div>
-                            <div className="rounded-md border bg-muted/40 p-3">
-                                <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Feedback Metrics</p>
+                            <details className="rounded-md border bg-muted/40 p-3">
+                                <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">Feedback diagnostics</summary>
                                 <pre className="text-xs whitespace-pre-wrap break-words">
 {JSON.stringify(memoryStats?.feedback_metrics || {}, null, 2)}
                                 </pre>
-                            </div>
+                            </details>
                         </CardContent>
                     </Card>
 
@@ -422,7 +546,7 @@ export default function CommsCenterPage() {
                                         <div key={`${event.timestamp ?? index}`} className="text-sm">
                                             <div className="font-medium">{event.message || event.event_type}</div>
                                             <div className="text-xs text-muted-foreground">
-                                                {event.timestamp ? format(new Date(event.timestamp), 'MMM d, HH:mm') : 'Unknown time'}
+                                                {event.timestamp ? formatEventTime(event.timestamp) : 'Unknown time'}
                                             </div>
                                         </div>
                                     )) : (
@@ -448,7 +572,7 @@ export default function CommsCenterPage() {
                                                 <Badge variant="outline">{event.event_type || 'unknown'}</Badge>
                                             </div>
                                             <div className="mt-1 text-xs text-muted-foreground">
-                                                {event.timestamp ? format(new Date(event.timestamp), 'MMM d, HH:mm:ss') : 'Unknown time'}
+                                                {event.timestamp ? formatEventTime(event.timestamp, 'MMM d, HH:mm:ss') : 'Unknown time'}
                                             </div>
                                         </div>
                                     )) : (
@@ -462,25 +586,25 @@ export default function CommsCenterPage() {
                 )}
             </TabsContent>
             
-            <TabsContent value="logs" className="mt-4">
+            <TabsContent value="logs" className="mt-6">
                  <Card>
                     <CardHeader>
-                        <CardTitle>Automation Run History</CardTitle>
-                        <CardDescription>A log of all executed tasks and sequences.</CardDescription>
+                        <CardTitle>Audit event timeline</CardTitle>
+                        <CardDescription>Recent backend audit events. For actual task execution receipts, use the automation workspace.</CardDescription>
                     </CardHeader>
                     <CardContent>
                         <ScrollArea className="h-96">
                             <div className="space-y-4">
                                 {recentAuditEvents.length > 0 ? recentAuditEvents.map((event, index) => (
                                     <div key={`${event.timestamp ?? index}-${event.event_type ?? 'event'}`} className="flex items-center space-x-4 p-2 rounded-md border bg-muted/40">
-                                        <div className="flex-1 grid grid-cols-4 gap-4 items-center">
-                                            <div className="col-span-2">
+                                        <div className="min-w-0 flex-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                                            <div className="min-w-0 sm:flex-1">
                                                 <p className="font-semibold text-foreground truncate">{event.message || event.event_type || 'Audit event'}</p>
                                                 <Badge variant="secondary">Audit</Badge>
                                             </div>
                                             <div className="flex items-center space-x-2">
                                                 <Clock className="h-3.5 w-3.5 text-muted-foreground"/>
-                                                <span className="text-xs text-muted-foreground">{event.timestamp ? format(new Date(event.timestamp), 'MMM d, HH:mm:ss') : 'Unknown time'}</span>
+                                                <span className="text-xs text-muted-foreground">{event.timestamp ? formatEventTime(event.timestamp, 'MMM d, HH:mm:ss') : 'Unknown time'}</span>
                                             </div>
                                             <div>
                                                 <Badge variant="outline">{event.event_type || 'unknown'}</Badge>
@@ -490,9 +614,9 @@ export default function CommsCenterPage() {
                                 )) : (
                                     <Alert variant="default" className="border-yellow-500/30 bg-yellow-500/5">
                                         <AlertCircle className="h-4 w-4 !text-yellow-600" />
-                                        <AlertTitle>Automation logs unavailable</AlertTitle>
+                                        <AlertTitle>{observability ? "No audit events in this snapshot" : "Audit events unavailable"}</AlertTitle>
                                         <AlertDescription>
-                                            Live automation run history is unavailable from the backend. No synthetic log data is shown.
+                                            {observability ? "The backend returned no recent audit events." : "The backend audit feed is not available. No synthetic log data is shown."}
                                         </AlertDescription>
                                     </Alert>
                                 )}
@@ -502,11 +626,11 @@ export default function CommsCenterPage() {
                  </Card>
             </TabsContent>
 
-            <TabsContent value="notes" className="mt-4">
+            <TabsContent value="notes" className="mt-6">
                 <Card>
                     <CardHeader>
-                        <CardTitle>Generated Notes & Summaries</CardTitle>
-                        <CardDescription>A collection of notes and summaries created by KAREN from conversations or tasks.</CardDescription>
+                        <CardTitle>Generated notes & summaries</CardTitle>
+                        <CardDescription>Notes and summaries are displayed here only when a governed backend source is available.</CardDescription>
                     </CardHeader>
                     <CardContent>
                        <ScrollArea className="h-96">
@@ -515,7 +639,7 @@ export default function CommsCenterPage() {
                                     <AlertCircle className="h-4 w-4 !text-yellow-600" />
                                     <AlertTitle>Generated notes unavailable</AlertTitle>
                                     <AlertDescription>
-                                        Generated notes are not currently exposed by backend APIs for this view.
+                                        Generated notes are not currently exposed by an authorized backend API for this view. No placeholder notes are displayed.
                                     </AlertDescription>
                                 </Alert>
                             </div>
@@ -524,10 +648,10 @@ export default function CommsCenterPage() {
                 </Card>
             </TabsContent>
 
-            <TabsContent value="alerts" className="mt-4">
+            <TabsContent value="alerts" className="mt-6">
                 <Card>
                     <CardHeader>
-                        <CardTitle>System Alerts & Notifications</CardTitle>
+                        <CardTitle>System alerts & notifications</CardTitle>
                         <CardDescription>Important updates and information about the KAREN system.</CardDescription>
                     </CardHeader>
                     <CardContent>
@@ -539,15 +663,15 @@ export default function CommsCenterPage() {
                                         <div className="flex-1">
                                             <p className="font-semibold text-foreground">{alert.title}</p>
                                             <p className="text-sm text-muted-foreground">{alert.description}</p>
-                                            <p className="text-xs text-muted-foreground/70 mt-1">{format(alert.timestamp, 'MMM d, HH:mm')}</p>
+                                            <p className="text-xs text-muted-foreground/70 mt-1">{formatEventTime(alert.timestamp)}</p>
                                         </div>
                                     </li>
                                 )) : (
                                     <Alert variant="default" className="border-yellow-500/30 bg-yellow-500/5">
                                         <AlertCircle className="h-4 w-4 !text-yellow-600" />
-                                        <AlertTitle>System alerts unavailable</AlertTitle>
+                                        <AlertTitle>{observability ? "No system alerts in this snapshot" : "System alerts unavailable"}</AlertTitle>
                                         <AlertDescription>
-                                            Live system alerts are currently unavailable from the backend.
+                                            {observability ? "The backend returned no current alerts." : "Live system alerts are currently unavailable from the backend."}
                                         </AlertDescription>
                                     </Alert>
                                 )}
