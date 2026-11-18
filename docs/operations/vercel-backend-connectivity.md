@@ -127,8 +127,9 @@ The canonical inspection owner is
 tests in `tests/architecture/test_vercel_environment_scopes.py`.
 Source CI exercises its boundary contract without Vercel credentials.
 The on-demand protected workflow audits *real* project metadata. The
-verifier admits only reviewed frontend-owned runtime names and presentation
-settings that use a safe `NEXT_PUBLIC_` name. Unknown application variables,
+verifier admits only explicit reviewed frontend-owned settings, including
+an exact allowlist of browser-visible `NEXT_PUBLIC_` names. There is no
+prefix-based exception. Unknown application variables, case-variant or
 credential-like public keys, hidden production inventory, malformed scope,
 pagination ambiguity, inaccessible platform, or backend credentials present
 in the frontend all block live inspection. This is a metadata ownership gate,
