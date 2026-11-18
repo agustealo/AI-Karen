@@ -92,8 +92,10 @@ function SectionHeading({
   title,
   description,
   aside,
+  headingId,
 }: {
   eyebrow: string;
+  headingId: string;
   title: string;
   description: string;
   aside?: ReactNode;
@@ -102,7 +104,7 @@ function SectionHeading({
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-4 sm:px-5">
       <div className="min-w-0">
         <p className="karen-metric uppercase tracking-[0.13em]">{eyebrow}</p>
-        <h3 className="mt-1 text-[15px] font-bold tracking-tight text-foreground">{title}</h3>
+        <h3 id={headingId} className="mt-1 text-[15px] font-bold tracking-tight text-foreground">{title}</h3>
         <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">{description}</p>
       </div>
       {aside}
@@ -302,6 +304,7 @@ export default function GrowthPage() {
 
       <section className="karen-surface overflow-hidden rounded-xl" aria-labelledby="growth-dimensions">
         <SectionHeading
+          headingId="growth-dimensions"
           eyebrow="SIGNAL QUALITY / SIX DIMENSIONS"
           title="Evidence quality"
           description="Measured dimension scores and the percentage of recorded work containing each signal."
@@ -342,6 +345,7 @@ export default function GrowthPage() {
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.85fr)]">
         <section className="karen-surface min-w-0 overflow-hidden rounded-xl" aria-labelledby="growth-milestones">
           <SectionHeading
+            headingId="growth-milestones"
             eyebrow="RECORDED ACHIEVEMENTS"
             title="Milestones"
             description="Only completed and recorded evidence can unlock a milestone."
@@ -379,6 +383,7 @@ export default function GrowthPage() {
 
         <section className="karen-surface min-w-0 overflow-hidden rounded-xl" aria-labelledby="growth-evidence">
           <SectionHeading
+            headingId="growth-evidence"
             eyebrow="PROVENANCE / RECENT OUTCOMES"
             title="Evidence ledger"
             description="The recorded outcomes behind this projection."
