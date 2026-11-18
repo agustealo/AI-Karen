@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -36,6 +37,9 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyDecision, PolicyEvaluationRequest, ProviderConstraints, RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
@@ -43,21 +47,29 @@ from ai_karen_engine.core.runtime.contracts import (
 )
 
 
-def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmission:
+def _scope(
+    *, calls: int = 2, tenant: str = "tenant-a",
+    provider_constraints: dict | None = None,
+    meter_model_calls: int | None = None,
+) -> GovernedToolModelAdmission:
     budget = ExecutionBudget(
         max_model_calls=calls,
         max_external_requests=1,
         max_duration_ms=60000,
     )
     plan = AuthorizedExecutionPlan(
-        execution_id="execution-a",
+        execution_id=f"execution-{uuid4().hex}",
         policy_decision_id="policy-a",
         authorized_user_id="user-a",
         authorized_tenant_id=tenant,
         authorized_session_id="session-a",
+        provider_constraints=dict(provider_constraints or {}),
         budget=budget,
     )
+    if meter_model_calls is not None:
+        budget.max_model_calls = meter_model_calls
     meter = ExecutionBudgetMeter(budget)
+    budget.max_model_calls = calls
     principal = UserData(
         user_id="user-a",
         tenant_id=tenant,
@@ -74,6 +86,27 @@ def _scope(*, calls: int = 2, tenant: str = "tenant-a") -> GovernedToolModelAdmi
         correlation_id="correlation-a",
         authenticated_user=principal,
     )
+    issuer = RuntimePolicyEnforcer()
+    issued_decision = PolicyDecision(
+        decision_id=plan.policy_decision_id,
+        policy_version="fixture",
+        allowed=True,
+        runtime_constraints={
+            "authorized_user_id": context.user_id,
+            "authorized_tenant_id": context.tenant_id,
+            "authorized_session_id": context.session_id,
+            "correlation_id": context.correlation_id,
+            "max_model_calls": plan.budget.max_model_calls,
+        },
+    )
+    # These tests exercise admission using an original issuer-returned
+    # decision object. Policy evaluation itself has separate real-policy
+    # integration coverage, never a production test-mode bypass.
+    issuer._record_issued_model_decision(issued_decision)
+    issuer.bind_chat_model_policy(
+        context=context, decision=issued_decision,
+    )
+    context.bind_runtime_model_authority(plan, meter)
     return GovernedToolModelAdmission(
         plan=plan,
         meter=meter,
@@ -218,8 +251,9 @@ async def test_deactivated_authenticated_user_denied_locally(monkeypatch):
 @pytest.mark.asyncio
 async def test_policy_provider_constraint_denies_before_client_execution(monkeypatch):
     _, attempts, _ = _local_manager(monkeypatch)
-    scope = _scope()
-    scope.plan.provider_constraints["eligible_providers"] = ["other-provider"]
+    scope = _scope(provider_constraints={
+        "eligible_providers": ["other-provider"],
+    })
     with pytest.raises(PermissionError, match="provider_not_authorized"):
         await ModelManagerInferencePort().generate(
             InferenceRequest(
@@ -247,8 +281,7 @@ async def test_restricted_model_with_unresolved_identity_denied_before_wire(
     manager, attempts, _ = _local_manager(
         monkeypatch, observed_model=selected_model,
     )
-    scope = _scope()
-    scope.plan.provider_constraints.update(restriction)
+    scope = _scope(provider_constraints=restriction)
     with pytest.raises(PermissionError, match="governed_model_identity_not_authorized"):
         await manager.generate_chat(
             [{"role": "user", "content": "restricted model input"}],
@@ -267,8 +300,7 @@ async def test_restricted_model_with_unresolved_identity_denied_before_wire(
 @pytest.mark.asyncio
 async def test_restricted_model_with_exact_identity_can_execute(monkeypatch, restriction):
     manager, attempts, _ = _local_manager(monkeypatch, observed_model="model-a")
-    scope = _scope()
-    scope.plan.provider_constraints.update(restriction)
+    scope = _scope(provider_constraints=restriction)
     response = await manager.generate_chat(
         [{"role": "user", "content": "approved model input"}],
         return_receipt=True,
@@ -381,6 +413,541 @@ def test_facade_sync_generation_uses_same_request_budget(monkeypatch):
     assert len(attempts) == 1
 
 
+@pytest.mark.asyncio
+async def test_direct_model_manager_embedding_denies_unauthenticated_before_encoder():
+    manager = object.__new__(ModelManager)
+    calls = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: calls.append(text) or [0.1],
+    )
+    for invalid in (None, object(), {"user_id": "user-a"}):
+        with pytest.raises(PermissionError, match="governed_model_transport_admission_required"):
+            await manager.generate_embedding("private text", execution_admission=invalid)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_direct_model_manager_embedding_denies_foreign_original_scope_without_charge():
+    manager = object.__new__(ModelManager)
+    calls = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: calls.append(text) or [0.1],
+    )
+    scope = _scope(calls=1)
+    foreign = replace(scope, tenant_id="foreign-tenant")
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        await manager.generate_embedding("private text", execution_admission=foreign)
+    alternate_meter = replace(
+        scope,
+        meter=ExecutionBudgetMeter(
+            ExecutionBudget(max_model_calls=1, max_duration_ms=60000),
+        ),
+    )
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        await manager.generate_embedding("private text", execution_admission=alternate_meter)
+    assert calls == []
+    assert scope.meter.model_calls == 0
+    assert scope.meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_copied_original_plan_and_fresh_same_budget_meter_cannot_reset_quota():
+    manager = object.__new__(ModelManager)
+    calls = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: calls.append(text) or [0.6, 0.2],
+    )
+    admission = _scope(calls=1)
+    assert await manager.generate_embedding(
+        "first", execution_admission=admission,
+    ) == [0.6, 0.2]
+    assert admission.meter.model_calls == 1
+
+    copied_plan = replace(admission.plan)
+    fresh_meter_same_budget = ExecutionBudgetMeter(admission.plan.budget)
+    copied_context = replace(admission.authenticated_context)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        copied_context.bind_runtime_model_authority(
+            admission.plan, fresh_meter_same_budget,
+        )
+
+    # A full value-preserving clone must not be able to reissue the same
+    # RuntimePolicy request with a fresh budget and zeroed counters.
+    copied_budget = replace(admission.plan.budget)
+    copied_policy_plan = replace(admission.plan, budget=copied_budget)
+    copied_meter = ExecutionBudgetMeter(copied_budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        copied_context.bind_runtime_model_authority(
+            copied_policy_plan, copied_meter,
+        )
+    forged = replace(
+        admission,
+        plan=copied_policy_plan,
+        meter=copied_meter,
+        authenticated_context=copied_context,
+    )
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        await manager.generate_embedding("replay", execution_admission=forged)
+    assert copied_meter.model_calls == 0
+    for clone in (
+        replace(admission, plan=copied_plan),
+        replace(admission, meter=fresh_meter_same_budget),
+        replace(admission, plan=copied_plan, meter=fresh_meter_same_budget),
+        replace(admission, authenticated_context=copied_context),
+    ):
+        with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+            await manager.generate_embedding("forbidden", execution_admission=clone)
+
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        admission.authenticated_context.bind_runtime_model_authority(
+            copied_plan, admission.meter,
+        )
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        admission.authenticated_context.bind_runtime_model_authority(
+            admission.plan, fresh_meter_same_budget,
+        )
+    # Neither the rejected clones nor the original exhausted grant executes
+    # another encoder call, even though the replacement meter had free quota.
+    with pytest.raises(RuntimeError, match="budget_exhausted"):
+        await manager.generate_embedding(
+            "exhausted", execution_admission=admission,
+        )
+    assert calls == ["first"]
+    assert admission.meter.model_calls == 1
+    assert fresh_meter_same_budget.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_original_policy_issuer_must_reject_fresh_execution_id_replay():
+    """Regression proof: a new string ID is not a RuntimePolicy authorization."""
+    manager = object.__new__(ModelManager)
+    invoked = []
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda text: invoked.append(text) or [0.7],
+    )
+    original = _scope(calls=1)
+    assert await manager.generate_embedding(
+        "admitted", execution_admission=original,
+    ) == [0.7]
+    assert original.meter.model_calls == 1
+
+    # The caller holds the exhausted admission but has no newly issued
+    # RuntimePolicy decision. Renaming an execution is not a new grant.
+    copied_budget = replace(original.plan.budget)
+    forged_plan = replace(
+        original.plan,
+        budget=copied_budget,
+        execution_id=f"{original.plan.execution_id}-self-issued",
+    )
+    forged_context = replace(original.authenticated_context)
+    fresh_meter = ExecutionBudgetMeter(copied_budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        forged_context.bind_runtime_model_authority(forged_plan, fresh_meter)
+    forged = replace(
+        original,
+        plan=forged_plan,
+        meter=fresh_meter,
+        authenticated_context=forged_context,
+    )
+    with pytest.raises(
+        PermissionError, match="governed_model_scope_or_budget_invalid",
+    ):
+        await manager.generate_embedding("unauthorized", execution_admission=forged)
+    assert original.meter.model_calls == 1
+    assert fresh_meter.model_calls == 0
+    assert invoked == ["admitted"]
+
+
+@pytest.mark.asyncio
+async def test_real_runtime_policy_evaluation_is_required_before_any_initial_model_bind():
+    """A policy identifier or a value-equal copy cannot issue model quota."""
+    issuer = RuntimePolicyEnforcer()
+    scope = PolicyEvaluationRequest(
+        user_id="issued-user",
+        tenant_id="issued-tenant",
+        session_id="issued-session",
+        correlation_id=f"issued-correlation-{uuid4().hex}",
+        max_model_calls=1,
+        action="general_assist",
+        requested_capabilities=[],
+    )
+    original_decision = await issuer.evaluate(scope)
+    assert original_decision.allowed
+    assert issuer._issued_model_decisions.get(original_decision.decision_id) is (
+        original_decision
+    )
+
+    context = ChatExecutionContext(
+        user_id=scope.user_id,
+        tenant_id=scope.tenant_id,
+        session_id=scope.session_id,
+        request_id=f"issued-request-{uuid4().hex}",
+        correlation_id=scope.correlation_id,
+        authenticated_user=UserData(
+            user_id=scope.user_id,
+            tenant_id=scope.tenant_id,
+            roles=["user"],
+            permissions=[],
+            is_active=True,
+            is_verified=True,
+        ),
+    )
+    budget = ExecutionBudget(max_model_calls=1)
+    plan = AuthorizedExecutionPlan(
+        execution_id=f"exec-{context.request_id}",
+        policy_decision_id=original_decision.decision_id,
+        authorized_user_id=context.user_id,
+        authorized_tenant_id=context.tenant_id,
+        authorized_session_id=context.session_id,
+        budget=budget,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        context.bind_runtime_model_authority(plan, meter)
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(
+            context=context,
+            decision=replace(original_decision),
+        )
+
+    # The issuer must enforce its actual evaluated values, not mutable
+    # attributes on the same PolicyDecision identity.
+    original_decision.runtime_constraints["max_model_calls"] = 9
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(context=context, decision=original_decision)
+    original_decision.runtime_constraints["max_model_calls"] = 1
+
+    original_decision.allowed_capabilities.append("model.personal_key.execute")
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(context=context, decision=original_decision)
+    original_decision.allowed_capabilities.pop()
+
+    issuer.bind_chat_model_policy(context=context, decision=original_decision)
+
+    # A serialized or in-process plan assembled before first binding cannot
+    # introduce permissions that the *real evaluated policy* never granted.
+    for attribute, unauthorized in (
+        ("allowed_tools", ["unapproved-tool"]),
+        ("allowed_plugins", ["unapproved-plugin"]),
+        ("allowed_agents", ["unapproved-agent"]),
+        ("allowed_capabilities", ["model.personal_key.execute"]),
+    ):
+        forged = replace(plan, **{attribute: unauthorized})
+        with pytest.raises(
+            PermissionError, match="runtime_model_execution_authority_invalid",
+        ):
+            context.bind_runtime_model_authority(forged, meter)
+        assert context.original_runtime_model_plan(meter) is None
+    context.bind_runtime_model_authority(plan, meter)
+    assert context.original_runtime_model_plan(meter) is plan
+
+    copied_budget = replace(budget)
+    copied_plan = replace(
+        plan, execution_id=f"forged-{uuid4().hex}", budget=copied_budget,
+    )
+    cloned_context = replace(context)
+    with pytest.raises(
+        PermissionError, match="runtime_model_policy_issuance_invalid",
+    ):
+        issuer.bind_chat_model_policy(
+            context=cloned_context, decision=original_decision,
+        )
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        cloned_context.bind_runtime_model_authority(
+            copied_plan, ExecutionBudgetMeter(copied_budget),
+        )
+    assert context.original_runtime_model_plan(meter) is plan
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "widened"),
+    [
+        ("eligible_providers", []),
+        ("eligible_providers", ["builtin_transformers", "external-provider"]),
+        ("forbidden_providers", []),
+        ("local_only", False),
+        ("external_allowed", True),
+        ("eligible_providers", "builtin_transformers"),
+    ],
+)
+async def test_issued_provider_scope_cannot_widen_before_first_model_bind(
+    field: str, widened: object,
+) -> None:
+    """A plan copy cannot relax the original issuer's provider limits."""
+    issuer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="provider-scope-user",
+        tenant_id="provider-scope-tenant",
+        session_id="provider-scope-session",
+        correlation_id=f"provider-scope-{uuid4().hex}",
+        max_model_calls=1,
+        requested_capabilities=[],
+        provider_constraints=ProviderConstraints(
+            eligible_providers=["builtin_transformers"],
+            forbidden_providers=["external-provider"],
+            local_only=True,
+            external_allowed=False,
+        ),
+    )
+    decision = await issuer.evaluate(request)
+    assert decision.allowed
+    context = ChatExecutionContext(
+        user_id=request.user_id,
+        tenant_id=request.tenant_id,
+        session_id=request.session_id,
+        request_id=f"provider-scope-request-{uuid4().hex}",
+        correlation_id=request.correlation_id,
+        authenticated_user=UserData(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            roles=["user"],
+            permissions=[],
+            is_active=True,
+            is_verified=True,
+        ),
+    )
+    issuer.bind_chat_model_policy(context=context, decision=decision)
+    original = decision.to_authorized_plan()
+    assert issuer.verifies_chat_model_policy(context=context, plan=original)
+
+    proposed = dict(original.provider_constraints)
+    proposed[field] = widened
+    forged = replace(original, provider_constraints=proposed)
+    meter = ExecutionBudgetMeter(original.budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        context.bind_runtime_model_authority(forged, meter)
+    assert context.original_runtime_model_plan(meter) is None
+    assert meter.model_calls == 0
+    assert meter.external_requests == 0
+
+    # The original issuer-derived plan remains eligible under the same meter.
+    context.bind_runtime_model_authority(original, meter)
+    assert context.original_runtime_model_plan(meter) is original
+
+
+@pytest.mark.asyncio
+async def test_tool_only_issuer_cannot_widen_external_request_meter() -> None:
+    """A zero-model policy does not authorize a forged external-call budget."""
+    issuer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="external-quota-user",
+        tenant_id="external-quota-tenant",
+        session_id="external-quota-session",
+        correlation_id=f"external-quota-{uuid4().hex}",
+        max_model_calls=0,
+        action="general_assist",
+        requested_capabilities=[],
+    )
+    decision = await issuer.evaluate(request)
+    assert decision.allowed
+    context = ChatExecutionContext(
+        user_id=request.user_id,
+        tenant_id=request.tenant_id,
+        session_id=request.session_id,
+        request_id=f"external-quota-request-{uuid4().hex}",
+        correlation_id=request.correlation_id,
+        authenticated_user=UserData(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            roles=["user"],
+            permissions=[],
+            is_active=True,
+            is_verified=True,
+        ),
+    )
+    issuer.bind_chat_model_policy(context=context, decision=decision)
+    original = decision.to_authorized_plan()
+    assert original.budget.max_model_calls == 0
+
+    forged_budget = replace(
+        original.budget,
+        max_external_requests=original.budget.max_external_requests + 1,
+    )
+    forged_plan = replace(original, budget=forged_budget)
+    forged_meter = ExecutionBudgetMeter(forged_budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        context.bind_runtime_model_authority(forged_plan, forged_meter)
+    assert forged_meter.external_requests == 0
+    assert context.original_runtime_model_plan(forged_meter) is None
+
+    # A legitimate tool-only, zero-model issuer-derived plan still binds.
+    legitimate_meter = ExecutionBudgetMeter(original.budget)
+    context.bind_runtime_model_authority(original, legitimate_meter)
+    assert context.original_runtime_model_plan(legitimate_meter) is original
+
+
+@pytest.mark.asyncio
+async def test_allowed_zero_model_quota_preserves_tool_only_plan_without_encoder():
+    issuer_scope = _scope(calls=0)
+    issuer_scope._require_scope()
+    assert issuer_scope.plan.budget.max_model_calls == 0
+    assert issuer_scope.meter.model_calls == 0
+    invoked = []
+    manager = object.__new__(ModelManager)
+    manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
+        embed_authoritative=lambda data: invoked.append(data) or [0.6],
+    )
+    with pytest.raises(RuntimeError, match="budget_exhausted"):
+        await manager.generate_embedding(
+            "blocked even if local", execution_admission=issuer_scope,
+        )
+    assert invoked == []
+    assert issuer_scope.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_mutating_authorized_budget_never_widens_original_meter_quota():
+    """Copyable plan budget fields are not a second quota authorization."""
+    budget = ExecutionBudget(
+        max_model_calls=1,
+        max_external_requests=1,
+        max_tool_calls=1,
+        max_reasoning_steps=1,
+        max_input_tokens=3,
+        max_duration_ms=60_000,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    meter.start()
+    assert await meter.reserve_model_execution() is True
+    assert meter.model_calls == 1
+    assert await meter.reserve_tool_call() is True
+    assert await meter.add_input_tokens(3) is True
+
+    # An in-process consumer holding an admitted plan may mutate its
+    # dataclass, but no original reservation limit can be rewritten.
+    budget.max_model_calls = 100
+    budget.max_tool_calls = 100
+    budget.max_input_tokens = 1000
+    budget.max_duration_ms = 3_600_000
+    assert meter.budget is budget
+    assert await meter.reserve_model_execution() is False
+    assert await meter.reserve_tool_call() is False
+    assert await meter.add_input_tokens(1) is False
+    assert meter.model_calls == 1
+    assert meter.tool_calls == 1
+    assert meter.input_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_mutated_external_budget_cannot_gain_second_model_transport():
+    budget = ExecutionBudget(
+        max_model_calls=2,
+        max_external_requests=1,
+        max_duration_ms=60_000,
+    )
+    meter = ExecutionBudgetMeter(budget)
+    assert await meter.reserve_model_execution(external=True) is True
+    budget.max_external_requests = 50
+    budget.max_model_calls = 50
+    assert await meter.reserve_model_execution(external=True) is False
+    assert meter.model_calls == 1
+    assert meter.external_requests == 1
+
+
+def test_original_meter_snapshot_must_match_policy_at_first_bind():
+    # The rejected prebind replay captured three model calls while the live
+    # budget was reduced to one before issuer/model authority binding.
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        _scope(calls=1, meter_model_calls=3)
+    admitted = _scope(calls=1)
+    admitted._require_scope()
+    assert admitted.meter.model_calls == 0
+
+
+def test_postbind_mutations_of_root_model_permissions_fail_closed():
+    scope = _scope(calls=1)
+    scope._require_scope()
+    scope.plan.allowed_tools.append("unapproved-tool")
+    with pytest.raises(PermissionError, match="scope_or_budget_invalid"):
+        scope._require_scope()
+    scope.plan.allowed_tools.clear()
+    scope._require_scope()
+    scope.plan.provider_constraints["eligible_providers"] = ["outside"]
+    with pytest.raises(PermissionError, match="scope_or_budget_invalid"):
+        scope._require_scope()
+    scope.plan.provider_constraints.clear()
+    scope._require_scope()
+    assert scope.meter.model_calls == 0
+
+
+def test_runtime_context_binding_is_not_serialized_or_cloned():
+    from dataclasses import asdict
+
+    admission = _scope(calls=1)
+    context = admission.authenticated_context
+    assert context.original_runtime_model_plan(admission.meter) is admission.plan
+    assert "_runtime_model_authority" not in asdict(context)
+    assert "_runtime_model_authority" not in asdict(admission.plan.budget)
+    assert not replace(context).is_runtime_model_plan_authorized(
+        admission.plan, admission.meter,
+    )
+
+
+def test_medusa_style_child_scope_preserves_identity_and_single_meter():
+    admission = _scope(calls=1)
+    narrowed_plan = replace(
+        admission.plan,
+        allowed_tools=[],
+        allowed_plugins=[],
+        allowed_agents=[],
+    )
+    child = replace(admission, plan=narrowed_plan)
+    with pytest.raises(PermissionError, match="governed_model_scope_or_budget_invalid"):
+        child._require_scope()
+    admission.authenticated_context.register_runtime_model_child_plan(
+        narrowed_plan, admission.meter,
+    )
+    child._require_scope()
+    assert child.meter is admission.meter
+    with pytest.raises(PermissionError, match="runtime_model_execution_authority_invalid"):
+        admission.authenticated_context.register_runtime_model_child_plan(
+            replace(narrowed_plan, budget=ExecutionBudget(max_model_calls=1)),
+            admission.meter,
+        )
+
+
 def test_facade_embedding_batch_consumes_one_budget_per_actual_vector(monkeypatch):
     manager, _, _ = _local_manager(monkeypatch)
     calls = []
@@ -435,8 +1002,7 @@ def test_embedding_respects_runtime_policy_provider_allow_and_deny(monkeypatch, 
         model=object(),
         embed_authoritative=lambda text: invoked.append(text) or [0.1],
     )
-    scope = _scope()
-    scope.plan.provider_constraints.update(constraints)
+    scope = _scope(provider_constraints=constraints)
     with pytest.raises(PermissionError, match="provider_not_authorized"):
         LLMUtils().embed("private text", execution_admission=scope)
     assert invoked == []
