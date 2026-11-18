@@ -84,3 +84,21 @@ describe("Agent Runtime owner-verified execution detail", () => {
     expect(source).toContain("return () => { active = false; }");
   });
 });
+
+describe("Agent Runtime discovery contract", () => {
+  it("validates the canonical minimal backend catalog before rendering", () => {
+    expect(source).toContain("function isAgentCatalogResponse(value: unknown)");
+    expect(source).toContain("if (!isAgentCatalogResponse(response))");
+    expect(source).toContain('response.eligibility_verified !== false');
+    expect(source).toContain('response.execution_authority !== "chat_runtime"');
+    expect(source).toContain('agent.eligibility === "runtime_decided_per_request"');
+  });
+
+  it("does not dereference metadata the discovery endpoint deliberately omits", () => {
+    expect(source).not.toContain("agent.capabilities.map(");
+    expect(source).not.toContain("agent.missing_dependencies.length");
+    expect(source).not.toContain("{agent.description}");
+    expect(source).not.toContain("{agent.version}");
+    expect(source).toContain("not exposed by this discovery endpoint");
+  });
+});
