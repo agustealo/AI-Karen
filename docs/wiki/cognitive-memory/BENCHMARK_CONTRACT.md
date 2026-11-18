@@ -45,3 +45,9 @@ Real PostgreSQL database, applied migrations, actual configured embeddings if ev
 
 Report **exact git SHAs, model/provider revisions, environment lock, CPU/GPU, query count, dataset hashes, measurement script, raw JSON/CSV results, confidence intervals, and deviations**. No numeric performance claims in this wiki until those outputs exist.
 
+
+## KCR-03 baseline-truth correction (2026-11-18)
+
+Some synthetic and SQL-construction research tests now **do execute in the Main Quality backend job**, including `test_recall_quality.py`, `test_recall_query_contract.py`, `test_associative_rank_research.py`, and `test_temporal_research_contract.py`. The last intentionally records one strict XFAIL for inclusive `MemoryClaim.is_valid(valid_until)` against the intended half-open contract. These fixtures **do not constitute live PostgreSQL, embedding, graph-security, or end-to-end consumer performance benchmarks**.
+
+`test_recall_latency.py`, `test_long_range_memory.py`, and `test_selective_forgetting.py` still have placeholder assertions at this research snapshot. **Only** `test_recall_quality.py` has replaced its original placeholder with labeled synthetic NeuroRecall candidate selection. See [ranked KCR-03 execution order](KCR03_PRIORITY_ADR.md).

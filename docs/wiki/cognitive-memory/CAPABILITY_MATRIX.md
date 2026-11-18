@@ -27,3 +27,9 @@
 ## Research release stages
 **INSPECT → REPRODUCE → BENCHMARK → GATE → ADR**. The sprint is currently at **INSPECT**. Source files and a proposed test plan are not completed functional enhancements.
 
+
+## KCR-03 decision and prioritized next work
+
+[KCR-03 evidence-ranked native capability backlog](KCR03_PRIORITY_ADR.md) ranks **Karen improvements**, not five frameworks. The order is: (1) canonical PostgreSQL retrieval truth, (2) half-open temporal boundary consistency, (3) source consent gating, (4) historical dual-clock recall, (5) retry-safe derived erasure, (6) outcome provenance, (7) associative ranking benchmark, (8) extraction enhancements only after a measured gap. **None is approved for installation**.
+
+This ordering uses observed source gaps and governance impact; it is not a claimed measurement of semantic quality, p95 latency or framework superiority. Security and actual query execution remain independent proof gates.
