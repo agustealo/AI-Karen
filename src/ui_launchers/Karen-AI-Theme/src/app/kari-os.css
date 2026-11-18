@@ -1,0 +1,157 @@
+/*
+ * Kari OS KUI-001: opt-in visual foundation.
+ * Visual contract: docs/design/kari-os-chat.md.
+ * Scoped deliberately: existing Karen pages retain their current theme until
+ * their real React owners migrate. Do not fake runtime state in presentation CSS.
+ */
+[data-kari-root] {
+  color-scheme: dark;
+  --kari-canvas: #070708;
+  --kari-panel: #0d0e0f;
+  --kari-card: #121315;
+  --kari-raised: #1c1b1f;
+  --kari-raised-2: #25252b;
+  --kari-elevation: #34343b;
+  --kari-line: #292a30;
+  --kari-line-strong: #3b3b47;
+  --kari-text: #e5e2e3;
+  --kari-text-subtle: #c6c5d8;
+  --kari-text-muted: #9a9da3;
+  --kari-primary: #bec2ff;
+  --kari-brand: #5e6bff;
+  --kari-cyan: #50d8e9;
+  --kari-lime: #c4ff44;
+  --kari-amber: #ffb689;
+  --kari-danger: #ffb4ab;
+  --kari-nav-width: 252px;
+  --kari-context-width: 332px;
+  --kari-dock-width: 276px;
+  --kari-header-height: 64px;
+  --kari-chat-max-width: 820px;
+  --kari-space-1: 4px;
+  --kari-space-2: 8px;
+  --kari-space-3: 12px;
+  --kari-space-4: 16px;
+  --kari-space-6: 24px;
+  --kari-radius-control: 8px;
+  --kari-radius-card: 12px;
+  --kari-radius-composer: 14px;
+  --kari-font-display: Manrope, system-ui, sans-serif;
+  --kari-font-body: Inter, system-ui, sans-serif;
+  --kari-font-mono: "JetBrains Mono", ui-monospace, monospace;
+  background: var(--kari-canvas);
+  color: var(--kari-text);
+  font-family: var(--kari-font-body);
+  min-width: 0;
+}
+[data-kari-root][data-kari-theme="light"] {
+  color-scheme: light;
+  --kari-canvas: #f5f6fa;
+  --kari-panel: #ffffff;
+  --kari-card: #ffffff;
+  --kari-raised: #edf0f7;
+  --kari-raised-2: #e6eaf5;
+  --kari-elevation: #d5dbea;
+  --kari-line: #d9dfeb;
+  --kari-line-strong: #acb5ca;
+  --kari-text: #171a28;
+  --kari-text-subtle: #394155;
+  --kari-text-muted: #586276;
+  --kari-primary: #3745ba;
+  --kari-brand: #4453d9;
+  --kari-cyan: #116b80;
+  --kari-lime: #3c6d06;
+  --kari-amber: #94500c;
+  --kari-danger: #ac2733;
+}
+[data-kari-root] .kari-display,
+[data-kari-root] .kari-card-title {
+  font-family: var(--kari-font-display);
+}
+[data-kari-root] .kari-metric {
+  font-family: var(--kari-font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+[data-kari-root] .kari-card {
+  border: 1px solid var(--kari-line);
+  border-radius: var(--kari-radius-card);
+  background: var(--kari-card);
+  min-width: 0;
+}
+[data-kari-root] .kari-workspace {
+  display: grid;
+  grid-template-columns: var(--kari-nav-width) minmax(0, 1fr) var(--kari-context-width) var(--kari-dock-width);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+[data-kari-root] .kari-workspace > * { min-width: 0; min-height: 0; }
+[data-kari-root] .kari-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--kari-line);
+  background: var(--kari-panel);
+}
+[data-kari-root] .kari-panel-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--kari-line-strong) transparent;
+}
+[data-kari-root] .kari-conversation {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--kari-canvas);
+}
+[data-kari-root] .kari-conversation-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+[data-kari-root] .kari-chat-content {
+  width: min(100% - 32px, var(--kari-chat-max-width));
+  margin-inline: auto;
+}
+[data-kari-root] .kari-composer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--kari-line);
+  background: var(--kari-panel);
+}
+[data-kari-root] :focus-visible {
+  outline: 2px solid var(--kari-primary);
+  outline-offset: 2px;
+}
+@media (max-width: 1599px) {
+  [data-kari-root] .kari-workspace {
+    grid-template-columns: var(--kari-nav-width) minmax(0, 1fr) minmax(280px, var(--kari-context-width));
+  }
+  [data-kari-root] .kari-workspace > [data-kari-region="dock"] { display: none; }
+}
+@media (max-width: 1279px) {
+  [data-kari-root] .kari-workspace { grid-template-columns: 64px minmax(0, 1fr); }
+  [data-kari-root] .kari-workspace > [data-kari-region="context"],
+  [data-kari-root] .kari-workspace > [data-kari-region="dock"] { display: none; }
+}
+@media (max-width: 767px) {
+  [data-kari-root] .kari-workspace { grid-template-columns: minmax(0, 1fr); }
+  [data-kari-root] .kari-workspace > [data-kari-region="navigation"],
+  [data-kari-root] .kari-workspace > [data-kari-region="context"],
+  [data-kari-root] .kari-workspace > [data-kari-region="dock"] { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-kari-root] *, [data-kari-root] *::before, [data-kari-root] *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
