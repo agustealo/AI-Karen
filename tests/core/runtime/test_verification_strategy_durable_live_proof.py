@@ -40,6 +40,7 @@ def _evidence(*, verify: bool = False) -> dict:
         user_id=USER,
         session_id=SESSION,
         execution_status="success",
+        executed_topology=topology,
         completed_at=datetime.now(timezone.utc),
         error_code=None,
         actual_provider="ollama",
@@ -124,6 +125,10 @@ def _evidence(*, verify: bool = False) -> dict:
                     **common,
                     "transcript_actor": "assistant",
                     "trajectory_id": trajectory.trajectory_id,
+                    "actual_provider": trajectory.actual_provider,
+                    "actual_model": MODEL,
+                    "fallback_level": 0,
+                    "degraded_mode": False,
                 },
             ),
         ),
@@ -394,5 +399,35 @@ def test_original_feature_must_match_request_and_tenant() -> None:
     evidence["feature"].correlation_id = "wrong"
     with pytest.raises(
         DurableLineageProofError, match="original_feature_snapshot_scope_mismatch"
+    ):
+        verify_persisted_chain(**evidence)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("actual_provider", "fallback"),
+        ("actual_model", "wrong-model"),
+        ("fallback_level", 1),
+        ("degraded_mode", True),
+    ],
+)
+def test_committed_assistant_cannot_claim_other_model(
+    field: str, value: object,
+) -> None:
+    evidence = _evidence()
+    evidence["snapshot"].messages[1].metadata[field] = value
+    with pytest.raises(
+        DurableLineageProofError, match="committed_transcript_trajectory_mismatch"
+    ):
+        verify_persisted_chain(**evidence)
+
+
+def test_forged_topology_cannot_pass_as_original_strategy() -> None:
+    evidence = _evidence()
+    evidence["trajectory"].executed_topology = "reasoning"
+    with pytest.raises(
+        DurableLineageProofError,
+        match="original_strategy_not_proven_or_ope_ineligible",
     ):
         verify_persisted_chain(**evidence)
