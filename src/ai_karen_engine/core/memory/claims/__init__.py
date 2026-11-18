@@ -50,11 +50,17 @@ class MemoryClaimStore:
     def _require_claim_scope(self, claim: MemoryClaim) -> None:
         self._require_scope(tenant_id=claim.tenant_id, user_id=claim.user_id)
 
+    def _require_stored_identity(self, claim_id: str, claim: MemoryClaim) -> None:
+        """Fail closed if a mutable stored claim no longer matches its key."""
+        self._require_claim_scope(claim)
+        if self._temporal.claim_ref(claim) != claim_id:
+            raise ValueError("memory claim store identity mismatch")
+
     def _verified_items(self) -> list[tuple[str, MemoryClaim]]:
         """Prevalidate the full snapshot before any multi-claim operation."""
         items = list(self._claims.items())
-        for _, claim in items:
-            self._require_claim_scope(claim)
+        for claim_id, claim in items:
+            self._require_stored_identity(claim_id, claim)
         return items
 
     def _checked_replacement_id(self, claim: MemoryClaim) -> str:
@@ -64,7 +70,7 @@ class MemoryClaimStore:
         claim_id = self._temporal.claim_ref(claim)
         existing = self._claims.get(claim_id)
         if existing is not None:
-            self._require_claim_scope(existing)
+            self._require_stored_identity(claim_id, existing)
         return claim_id
 
     def add(self, claim: MemoryClaim) -> str:
@@ -83,7 +89,7 @@ class MemoryClaimStore:
         self._require_scope(tenant_id=tenant_id, user_id=user_id)
         claim = self._claims.get(claim_id)
         if claim is not None:
-            self._require_claim_scope(claim)
+            self._require_stored_identity(claim_id, claim)
         return claim
 
     def get_by_subject(
@@ -94,7 +100,7 @@ class MemoryClaimStore:
         for claim_id in self._by_subject.get(subject, []):
             claim = self._claims.get(claim_id)
             if claim is not None:
-                self._require_claim_scope(claim)
+                self._require_stored_identity(claim_id, claim)
                 claims.append(claim)
         return claims
 
@@ -110,7 +116,7 @@ class MemoryClaimStore:
         previous = self._claims.get(claim_id)
         if previous is None:
             raise KeyError(f"unknown memory claim: {claim_id}")
-        self._require_claim_scope(previous)
+        self._require_stored_identity(claim_id, previous)
         decision = self._temporal.evolve(
             previous,
             incoming,
@@ -132,7 +138,7 @@ class MemoryClaimStore:
         old = self._claims.get(claim_id)
         if old is None:
             return
-        self._require_claim_scope(old)
+        self._require_stored_identity(claim_id, old)
         replacement_id = self._checked_replacement_id(new_claim)
         if replacement_id == claim_id:
             raise ValueError("supersession requires a distinct claim version")
@@ -160,7 +166,7 @@ class MemoryClaimStore:
         claim = self._claims.get(claim_id)
         if claim is None:
             return []
-        self._require_claim_scope(claim)
+        self._require_stored_identity(claim_id, claim)
 
         contradictions: list[str] = []
         for other_id, other in self._verified_items():
@@ -195,7 +201,7 @@ class MemoryClaimStore:
         self._require_scope(tenant_id=tenant_id, user_id=user_id)
         claim = self._claims.get(claim_id)
         if claim is not None:
-            self._require_claim_scope(claim)
+            self._require_stored_identity(claim_id, claim)
             claim.confidence = max(0.0, min(1.0, new_confidence))
             claim.last_confirmed = datetime.now(tz=UTC)
 

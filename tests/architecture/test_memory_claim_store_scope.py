@@ -239,6 +239,44 @@ def test_foreign_confidence_update_is_rejected_before_mutation() -> None:
     assert store.get(claim_id, **SCOPE_A).confidence == original_confidence
 
 
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("subject", "different-subject"),
+        ("predicate", "different-predicate"),
+        ("object", "different-object"),
+        ("asserted_at", START + timedelta(days=1)),
+    ],
+)
+def test_same_owner_identity_mutation_fails_closed(
+    field: str, value: object
+) -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    original = _claim()
+    claim_id = store.add(original)
+    setattr(original, field, value)
+    incoming = _claim(value="vscode")
+
+    operations = (
+        lambda: store.get(claim_id, **SCOPE_A),
+        lambda: store.get_by_subject("user", **SCOPE_A),
+        lambda: store.get_valid_claims(START, **SCOPE_A),
+        lambda: store.get_claims_by_status(ClaimStatus.OBSERVED, **SCOPE_A),
+        lambda: store.update_confidence(claim_id, 1.0, **SCOPE_A),
+        lambda: store.evolve(claim_id, incoming),
+        lambda: store.supersede(claim_id, incoming),
+        lambda: store.detect_contradictions(claim_id, **SCOPE_A),
+    )
+    for operation in operations:
+        with pytest.raises(ValueError, match="identity mismatch"):
+            operation()
+
+    assert original.status is ClaimStatus.OBSERVED
+    assert original.valid_until is None
+    assert original.superseded_at is None
+
+
 def test_mutated_record_scope_fails_closed_on_all_read_paths() -> None:
     store = MemoryClaimStore(**SCOPE_A)
     original = _claim()
