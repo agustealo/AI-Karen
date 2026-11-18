@@ -7,6 +7,7 @@ on:
       - 'src/ai_karen_engine/extensions/**'
       - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/**'
+      - 'src/ai_karen_engine/auth/session.py'
       - 'src/ai_karen_engine/api_routes/extensions/extensions.py'
       - 'src/ai_karen_engine/services/plugin_service.py'
       - 'src/ai_karen_engine/services/plugin_settings_repository.py'
@@ -46,6 +47,8 @@ on:
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
       - 'tests/architecture/test_plugin_lifecycle_ingress_fence.py'
+      - 'tests/auth/test_plugin_lifecycle_session.py'
+      - 'tests/services/test_plugin_lifecycle_resume.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
@@ -56,6 +59,7 @@ on:
       - 'src/ai_karen_engine/extensions/**'
       - 'src/ai_karen_engine/extensions/platform/api_routes/plugin_store_routes.py'
       - 'src/ai_karen_engine/api_routes/plugins/**'
+      - 'src/ai_karen_engine/auth/session.py'
       - 'src/ai_karen_engine/api_routes/extensions/extensions.py'
       - 'src/ai_karen_engine/services/plugin_service.py'
       - 'src/ai_karen_engine/services/plugin_settings_repository.py'
@@ -95,6 +99,8 @@ on:
       - 'tests/architecture/test_extension_lifecycle_authority.py'
       - 'tests/architecture/test_extension_route_authority.py'
       - 'tests/architecture/test_plugin_lifecycle_ingress_fence.py'
+      - 'tests/auth/test_plugin_lifecycle_session.py'
+      - 'tests/services/test_plugin_lifecycle_resume.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
@@ -242,6 +248,8 @@ jobs:
             tests/core/runtime/test_plugin_management_preflight_projection.py \
             tests/core/runtime/test_plugin_lifecycle_policy_gate.py \
             tests/services/test_approval_service.py \
+            tests/auth/test_plugin_lifecycle_session.py \
+            tests/services/test_plugin_lifecycle_resume.py \
             tests/core/runtime/test_grounded_article_reference_execution.py \
             tests/core/runtime/test_search_answer_composition_status.py \
             tests/services/test_search_article_chat_reference.py \
