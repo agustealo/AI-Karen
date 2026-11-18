@@ -463,6 +463,8 @@ def test_c3d_requires_original_verifier_receipt() -> None:
         ("reasoning_id", None),
         ("reasoning_id", ""),
         ("reasoning_status", "failed"),
+        ("reasoning_status", "partial"),
+        ("reasoning_status", "abstained"),
         ("reasoning_status", "budget_exhausted"),
         ("reasoning_status", "unknown"),
         ("reason_codes", ["model_generation_receipt_unverified"]),
