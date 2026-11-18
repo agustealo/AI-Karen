@@ -257,4 +257,4 @@ def test_protected_dispatch_never_exposes_secret_to_install_or_unreviewed_ref():
     assert "secrets.VERCEL_TOKEN" not in setup
     step = workflow.split("      - name: Audit frontend environment key ownership", 1)[1]
     assert "VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}" in step
-    assert "python scripts/ci/verify_vercel_environment_scopes.py" in step
+    assert "python -m scripts.ci.verify_vercel_environment_scopes" in step
