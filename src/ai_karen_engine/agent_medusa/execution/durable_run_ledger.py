@@ -633,18 +633,27 @@ class PostgresDurableRunLedger:
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
-                await session.execute(
+                result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
                         SET audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref)
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
+                          AND (
+                              audit_event_ref IS NULL
+                              OR audit_event_ref = :audit_event_ref
+                          )
                     """),
                     {
                         "run_id": run_id,
                         "tenant_id": canonical_tenant_id,
                         "audit_event_ref": audit_event_ref,
                     },
+                )
+                _require_transition(
+                    result,
+                    run_id=run_id,
+                    transition="audit_link",
                 )
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
