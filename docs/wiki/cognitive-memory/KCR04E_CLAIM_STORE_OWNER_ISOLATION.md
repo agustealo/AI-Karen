@@ -10,6 +10,14 @@ The original in-process store had no owner context. Its key was `subject:predica
 
 **This is a real API design weakness but is not an observed production breach.** Direct runtime-memory modules inspected did not construct `MemoryClaimStore`. The GitHub code search index was incomplete, so production-wide caller coverage and actual injection lifecycle remain unknown. Core exports the class publicly; callers outside the inspected package remain a migration risk.
 
+## Source caller census (read-only, exact branch)
+
+An API-backed walk of the complete `src/ai_karen_engine/core/memory` tree at Git tree `ad1fcb42d2c766d025d84cdc414cbb66fdbefd84` enumerated **109 Python files**. Every file was read from the KCR-04E branch. Searches for exact `MemoryClaimStore` and `get_valid_claims` symbols found only the canonical class/implementation in `claims/__init__.py` and its public export in `memory/__init__.py`; there were **zero direct callers in the memory package and zero unread files**.
+
+A second focused read of 16 additional runtime/composition modules, including `core/cortex/memory_formation.py`, LangGraph memory nodes, `runtime/memory/coordinator.py`, and the integrations/memory entry points, found no direct use of either symbol. That is a **125-file source audit**, not a repository-wide executed AST census. Dynamic import aliases and other packages remain unverified until the checkout-based architecture gate executes.
+
+These observations support the decision to keep this change in the existing in-process utility rather than adding a new store or altering the durable ledger. They do not prove that the public export has no external consumers or that caller-provided scope strings are authenticated.
+
 ## Correct owner and behavior
 
 - Bind each `MemoryClaimStore` at construction to explicit immutable tenant and user identifiers; `user_id=None` represents a distinct tenant-level owner.
