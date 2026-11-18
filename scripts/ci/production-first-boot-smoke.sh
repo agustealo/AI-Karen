@@ -491,7 +491,8 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
       exit 1
     }
   if [[ "${KAREN_SMOKE_DUAL_STRATEGY_LIVE_PROOF:-false}" == "true" ||
-        "${KAREN_SMOKE_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
+        "${KAREN_SMOKE_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ||
+        "${KAREN_SMOKE_VERIFIED_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
     # /api/auth/me was read after the real session-cookie login and verified
     # by the first-boot harness. Bind the isolated internal executor proof
     # to this same authorized principal, never a guessed tenant identity.
@@ -531,6 +532,19 @@ if [[ -n "${LIVE_MODEL_BASE_URL}" && ( "${LIVE_MODEL_PROVIDER}" == "ollama" || "
       "${API_CONTAINER}" python - \
       < scripts/ci/verification_strategy_durable_live_proof.py
     echo "REAL AUTHENTICATED DURABLE STRATEGY LINEAGE PROOF PASSED"
+  fi
+  if [[ "${KAREN_SMOKE_VERIFIED_DURABLE_STRATEGY_LIVE_PROOF:-false}" == "true" ]]; then
+    echo "[smoke] proving full authorized verification, stream and nonstream durable lineage"
+    # Exact checked-out source, isolated CI-only authenticated principal.
+    # No new HTTP route, shadow selector, secondary store or synthetic receipt.
+    docker exec -i \
+      -e KAREN_CI_C3D_VERIFIED_DURABLE_PROOF=enabled \
+      -e "KAREN_CI_C3D_USER_ID=${dual_identity[0]}" \
+      -e "KAREN_CI_C3D_TENANT_ID=${dual_identity[1]}" \
+      -e "KAREN_CI_C3D_MODEL=${LIVE_MODEL_NAME}" \
+      "${API_CONTAINER}" python - \
+      < scripts/ci/verification_strategy_durable_live_proof.py
+    echo "REAL AUTHORIZED VERIFIED DURABLE STRATEGY PROOF PASSED"
   fi
   if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" ]]; then
     echo "PRODUCTION OLLAMA SETTINGS-TO-RUNTIME LIVE PROOF PASSED"
