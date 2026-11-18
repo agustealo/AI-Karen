@@ -236,3 +236,42 @@
   background: hsl(var(--card) / 0.86);
   box-shadow: 0 12px 32px hsl(225 40% 2% / 0.1);
 }
+\n/* Kari OS Growth uses the existing semantic surface and typography owners.
+ * Layering follows the approved graphite / indigo / measured-status language.
+ * No independent score, permission, or persistence logic lives in CSS.
+ */
+@layer components {
+  .karen-growth {
+    font-family: var(--font-sans);
+  }
+
+  .karen-growth-hero {
+    background:
+      radial-gradient(circle at 3% 0%, hsl(var(--primary) / 0.11), transparent 25rem),
+      linear-gradient(145deg, hsl(var(--surface-2) / 0.6), hsl(var(--card) / 0.94) 60%);
+  }
+
+  .karen-growth-hero-main::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.35;
+    background-image:
+      linear-gradient(to right, hsl(var(--foreground) / 0.045) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--foreground) / 0.045) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: linear-gradient(to right, transparent, black);
+  }
+
+  .karen-growth-stat {
+    background: hsl(var(--card) / 0.45);
+    box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.035);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .karen-growth * {
+      scroll-behavior: auto;
+    }
+  }
+}
