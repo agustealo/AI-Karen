@@ -164,12 +164,16 @@ def _origins_secure(value: str) -> bool:
         return False
     for origin in value.split(","):
         origin = origin.strip()
+        # urlsplit silently removes embedded tabs and newlines. An audit must
+        # never accept a different origin than the operator actually supplied.
+        if not origin or any(ord(c) <= 32 or ord(c) == 127 for c in origin):
+            return False
         try:
             parsed = urlsplit(origin)
             host = parsed.hostname
             port = parsed.port  # Access forces validation of malformed/out-of-range ports.
             if (parsed.scheme != "https" or not host or "." not in host
-                    or parsed.username or parsed.password
+                    or "@" in parsed.netloc or parsed.netloc.endswith(":")
                     or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
                     or "*" in origin or port == 0):
                 return False
