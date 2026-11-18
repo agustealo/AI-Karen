@@ -70,3 +70,13 @@ Breakpoints: four regions at 1600px and above; three at 1280–1599px; two regio
 ## KUI-001 change scope
 
 This first PR introduces a scoped CSS contract plus root import and does **not** attach `data-kari-root` to existing routes. It is therefore designed not to alter any currently rendered screen. The next change must audit the actual active chat owner and test the full component integration before applying the skin.
+
+## Verified current component ownership (repository audit)
+
+- Product shell and navigation: `src/app/dashboard/page.tsx` (uses Radix sidebar primitives; dynamically mounts consumer chat).
+- Conversation/session navigation adapter: `src/components/chat/copilotkit/KarenCopilotConsumerChat.tsx`. Uses `SessionProvider`, guards active runs during navigation, and delegates chat execution to `KarenCopilotChat`.
+- Runtime/model preference surface: `src/components/chat/KarenComposerRuntimeCatalog` (requested selection only, not proof of actual model execution).
+- Chat execution display: `src/components/chat/copilotkit/KarenCopilotChat`, which must be audited before changing message rendering.
+- Existing product mark: `public/brand/karen-mark.svg` and root metadata in `src/app/layout.tsx`. Do not silently overwrite until the full brand migration is approved.
+
+**Next implementation slice:** audit the underlying `KarenCopilotChat` component and artifact rendering pipeline; add response-aware context and user-pinned dock as a separately reviewed change. Preserve `SessionProvider` as conversation-identity owner, and keep all persistence and action permissions backend-authoritative.
