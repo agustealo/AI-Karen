@@ -10,6 +10,7 @@ import argparse
 import ast
 import base64
 import binascii
+import ipaddress
 import re
 import sys
 from dataclasses import dataclass
@@ -153,18 +154,49 @@ def _fernet_material_valid(value: str) -> bool:
 
 
 def _origins_secure(value: str) -> bool:
+    """Accept only browser-valid HTTPS origins for deployed consumers.
+
+    This is a read-only diagnostic, never a source of new CORS authority.
+    Reject private/loopback literal IPs, local-only hostnames, bad DNS labels
+    and invalid ports before declaring a production environment ready.
+    """
     if not value:
         return False
     for origin in value.split(","):
-        origin = origin.strip()
+        # Only tolerate formatting spaces around comma-separated origins.
+        # Do not strip tabs/newlines before validating forbidden URL controls.
+        origin = origin.strip(" ")
+        # urlsplit silently removes embedded tabs and newlines. An audit must
+        # never accept a different origin than the operator actually supplied.
+        if not origin or any(ord(c) <= 32 or ord(c) == 127 for c in origin):
+            return False
         try:
             parsed = urlsplit(origin)
+            host = parsed.hostname
+            port = parsed.port  # Access forces validation of malformed/out-of-range ports.
+            if (parsed.scheme != "https" or not host or "." not in host
+                    or "@" in parsed.netloc or parsed.netloc.endswith(":")
+                    or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                    or "*" in origin or port == 0):
+                return False
+            if host.endswith((".local", ".internal", ".localhost", ".home.arpa")):
+                return False
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                labels = host.split(".")
+                # Browsers interpret some noncanonical numeric hostnames as
+                # IPv4 literals (e.g. 127.0.1 or octal forms). Reject those
+                # rather than reclassifying them as arbitrary public DNS.
+                if labels[-1].isdigit() or any(
+                    not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                    for label in labels
+                ):
+                    return False
+            else:
+                if not address.is_global:
+                    return False
         except ValueError:
-            return False
-        if (parsed.scheme != "https" or not parsed.hostname
-                or "." not in parsed.hostname or parsed.username or parsed.password
-                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
-                or "*" in origin or parsed.hostname.endswith((".local", ".internal"))):
             return False
     return True
 

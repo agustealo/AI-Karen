@@ -319,11 +319,53 @@ def test_rejects_malformed_job_encryption_key(m, bad):
 @pytest.mark.parametrize("bad", (
     "*", "http://ai-karen.example.com", "https://localhost:3000",
     "https://ai-karen.example.com/path", "https://*.example.com",
+    "https://127.0.0.1", "https://10.2.3.4:443",
+    "https://127.0.1", "https://0177.0.0.1", "https://0x7f.0.0.1",
+    "https://192.168.1.4", "https://169.254.169.254",
+    "https://dev.localhost", "https://host.home.arpa",
+    "https://good..example.com", "https://-host.example.com",
+    "https://host_.example.com",
+    "https://consumer.example.com:not-a-port",
+    "https://consumer.example.com:65536",
+    "https://consumer.example.com:0",
+    "https://consumer.example.com:443:443",
+    "https://consumer.example.com:",
+    "https://@consumer.example.com",
+    "https://consumer.example.com\n.evil.com",
+    "https://consumer.example.com\t",
+    "https://consumer.example.com,https://127.0.0.1",
 ))
 def test_rejects_insecure_cors_origins(m, bad):
     env = safe_env(m)
     env["KARI_CORS_ORIGINS"] = bad
     assert "insecure:KARI_CORS_ORIGINS" in inspect(m, FakeClient(env)).failures
+
+
+@pytest.mark.parametrize("valid", (
+    "https://consumer.example.com",
+    "https://consumer.example.com:443",
+    "https://consumer.example.com:8443",
+    "https://consumer.example.com,https://staging.example.com",
+    "  https://consumer.example.com, https://staging.example.com:443 ",
+))
+def test_accepts_structurally_valid_production_cors_origins(m, valid):
+    env = safe_env(m)
+    env["KARI_CORS_ORIGINS"] = valid
+    report = inspect(m, FakeClient(env))
+    assert report.ready
+    assert "insecure:KARI_CORS_ORIGINS" not in report.failures
+
+
+def test_cors_preflight_does_not_rewrite_operator_configuration(m):
+    env = safe_env(m)
+    value = "https://consumer.example.com:65536"
+    env["KARI_CORS_ORIGINS"] = value
+    client = FakeClient(env)
+    report = inspect(m, client)
+    assert "insecure:KARI_CORS_ORIGINS" in report.failures
+    assert env["KARI_CORS_ORIGINS"] == value
+    assert {call[0] for call in client.calls} == {"GET"}
+    assert value not in repr(report)
 
 
 def test_reports_both_live_branch_and_health_path_drift(m):
