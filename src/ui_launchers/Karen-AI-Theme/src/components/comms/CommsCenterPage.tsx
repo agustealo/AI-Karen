@@ -231,7 +231,7 @@ export default function CommsCenterPage() {
                     : "Unavailable";
 
   return (
-    <div className="space-y-6 pb-8" data-testid="comms-center">
+    <div data-kari-root className="space-y-6 pb-8" data-testid="comms-center">
         <header className="karen-surface relative isolate overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-primary/10 p-5 shadow-lg md:p-8">
             <div aria-hidden="true" className="karen-workspace-grid pointer-events-none absolute inset-0 opacity-35" />
             <div aria-hidden="true" className="pointer-events-none absolute -right-10 -top-20 h-64 w-64 rounded-full bg-primary/10 blur-3xl" />
@@ -241,7 +241,7 @@ export default function CommsCenterPage() {
                         <Radio aria-hidden="true" className="h-3.5 w-3.5" />
                         Communications Center
                     </div>
-                    <h2 className="karen-page-title text-balance md:text-[2.25rem]">Activity &amp; Notifications</h2>
+                    <h2 className="kari-display karen-page-title text-balance md:text-[2.25rem]">Activity &amp; Notifications</h2>
                     <p className="karen-page-description mt-3">
                         A clear view of backend audit activity, system alerts, memory operations and
                         training signals. Only verified information is shown.
