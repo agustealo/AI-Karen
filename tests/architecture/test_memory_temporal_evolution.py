@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -15,10 +15,9 @@ from ai_karen_engine.core.memory.temporal import (
     TemporalInterval,
 )
 
-
-UTC = timezone.utc
 TENANT = "00000000-0000-0000-0000-000000000001"
 USER = "00000000-0000-0000-0000-000000000002"
+CLAIM_SCOPE = {"tenant_id": TENANT, "user_id": USER}
 
 
 def _claim(
@@ -67,6 +66,44 @@ def test_newer_overlapping_value_supersedes_without_deleting_history() -> None:
     assert decision.previous.valid_until == second_time
     assert decision.incoming.supersedes == decision.previous_ref
     assert decision.incoming.object == "vscode"
+
+
+def test_explicit_supersession_with_identical_reference_preserves_history() -> None:
+    """Same version cannot replace itself and erase the superseded claim."""
+    start = datetime(2026, 6, 1, tzinfo=UTC)
+    store = MemoryClaimStore(**CLAIM_SCOPE)
+    previous = _claim("vim", valid_from=start)
+    original_id = store.add(previous)
+    duplicate = _claim("vim", valid_from=start)
+
+    with pytest.raises(ValueError, match="distinct claim version"):
+        store.supersede(original_id, duplicate)
+
+    assert store.get(original_id, **CLAIM_SCOPE) is previous
+    assert store.get_by_subject("user", **CLAIM_SCOPE) == [previous]
+    assert previous.status is ClaimStatus.OBSERVED
+    assert previous.superseded_at is None
+    assert previous.valid_until is None
+    assert duplicate.supersedes is None
+
+
+def test_backdated_explicit_supersession_rejects_invalid_validity_window() -> None:
+    """Compatibility supersede cannot create an end before the old start."""
+    start = datetime(2026, 6, 1, tzinfo=UTC)
+    store = MemoryClaimStore(**CLAIM_SCOPE)
+    previous = _claim("vscode", valid_from=start)
+    claim_id = store.add(previous)
+    backdated = _claim("vim", valid_from=start - timedelta(days=1))
+
+    with pytest.raises(ValueError, match="backdated supersession"):
+        store.supersede(claim_id, backdated)
+
+    assert store.get(claim_id, **CLAIM_SCOPE) is previous
+    assert store.get_by_subject("user", **CLAIM_SCOPE) == [previous]
+    assert previous.status is ClaimStatus.OBSERVED
+    assert previous.valid_until is None
+    assert previous.superseded_at is None
+    assert backdated.supersedes is None
 
 
 def test_non_overlapping_historical_values_coexist() -> None:
@@ -134,7 +171,7 @@ def test_temporal_evolution_fails_closed_across_tenants() -> None:
 
 
 def test_claim_store_uses_temporal_evolution_for_change() -> None:
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     first_time = datetime(2026, 1, 1, tzinfo=UTC)
     second_time = datetime(2026, 2, 1, tzinfo=UTC)
     claim_id = store.add(_claim("vim", valid_from=first_time))
@@ -142,8 +179,36 @@ def test_claim_store_uses_temporal_evolution_for_change() -> None:
     decision = store.evolve(claim_id, _claim("vscode", valid_from=second_time))
 
     assert decision.kind is TemporalEvolutionKind.SUPERSEDE
-    assert store.get(claim_id) is not None
-    assert store.get(claim_id).valid_until == second_time
+    assert store.get(claim_id, **CLAIM_SCOPE) is not None
+    assert store.get(claim_id, **CLAIM_SCOPE).valid_until == second_time
+
+
+@pytest.mark.parametrize(
+    ("previous_confidence", "incoming_confidence"),
+    [(0.9, 0.2), (0.2, 0.9)],
+)
+def test_store_same_ref_reinforcement_keeps_canonical_merged_version(
+    previous_confidence: float,
+    incoming_confidence: float,
+) -> None:
+    store = MemoryClaimStore(**CLAIM_SCOPE)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    previous = _claim("vim", valid_from=start, confidence=previous_confidence)
+    previous.provenance = ["conversation:first"]
+    claim_id = store.add(previous)
+    incoming = _claim("vim", valid_from=start, confidence=incoming_confidence)
+    incoming.provenance = ["conversation:second"]
+
+    decision = store.evolve(
+        claim_id, incoming, recorded_at=start + timedelta(days=1)
+    )
+    stored = store.get(claim_id, **CLAIM_SCOPE)
+
+    assert decision.kind is TemporalEvolutionKind.REINFORCE
+    assert stored is decision.previous
+    assert stored.confidence == max(previous_confidence, incoming_confidence)
+    assert stored.provenance == ["conversation:first", "conversation:second"]
+    assert store.get_by_subject("user", **CLAIM_SCOPE) == [stored]
 
 
 @pytest.mark.parametrize(
@@ -178,19 +243,26 @@ def test_canonical_claim_includes_start_instant_and_normalizes_utc_offsets() -> 
 def test_get_valid_claims_switches_at_one_exclusive_boundary() -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     boundary = start + timedelta(days=1)
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     store.add(_claim("vim", valid_from=start, valid_until=boundary))
     store.add(_claim("vscode", valid_from=boundary))
-    assert {claim.object for claim in store.get_valid_claims(start)} == {"vim"}
-    assert {claim.object for claim in store.get_valid_claims(boundary)} == {"vscode"}
-    assert {claim.object for claim in store.get_valid_claims(boundary - timedelta(microseconds=1))} == {"vim"}
+    assert {claim.object for claim in store.get_valid_claims(start, **CLAIM_SCOPE)} == {"vim"}
+    assert {
+        claim.object for claim in store.get_valid_claims(boundary, **CLAIM_SCOPE)
+    } == {"vscode"}
+    assert {
+        claim.object
+        for claim in store.get_valid_claims(
+            boundary - timedelta(microseconds=1), **CLAIM_SCOPE
+        )
+    } == {"vim"}
 
 
 def test_get_valid_claims_without_at_uses_one_utc_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start = datetime(2020, 1, 1, tzinfo=UTC)
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     store.add(_claim("vim", valid_from=start))
     store.add(_claim("vscode", valid_from=start))
 
@@ -202,7 +274,7 @@ def test_get_valid_claims_without_at_uses_one_utc_snapshot(
         return original_is_valid(self, at)
 
     monkeypatch.setattr(MemoryClaim, "is_valid", recording_is_valid)
-    assert {claim.object for claim in store.get_valid_claims()} == {"vim", "vscode"}
+    assert {claim.object for claim in store.get_valid_claims(**CLAIM_SCOPE)} == {"vim", "vscode"}
     assert len(observed) == 2
     assert observed[0] is not None
     assert observed[0] is observed[1]
@@ -214,7 +286,7 @@ def test_get_valid_claims_implicit_snapshot_respects_exact_end(
 ) -> None:
     start = datetime(2026, 1, 1, tzinfo=UTC)
     boundary = start + timedelta(days=1)
-    store = MemoryClaimStore()
+    store = MemoryClaimStore(**CLAIM_SCOPE)
     store.add(_claim("vim", valid_from=start, valid_until=boundary))
     store.add(_claim("vscode", valid_from=boundary))
     clock_reads: list[datetime] = []
@@ -227,7 +299,7 @@ def test_get_valid_claims_implicit_snapshot_respects_exact_end(
             return boundary
 
     monkeypatch.setattr("ai_karen_engine.core.memory.claims.datetime", FrozenClock)
-    assert {claim.object for claim in store.get_valid_claims()} == {"vscode"}
+    assert {claim.object for claim in store.get_valid_claims(**CLAIM_SCOPE)} == {"vscode"}
     assert clock_reads == [boundary]
 
 
