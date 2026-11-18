@@ -494,22 +494,22 @@ export default function CommsCenterPage() {
                     <Card className="xl:col-span-1">
                         <CardHeader>
                             <CardTitle>Memory Observability</CardTitle>
-                            <CardDescription>Writeback queue, shard linking, and feedback loop state.</CardDescription>
+                            <CardDescription>Account-scoped feedback and verified queue status only.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4 text-sm">
                             <div className="flex items-center justify-between">
-                                <span className="text-muted-foreground">Memory service</span>
+                                <span className="text-muted-foreground">Account-scoped queue metrics</span>
                                 <Badge variant={memoryStats?.available ? "secondary" : "outline"}>
-                                    {memoryStats?.available ? "Available" : "Unavailable"}
+                                    {memoryStats?.available ? "Verified" : "Not verified"}
                                 </Badge>
                             </div>
                             <div className="flex items-center justify-between">
                                 <span className="text-muted-foreground">Pending writebacks</span>
-                                <span className="font-medium">{memoryStats?.pending_writebacks ?? 0}</span>
+                                <span className="font-medium" data-testid="comms-observability-pending">{metricValue(memoryStats?.available ? memoryStats.pending_writebacks : null)}</span>
                             </div>
                             <div className="flex items-center justify-between">
                                 <span className="text-muted-foreground">Active shard links</span>
-                                <span className="font-medium">{memoryStats?.active_shard_links ?? 0}</span>
+                                <span className="font-medium" data-testid="comms-observability-shards">{metricValue(memoryStats?.available ? memoryStats.active_shard_links : null)}</span>
                             </div>
                             <details className="rounded-md border bg-muted/40 p-3">
                                 <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">Feedback diagnostics</summary>

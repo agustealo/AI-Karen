@@ -127,6 +127,23 @@ describe("Communications Center's canonical visual and authority contract", () =
     expect(screen.queryByText("Verified backend audit receipt")).toBeNull();
   });
 
+  it("never converts missing scoped queue metrics to healthy zeroes", async () => {
+    stubs.get.mockResolvedValue({
+      ...LIVE_SNAPSHOT,
+      memory: { ...LIVE_SNAPSHOT.memory, available: false, pending_writebacks: 0, active_shard_links: 0 },
+    });
+    render(<CommsCenterPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("comms-metric-audit").textContent?.trim()).toBe("1");
+    });
+    expect(screen.getByTestId("comms-metric-writebacks").textContent?.trim()).toBe("—");
+    fireEvent.click(screen.getByRole("tab", { name: "Observability" }));
+    expect(screen.getByTestId("comms-observability-pending").textContent?.trim()).toBe("—");
+    expect(screen.getByTestId("comms-observability-shards").textContent?.trim()).toBe("—");
+    expect(screen.getByText("Account-scoped queue metrics")).toBeTruthy();
+    expect(screen.getByText("Not verified")).toBeTruthy();
+  });
+
   it("fetches a fresh snapshot after an explicit Refresh click", async () => {
     stubs.get.mockResolvedValue(LIVE_SNAPSHOT);
     render(<CommsCenterPage />);
