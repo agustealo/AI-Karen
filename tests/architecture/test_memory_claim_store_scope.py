@@ -249,6 +249,29 @@ def test_foreign_confidence_update_is_rejected_before_mutation() -> None:
         ("asserted_at", START + timedelta(days=1)),
     ],
 )
+
+def test_add_cannot_replace_existing_canonical_claim_version() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    original = _claim()
+    original.confidence = 0.95
+    original.provenance = ["conversation:verified"]
+    claim_id = store.add(original)
+
+    # Re-registering the same object is safe and does not duplicate the index.
+    assert store.add(original) == claim_id
+
+    competing = _claim()
+    competing.confidence = 0.1
+    competing.provenance = ["conversation:unverified"]
+    with pytest.raises(ValueError, match="version already exists"):
+        store.add(competing)
+
+    assert store.get(claim_id, **SCOPE_A) is original
+    assert original.confidence == 0.95
+    assert original.provenance == ["conversation:verified"]
+    assert store.get_by_subject("user", **SCOPE_A) == [original]
+
+
 def test_same_owner_identity_mutation_fails_closed(
     field: str, value: object
 ) -> None:

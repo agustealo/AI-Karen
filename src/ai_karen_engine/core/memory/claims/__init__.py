@@ -77,6 +77,13 @@ class MemoryClaimStore:
         """Add only claims owned by this store's immutable tenant/user scope."""
         self._require_claim_scope(claim)
         claim_id = self._checked_replacement_id(claim)
+        existing = self._claims.get(claim_id)
+        if existing is not None:
+            if existing is claim:
+                return claim_id
+            raise ValueError(
+                "memory claim version already exists; use temporal evolution"
+            )
         self._claims[claim_id] = claim
         subject_claims = self._by_subject.setdefault(claim.subject, [])
         if claim_id not in subject_claims:
