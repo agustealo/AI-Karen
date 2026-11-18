@@ -15,6 +15,8 @@ on:
       - "src/ai_karen_engine/api_routes/models/runtime_api.py"
       - "src/ai_karen_engine/core/model_runtime/**"
       - "src/ai_karen_engine/core/runtime/**"
+      - "src/ai_karen_engine/core/memory/signals/memory_signal_extractor.py"
+      - "tests/core/memory/test_signal_pipeline_async.py"
       - ".github/workflows/ollama-settings-live-e2e.yml"
   push:
     branches:
@@ -29,6 +31,8 @@ on:
       - "src/ai_karen_engine/api_routes/models/runtime_api.py"
       - "src/ai_karen_engine/core/model_runtime/**"
       - "src/ai_karen_engine/core/runtime/**"
+      - "src/ai_karen_engine/core/memory/signals/memory_signal_extractor.py"
+      - "tests/core/memory/test_signal_pipeline_async.py"
       - ".github/workflows/ollama-settings-live-e2e.yml"
 
 permissions:
