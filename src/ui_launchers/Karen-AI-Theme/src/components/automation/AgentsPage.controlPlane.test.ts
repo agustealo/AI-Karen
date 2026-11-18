@@ -87,11 +87,11 @@ describe("Agent Runtime owner-verified execution detail", () => {
 
 describe("Agent Runtime discovery contract", () => {
   it("validates the canonical minimal backend catalog before rendering", () => {
-    expect(source).toContain("function isAgentCatalogResponse(value: unknown)");
+    expect(source).toContain('import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog"');
     expect(source).toContain("if (!isAgentCatalogResponse(response))");
-    expect(source).toContain('response.eligibility_verified !== false');
-    expect(source).toContain('response.execution_authority !== "chat_runtime"');
-    expect(source).toContain('agent.eligibility === "runtime_decided_per_request"');
+    expect(source).toContain("Registered specialists are unavailable until the catalog contract is verified.");
+    expect(source).toContain("Agent catalog response does not match the discovery contract.");
+    expect(source).toContain("Determined per request");
   });
 
   it("does not dereference metadata the discovery endpoint deliberately omits", () => {
