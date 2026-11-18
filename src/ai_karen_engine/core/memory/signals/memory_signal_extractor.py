@@ -37,13 +37,21 @@ class MemorySignalExtractor:
         signals: list[MemorySignal] = classify_explicit_user_memory(text)
         explicit_types = {signal.signal_type for signal in signals}
 
-        if parsed.entities and "identity_fact" not in explicit_types:
+        # The canonical linguistic contract returns (text, label) tuples.
+        # Normalize once at this adapter boundary: MemorySignal and NeuroVault
+        # require entities with explicit text/label fields, never raw tuples.
+        normalized_entities = [
+            {"text": entity_text, "label": entity_label}
+            for entity_text, entity_label in parsed.entities
+            if entity_text and entity_label
+        ]
+        if normalized_entities and "identity_fact" not in explicit_types:
             signals.append(
                 MemorySignal(
                     text=text,
                     signal_type="entity",
                     confidence=0.8,
-                    entities=parsed.entities,
+                    entities=normalized_entities,
                     scope="user",
                     metadata={"source": "spacy_ner"},
                 )
