@@ -145,7 +145,7 @@ def test_invalid_identity_or_credential_never_calls_platform():
     client = FakeOpener([])
     for project, team, token in (
         ("", TEAM, TOKEN), (PROJECT, "", TOKEN),
-        (PROJECT, TEAM, ""), (PROJECT, TEAM, "bad\\nheader"),
+        (PROJECT, TEAM, ""), (PROJECT, TEAM, "bad\nheader"),
         ("srv_wrong", TEAM, TOKEN), (PROJECT, "prj_wrong", TOKEN),
     ):
         with pytest.raises(RevisionVerificationError):
