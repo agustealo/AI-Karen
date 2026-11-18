@@ -10,6 +10,7 @@ import argparse
 import ast
 import base64
 import binascii
+import ipaddress
 import re
 import sys
 from dataclasses import dataclass
@@ -153,18 +154,40 @@ def _fernet_material_valid(value: str) -> bool:
 
 
 def _origins_secure(value: str) -> bool:
+    """Accept only browser-valid HTTPS origins for deployed consumers.
+
+    This is a read-only diagnostic, never a source of new CORS authority.
+    Reject private/loopback literal IPs, local-only hostnames, bad DNS labels
+    and invalid ports before declaring a production environment ready.
+    """
     if not value:
         return False
     for origin in value.split(","):
         origin = origin.strip()
         try:
             parsed = urlsplit(origin)
+            host = parsed.hostname
+            port = parsed.port  # Access forces validation of malformed/out-of-range ports.
+            if (parsed.scheme != "https" or not host or "." not in host
+                    or parsed.username or parsed.password
+                    or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                    or "*" in origin or port == 0):
+                return False
+            if host.endswith((".local", ".internal", ".localhost", ".home.arpa")):
+                return False
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                labels = host.split(".")
+                if any(
+                    not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                    for label in labels
+                ):
+                    return False
+            else:
+                if not address.is_global:
+                    return False
         except ValueError:
-            return False
-        if (parsed.scheme != "https" or not parsed.hostname
-                or "." not in parsed.hostname or parsed.username or parsed.password
-                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
-                or "*" in origin or parsed.hostname.endswith((".local", ".internal"))):
             return False
     return True
 
