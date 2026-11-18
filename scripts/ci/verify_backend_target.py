@@ -10,13 +10,14 @@ import json
 import os
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request, build_opener
 
-
-class NoRedirects(HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, msg, headers, newurl):
-        return None
+from scripts.ci.verify_deployment_revision import (
+    NoRedirects,
+    RevisionVerificationError,
+    _request_headers,
+    revision_endpoint,
+)
 
 
 def _probe_json(opener, url: str, headers: dict[str, str], *, endpoint: str) -> tuple[int, dict]:
@@ -42,27 +43,21 @@ def _probe_json(opener, url: str, headers: dict[str, str], *, endpoint: str) -> 
 
 
 def verify(base_url: str) -> None:
-    parsed = urlsplit(base_url)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in ("", "/")
-    ):
-        raise ValueError("Expected an HTTPS deployment origin without credentials or path")
-
-    headers = {"Accept": "application/json", "Cache-Control": "no-store"}
-    bypass_secret = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET", "")
-    if bypass_secret:
-        if any(ord(char) < 32 or ord(char) == 127 for char in bypass_secret):
-            raise ValueError("Invalid deployment bypass credential configuration")
-        headers["x-vercel-protection-bypass"] = bypass_secret
+    # The canonical deployed-revision owner validates the URL, and its
+    # protection-header builder also restricts the optional bypass credential
+    # to the same reviewed Vercel deployment host shape. A manually supplied
+    # HTTPS URL is never enough to authorize sending the bypass secret.
+    bypass_secret = os.environ.get("VERCEL_AUTOMATION_BYPASS_SECRET") or None
+    try:
+        revision_url = revision_endpoint(base_url)
+        headers = _request_headers(base_url, bypass_secret)
+    except RevisionVerificationError:
+        raise ValueError(
+            "Expected an HTTPS deployment origin with clean URL and approved protection target"
+        ) from None
 
     opener = build_opener(NoRedirects())
-    base = base_url.rstrip("/")
+    base = revision_url.removesuffix("/api/deployment-revision")
 
     # The authentication route is useful for validating the canonical ingress,
     # but an unauthenticated 401 is not proof that required storage is healthy.

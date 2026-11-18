@@ -208,9 +208,13 @@ def test_search_acceptance_checks_platform_before_and_after_browser():
                    workflow.split("  authenticated-search-replay:", 1)[1],
                    maxsplit=1)[0]
     pre = job.index("- name: Verify independent Vercel deployment provenance before browser acceptance")
+    revision = job.index("- name: Verify deployed revision before browser acceptance")
     browser = job.index("- name: Prove live authenticated grounded search and replay")
     post = job.index("- name: Revalidate platform, running deployment and reviewed main head")
-    assert pre < browser < post
+    assert pre < revision < browser < post
+    provider_step = job[pre:revision]
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in provider_step
+    assert "VERCEL_TOKEN: " + chr(36) + "{{ secrets.VERCEL_TOKEN }}" in provider_step
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
     assert "VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}" in job
