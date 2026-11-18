@@ -23,7 +23,9 @@ on:
       - 'tests/core/runtime/test_verification_alternative_readiness.py'
       - 'tests/core/runtime/test_verification_strategy_pair_live_proof.py'
       - 'scripts/ci/verification_strategy_pair_live_proof.py'
+      - 'scripts/ci/verification_strategy_durable_live_proof.py'
       - 'tests/core/runtime/test_selected_strategy_execution_evidence.py'
+      - 'tests/core/runtime/test_verification_strategy_durable_live_proof.py'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'tests/core/test_runtime_reasoning_policy.py'
       - 'tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py'
@@ -66,7 +68,9 @@ on:
       - 'tests/core/runtime/test_verification_alternative_readiness.py'
       - 'tests/core/runtime/test_verification_strategy_pair_live_proof.py'
       - 'scripts/ci/verification_strategy_pair_live_proof.py'
+      - 'scripts/ci/verification_strategy_durable_live_proof.py'
       - 'tests/core/runtime/test_selected_strategy_execution_evidence.py'
+      - 'tests/core/runtime/test_verification_strategy_durable_live_proof.py'
       - 'src/ai_karen_engine/core/runtime/chat_runtime.py'
       - 'tests/core/test_runtime_reasoning_policy.py'
       - 'tests/core/runtime/trajectory/test_chat_runtime_learning_lineage.py'
@@ -292,6 +296,14 @@ jobs:
             tests/core/runtime/test_selected_strategy_execution_evidence.py \
             tests/core/runtime/test_reasoning_model_attribution_truth.py \
             tests/core/runtime/test_reasoning_provider_synthesis.py \
+            -q --timeout=300 --tb=short
+
+      - name: Prove KCOG-01C1B2C3C committed strategy lineage remains non-OPE
+        if: ${{ always() }}
+        run: |
+          python -m py_compile scripts/ci/verification_strategy_durable_live_proof.py
+          pytest tests/core/runtime/test_verification_strategy_durable_live_proof.py \
+            tests/core/runtime/test_selected_strategy_execution_evidence.py \
             -q --timeout=300 --tb=short
 
       - name: Prove KCOG-01C1B2C2 actual async cancellation and terminal trajectory truth
