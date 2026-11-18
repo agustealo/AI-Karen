@@ -137,8 +137,8 @@ jobs:
       - name: Prove admin user route imports and canonical authorization enums
         run: pytest tests/unit/api_routes/test_admin_user_route_imports.py -q
 
-      - name: Consumer My Account ownership and security contracts
-        run: pytest tests/api_routes/test_consumer_my_account_contract.py -q
+      - name: Consumer ownership and Communications scope security contracts
+        run: pytest tests/api_routes/test_consumer_my_account_contract.py tests/api_routes/test_communications_center_scope.py -q
 
       - name: Enforce durable account session revocation
         run: pytest tests/auth/test_live_session_enforcement.py tests/architecture/test_auth_session_validation_contract.py tests/architecture/test_account_beta_recovery_contract.py -q
