@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -14,7 +14,7 @@ TENANT_A = "00000000-0000-0000-0000-000000000001"
 TENANT_B = "00000000-0000-0000-0000-000000000099"
 USER_A = "00000000-0000-0000-0000-000000000002"
 USER_B = "00000000-0000-0000-0000-000000000098"
-START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+START = datetime(2026, 1, 1, tzinfo=UTC)
 SCOPE_A = {"tenant_id": TENANT_A, "user_id": USER_A}
 SCOPE_B = {"tenant_id": TENANT_B, "user_id": USER_B}
 
