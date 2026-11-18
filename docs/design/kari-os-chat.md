@@ -1,13 +1,13 @@
 # Kari OS chat design contract (KUI-001)
 
-Status: **staged, opt-in**. This contract does not represent completed chat UI integration.
+Status: **active only in the canonical consumer chat (draft PR)**. This is a scoped visual adoption, not completed four-panel or artifact integration.
 Source: approved Kari OS chat workspace HTML and KARI-OS-CHAT-DEV-SHEET v1.1 (2026-11-18), preserved in the project's persistent design Library.
 
 ## Ownership and non-negotiable behavior
 
 - Existing frontend owner: `src/ui_launchers/Karen-AI-Theme` (Next.js / Tailwind / Radix).
 - Existing global semantics: `src/app/globals.css`; don't duplicate or replace its existing classes.
-- Kari OS's scoped, optional skin: `src/app/kari-os.css`. Apply `data-kari-root` only to explicitly migrated screens.
+- Kari OS's scoped, optional skin: `src/app/kari-os.css`. The canonical `KarenCopilotConsumerChat` root now opts in through `data-kari-root`; do not apply it to unrelated screens.
 - Runtime alone determines model/provider availability, completion, persistence, tool execution, memory state, RBAC, and telemetry. Presentation must not make up operational values.
 - The current `public/brand/karen-mark.svg` and layout metadata remain untouched until the product-wide brand migration is separately approved and tested. The proposed Orbital-K logo remains a design asset, not a silent replacement.
 
@@ -69,7 +69,7 @@ Breakpoints: four regions at 1600px and above; three at 1280–1599px; two regio
 
 ## KUI-001 change scope
 
-This first PR introduces a scoped CSS contract plus root import and does **not** attach `data-kari-root` to existing routes. It is therefore designed not to alter any currently rendered screen. The next change must audit the actual active chat owner and test the full component integration before applying the skin.
+This draft PR introduces a scoped CSS contract and enables it only on the existing `KarenCopilotConsumerChat` root. It changes the appearance of the consumer chat but leaves authentication, session identity, provider decisions, draft persistence, message transport, and verified receipts to their existing owners. This visual change is **not release-approved** until exact-head checks and authenticated screenshot comparisons pass. The existing verified rail remains the context source; persistent user-pinned artifact dock is not yet implemented.
 
 ## Verified current component ownership (repository audit)
 
