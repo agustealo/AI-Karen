@@ -38,7 +38,7 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 from ai_karen_engine.core.model_runtime.provider_execution import ProviderExecutionResult
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
-    PolicyDecision, PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    PolicyDecision, PolicyEvaluationRequest, ProviderConstraints, RuntimePolicyEnforcer,
 )
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
@@ -689,6 +689,75 @@ async def test_real_runtime_policy_evaluation_is_required_before_any_initial_mod
             copied_plan, ExecutionBudgetMeter(copied_budget),
         )
     assert context.original_runtime_model_plan(meter) is plan
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "widened"),
+    [
+        ("eligible_providers", []),
+        ("eligible_providers", ["builtin_transformers", "external-provider"]),
+        ("forbidden_providers", []),
+        ("local_only", False),
+        ("external_allowed", True),
+        ("eligible_providers", "builtin_transformers"),
+    ],
+)
+async def test_issued_provider_scope_cannot_widen_before_first_model_bind(
+    field: str, widened: object,
+) -> None:
+    """A plan copy cannot relax the original issuer's provider limits."""
+    issuer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="provider-scope-user",
+        tenant_id="provider-scope-tenant",
+        session_id="provider-scope-session",
+        correlation_id=f"provider-scope-{uuid4().hex}",
+        max_model_calls=1,
+        requested_capabilities=[],
+        provider_constraints=ProviderConstraints(
+            eligible_providers=["builtin_transformers"],
+            forbidden_providers=["external-provider"],
+            local_only=True,
+            external_allowed=False,
+        ),
+    )
+    decision = await issuer.evaluate(request)
+    assert decision.allowed
+    context = ChatExecutionContext(
+        user_id=request.user_id,
+        tenant_id=request.tenant_id,
+        session_id=request.session_id,
+        request_id=f"provider-scope-request-{uuid4().hex}",
+        correlation_id=request.correlation_id,
+        authenticated_user=UserData(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            roles=["user"],
+            permissions=[],
+            is_active=True,
+            is_verified=True,
+        ),
+    )
+    issuer.bind_chat_model_policy(context=context, decision=decision)
+    original = decision.to_authorized_plan()
+    assert issuer.verifies_chat_model_policy(context=context, plan=original)
+
+    proposed = dict(original.provider_constraints)
+    proposed[field] = widened
+    forged = replace(original, provider_constraints=proposed)
+    meter = ExecutionBudgetMeter(original.budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        context.bind_runtime_model_authority(forged, meter)
+    assert context.original_runtime_model_plan(meter) is None
+    assert meter.model_calls == 0
+    assert meter.external_requests == 0
+
+    # The original issuer-derived plan remains eligible under the same meter.
+    context.bind_runtime_model_authority(original, meter)
+    assert context.original_runtime_model_plan(meter) is original
 
 
 @pytest.mark.asyncio

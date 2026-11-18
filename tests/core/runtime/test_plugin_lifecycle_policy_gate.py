@@ -180,3 +180,83 @@ async def test_trusted_lifecycle_policy_ignores_untrusted_role_and_identity_clai
     context.session_id = "different-session"
     denied = await policy.authorize_approved_plugin_lifecycle(**params)
     assert denied.allowed is False
+
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_preapproval_cannot_open_action_execution_gate() -> None:
+    context, scope, approved = _approved_lifecycle_context()
+    policy = RuntimePolicyEnforcer()
+    params = {
+        "context": context,
+        "scope": scope,
+        "observed_state": scope.expected_state,
+        "manifest_checksum": scope.manifest_checksum,
+        "revision": scope.expected_revision,
+        "disposition": "ready",
+    }
+    decision = await policy.authorize_plugin_lifecycle_preflight(**params)
+    assert decision.allowed is True
+    assert decision.requires_human_gate is True
+    assert decision.risk_level == "high"
+    assert decision.allowed_capabilities == []
+    assert decision.runtime_constraints["plugin_lifecycle_approval_only"] is True
+    assert not await ActionExecutionGate.authorize(
+        decision.to_authorized_plan(), "plugin.lifecycle.disable"
+    )
+    # An actual human-approved receipt is a separate decision with the exact
+    # action capability and cannot be inferred from preapproval alone.
+    complete = await policy.authorize_approved_plugin_lifecycle(
+        **params, approval=approved,
+    )
+    assert complete.allowed_capabilities == ["plugin.lifecycle.disable"]
+    assert await ActionExecutionGate.authorize(
+        complete.to_authorized_plan(), "plugin.lifecycle.disable"
+    )
+
+    for changed in (
+        {"revision": scope.expected_revision + 1},
+        {"manifest_checksum": "b" * 64},
+        {"observed_state": "disabled"},
+        {"disposition": "unresolved"},
+    ):
+        denied = await policy.authorize_plugin_lifecycle_preflight(
+            **{**params, **changed}
+        )
+        assert denied.allowed is False
+        assert denied.allowed_capabilities == []
+        assert not await ActionExecutionGate.authorize(
+            denied.to_authorized_plan(), "plugin.lifecycle.disable"
+        )
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_preapproval_requires_active_trusted_principal_and_rbac() -> None:
+    context, scope, _ = _approved_lifecycle_context()
+    policy = RuntimePolicyEnforcer()
+    params = {
+        "context": context,
+        "scope": scope,
+        "observed_state": scope.expected_state,
+        "manifest_checksum": scope.manifest_checksum,
+        "revision": scope.expected_revision,
+        "disposition": "ready",
+    }
+    context.authenticated_user = None
+    context.roles = ["admin"]
+    context.permissions = ["admin.plugins:manage"]
+    assert not (await policy.authorize_plugin_lifecycle_preflight(**params)).allowed
+    context.authenticated_user = UserData(
+        user_id=scope.user_id, tenant_id=scope.tenant_id, roles=["user"]
+    )
+    assert not (await policy.authorize_plugin_lifecycle_preflight(**params)).allowed
+    context.authenticated_user = UserData(
+        user_id=scope.user_id, tenant_id=scope.tenant_id, roles=["admin"],
+        is_active=False,
+    )
+    assert not (await policy.authorize_plugin_lifecycle_preflight(**params)).allowed
+    context.authenticated_user = UserData(
+        user_id=scope.user_id, tenant_id=scope.tenant_id, roles=["admin"],
+    )
+    context.session_id = "untrusted-session"
+    assert not (await policy.authorize_plugin_lifecycle_preflight(**params)).allowed

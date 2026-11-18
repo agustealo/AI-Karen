@@ -1783,6 +1783,138 @@ class PluginService:
             await self.kernel.cleanup()
         self.initialized = False
 
+    async def prepare_lifecycle_approval(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        plugin_id: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        """Persist exact, revocable human consent request for one plugin.
+
+        This is a host-only preparation step, not an execution grant. The
+        installer, manifest SHA-256, terminal state and global revision come
+        exclusively from the canonical kernel and PostgreSQL ledger. No
+        request payload or chat turn can supply those facts.
+        """
+        from ai_karen_engine.auth.rbac_middleware import (
+            Permission, get_rbac_manager,
+        )
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext, ChatExecutionRequest,
+        )
+        from ai_karen_engine.core.runtime.execution_decision import (
+            ExecutionDecision, RiskLevel,
+        )
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+        from ai_karen_engine.persistence.repositories.plugin_lifecycle_repository import (
+            PluginLifecycleLedger, PluginLifecycleRevisionConflict,
+        )
+        from ai_karen_engine.services.approvals import get_approval_service
+
+        if not isinstance(context, ChatExecutionContext):
+            raise TypeError("Authenticated plugin lifecycle context required")
+        principal = context.require_authenticated_user()
+        if not get_rbac_manager().has_permission(
+            principal, Permission.ADMIN_PLUGINS_MANAGE,
+        ):
+            raise PermissionError("Plugin lifecycle management permission required")
+        if (
+            not isinstance(plugin_id, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_-]{0,49}", plugin_id)
+            or not isinstance(action, str)
+            or action not in {"enable", "disable"}
+        ):
+            raise ValueError("Unsupported plugin lifecycle approval request")
+        if (
+            not context.request_id
+            or not context.correlation_id
+            or not context.session_id
+        ):
+            raise ValueError("Lifecycle approval requires authenticated session and trace")
+        # A canonical UUID conversation is required; the runtime context may
+        # derive one from the trusted session when ingress has not assigned it.
+        conversation = context.require_conversation_id()
+        await self._ensure_initialized()
+        observation = await self._get_kernel().observe_lifecycle_for_finalization(
+            plugin_id, operation_id=str(uuid.uuid4()),
+        )
+        if observation.observed_state != (
+            "disabled" if action == "enable" else "enabled"
+        ):
+            raise ValueError("Plugin lifecycle action is already satisfied")
+        ledger = PluginLifecycleLedger()
+        revision = await ledger.initialize_observation(
+            installation_id=observation.installation_id,
+            manifest_checksum=observation.manifest_checksum,
+            observed_state=observation.observed_state,
+        )
+        if revision["disposition"] != "ready":
+            raise PluginLifecycleRevisionConflict(
+                "Plugin lifecycle remains unresolved from an earlier operation"
+            )
+        scope = PluginLifecycleApprovalScope(
+            installation_id=observation.installation_id,
+            action=action,
+            manifest_checksum=observation.manifest_checksum,
+            expected_state=observation.observed_state,
+            expected_revision=revision["revision"],
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            session_id=context.session_id,
+            conversation_id=conversation,
+        )
+        decision = await self._policy_enforcer.authorize_plugin_lifecycle_preflight(
+            context=context,
+            scope=scope,
+            observed_state=observation.observed_state,
+            manifest_checksum=observation.manifest_checksum,
+            revision=revision["revision"],
+            disposition=revision["disposition"],
+        )
+        if (
+            not decision.allowed
+            or not decision.requires_human_gate
+            or decision.allowed_capabilities
+            or decision.risk_level != "high"
+        ):
+            raise PermissionError("Plugin lifecycle consent preflight denied")
+        # Reuse ApprovalService's canonical scope fingerprint, PostgreSQL
+        # repository and audit. Empty chat messages are deliberate: this is
+        # an authenticated admin action, not an invented user chat turn.
+        approval = await get_approval_service().create_for_request(
+            ChatExecutionRequest(messages=[], context=context),
+            ExecutionDecision(
+                intent="plugin.lifecycle." + action,
+                risk_level=RiskLevel.HIGH,
+                requires_human_gate=True,
+                policy_decision_id=decision.decision_id,
+                policy_version=decision.policy_version,
+                policy_reason_codes=[reason.value for reason in decision.reason_codes],
+                policy_constraints={"authorization_status": "allowed"},
+            ),
+            lifecycle_scope=scope,
+        )
+        if approval.get("status") != "pending":
+            raise RuntimeError("Lifecycle approval was not durably recorded as pending")
+        return {
+            "status": "pending",
+            "approval_id": approval["approval_id"],
+            "plugin_id": scope.installation_id,
+            "action": scope.action,
+            "expected_state": scope.expected_state,
+            "target_state": "enabled" if action == "enable" else "disabled",
+            "expected_revision": scope.expected_revision,
+            "manifest_checksum": scope.manifest_checksum,
+            "expires_at": approval["expires_at"],
+            "policy_decision_id": decision.decision_id,
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+            "execution_performed": False,
+        }
+
     async def execute_approved_lifecycle(
         self,
         *,
