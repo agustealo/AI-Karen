@@ -15,7 +15,9 @@ import logging
 import os
 import re
 import sys
+import traceback
 import uuid
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import text
@@ -43,6 +45,7 @@ class _ScopedMemoryFailureTypeCapture(logging.Handler):
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
         self.error_type: str | None = None
+        self.error_origin: str | None = None
 
     def emit(self, record: logging.LogRecord) -> None:
         if (
@@ -56,6 +59,27 @@ class _ScopedMemoryFailureTypeCapture(logging.Handler):
             and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", candidate)
         ):
             self.error_type = candidate
+            # Canonical ChatRuntime logs this record synchronously from its
+            # exception handler. Read only stack locations, never exception
+            # arguments or the raw traceback, then discard the traceback.
+            _type, _value, tb = sys.exc_info()
+            if _type is None or _type.__name__ != candidate or tb is None:
+                return
+            self.error_origin = "outside_memory"
+            for frame in reversed(traceback.extract_tb(tb)):
+                filename = frame.filename.replace("\\", "/")
+                if not (
+                    "/ai_karen_engine/core/memory/" in filename
+                    or "/ai_karen_engine/platform/memory/" in filename
+                ):
+                    continue
+                basename = Path(filename).name
+                if (
+                    re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}\.py", basename)
+                    and 1 <= frame.lineno <= 99999
+                ):
+                    self.error_origin = f"{basename}:{frame.lineno}"
+                break
 
 
 def require(condition: bool, code: str) -> None:
@@ -499,6 +523,7 @@ async def prove_verified_durable_runtime(
                     failure_code = "nonstream_response_missing"
                 failure = DurableLineageProofError(failure_code)
                 failure.observed_error_type = memory_failure.error_type
+                failure.observed_error_origin = memory_failure.error_origin
                 raise failure
             answer = result.answer
 
@@ -618,6 +643,16 @@ def main() -> int:
             and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", observed)
         ):
             diagnostics["memory_exception_type"] = observed
+        origin = getattr(exc, "observed_error_origin", None)
+        if (
+            isinstance(exc, DurableLineageProofError)
+            and isinstance(origin, str)
+            and re.fullmatch(
+                r"(?:[A-Za-z_][A-Za-z0-9_]{0,63}\.py:[1-9][0-9]{0,4}|outside_memory)",
+                origin,
+            )
+        ):
+            diagnostics["memory_exception_origin"] = origin
         print(
             json.dumps(diagnostics, sort_keys=True),
             file=sys.stderr,
