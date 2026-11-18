@@ -127,6 +127,7 @@ const isObservabilitySnapshot = (value: unknown): value is ObservabilitySnapshot
 type OwnedAgentRun = {
     run_id: string;
     user_id: string;
+    tenant_id: string;
     status: "queued" | "running" | "cancelling" | "completed" | "succeeded" | "failed" | "cancelled" | "canceled" | "orphaned";
     started_at?: string | null;
     completed_at?: string | null;
@@ -144,7 +145,7 @@ const OWNED_RUN_STATUSES = new Set([
     "failed", "cancelled", "canceled", "orphaned",
 ]);
 
-const isOwnedRunResponse = (value: unknown, ownerId: string): value is OwnedRunResponse => {
+const isOwnedRunResponse = (value: unknown, ownerId: string, tenantId: string): value is OwnedRunResponse => {
     if (!value || typeof value !== "object") return false;
     const response = value as Partial<OwnedRunResponse>;
     return Array.isArray(response.runs) &&
@@ -155,7 +156,7 @@ const isOwnedRunResponse = (value: unknown, ownerId: string): value is OwnedRunR
         response.runs.every((run) =>
             !!run && typeof run === "object" &&
             typeof run.run_id === "string" && run.run_id.length > 0 && run.run_id.length <= 128 &&
-            run.user_id === ownerId &&
+            run.user_id === ownerId && run.tenant_id === tenantId &&
             typeof run.status === "string" && OWNED_RUN_STATUSES.has(run.status) &&
             (run.started_at == null || typeof run.started_at === "string") &&
             (run.completed_at == null || typeof run.completed_at === "string")
@@ -303,7 +304,7 @@ export default function CommsCenterPage() {
         const load = async () => {
             try {
                 const response: unknown = await apiClient.get<unknown>("/api/agent-runtime/my-runs");
-                if (!isOwnedRunResponse(response, user.user_id)) {
+                if (!isOwnedRunResponse(response, user.user_id, user.tenant_id)) {
                     throw new Error("Invalid owner-scoped Medusa execution contract");
                 }
                 if (active) setOwnedRunSnapshot({ principal, value: response });

@@ -148,7 +148,7 @@ describe("Communications Center's canonical visual and authority contract", () =
     stubs.get.mockImplementation(async (path: string) => {
       if (path === "/api/communications-center/observability") return LIVE_SNAPSHOT;
       if (path === "/api/agent-runtime/my-runs") return {
-        runs: [{ run_id: "owned-run-001", user_id: "user-one", status: "completed", started_at: "2026-11-18T15:00:00Z" }],
+        runs: [{ run_id: "owned-run-001", user_id: "user-one", tenant_id: "tenant-one", status: "completed", started_at: "2026-11-18T15:00:00Z" }],
         total: 1, generated_at: "2026-11-18T16:00:00Z",
       };
       throw new Error("Unexpected endpoint");
@@ -167,8 +167,8 @@ describe("Communications Center's canonical visual and authority contract", () =
       if (path === "/api/communications-center/observability") return LIVE_SNAPSHOT;
       return {
         runs: [
-          { run_id: "my-safe-run", user_id: "user-one", status: "completed" },
-          { run_id: "other-user-secret-run", user_id: "user-two", status: "completed" },
+          { run_id: "my-safe-run", user_id: "user-one", tenant_id: "tenant-one", status: "completed" },
+          { run_id: "other-user-secret-run", user_id: "user-two", tenant_id: "tenant-one", status: "completed" },
         ],
         total: 2, generated_at: "2026-11-18T16:00:00Z",
       };
@@ -180,12 +180,31 @@ describe("Communications Center's canonical visual and authority contract", () =
     expect(screen.queryByText(/other-user-secret-run/)).toBeNull();
   });
 
+  it("rejects a foreign tenant even when the user identifier matches", async () => {
+    stubs.get.mockImplementation(async (path: string) => {
+      if (path === "/api/communications-center/observability") return LIVE_SNAPSHOT;
+      if (path === "/api/agent-runtime/my-runs") return {
+        runs: [
+          { run_id: "valid-same-user-run", user_id: "user-one", tenant_id: "tenant-one", status: "completed" },
+          { run_id: "cross-tenant-sensitive-run", user_id: "user-one", tenant_id: "tenant-two", status: "completed" },
+        ],
+        total: 2, generated_at: "2026-11-18T16:00:00Z",
+      };
+      throw new Error("Unexpected API request");
+    });
+    render(<CommsCenterPage />);
+    await waitFor(() => expect(screen.getByText("Owner-verified agent execution history is unavailable.")).toBeTruthy());
+    expect(screen.getByTestId("comms-owned-run-count").textContent).toContain("Unverified");
+    expect(screen.queryByText(/Execution valid-sa/)).toBeNull();
+    expect(screen.queryByText(/Execution cross-te/)).toBeNull();
+  });
+
   it("does not display the previous account's execution history after identity changes", async () => {
     let finishSecondRequest!: (value: unknown) => void;
     stubs.get.mockImplementation((path: string) => {
       if (path === "/api/communications-center/observability") return Promise.resolve(LIVE_SNAPSHOT);
       if (stubs.useAuth().user.user_id === "user-one") return Promise.resolve({
-        runs: [{ run_id: "private-owner-run", user_id: "user-one", status: "running" }],
+        runs: [{ run_id: "private-owner-run", user_id: "user-one", tenant_id: "tenant-one", status: "running" }],
         total: 1, generated_at: "2026-11-18T16:00:00Z",
       });
       return new Promise((resolve) => { finishSecondRequest = resolve; });
