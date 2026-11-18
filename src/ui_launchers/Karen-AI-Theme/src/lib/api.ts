@@ -88,6 +88,7 @@ class ApiClient {
   private readonly SESSION_MARKER_KEY = 'kari_session_expected';
   private readonly SESSION_WARNING_SHOWN_KEY = 'session_warning_shown';
   private readonly TOKEN_REFRESH_ATTEMPTED_KEY = 'token_refresh_attempted';
+  private refreshInFlight: Promise<void> | null = null;
 
   private invalidateAuthSession(
     reason: 'terminal_401' | 'refresh_failed' | 'session_invalid',
@@ -530,6 +531,19 @@ class ApiClient {
   }
 
   private async refreshAccessToken(): Promise<void> {
+    // Share a single credential-rotating request across concurrent API calls.
+    if (this.refreshInFlight) return this.refreshInFlight;
+
+    const refresh = this.executeRefreshAccessToken();
+    this.refreshInFlight = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.refreshInFlight === refresh) this.refreshInFlight = null;
+    }
+  }
+
+  private async executeRefreshAccessToken(): Promise<void> {
     try {
       const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('refresh_token') : null;
       if (!refreshToken) throw new Error('No refresh token available');
@@ -556,6 +570,10 @@ class ApiClient {
         throw new Error('Invalid refresh response: missing access_token');
       }
 
+      // A late refresh response must never restore a logged-out or changed session.
+      if (localStorage.getItem('refresh_token') !== refreshToken) {
+        throw new Error('Refresh session changed during request');
+      }
       localStorage.setItem('access_token', data.access_token);
       // Clear any refresh attempt flags on success
       localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);

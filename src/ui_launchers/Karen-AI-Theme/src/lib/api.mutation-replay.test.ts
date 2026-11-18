@@ -90,6 +90,47 @@ describe('single-attempt authenticated mutations', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('coalesces concurrent refresh calls into a single POST', async () => {
+    localStorage.setItem('refresh_token', 'one-session-refresh-token');
+    let resolveFetch!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveFetch = resolve; });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = clientInternals.refreshAccessToken();
+    const second = clientInternals.refreshAccessToken();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolveFetch(new Response(JSON.stringify({ access_token: 'fresh-access-token' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    await Promise.all([first, second]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('access_token')).toBe('fresh-access-token');
+  });
+
+  it('rejects a late refresh response after the session changed', async () => {
+    localStorage.setItem('refresh_token', 'previous-refresh-token');
+    localStorage.setItem('access_token', 'previous-access-token');
+    let resolveFetch!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveFetch = resolve; });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const refresh = clientInternals.refreshAccessToken();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    localStorage.setItem('refresh_token', 'different-session-refresh-token');
+    resolveFetch(new Response(JSON.stringify({ access_token: 'stale-refresh-result' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(refresh).rejects.toThrow('Refresh session changed during request');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('access_token')).toBe('previous-access-token');
+  });
+
   it('never retries a credential-rotating refresh after a lost response', async () => {
     localStorage.setItem('refresh_token', 'refresh-credential-for-single-attempt-proof');
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
