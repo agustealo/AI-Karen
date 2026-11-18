@@ -118,9 +118,12 @@ class MemoryClaimStore:
         )
         self._require_claim_scope(decision.previous)
         self._require_claim_scope(decision.incoming)
-        self._checked_replacement_id(decision.incoming)
+        incoming_id = self._checked_replacement_id(decision.incoming)
+        if incoming_id == claim_id and decision.kind is not TemporalEvolutionKind.REINFORCE:
+            raise ValueError("non-reinforcement evolution cannot replace its source")
         self._claims[claim_id] = decision.previous
-        self.add(decision.incoming)
+        if incoming_id != claim_id:
+            self.add(decision.incoming)
         return decision
 
     def supersede(self, claim_id: str, new_claim: MemoryClaim) -> None:

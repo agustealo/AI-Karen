@@ -32,6 +32,24 @@ Three regression tests prove rejection and absence of partial writes. These
 are single-process integrity guarantees, not runtime authentication, locking,
 or database transaction isolation.
 
+## Same-reference temporal reinforcement fix
+
+The canonical version-aware claim-reference change revealed a reinforcement
+integrity regression. When an incoming observation has the same canonical
+reference as the existing claim, `MemoryTemporalEvolutionService.evolve()`
+produces a `REINFORCE` decision with a correctly merged previous version,
+including the maximum confidence. The store previously wrote that merged
+version and then replaced it with `decision.incoming` under the same key.
+A weaker incoming observation could therefore reduce stored confidence.
+
+`MemoryClaimStore.evolve()` now stores the merged previous version once
+for same-reference reinforcement; a distinct incoming reference is still
+added normally. It rejects any non-reinforcement decision that tries to
+reuse the original key before writing. Two parameterized regression cases
+cover stronger-to-weaker and weaker-to-stronger observations, including
+provenance and single-entry indexing. This remains in-process semantic
+correctness, not persistence authorization.
+
 ## Correct owner and behavior
 
 - Bind each `MemoryClaimStore` at construction to explicit immutable tenant and user identifiers; `user_id=None` represents a distinct tenant-level owner.

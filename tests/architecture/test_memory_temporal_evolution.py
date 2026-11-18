@@ -165,6 +165,34 @@ def test_claim_store_uses_temporal_evolution_for_change() -> None:
 
 
 @pytest.mark.parametrize(
+    ("previous_confidence", "incoming_confidence"),
+    [(0.9, 0.2), (0.2, 0.9)],
+)
+def test_store_same_ref_reinforcement_keeps_canonical_merged_version(
+    previous_confidence: float,
+    incoming_confidence: float,
+) -> None:
+    store = MemoryClaimStore(**CLAIM_SCOPE)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    previous = _claim("vim", valid_from=start, confidence=previous_confidence)
+    previous.provenance = ["conversation:first"]
+    claim_id = store.add(previous)
+    incoming = _claim("vim", valid_from=start, confidence=incoming_confidence)
+    incoming.provenance = ["conversation:second"]
+
+    decision = store.evolve(
+        claim_id, incoming, recorded_at=start + timedelta(days=1)
+    )
+    stored = store.get(claim_id, **CLAIM_SCOPE)
+
+    assert decision.kind is TemporalEvolutionKind.REINFORCE
+    assert stored is decision.previous
+    assert stored.confidence == max(previous_confidence, incoming_confidence)
+    assert stored.provenance == ["conversation:first", "conversation:second"]
+    assert store.get_by_subject("user", **CLAIM_SCOPE) == [stored]
+
+
+@pytest.mark.parametrize(
     ("valid_offset", "expected"),
     [
         (timedelta(microseconds=-1), True),
