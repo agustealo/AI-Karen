@@ -26,3 +26,7 @@ Graphiti's core package includes `neo4j>=5.26.0` and `posthog`; typical deployme
 
 **Gate:** KAREN temporal authority stays native; a new graph DB is unjustified unless a later ADR proves a gap that native PostgreSQL cannot close economically.
 
+
+## KCR-02B pinned code findings
+
+[Temporal fields](https://github.com/getzep/graphiti/blob/4ef979c74e1e68d08217cf0af4022ddbc89c257f/graphiti_core/edges.py#L228-L257) separate world-time `valid_at`/`invalid_at`, invalidation-time `expired_at` and episode `reference_time`; [edge-resolution](https://github.com/getzep/graphiti/blob/4ef979c74e1e68d08217cf0af4022ddbc89c257f/graphiti_core/utils/maintenance/edge_operations.py#L429-L598) uses scoped endpoint candidates, typed duplicate checks and LLM-assisted conflict decisions. Karen already handles temporal evolution; research must test historical valid/known-time queries without importing graph drivers. See [KCR-02B](../KCR02B_TEMPORAL_PROVENANCE.md).

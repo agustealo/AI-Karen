@@ -26,3 +26,7 @@ Even core Semantica pulls `networkx`, `rdflib`, `pyarrow`, `grpcio`, numpy, scip
 
 **Gate:** Do not import a second decision recorder, policy engine or memory store. A small standards export or truth-maintenance technique must be justified independently.
 
+
+## KCR-02B pinned code findings
+
+[TemporalTruthMaintenanceAdapter](https://github.com/semantica-agi/semantica/blob/4d83266ca0d7f70185906bfce7c96ec71c6ebc04/semantica/reasoning/temporal_truth_maintenance.py) supports read-only historical `query_at(valid_at, known_at)` snapshots. [DecisionRecorder](https://github.com/semantica-agi/semantica/blob/4d83266ca0d7f70185906bfce7c96ec71c6ebc04/semantica/context/decision_recorder.py) writes to its own graph, which is incompatible with direct KAREN ownership. Native as-of semantics and read-only evidence reconstruction are research candidates. See [KCR-02B](../KCR02B_TEMPORAL_PROVENANCE.md).

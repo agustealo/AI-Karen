@@ -9,10 +9,10 @@
 | ID | Day(s) | Workstream | Output | Initial state |
 | --- | --- | --- | --- | --- |
 | KCR-01 | 1 | Existing KAREN memory, graph, reasoning, evidence, and retrieval call graph | [Baseline](KAREN_BASELINE.md), [retrieval lineage](KCR01_RETRIEVAL_LINEAGE.md), executable query/candidate probes | Source-inspected; live DB proof outstanding |
-| KCR-02 | 2-4 | Five upstream studies: algorithms, failure cases, license, manifests, storage, model costs | [Project dossiers](README.md#navigation), [KCR-02A pinned-source algorithm audit](KCR02A_GRAPH_RETRIEVAL.md) | LightRAG/HippoRAG mechanics inspected; 3 deeper dossiers pending; synthetic tests not live acceptance |
+| KCR-02 | 2-4 | Five upstream studies: algorithms, failure cases, license, manifests, storage, model costs | [Project dossiers](README.md#navigation), [KCR-02A pinned-source algorithm audit](KCR02A_GRAPH_RETRIEVAL.md) | Five mechanisms inspected with KCR-02B; dependency/SBOM and live acceptance pending |
 | KCR-03 | 5 | Collapse overlaps, separate core technique from vendor platform | [Capability matrix](CAPABILITY_MATRIX.md) and [candidate backlog](ADAPTATION_BACKLOG.md) | First-pass draft |
 | KCR-04 | 6 | Fix definition of valid baseline (paraphrase, FTS, pgvector, temporal, graph, provenance) | [Benchmark contract](BENCHMARK_CONTRACT.md) | Specified; not executed |
-| KCR-05 | 7 | Prove permissions, erasure, deletion propagation, RLS, old/new revision semantics | Adversarial fixtures and test report | Not started |
+| KCR-05 | 7 | Prove permissions, erasure, deletion propagation, RLS, old/new revision semantics | [Temporal/provenance audit](KCR02B_TEMPORAL_PROVENANCE.md), explicit SQL security gate | Known gap documented; live proofs not started |
 | KCR-06 | 8 | SBOM/solver check, license, CPU/RAM/disk/latency/model/operational overhead | [Dependency gate](DEPENDENCY_GATES.md) | Manifest inspection only |
 | KCR-07 | 9 | Implement **research-only** low-dependency comparison behind existing contracts, with no production imports | Isolated benchmark artefacts, if authorized | Not started |
 | KCR-08 | 10 | Decide each feature: native improve / optional algorithm / reject / defer; record tradeoffs | Evidence-backed ADR with rollback and proof | Not started |

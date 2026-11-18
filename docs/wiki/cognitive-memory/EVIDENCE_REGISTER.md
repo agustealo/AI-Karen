@@ -20,3 +20,10 @@
 ## Source research in the wiki
 The individual [project dossiers](README.md#navigation) record the specific mechanism to reproduce, read-only source anchors, default dependencies and blockers. Future research notes add a date, pinned commit, finding, test artifact and reviewer. No unsupported speedup numbers.
 
+
+## KCR-02B source-level verification (2026-11-18)
+
+- Graphiti `EntityEdge` has separate `valid_at`, `invalid_at`, `expired_at`, `reference_time` and episode IDs; conflict reconciliation is a scoped, model-assisted operation. [Pinned Graphiti code](https://github.com/getzep/graphiti/blob/4ef979c74e1e68d08217cf0af4022ddbc89c257f/graphiti_core/edges.py#L228-L257).
+- Cognee's provenance deletion planner partitions surviving vs unowned derived elements, deletes unowned vectors, removes surviving refs, then hard-deletes unowned graph artifacts. Retry-safe intent **INSPECTED**, failure-injection proof **UNPROVEN**. [Pinned planner](https://github.com/topoteretes/cognee/blob/5870f15d2488b99e80f71dd6e8e146b228749356/cognee/infrastructure/databases/unified/provenance_delete_planner.py).
+- Semantica `TemporalTruthMaintenanceAdapter.query_at` derives independent valid/known time snapshots without changing the live session. [Pinned implementation](https://github.com/semantica-agi/semantica/blob/4d83266ca0d7f70185906bfce7c96ec71c6ebc04/semantica/reasoning/temporal_truth_maintenance.py).
+- KAREN's `MemoryClaim.is_valid` interval end is inclusive whereas `TemporalInterval` and governed SQL end are exclusive. This is **source-inspected**, not yet repaired. [Research contract](KCR02B_TEMPORAL_PROVENANCE.md).

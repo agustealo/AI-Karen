@@ -359,6 +359,7 @@ jobs:
           pytest tests/benchmarks/memory/test_recall_query_contract.py -q
           pytest tests/benchmarks/memory/test_recall_quality.py -q
           pytest tests/benchmarks/memory/test_associative_rank_research.py -q
+          pytest tests/benchmarks/memory/test_temporal_research_contract.py -q
           pytest tests/core/memory/test_spreading_activation.py -q
 
       - name: Reject retired provider authorities
