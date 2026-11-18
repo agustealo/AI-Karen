@@ -431,3 +431,116 @@ def test_forged_topology_cannot_pass_as_original_strategy() -> None:
         match="original_strategy_not_proven_or_ope_ineligible",
     ):
         verify_persisted_chain(**evidence)
+
+
+# KCOG-01C1B2C3D: accepted verification must have original verifier evidence.
+def _verified_durable_evidence() -> dict:
+    evidence = _evidence(verify=True)
+    evidence["trajectory"].cortex_decision = {
+        "reasoning_modes": ["verification"],
+    }
+    evidence["outcomes"][0]["metadata"]["selected_strategy_execution"].update({
+        "reasoning_id": "original-executed-verifier",
+        "reasoning_status": "success",
+        "reason_codes": [],
+    })
+    return evidence
+
+
+def test_c3d_requires_original_verifier_receipt() -> None:
+    evidence = _verified_durable_evidence()
+    result = verify_persisted_chain(
+        **evidence, expected_action="verify_then_respond",
+    )
+    assert result["status"] == "passed"
+    assert result["ope_eligible"] is False
+    assert result["review_receipts"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reasoning_id", None),
+        ("reasoning_id", ""),
+        ("reasoning_status", "failed"),
+        ("reasoning_status", "budget_exhausted"),
+        ("reasoning_status", "unknown"),
+        ("reason_codes", ["model_generation_receipt_unverified"]),
+        ("status", "unverified"),
+        ("independent_verification_proven", True),
+    ],
+)
+def test_c3d_rejects_unobserved_or_fabricated_verification(
+    field: str, value: object,
+) -> None:
+    evidence = _verified_durable_evidence()
+    execution = evidence["outcomes"][0]["metadata"]["selected_strategy_execution"]
+    execution[field] = value
+    with pytest.raises(
+        DurableLineageProofError,
+        match=(
+            "selected_execution_provenance_unverified"
+            if field in {"status", "independent_verification_proven"}
+            else "verification_execution_receipt_unverified"
+        ),
+    ):
+        verify_persisted_chain(
+            **evidence, expected_action="verify_then_respond",
+        )
+
+
+def test_c3d_rejects_direct_path_misreported_as_verification() -> None:
+    evidence = _evidence()
+    evidence["trajectory"].cortex_decision = {"reasoning_modes": []}
+    with pytest.raises(
+        DurableLineageProofError, match="original_strategy_not_proven_or_ope_ineligible",
+    ):
+        verify_persisted_chain(
+            **evidence, expected_action="verify_then_respond",
+        )
+
+
+def test_c3d_rejects_verification_without_original_cortex_mode() -> None:
+    evidence = _verified_durable_evidence()
+    evidence["trajectory"].cortex_decision["reasoning_modes"] = []
+    with pytest.raises(
+        DurableLineageProofError, match="verification_execution_receipt_unverified",
+    ):
+        verify_persisted_chain(
+            **evidence, expected_action="verify_then_respond",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_id,expected_prefix",
+    [
+        ("kcog_c3c_0123456789abcdef0123456789abcdef", "kcog_c3d_"),
+        ("kcog_c3d_bad", "kcog_c3d_"),
+        ("kcog_c3d_0123456789abcdef0123456789abcdeg", "kcog_c3d_"),
+        ("kcog_c3d_0123456789abcdef0123456789abcdef", "unapproved_"),
+    ],
+)
+async def test_c3d_readback_denies_unapproved_session_before_database(
+    session_id: str, expected_prefix: str,
+) -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import read_back
+
+    with pytest.raises(
+        DurableLineageProofError, match="unapproved_acceptance_session",
+    ):
+        await read_back(
+            tenant_id=TENANT, user_id=USER,
+            session_id=session_id, model=MODEL,
+            expected_session_prefix=expected_prefix,
+            expected_action="verify_then_respond",
+        )
+
+
+def test_c3d_ci_entrypoint_requires_exclusive_authorization(monkeypatch, capsys) -> None:
+    from scripts.ci.verification_strategy_durable_live_proof import main
+
+    monkeypatch.setenv("KAREN_CI_C3C_LINEAGE_PROOF", "enabled")
+    monkeypatch.setenv("KAREN_CI_C3D_VERIFIED_DURABLE_PROOF", "enabled")
+    assert main() == 1
+    assert "ci_authorization_missing" in capsys.readouterr().out
