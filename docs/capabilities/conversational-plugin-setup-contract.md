@@ -750,6 +750,62 @@ truth and allow human confirmation. Preserve the existing scoped approval
 repository, then migrate old HTTP activation routes into that backend owner
 only after independent browser and end-to-end tests.
 
+## Authenticated lifecycle API handoff (KPLUG-CONV-02C3B3B2A)
+
+The guarded B3B1 backend consent and B2B physical execution paths now have
+a narrow **administrator HTTP** handoff, not an automatic action endpoint:
+
+1. `POST /api/plugins/{plugin_name}/lifecycle/{enable|disable}/approval`
+   accepts no external lifecycle scope. It requires an actual validated
+   active bearer session, canonical UUID actor/tenant identity and fresh
+   `ADMIN_PLUGINS_MANAGE` RBAC; the backend calls
+   `PluginService.prepare_lifecycle_approval`, returns HTTP 202 `pending`
+   with `execution_performed=false`, and sets `Cache-Control: private,
+   no-store`. Nothing in this step modifies the plugin.
+2. The **existing** `POST /api/approvals/{approval_id}/decision` endpoint
+   remains the single actor-scoped human approve/reject authority.
+   A pending or rejected receipt cannot be resumed.
+3. `POST /api/plugins/{plugin_name}/lifecycle/{enable|disable}/execute`
+   accepts **only** an approval UUID. The trusted dependency derives
+   `session_id` as a tenant/actor-scoped **SHA-256 digest** of the
+   current validated access token's server-issued `token_id`, and a
+   deterministic tenant/session-scoped conversation ID. The raw token
+   identifier must never enter approval rows or audit metadata.
+   No body-supplied session, roles, manifest checksum, global revision,
+   human decision or approved scope is trusted. The canonical
+   `PluginService.resume_lifecycle_approval` reads the actor/tenant-scoped
+   persisted approval and reconstructs the typed immutable scope. It then
+   delegates to the existing `execute_approved_lifecycle` for fresh
+   policy/RBAC, durable CAS, physical execution and verified commit.
+   HTTP 200 is returned **only** for `verified_committed`. Replayed,
+   expired, mismatched or stale receipts fail closed. Uncertain errors
+   return an explicit unverified status, never an optimistic success.
+
+For this sensitive management action, cookie-only auth, development auth
+bypass and missing/invalid JWT `token_id` intentionally fail closed.
+Ordinary plugin listing and read-only inspection retain their existing
+authentication behavior. The canonical JWT validator checks the backed
+session and current account roles before the plugin-specific session
+context can be constructed. Audit records include actor, tenant, action,
+request/correlation IDs, pending and verified/unverified outcomes; session
+tokens and secrets do not enter those records.
+
+The historical `/{plugin}/enable`/`disable`, `/reload`, Plugin Store
+install-as-enable and extension HTTP load/unload routes remain **explicit
+approval-required 409**. No browser controls are automatically re-enabled
+in this API slice. The existing admin UI must be updated to render the
+human review, pending/approved/rejected/expired/unknown and terminal
+receipt states before calling these new routes. A same-click automatic
+approval and execution would violate the human gate. This does **not**
+enable generic chat lifecycle actions or fix still-unaudited global
+startup/refresh/package mutation paths.
+
+**B3B2B next:** frontend consent review and decision/resume via the
+existing plugin state store and API client, with backend-verified
+terminal display, accessible confirmation, interruption recovery and
+responsive browser acceptance. **B3C:** complete legacy/internal
+physical caller reconciliation and multi-host proof.
+
 ## Execution slices (do not duplicate owners)
 
 1. **KPLUG-CONV-01A:** Audit current runtime intent/tool orchestration and

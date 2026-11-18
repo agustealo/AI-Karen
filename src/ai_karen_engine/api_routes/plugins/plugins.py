@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+from ai_karen_engine.auth.session import get_plugin_lifecycle_context
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.persistence.repositories.plugin_lifecycle_repository import (
+    PluginLifecycleApprovalRejected, PluginLifecycleRevisionConflict,
+)
+from ai_karen_engine.services.approvals import (
+    ApprovalNotFoundError, ApprovalScopeError, ApprovalStateError,
+)
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.services.dependencies import (
     bypass_user_context_func,
@@ -32,6 +43,13 @@ router = APIRouter(
 public_router = APIRouter(tags=["plugins-public"], prefix="/api/public/plugins")
 _PLUGIN_MUTATION_PERMISSION = Permission.ADMIN_PLUGINS_MANAGE
 _ENABLED_STATES = {"registered", "enabled", "loaded", "active"}
+
+
+class LifecycleApprovalExecutionRequest(BaseModel):
+    """Only receipt ID is accepted; lifecycle scope never comes from HTTP."""
+
+    model_config = ConfigDict(extra="forbid")
+    approval_id: UUID
 
 
 class ExecutePluginRequest(BaseModel):
@@ -222,7 +240,7 @@ def _audit_plugin_mutation(
     get_audit_logger().log_audit_event(
         {
             "event_type": "plugin_runtime_mutation",
-            "severity": "info" if outcome in {"attempt", "ok"} else "warning",
+            "severity": "info" if outcome in {"attempt", "ok", "pending", "verified_committed"} else "warning",
             "message": action,
             "user_id": user.get("user_id"),
             "tenant_id": user.get("tenant_id"),
@@ -568,6 +586,133 @@ async def _set_enabled(
             "execute without a fresh, actor-bound, revision-verified human approval."
         ),
     )
+
+def _plugin_lifecycle_error(exc: Exception) -> HTTPException:
+    """Return a safe denial or uncertain result without revealing SQL secrets."""
+    if isinstance(exc, ApprovalNotFoundError):
+        return HTTPException(status_code=404, detail="Lifecycle approval not found")
+    if isinstance(exc, (ApprovalStateError, PluginLifecycleRevisionConflict,
+                        PluginLifecycleApprovalRejected)):
+        return HTTPException(
+            status_code=409,
+            detail="Lifecycle approval or global revision is no longer executable",
+        )
+    if isinstance(exc, (ApprovalScopeError, PermissionError)):
+        return HTTPException(
+            status_code=403,
+            detail="Lifecycle approval is not authorized for this actor and session",
+        )
+    if isinstance(exc, (ValueError, TypeError)):
+        return HTTPException(status_code=422, detail="Invalid plugin lifecycle request")
+    # An error after the irreversible kernel step is uncertain, not success,
+    # and must not trigger a browser retry without a durable receipt check.
+    return HTTPException(
+        status_code=503,
+        detail="Plugin lifecycle outcome is unverified; inspect the durable receipt",
+    )
+
+
+@router.post("/{plugin_name}/lifecycle/{action}/approval")
+async def request_plugin_lifecycle_approval(
+    plugin_name: str,
+    action: Literal["enable", "disable"],
+    request: Request,
+    context: ChatExecutionContext = Depends(get_plugin_lifecycle_context),
+    plugin_service: PluginService = Depends(get_plugin_service),
+):
+    """Ask for consent using only the freshly validated bearer session."""
+    principal = context.require_authenticated_user()
+    _audit_plugin_mutation(
+        request=request,
+        user=principal,
+        action="plugin_lifecycle_" + action + "_approval",
+        outcome="attempt",
+        plugin_name=plugin_name,
+    )
+    try:
+        pending = await plugin_service.prepare_lifecycle_approval(
+            context=context,
+            plugin_id=plugin_name,
+            action=action,
+        )
+        if pending.get("status") != "pending" or pending.get("execution_performed") is not False:
+            raise RuntimeError("Lifecycle consent did not return a pending receipt")
+    except Exception as exc:
+        _audit_plugin_mutation(
+            request=request,
+            user=principal,
+            action="plugin_lifecycle_" + action + "_approval",
+            outcome="rejected",
+            plugin_name=plugin_name,
+        )
+        logger.warning(
+            "plugin.lifecycle.preapproval_unavailable",
+            extra={"correlation_id": context.correlation_id,
+                   "error_type": type(exc).__name__},
+        )
+        raise _plugin_lifecycle_error(exc) from exc
+    _audit_plugin_mutation(
+        request=request,
+        user=principal,
+        action="plugin_lifecycle_" + action + "_approval",
+        outcome="pending",
+        plugin_name=plugin_name,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content=jsonable_encoder(pending),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/{plugin_name}/lifecycle/{action}/execute")
+async def execute_plugin_lifecycle_approval(
+    plugin_name: str,
+    action: Literal["enable", "disable"],
+    payload: LifecycleApprovalExecutionRequest,
+    request: Request,
+    context: ChatExecutionContext = Depends(get_plugin_lifecycle_context),
+    plugin_service: PluginService = Depends(get_plugin_service),
+):
+    """Resume a human-approved action; no scope or roles from the client."""
+    principal = context.require_authenticated_user()
+    _audit_plugin_mutation(
+        request=request, user=principal,
+        action="plugin_lifecycle_" + action + "_execute",
+        outcome="attempt", plugin_name=plugin_name,
+    )
+    try:
+        receipt = await plugin_service.resume_lifecycle_approval(
+            context=context,
+            plugin_id=plugin_name,
+            action=action,
+            approval_id=str(payload.approval_id),
+        )
+        if receipt.get("status") != "verified_committed":
+            raise RuntimeError("Lifecycle execution did not commit a verified receipt")
+    except Exception as exc:
+        _audit_plugin_mutation(
+            request=request, user=principal,
+            action="plugin_lifecycle_" + action + "_execute",
+            outcome="unverified", plugin_name=plugin_name,
+        )
+        logger.warning(
+            "plugin.lifecycle.execute_unverified",
+            extra={"correlation_id": context.correlation_id,
+                   "error_type": type(exc).__name__},
+        )
+        raise _plugin_lifecycle_error(exc) from exc
+    _audit_plugin_mutation(
+        request=request, user=principal,
+        action="plugin_lifecycle_" + action + "_execute",
+        outcome="verified_committed", plugin_name=plugin_name,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=jsonable_encoder(receipt),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
 
 @router.post("/{plugin_name}/enable")
 async def enable_plugin(

@@ -26,7 +26,11 @@ from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.persistence.repositories import approval_repository as approval_repo_module
 from ai_karen_engine.services import approvals as approvals_module
-from ai_karen_engine.services.approvals import ApprovalService
+from ai_karen_engine.services.approvals import (
+    ApprovalNotFoundError,
+    ApprovalService,
+    ApprovalStateError,
+)
 from ai_karen_engine.persistence.repositories.approval_repository import SqlApprovalRepository
 from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
     PluginLifecycleApprovalScope,
@@ -762,12 +766,12 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
         preapproval_scope = PluginLifecycleApprovalScope(
             **stored_consent["request_payload"]["plugin_lifecycle_scope"]
         )
-        with pytest.raises(PermissionError, match="policy denied"):
-            await service.execute_approved_lifecycle(
-                context=governed_context(), scope=preapproval_scope,
+        with pytest.raises(ApprovalStateError, match="not executable"):
+            await service.resume_lifecycle_approval(
+                context=governed_context(),
+                plugin_id="governed-request", action="enable",
                 approval_id=consent_id,
             )
-        from ai_karen_engine.services.approvals import ApprovalNotFoundError
         with pytest.raises(ApprovalNotFoundError):
             await approved_service.get(
                 consent_id,
@@ -780,8 +784,11 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
         )
         assert approved_consent["status"] == "approved"
         assert approved_consent["decided_by"] == str(actor_a)
-        consent_receipt = await service.execute_approved_lifecycle(
-            context=governed_context(), scope=preapproval_scope,
+        # The session-backed API never supplies a trusted scope; canonical
+        # PluginService must reconstruct it from the actor-scoped SQL receipt.
+        consent_receipt = await service.resume_lifecycle_approval(
+            context=governed_context(),
+            plugin_id="governed-request", action="enable",
             approval_id=consent_id,
         )
         assert consent_receipt["status"] == "verified_committed"
@@ -790,9 +797,10 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
         assert (await approved_service.get(
             consent_id, user=trusted_actor,
         ))["status"] == "consumed"
-        with pytest.raises(PermissionError, match="policy denied"):
-            await service.execute_approved_lifecycle(
-                context=governed_context(), scope=preapproval_scope,
+        with pytest.raises(ApprovalStateError, match="not executable"):
+            await service.resume_lifecycle_approval(
+                context=governed_context(),
+                plugin_id="governed-request", action="enable",
                 approval_id=consent_id,
             )
 
@@ -815,9 +823,10 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
             reject_id, user=trusted_actor, decision="rejected",
         )
         assert reject_record["status"] == "rejected"
-        with pytest.raises(PermissionError, match="policy denied"):
-            await service.execute_approved_lifecycle(
-                context=governed_context(), scope=reject_scope,
+        with pytest.raises(ApprovalStateError, match="not executable"):
+            await service.resume_lifecycle_approval(
+                context=governed_context(),
+                plugin_id="governed-request", action="disable",
                 approval_id=reject_id,
             )
         assert (await ledger.read_observation("governed-request"))["revision"] == 2
