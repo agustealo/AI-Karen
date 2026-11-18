@@ -82,8 +82,21 @@ CREATE POLICY conversation_presentation_pins_owner
     );
 
 REVOKE ALL ON public.conversation_presentation_pins FROM PUBLIC;
-REVOKE ALL ON public.conversation_presentation_pins FROM anon;
-REVOKE ALL ON public.conversation_presentation_pins FROM authenticated;
+
+-- Supabase exposes anon/authenticated roles, while the canonical plain
+-- PostgreSQL first-boot smoke image may not create either role. Revocation
+-- remains mandatory whenever those roles exist, without making the
+-- migration depend on a Supabase-only role bootstrap.
+DO $revoke_client_pin_access$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        REVOKE ALL ON public.conversation_presentation_pins FROM anon;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        REVOKE ALL ON public.conversation_presentation_pins FROM authenticated;
+    END IF;
+END;
+$revoke_client_pin_access$;
 
 COMMENT ON TABLE public.conversation_presentation_pins IS
     'Reference-only user-scoped saved presentation pins. Contents, verified attestation and authorization stay in canonical conversation runtime; every read must revalidate.';
