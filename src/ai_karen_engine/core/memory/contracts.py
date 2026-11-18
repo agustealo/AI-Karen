@@ -7,7 +7,7 @@ Concrete persistence remains outside Core.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -33,8 +33,8 @@ MemoryLifecycleState = ClaimStatus
 
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclass
@@ -47,7 +47,7 @@ class MemoryClaim:
     confidence: float = 0.5
     provenance: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
-    asserted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    asserted_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     event_time: datetime | None = None
     valid_from: datetime | None = None
     valid_until: datetime | None = None
@@ -77,17 +77,33 @@ class MemoryClaim:
         self.confidence = max(0.0, min(1.0, self.confidence))
 
     def is_valid(self, at: datetime | None = None) -> bool:
-        """Check the half-open [valid_from, valid_until) effective interval."""
-        check_time = _utc(at or datetime.now(timezone.utc))
-        if self.valid_from and check_time < self.valid_from:
-            return False
-        if self.valid_until is not None and check_time >= self.valid_until:
-            return False
-        return self.status not in {
-            ClaimStatus.SUPERSEDED,
+        """Check effective valid time, without reviving removed claim content.
+
+        An explicitly dated historical lookup may include a superseded version
+        within its bounded former validity interval. This is *valid time* only:
+        it does not claim a reconstruction of the recorded-as-of ledger.
+        """
+        if self.deleted_at is not None or self.status in {
             ClaimStatus.RETRACTED,
             ClaimStatus.STALE,
-        }
+        }:
+            return False
+
+        # Never return an unbounded superseded version, or revive one through
+        # an implicit current-state check.
+        if self.status is ClaimStatus.SUPERSEDED and (
+            at is None or self.valid_until is None
+        ):
+            return False
+
+        check_time = _utc(at if at is not None else datetime.now(UTC))
+        start = self.valid_from
+        if self.status is ClaimStatus.SUPERSEDED:
+            # Match the canonical temporal service's effective start fallback.
+            start = start or self.event_time or self.asserted_at
+        if start is not None and check_time < _utc(start):
+            return False
+        return self.valid_until is None or check_time < _utc(self.valid_until)
 
     def effective_confidence(self) -> float:
         return max(0.0, min(1.0, self.confidence - 0.1 * len(self.contradiction_refs)))
@@ -231,7 +247,7 @@ class ProspectiveMemory:
     target_goal_id: str | None = None
     evidence_refs: list[str] = field(default_factory=list)
     priority: str = "medium"
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     triggered_at: datetime | None = None
     completed_at: datetime | None = None
     archived_at: datetime | None = None
@@ -292,12 +308,12 @@ class RecallScoreComponents:
 
 __all__ = [
     "ClaimStatus",
-    "MemoryClaim",
     "GoalState",
+    "MemoryClaim",
     "MemoryLifecycleState",
-    "OpenLoopState",
     "MemoryProcessingStage",
     "MemorySalience",
+    "OpenLoopState",
     "ProspectiveMemory",
     "ProspectiveState",
     "ProspectiveTrigger",

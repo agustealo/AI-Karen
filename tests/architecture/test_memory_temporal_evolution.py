@@ -330,3 +330,74 @@ def test_graph_edge_contract_carries_temporal_projection_fields() -> None:
     assert edge.recorded_at == now
     assert edge.lifecycle_state == "active"
     assert edge.schema_version == 1
+
+
+def test_historical_superseded_claim_is_effective_before_exclusive_boundary() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    boundary = start + timedelta(days=10)
+    reasoner = MemoryTemporalEvolutionService()
+    decision = reasoner.evolve(
+        _claim("vim", valid_from=start),
+        _claim("vscode", valid_from=boundary),
+        recorded_at=boundary + timedelta(days=1),
+    )
+
+    assert decision.kind is TemporalEvolutionKind.SUPERSEDE
+    assert decision.previous.status is ClaimStatus.SUPERSEDED
+    assert decision.previous.is_valid(start - timedelta(microseconds=1)) is False
+    assert decision.previous.is_valid(start) is True
+    assert decision.previous.is_valid(boundary - timedelta(microseconds=1)) is True
+    assert decision.previous.is_valid(boundary) is False
+    assert decision.previous.is_valid(boundary + timedelta(microseconds=1)) is False
+    assert decision.incoming.is_valid(boundary) is True
+    assert decision.previous.is_valid() is False
+
+
+def test_historical_supersession_requires_a_bounded_valid_window() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    claim = _claim("vim", valid_from=start)
+    claim.status = ClaimStatus.SUPERSEDED
+
+    assert claim.is_valid(start + timedelta(days=1)) is False
+
+
+@pytest.mark.parametrize("status", [ClaimStatus.RETRACTED, ClaimStatus.STALE])
+def test_historical_lookup_never_revives_retracted_or_stale_claims(
+    status: ClaimStatus,
+) -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    claim = _claim("vim", valid_from=start, valid_until=start + timedelta(days=10))
+    claim.status = status
+
+    assert claim.is_valid(start + timedelta(days=2)) is False
+
+
+def test_deleted_claim_is_hidden_even_at_earlier_valid_time() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    claim = _claim("vim", valid_from=start, valid_until=start + timedelta(days=10))
+    claim.status = ClaimStatus.SUPERSEDED
+    claim.deleted_at = start + timedelta(days=11)
+
+    assert claim.is_valid(start + timedelta(days=2)) is False
+
+
+def test_historical_superseded_claim_normalizes_legacy_naive_and_offset_times() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    boundary = start + timedelta(days=10)
+    claim = _claim("vim", valid_from=start)
+    claim.status = ClaimStatus.SUPERSEDED
+    claim.valid_until = boundary.replace(tzinfo=None)
+
+    assert claim.is_valid(datetime(2026, 1, 5, 0, tzinfo=timezone(timedelta(hours=-5)))) is True
+    assert claim.is_valid(boundary) is False
+
+
+def test_superseded_history_uses_event_time_when_valid_from_is_absent() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    claim = _claim("vim", valid_from=start)
+    claim.valid_from = None
+    claim.status = ClaimStatus.SUPERSEDED
+    claim.valid_until = start + timedelta(days=10)
+
+    assert claim.is_valid(start - timedelta(microseconds=1)) is False
+    assert claim.is_valid(start) is True
