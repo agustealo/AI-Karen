@@ -92,3 +92,9 @@ The existing `KarenCopilotVerifiedHistory` now exposes the canonical ordered ass
 ## KUI-002B read-only response-linked presentation cards
 
 The context panel now renders existing `KarenPresentationRegistry` cards for the selected, previously authenticated assistant message. Their `presentation_id` and `evidence_ref` are inherited from verified saved history, never copied from model prose or client-generated identifiers. The original inline presentation remains available. This is an explicit **read-only visual projection**, not placement migration or a persisted pin. Pinning, cross-session dock restore, automatic scroll-follow and revision-aware artifact storage remain blocked on verified owned backend endpoints and tests.
+
+## KUI-002C stationary dock shell (no pin persistence yet)
+
+The canonical `KarenCopilotChat` now mounts exactly one `KarenCopilotPinnedDock` alongside `KarenCopilotVerifiedRail`. At 1600px and above the independently scrolling dock is exactly 276px, matching the reference. It intentionally reports that secure pinning is unavailable and displays no simulated saved artifacts or actions. At narrower widths it is hidden pending an authorized responsive drawer when the backend service exists. This is layout groundwork only.
+
+Before enabling pin/unpin: resolve canonical persistent ownership, versioned pin metadata, request context/tenant principal, re-authorize the referenced saved artifact on read, enforce delete/revocation, perform idempotent mutations with revision validation, audit action and deny stale/cross-tenant material. Existing browser-local `CustomizableCardDeck` preferences are not sufficient. Record API, persistence, authorization and browser proof in the existing KCON ledger and add negative tests. Never turn unavailable into a localStorage fallback.
