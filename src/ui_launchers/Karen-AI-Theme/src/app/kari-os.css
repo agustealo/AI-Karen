@@ -157,12 +157,13 @@
 }
 
 /*
- * KUI-001B: canonical consumer chat activation.
- * HSL semantic mappings are scoped to this conversation subtree so Radix,
- * CopilotKit, and existing Tailwind classes inherit the approved palette.
- * No parent dashboard sidebar, auth surface, or unrelated route is modified.
+ * KUI-001B: opt-in semantic palette for approved Kari OS surfaces.
+ * One shared HSL mapping connects the graphite token authority to existing
+ * shadcn/Tailwind primitives in Chat and Communications Center. Keep this
+ * scoped: unrelated routes, parent dashboard and auth remain unchanged.
  */
-[data-kari-root][data-testid="karen-copilot-consumer-chat"] {
+:is([data-kari-root][data-testid="karen-copilot-consumer-chat"],
+    [data-kari-root][data-testid="comms-center"]) {
   --background: 240 7% 4%;
   --foreground: 300 4% 89%;
   --card: 220 8% 8%;
