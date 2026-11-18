@@ -833,10 +833,18 @@ class RuntimePolicyEnforcer:
             ):
                 return False
             quota = constraints.get("max_model_calls")
+            # External requests may be charged without a model call. A
+            # serialized standalone plan cannot mint a larger independent
+            # external budget than the original issuer-derived plan grants.
+            external_limit = decision.to_authorized_plan().budget.max_external_requests
+            external_requests = plan.budget.max_external_requests
             return (
                 type(quota) is int
                 and quota >= 0
+                and type(plan.budget.max_model_calls) is int
                 and 0 <= plan.budget.max_model_calls <= quota
+                and type(external_requests) is int
+                and 0 <= external_requests <= external_limit
             )
 
     async def _evaluate_policy_request(

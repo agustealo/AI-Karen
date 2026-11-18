@@ -761,6 +761,59 @@ async def test_issued_provider_scope_cannot_widen_before_first_model_bind(
 
 
 @pytest.mark.asyncio
+async def test_tool_only_issuer_cannot_widen_external_request_meter() -> None:
+    """A zero-model policy does not authorize a forged external-call budget."""
+    issuer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="external-quota-user",
+        tenant_id="external-quota-tenant",
+        session_id="external-quota-session",
+        correlation_id=f"external-quota-{uuid4().hex}",
+        max_model_calls=0,
+        action="general_assist",
+        requested_capabilities=[],
+    )
+    decision = await issuer.evaluate(request)
+    assert decision.allowed
+    context = ChatExecutionContext(
+        user_id=request.user_id,
+        tenant_id=request.tenant_id,
+        session_id=request.session_id,
+        request_id=f"external-quota-request-{uuid4().hex}",
+        correlation_id=request.correlation_id,
+        authenticated_user=UserData(
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+            roles=["user"],
+            permissions=[],
+            is_active=True,
+            is_verified=True,
+        ),
+    )
+    issuer.bind_chat_model_policy(context=context, decision=decision)
+    original = decision.to_authorized_plan()
+    assert original.budget.max_model_calls == 0
+
+    forged_budget = replace(
+        original.budget,
+        max_external_requests=original.budget.max_external_requests + 1,
+    )
+    forged_plan = replace(original, budget=forged_budget)
+    forged_meter = ExecutionBudgetMeter(forged_budget)
+    with pytest.raises(
+        PermissionError, match="runtime_model_execution_authority_invalid",
+    ):
+        context.bind_runtime_model_authority(forged_plan, forged_meter)
+    assert forged_meter.external_requests == 0
+    assert context.original_runtime_model_plan(forged_meter) is None
+
+    # A legitimate tool-only, zero-model issuer-derived plan still binds.
+    legitimate_meter = ExecutionBudgetMeter(original.budget)
+    context.bind_runtime_model_authority(original, legitimate_meter)
+    assert context.original_runtime_model_plan(legitimate_meter) is original
+
+
+@pytest.mark.asyncio
 async def test_allowed_zero_model_quota_preserves_tool_only_plan_without_encoder():
     issuer_scope = _scope(calls=0)
     issuer_scope._require_scope()
