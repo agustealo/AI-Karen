@@ -546,3 +546,57 @@ def test_c3d_ci_entrypoint_requires_exclusive_authorization(monkeypatch, capsys)
     monkeypatch.setenv("KAREN_CI_C3D_VERIFIED_DURABLE_PROOF", "enabled")
     assert main() == 1
     assert "ci_authorization_missing" in capsys.readouterr().out
+
+
+def test_c3d_memory_error_probe_exposes_only_bounded_exception_class() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    record = logging.LogRecord(
+        "ai_karen_engine.core.runtime.chat_runtime",
+        logging.WARNING, "chat_runtime.py", 1,
+        "Memory persistence failed", (), None,
+    )
+    record.error_type = "OperationalError"
+    record.prompt = "private-input-must-never-be-emitted"
+    probe.emit(record)
+    assert probe.error_type == "OperationalError"
+    assert "private-input" not in probe.error_type
+
+    record.error_type = "OperationalError\nsecret=private-input"
+    probe.emit(record)
+    assert probe.error_type == "OperationalError"
+
+    record.error_type = "X" * 65
+    probe.emit(record)
+    assert probe.error_type == "OperationalError"
+
+
+def test_c3d_memory_error_probe_ignores_other_log_records() -> None:
+    import logging
+
+    from scripts.ci.verification_strategy_durable_live_proof import (
+        _ScopedMemoryFailureTypeCapture,
+    )
+
+    probe = _ScopedMemoryFailureTypeCapture()
+    different_logger = logging.LogRecord(
+        "ai_karen_engine.core.reasoning",
+        logging.WARNING, "reasoning.py", 1,
+        "Memory persistence failed", (), None,
+    )
+    different_logger.error_type = "RuntimeError"
+    probe.emit(different_logger)
+
+    different_event = logging.LogRecord(
+        "ai_karen_engine.core.runtime.chat_runtime",
+        logging.WARNING, "chat_runtime.py", 1,
+        "Other runtime warning", (), None,
+    )
+    different_event.error_type = "ValueError"
+    probe.emit(different_event)
+    assert probe.error_type is None
