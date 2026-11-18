@@ -49,14 +49,14 @@ export function KarenCopilotVerifiedRail() {
     }
   }, [responses, selectedId]);
 
-  const switcher = responses.length > 1 ? (
+  const renderSwitcher = (controlId: string) => responses.length > 1 ? (
     <div data-testid="karen-response-context-picker"
       className="border-b border-border/60 px-3 py-3">
-      <label htmlFor="karen-verified-response-select"
+      <label htmlFor={controlId}
         className="mb-1 block text-xs font-semibold text-muted-foreground">
         Inspect saved response
       </label>
-      <select id="karen-verified-response-select"
+      <select id={controlId}
         value={selected?.messageId ?? ""}
         onChange={event => setSelectedId(
           event.target.value === latestId ? null : event.target.value,
@@ -90,7 +90,7 @@ export function KarenCopilotVerifiedRail() {
           Response context
         </summary>
         <div className="max-h-[min(55dvh,28rem)] min-h-0 overflow-y-auto overscroll-contain border-t border-border/60">
-          {switcher}
+          {renderSwitcher("karen-verified-response-mobile")}
           {context}
         </div>
       </details>
@@ -106,7 +106,7 @@ export function KarenCopilotVerifiedRail() {
         {switcher}
         {selected?.receipt
           ? <><ConversationContextRail metadata={selected.receipt}
-              agentSteps={selected.agentSteps} />
+              agentSteps={selected.agentSteps} embedded />
               {selected.agentSteps.length === 0 && <ActivityReplayNotice />}</>
           : <RailUnavailable embedded />}
       </aside>
