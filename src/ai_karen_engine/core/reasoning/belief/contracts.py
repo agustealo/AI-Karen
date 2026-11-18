@@ -129,7 +129,7 @@ class ClaimTemporalValidity:
 
     def is_expired(self, now: datetime | None = None) -> bool:
         current = _utc(now or datetime.now(timezone.utc))
-        return self.valid_until is not None and current > _utc(self.valid_until)
+        return self.valid_until is not None and current >= _utc(self.valid_until)
 
     def age_seconds(self, now: datetime | None = None) -> float:
         current = _utc(now or datetime.now(timezone.utc))
