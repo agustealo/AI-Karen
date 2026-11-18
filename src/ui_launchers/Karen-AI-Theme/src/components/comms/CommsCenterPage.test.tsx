@@ -68,6 +68,8 @@ describe("Communications Center's canonical visual and authority contract", () =
 
     expect(screen.getByRole("heading", { name: "Activity & Notifications" })).toBeTruthy();
     expect(container.querySelector('[data-testid="comms-center"] .karen-surface')).toBeTruthy();
+    expect(container.querySelector('[data-testid="comms-center"][data-kari-root]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="comms-center"] .kari-display')).toBeTruthy();
     const nav = container.querySelector('[aria-label="Communications Center sections"]');
     expect(nav?.className).toContain("overflow-x-auto");
     expect(nav?.querySelectorAll('svg[aria-hidden="true"]').length).toBe(5);
