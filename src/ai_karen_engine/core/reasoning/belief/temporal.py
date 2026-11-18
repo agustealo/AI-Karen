@@ -104,7 +104,7 @@ class TemporalReasoner:
     ) -> list[str]:
         """Return list of temporal consistency violations."""
         violations: list[str] = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         if not self.is_valid(claim, now):
             violations.append("claim_outside_valid_window")
