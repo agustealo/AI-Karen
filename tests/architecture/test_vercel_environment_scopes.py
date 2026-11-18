@@ -130,6 +130,22 @@ def test_browser_visible_key_prefix_cannot_disguise_backend_credentials(name):
         proof([{"envs": [entry(name, ["preview"])]}])
 
 
+@pytest.mark.parametrize("name", [
+    "NEXT_PUBLIC_UNREVIEWED_FEATURE",
+    "NEXT_PUBLIC_UNREVIEWED_BACKEND_ENDPOINT",
+    "NEXT_PUBLIC_auth_jwt_secret_key",
+    "NEXT_PUBLIC_database_url",
+    "NEXT_PUBLIC_CREDENTIALS2",
+    "NEXT_PUBLIC_secretKey",
+    "NEXT_PUBLIC_API_KEY2",
+    "NEXT_PUBLIC_DEBUG",
+    "NEXT_PUBLIC_NEW_DATABASE_READONLY",
+])
+def test_public_prefix_never_grants_automatic_frontend_ownership(name):
+    with pytest.raises(RevisionVerificationError, match="Backend-owned variables"):
+        proof([{"envs": [entry(name, ["preview"])]}])
+
+
 def test_approved_frontend_environment_names_are_not_false_positive():
     count, _ = proof([{"envs": [
         entry("KAREN_BACKEND_URL"),
