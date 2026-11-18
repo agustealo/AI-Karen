@@ -12,6 +12,7 @@ import {
 
 import useAuth from "@/lib/useAuth";
 import { apiClient } from "@/lib/api";
+import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,23 +23,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-
-interface AgentCatalogRecord {
-  agent_id: string;
-  name: string;
-  lifecycle_state: string;
-  healthy: boolean;
-  eligibility: "runtime_decided_per_request";
-}
-
-interface AgentCatalogResponse {
-  agents: AgentCatalogRecord[];
-  total: number;
-  selection_authority: string;
-  execution_authority: string;
-  orchestrator: string;
-  eligibility_verified: boolean;
-}
 
 interface AgentRunRecord {
   run_id: string;
@@ -75,31 +59,6 @@ interface AgentRunsResponse {
   runs: AgentRunRecord[];
   total: number;
   generated_at: string;
-}
-
-function isAgentCatalogResponse(value: unknown): value is AgentCatalogResponse {
-  if (typeof value !== "object" || value === null) return false;
-  const response = value as Record<string, unknown>;
-  if (!Array.isArray(response.agents) || typeof response.total !== "number") return false;
-  if (
-    response.total !== response.agents.length ||
-    response.eligibility_verified !== false ||
-    response.selection_authority !== "cortex_runtime_policy" ||
-    response.execution_authority !== "chat_runtime" ||
-    response.orchestrator !== "agent_medusa"
-  ) return false;
-  return response.agents.every((record: unknown) => {
-    if (typeof record !== "object" || record === null) return false;
-    const agent = record as Record<string, unknown>;
-    return (
-      typeof agent.agent_id === "string" &&
-      agent.agent_id.length > 0 &&
-      typeof agent.name === "string" &&
-      typeof agent.lifecycle_state === "string" &&
-      typeof agent.healthy === "boolean" &&
-      agent.eligibility === "runtime_decided_per_request"
-    );
-  });
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -573,6 +532,12 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
               <RefreshCw className="h-4 w-4 animate-spin" />
               Loading Agent Medusa catalog…
+            </CardContent>
+          </Card>
+        ) : catalogError ? (
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              Registered specialists are unavailable until the catalog contract is verified.
             </CardContent>
           </Card>
         ) : catalog?.agents.length ? (
