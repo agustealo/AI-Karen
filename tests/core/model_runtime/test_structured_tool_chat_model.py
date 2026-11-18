@@ -13,6 +13,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyDecision, RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     ProviderEndpoint, ProviderEndpointType,
 )
@@ -37,7 +40,7 @@ def endpoint():
     )
 
 
-def model():
+def model(*, provider_constraints: dict | None = None):
     budget = ExecutionBudget(max_model_calls=3, max_external_requests=2)
     plan = AuthorizedExecutionPlan(
         execution_id="run-1",
@@ -46,6 +49,7 @@ def model():
         authorized_tenant_id="t-1",
         authorized_session_id="s-1",
         topology=ExecutionTopology.MULTI_AGENT,
+        provider_constraints=dict(provider_constraints or {}),
         budget=budget,
     )
     meter = ExecutionBudgetMeter(budget)
@@ -66,6 +70,27 @@ def model():
         correlation_id="corr-1",
         authenticated_user=principal,
     )
+    issuer = RuntimePolicyEnforcer()
+    issued_decision = PolicyDecision(
+        decision_id=plan.policy_decision_id,
+        policy_version="fixture",
+        allowed=True,
+        runtime_constraints={
+            "authorized_user_id": authenticated_context.user_id,
+            "authorized_tenant_id": authenticated_context.tenant_id,
+            "authorized_session_id": authenticated_context.session_id,
+            "correlation_id": authenticated_context.correlation_id,
+            "max_model_calls": plan.budget.max_model_calls,
+        },
+    )
+    # These tests exercise admission using an original issuer-returned
+    # decision object. Policy evaluation itself has separate real-policy
+    # integration coverage, never a production test-mode bypass.
+    issuer._record_issued_model_decision(issued_decision)
+    issuer.bind_chat_model_policy(
+        context=authenticated_context, decision=issued_decision,
+    )
+    authenticated_context.bind_runtime_model_authority(plan, meter)
     return KarenGovernedChatModel(
         endpoint=endpoint(),
         selected_model="model-with-tools",
@@ -139,8 +164,7 @@ async def test_restricted_structured_model_uses_selected_identity_and_one_meter_
         "execute_structured_provider_endpoint",
         execute,
     )
-    wrapped = model()
-    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    wrapped = model(provider_constraints=restriction)
     response = await wrapped.ainvoke([HumanMessage(content="Authorized tools")])
     assert response.content == "approved tool model response"
     assert response.response_metadata["actual_model"] == "model-with-tools"
@@ -163,8 +187,7 @@ async def test_restricted_structured_model_rejects_disallowed_identity_before_wi
         "execute_structured_provider_endpoint",
         execute,
     )
-    wrapped = model()
-    wrapped.execution_admission.plan.provider_constraints.update(restriction)
+    wrapped = model(provider_constraints=restriction)
     with pytest.raises(PermissionError, match="governed_model_identity_not_authorized"):
         await wrapped.ainvoke([HumanMessage(content="Unapproved tools")])
     execute.assert_not_awaited()

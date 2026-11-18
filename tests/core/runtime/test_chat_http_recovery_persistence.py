@@ -1,10 +1,15 @@
 """Recovering an HTTP reply must not bypass durable transcript authority."""
 
 from types import SimpleNamespace
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyDecision, RuntimePolicyEnforcer,
+)
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -41,6 +46,16 @@ async def test_recovery_response_requires_durable_transcript(persisted):
         request_id="request-a",
         correlation_id="correlation-a",
     )
+    # Recovery is a real authenticated runtime path. The fixture must not
+    # bypass the original-principal requirement added for model admission.
+    ctx.authenticated_user = UserData(
+        user_id=ctx.user_id,
+        tenant_id=ctx.tenant_id,
+        roles=["user"],
+        permissions=[],
+        is_active=True,
+        is_verified=True,
+    )
     request = ChatExecutionRequest(
         messages=[{"role": "user", "content": "Hello"}],
         context=ctx,
@@ -50,13 +65,28 @@ async def test_recovery_response_requires_durable_transcript(persisted):
     )
     decision = ExecutionDecision(max_model_calls=2, memory_write_allowed=True)
     plan = AuthorizedExecutionPlan(
-        execution_id="exec-request-a",
+        execution_id=f"exec-request-a-{uuid4().hex}",
         policy_decision_id="policy-a",
         authorized_user_id=ctx.user_id,
         authorized_tenant_id=ctx.tenant_id,
         authorized_session_id=ctx.session_id,
         budget=ExecutionBudget(max_model_calls=2),
     )
+    issuer = RuntimePolicyEnforcer()
+    issued = PolicyDecision(
+        decision_id=plan.policy_decision_id,
+        policy_version="fixture",
+        allowed=True,
+        runtime_constraints={
+            "authorized_user_id": ctx.user_id,
+            "authorized_tenant_id": ctx.tenant_id,
+            "authorized_session_id": ctx.session_id,
+            "correlation_id": ctx.correlation_id,
+            "max_model_calls": plan.budget.max_model_calls,
+        },
+    )
+    issuer._record_issued_model_decision(issued)
+    issuer.bind_chat_model_policy(context=ctx, decision=issued)
     recovered = ChatExecutionResult(
         answer="Recovered model-generated answer.",
         status=ChatExecutionStatus.DEGRADED,

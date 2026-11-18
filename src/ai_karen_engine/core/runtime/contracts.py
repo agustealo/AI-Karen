@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Dict, List, Optional
 
 
@@ -59,6 +60,16 @@ class ExecutionBudgetMeter:
 
     def __init__(self, budget: ExecutionBudget) -> None:
         self._budget = budget
+        # The plan retains the original policy budget object for scope
+        # identity, but that dataclass is mutable. Capture the original
+        # numeric limits once so changing plan.budget after admission
+        # cannot grant new model calls, retries, tool turns or time.
+        self._authorized_limits = MappingProxyType(
+            {
+                item.name: getattr(budget, item.name)
+                for item in fields(ExecutionBudget)
+            }
+        )
         self._model_calls = 0
         self._reasoning_steps = 0
         self._tool_calls = 0
@@ -69,6 +80,30 @@ class ExecutionBudgetMeter:
         self._start_ms: float | None = None
         self._exhausted = False
         self._lock = asyncio.Lock()
+
+    def retains_initial_budget_limits(self) -> bool:
+        """Reject a plan whose mutable budget differs from this meter's grant.
+
+        The meter snapshots limits at construction. Initial authority binding
+        must check the very same limits enforced by later reservations; object
+        identity with a subsequently mutated budget is insufficient.
+        """
+        return all(
+            type(original) is int
+            and original >= 0
+            and type(getattr(self._budget, name, None)) is int
+            and getattr(self._budget, name) == original
+            for name, original in self._authorized_limits.items()
+        )
+
+    def within_issued_model_quota(self, max_model_calls: int) -> bool:
+        """Check the enforceable original limit, not a mutable plan value."""
+        return (
+            type(max_model_calls) is int
+            and max_model_calls >= 0
+            and self.retains_initial_budget_limits()
+            and self._authorized_limits["max_model_calls"] <= max_model_calls
+        )
 
     def start(self) -> None:
         """Start once; restarting cannot extend an authorized time budget."""
@@ -81,7 +116,7 @@ class ExecutionBudgetMeter:
             return False
         self.start()
         assert self._start_ms is not None
-        if time.monotonic() * 1000.0 - self._start_ms >= self._budget.max_duration_ms:
+        if time.monotonic() * 1000.0 - self._start_ms >= self._authorized_limits["max_duration_ms"]:
             self._exhausted = True
             return False
         return True
@@ -101,7 +136,7 @@ class ExecutionBudgetMeter:
                 return 0.0
             assert self._start_ms is not None
             elapsed_ms = time.monotonic() * 1000.0 - self._start_ms
-            return max(0.0, float(self._budget.max_duration_ms) - elapsed_ms)
+            return max(0.0, float(self._authorized_limits["max_duration_ms"]) - elapsed_ms)
 
     async def _reserve(self, field: str, limit: int, amount: int = 1) -> bool:
         """Commit an authorized nonnegative reservation exactly once.
@@ -135,9 +170,9 @@ class ExecutionBudgetMeter:
         async with self._lock:
             if not self._within_deadline():
                 return False
-            limits = [("_model_calls", self._budget.max_model_calls)]
+            limits = [("_model_calls", self._authorized_limits["max_model_calls"])]
             if external:
-                limits.append(("_external_requests", self._budget.max_external_requests))
+                limits.append(("_external_requests", self._authorized_limits["max_external_requests"]))
             for field_name, limit in limits:
                 if type(limit) is not int or limit < 0:
                     raise ValueError("execution budget limit must be a nonnegative integer")
@@ -152,22 +187,22 @@ class ExecutionBudgetMeter:
         return await self.reserve_model_execution()
 
     async def reserve_reasoning_step(self) -> bool:
-        return await self._reserve("_reasoning_steps", self._budget.max_reasoning_steps)
+        return await self._reserve("_reasoning_steps", self._authorized_limits["max_reasoning_steps"])
 
     async def reserve_tool_call(self) -> bool:
-        return await self._reserve("_tool_calls", self._budget.max_tool_calls)
+        return await self._reserve("_tool_calls", self._authorized_limits["max_tool_calls"])
 
     async def reserve_agent_turn(self) -> bool:
-        return await self._reserve("_agent_turns", self._budget.max_agent_turns)
+        return await self._reserve("_agent_turns", self._authorized_limits["max_agent_turns"])
 
     async def reserve_external_request(self) -> bool:
-        return await self._reserve("_external_requests", self._budget.max_external_requests)
+        return await self._reserve("_external_requests", self._authorized_limits["max_external_requests"])
 
     async def add_input_tokens(self, count: int) -> bool:
-        return await self._reserve("_input_tokens", self._budget.max_input_tokens, count)
+        return await self._reserve("_input_tokens", self._authorized_limits["max_input_tokens"], count)
 
     async def add_output_tokens(self, count: int) -> bool:
-        return await self._reserve("_output_tokens", self._budget.max_output_tokens, count)
+        return await self._reserve("_output_tokens", self._authorized_limits["max_output_tokens"], count)
 
     async def consume_model_call(self) -> bool:
         return await self.reserve_model_call()
