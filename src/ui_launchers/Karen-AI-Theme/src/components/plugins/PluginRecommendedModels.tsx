@@ -79,7 +79,7 @@ function normalizedProgress(value: unknown): number {
 function downloadFailureGuidance(job: DownloadJob): string {
   switch (job.failure_category) {
     case "source_access":
-      return "Model source access was denied. Confirm your Hugging Face account has accepted the gated model terms and Karen’s backend has approved source access, then retry.";
+      return "The model source denied access. For gated models, verify upstream approval. For public models, inspect worker connectivity and source credentials in Models & Runtime before retrying.";
     case "network":
       return "The model worker could not reach or verify its source. Check backend network, proxy, TLS and source availability before retrying.";
     case "storage":
@@ -142,6 +142,21 @@ function downloadRequestGuidance(
     }
   }
   return fallback;
+}
+
+/**
+ * A verified public model uses one explicit Install click. Gated or unknown
+ * sources retain fresh per-revision checkbox consent.
+ */
+function licenseAcknowledged(
+  item: ModelRecommendation,
+  accepted: Record<string, boolean>,
+): boolean {
+  const revision = item.resolved_revision;
+  if (!item.license || !item.license_url || !revision ||
+      !IMMUTABLE_REVISION.test(revision)) return false;
+  return item.gated === false ||
+    accepted[item.id + ":" + revision] === true;
 }
 
 function isModelRecommendation(value: unknown): value is ModelRecommendation {
@@ -301,7 +316,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         item.installed || alreadyRunning ||
         item.metadata_verified !== true || item.verification_state !== "verified" ||
         !revision || !IMMUTABLE_REVISION.test(revision) ||
-        accepted[`${item.id}:${revision}`] !== true) return;
+        !licenseAcknowledged(item, accepted)) return;
 
     submitting.current = true;
     setBusyId(item.id);
@@ -451,7 +466,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         const selectedMethod = downloadMethods[item.id] || "hf_hub";
         const canQueue = !item.installed && !activeJob && !blocked && verified &&
           availableMethods.includes(selectedMethod) &&
-          accepted[acceptanceKey] === true && busyId === null;
+          licenseAcknowledged(item, accepted) && busyId === null;
         return (
           <div key={item.id} className="space-y-3 rounded-lg border bg-background p-3">
             <div className="flex items-start justify-between gap-2">
@@ -492,7 +507,9 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                   <p role="status" className="text-xs text-destructive"
                     data-testid="plugin-last-download-failure">
                     Previous attempt: {lastFailedJob.status}. {downloadFailureGuidance(lastFailedJob)}
-                    {" "}A new attempt requires fresh explicit model-license acceptance.
+                    {" "}{item.gated === false
+                      ? "A new request will reverify the public model source."
+                      : "A new attempt requires fresh explicit model-license acceptance."}
                   </p>
                 )}
                 {blocked && (
@@ -512,19 +529,31 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                         No source terms link was returned. Verify the model terms before proceeding.
                       </p>
                     )}
-                    <label className="flex items-start gap-2 text-xs">
-                      <Checkbox checked={Boolean(accepted[acceptanceKey])}
-                        onCheckedChange={(value) => setAccepted((old) => ({
-                          ...old, [acceptanceKey]: value === true,
-                        }))} disabled={!item.license_url} />
-                      <span>I reviewed and accept the model license and any gated-access conditions
-                        for revision {revision?.slice(0, 12)}.</span>
-                    </label>
+                    {item.gated === false ? (
+                      <p className="text-xs text-muted-foreground" data-testid="public-model-one-click">
+                        Public model, no Hugging Face account or token needed.
+                        Selecting Download acknowledges the displayed {item.license}{" "}
+                        terms for this verified revision. Attribution still applies.
+                      </p>
+                    ) : (
+                      <label className="flex items-start gap-2 text-xs">
+                        <Checkbox checked={Boolean(accepted[acceptanceKey])}
+                          onCheckedChange={(value) => setAccepted((old) => ({
+                            ...old, [acceptanceKey]: value === true,
+                          }))} disabled={!item.license_url} />
+                        <span>I reviewed and accept the model license and any gated-access conditions
+                          for revision {revision?.slice(0, 12)}.</span>
+                      </label>
+                    )}
                   </div>
                 )}
                 {verified && !blocked && availableMethods.length > 1 && (
-                  <label className="block space-y-1 text-xs">
-                    <span className="font-medium">Download method</span>
+                  <details className="rounded-md border px-2 py-2">
+                    <summary className="cursor-pointer text-xs font-medium">
+                      Advanced download options
+                    </summary>
+                    <label className="mt-2 block space-y-1 text-xs">
+                      <span className="font-medium">Download method</span>
                     <select aria-label="Download method"
                       className="w-full rounded-md border bg-background px-2 py-2"
                       value={selectedMethod}
@@ -548,7 +577,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                       Both methods require the same reviewed license, backend authentication,
                       model revision, audited download worker and installation checks.
                     </span>
-                  </label>
+                    </label>
+                  </details>
                 )}
                 <Button type="button" size="sm" disabled={!canQueue}
                   onClick={() => void install(item)}>

@@ -72,15 +72,15 @@
     },
     {
       "id": "pocket-tts-english-18m-refl",
-      "model_id": "kyutai/pocket-tts",
+      "model_id": "kyutai/pocket-tts-without-voice-cloning",
       "label": "Pocket TTS English 18.2M (REFL)",
-      "purpose": "Local CPU speech synthesis for Karen's first governed Pocket TTS plugin. Gated weights require explicit upstream license acceptance before installation.",
+      "purpose": "Ungated official Kyutai CPU speech synthesis with curated voices. No Hugging Face approval or token required; CC BY 4.0 attribution still applies.",
       "tier": "optional",
       "channel_id": "plugin_audio",
       "expected_runtime": "pocket-tts",
-      "revision": "db04f0e653473e5c7333c69686ac92b7460b0c1d",
+      "revision": "a7056f505a4a8ca72d8b5fb1440071d6f1a35739",
       "license": "CC-BY-4.0",
-      "license_url": "https://huggingface.co/kyutai/pocket-tts",
+      "license_url": "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning",
       "include_patterns": [
         "languages/english_18m_refl_2026-10/model.safetensors",
         "languages/english_18m_refl_2026-10/tokenizer.model",
@@ -94,7 +94,8 @@
       "app_consumers": [
         "pocket-tts"
       ],
-      "recommended": false
+      "recommended": false,
+      "gated": false
     }
   ]
 }
