@@ -9,7 +9,6 @@ import pytest
 from ai_karen_engine.core.memory.claims import MemoryClaimStore
 from ai_karen_engine.core.memory.contracts import ClaimStatus, MemoryClaim
 
-
 TENANT_A = "00000000-0000-0000-0000-000000000001"
 TENANT_B = "00000000-0000-0000-0000-000000000099"
 USER_A = "00000000-0000-0000-0000-000000000002"
