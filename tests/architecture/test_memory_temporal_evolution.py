@@ -183,8 +183,15 @@ def test_get_valid_claims_switches_at_one_exclusive_boundary() -> None:
     store.add(_claim("vim", valid_from=start, valid_until=boundary))
     store.add(_claim("vscode", valid_from=boundary))
     assert {claim.object for claim in store.get_valid_claims(start, **CLAIM_SCOPE)} == {"vim"}
-    assert {claim.object for claim in store.get_valid_claims(boundary, **CLAIM_SCOPE)} == {"vscode"}
-    assert {claim.object for claim in store.get_valid_claims(boundary - timedelta(microseconds=1), **CLAIM_SCOPE)} == {"vim"}
+    assert {
+        claim.object for claim in store.get_valid_claims(boundary, **CLAIM_SCOPE)
+    } == {"vscode"}
+    assert {
+        claim.object
+        for claim in store.get_valid_claims(
+            boundary - timedelta(microseconds=1), **CLAIM_SCOPE
+        )
+    } == {"vim"}
 
 
 def test_get_valid_claims_without_at_uses_one_utc_snapshot(
