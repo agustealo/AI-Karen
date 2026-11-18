@@ -246,7 +246,7 @@ export default function GrowthPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="karen-metric uppercase tracking-[0.15em]">CURRENT PROGRESSION</span>
                 <Badge variant="outline" className="border-primary/30 bg-primary/10 text-[10px] text-primary">
-                  Policy verified projection
+                  Evidence-based projection
                 </Badge>
               </div>
               <p className="mt-5 text-[34px] font-extrabold leading-none tracking-tight sm:text-[42px]">

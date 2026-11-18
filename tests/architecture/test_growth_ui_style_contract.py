@@ -29,3 +29,9 @@ def test_growth_uses_existing_canonical_visual_primitives() -> None:
     assert "aria-labelledby" in source
     assert "sm:grid-cols-2 xl:grid-cols-3" in source
     assert "memory consent" in source
+
+
+def test_growth_does_not_invent_policy_verification_receipt() -> None:
+    source = GROWTH.read_text(encoding="utf-8")
+    assert "Evidence-based projection" in source
+    assert "Policy verified projection" not in source
