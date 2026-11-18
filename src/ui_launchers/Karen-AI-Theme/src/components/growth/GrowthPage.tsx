@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -95,7 +95,7 @@ function SectionHeading({
   eyebrow: string;
   title: string;
   description: string;
-  aside?: React.ReactNode;
+  aside?: ReactNode;
 }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-4 sm:px-5">
@@ -116,9 +116,9 @@ function Stat({
   icon: Icon,
 }: {
   label: string;
-  value: React.ReactNode;
+  value: ReactNode;
   description: string;
-  icon: typeof Trophy;
+  icon: LucideIcon;
 }) {
   return (
     <div className="karen-growth-stat min-w-0 p-4 sm:p-5">
@@ -273,7 +273,7 @@ export default function GrowthPage() {
           <div className="grid grid-cols-2 divide-x divide-y divide-border/70 [&>*:nth-child(-n+2)]:border-t-0">
             <Stat
               label="Quality"
-              value={<span className="font-mono tabular-nums text-info">{formatNumber(progress.average_quality, 1)}</span>}
+              value={<span className="font-mono tabular-nums text-accent">{formatNumber(progress.average_quality, 1)}</span>}
               description="Confidence-weighted outcome quality"
               icon={Target}
             />
@@ -318,7 +318,7 @@ export default function GrowthPage() {
                     <Icon className="h-4 w-4 text-primary" aria-hidden="true" />
                     {label}
                   </span>
-                  <span className={`font-mono text-sm font-semibold tabular-nums ${hasEvidence ? "text-info" : "text-muted-foreground"}`}>
+                  <span className={`font-mono text-sm font-semibold tabular-nums ${hasEvidence ? "text-accent" : "text-muted-foreground"}`}>
                     {hasEvidence ? `${formatNumber(score, 0)}%` : "No data"}
                   </span>
                 </div>
@@ -397,7 +397,7 @@ export default function GrowthPage() {
                 <li key={item.trajectory_id} className="p-4 sm:px-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="font-mono text-lg font-semibold tabular-nums text-info">{formatNumber(item.score, 1)}
+                      <p className="font-mono text-lg font-semibold tabular-nums text-accent">{formatNumber(item.score, 1)}
                         <span className="ml-2 text-xs font-normal text-muted-foreground">quality</span>
                       </p>
                       <p className="mt-1 text-[11px] text-muted-foreground">{formatTimestamp(item.recorded_at)}</p>
