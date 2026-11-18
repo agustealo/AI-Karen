@@ -26,16 +26,8 @@ import {
 interface AgentCatalogRecord {
   agent_id: string;
   name: string;
-  description: string;
-  version: string;
   lifecycle_state: string;
-  status: string;
-  capabilities: string[];
-  implementation_id?: string | null;
-  prompt_contract_id?: string | null;
-  prompt_version?: string | null;
   healthy: boolean;
-  missing_dependencies: string[];
   eligibility: "runtime_decided_per_request";
 }
 
@@ -45,6 +37,7 @@ interface AgentCatalogResponse {
   selection_authority: string;
   execution_authority: string;
   orchestrator: string;
+  eligibility_verified: boolean;
 }
 
 interface AgentRunRecord {
@@ -82,6 +75,31 @@ interface AgentRunsResponse {
   runs: AgentRunRecord[];
   total: number;
   generated_at: string;
+}
+
+function isAgentCatalogResponse(value: unknown): value is AgentCatalogResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const response = value as Record<string, unknown>;
+  if (!Array.isArray(response.agents) || typeof response.total !== "number") return false;
+  if (
+    response.total !== response.agents.length ||
+    response.eligibility_verified !== false ||
+    response.selection_authority !== "cortex_runtime_policy" ||
+    response.execution_authority !== "chat_runtime" ||
+    response.orchestrator !== "agent_medusa"
+  ) return false;
+  return response.agents.every((record: unknown) => {
+    if (typeof record !== "object" || record === null) return false;
+    const agent = record as Record<string, unknown>;
+    return (
+      typeof agent.agent_id === "string" &&
+      agent.agent_id.length > 0 &&
+      typeof agent.name === "string" &&
+      typeof agent.lifecycle_state === "string" &&
+      typeof agent.healthy === "boolean" &&
+      agent.eligibility === "runtime_decided_per_request"
+    );
+  });
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -177,9 +195,12 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     setIsLoadingCatalog(true);
     setCatalogError("");
     try {
-      const response = await apiClient.get<AgentCatalogResponse>(
+      const response = await apiClient.get<unknown>(
         "/api/agent-runtime/catalog",
       );
+      if (!isAgentCatalogResponse(response)) {
+        throw new Error("Agent catalog response does not match the discovery contract.");
+      }
       setCatalog(response);
     } catch (error) {
       setCatalog(null);
@@ -568,48 +589,24 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                       <Badge variant="outline">{agent.lifecycle_state}</Badge>
                     </div>
                   </div>
-                  <CardDescription>{agent.description}</CardDescription>
+                  <CardDescription>
+                    Registered specialist. Execution eligibility is decided for each request by CORTEX and RuntimePolicy.
+                  </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex flex-wrap gap-2">
-                    {agent.capabilities.map((capability) => (
-                      <Badge key={capability} variant="secondary">
-                        {capability}
-                      </Badge>
-                    ))}
-                  </div>
-
+                <CardContent className="space-y-3">
                   <dl className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                     <div>
                       <dt className="font-medium text-foreground">Agent ID</dt>
                       <dd className="break-all">{agent.agent_id}</dd>
                     </div>
                     <div>
-                      <dt className="font-medium text-foreground">Version</dt>
-                      <dd>{agent.version}</dd>
-                    </div>
-                    <div>
-                      <dt className="font-medium text-foreground">Implementation</dt>
-                      <dd className="break-all">{agent.implementation_id || "Not exposed"}</dd>
-                    </div>
-                    <div>
-                      <dt className="font-medium text-foreground">Prompt contract</dt>
-                      <dd className="break-all">
-                        {agent.prompt_contract_id
-                          ? `${agent.prompt_contract_id}@${agent.prompt_version || "unversioned"}`
-                          : "Not exposed"}
-                      </dd>
+                      <dt className="font-medium text-foreground">Execution eligibility</dt>
+                      <dd>Determined per request</dd>
                     </div>
                   </dl>
-
-                  {!agent.healthy && agent.missing_dependencies.length > 0 && (
-                    <Alert variant="destructive">
-                      <AlertTitle>Missing dependencies</AlertTitle>
-                      <AlertDescription>
-                        {agent.missing_dependencies.join(", ")}
-                      </AlertDescription>
-                    </Alert>
-                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Capabilities, implementation, prompt contract, and version are not exposed by this discovery endpoint.
+                  </p>
                 </CardContent>
               </Card>
             ))}
