@@ -1915,6 +1915,74 @@ class PluginService:
             "execution_performed": False,
         }
 
+    async def resume_lifecycle_approval(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        plugin_id: str,
+        action: str,
+        approval_id: str,
+    ) -> Dict[str, Any]:
+        """Rebuild exact approved scope from tenant-scoped SQL, never HTTP.
+
+        The authenticated admin ingress supplies only an approval UUID and
+        action path. ApprovalService owns the durable consent. The existing
+        execute_approved_lifecycle performs all fresh policy/RBAC checks,
+        global revision CAS, physical fencing and verified terminalization.
+        """
+        from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+        from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
+            PluginLifecycleApprovalScope,
+        )
+        from ai_karen_engine.services.approvals import (
+            ApprovalScopeError, ApprovalStateError, get_approval_service,
+        )
+
+        if not isinstance(context, ChatExecutionContext):
+            raise TypeError("Verified plugin lifecycle identity required")
+        principal = context.require_authenticated_user()
+        if (
+            not isinstance(plugin_id, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_-]{0,49}", plugin_id)
+            or action not in {"enable", "disable"}
+        ):
+            raise ValueError("Invalid plugin lifecycle target")
+        try:
+            canonical_id = str(uuid.UUID(approval_id))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("Invalid lifecycle approval identifier") from exc
+        if canonical_id != approval_id:
+            raise ValueError("Noncanonical lifecycle approval identifier")
+
+        # Authenticated actor/tenant SQL read. A client cannot provide the
+        # trusted immutable action/revision/manifest identity as a shortcut.
+        approval = await get_approval_service().get(canonical_id, user=principal)
+        if approval.get("status") != "approved":
+            raise ApprovalStateError("Human lifecycle approval is not executable")
+        saved = approval.get("request_payload")
+        bound = saved.get("plugin_lifecycle_scope") if isinstance(saved, dict) else None
+        if not isinstance(bound, dict):
+            raise ApprovalScopeError("Lifecycle approval scope is unavailable")
+        try:
+            scope = PluginLifecycleApprovalScope(**bound)
+        except (TypeError, ValueError) as exc:
+            raise ApprovalScopeError("Persisted lifecycle approval scope is invalid") from exc
+        if (
+            scope.installation_id != plugin_id
+            or scope.action != action
+            or approval.get("intent") != "plugin.lifecycle." + action
+        ):
+            raise ApprovalScopeError("Lifecycle approval does not match the requested action")
+        try:
+            scope.require_matching_context(context)
+        except PermissionError as exc:
+            raise ApprovalScopeError("Lifecycle approval does not belong to this session") from exc
+        return await self.execute_approved_lifecycle(
+            context=context,
+            scope=scope,
+            approval_id=canonical_id,
+        )
+
     async def execute_approved_lifecycle(
         self,
         *,
