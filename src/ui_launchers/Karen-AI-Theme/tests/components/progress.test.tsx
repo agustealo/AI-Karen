@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { Progress } from './progress';
+import { Progress } from '@/components/ui/progress';
 
 describe('Progress accessibility', () => {
   it('exposes the actual supplied percentage to assistive technology', () => {
