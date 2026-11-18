@@ -328,6 +328,10 @@ def test_rejects_malformed_job_encryption_key(m, bad):
     "https://consumer.example.com:65536",
     "https://consumer.example.com:0",
     "https://consumer.example.com:443:443",
+    "https://consumer.example.com:",
+    "https://@consumer.example.com",
+    "https://consumer.example.com\n.evil.com",
+    "https://consumer.example.com\t",
     "https://consumer.example.com,https://127.0.0.1",
 ))
 def test_rejects_insecure_cors_origins(m, bad):
