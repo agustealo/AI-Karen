@@ -147,6 +147,34 @@ async def test_communications_never_projects_own_principal_freeform_error_text(m
 
 
 @pytest.mark.asyncio
+async def test_communications_does_not_reflect_untrusted_event_type_or_subtype(monkeypatch):
+    """Unknown type names and training subtypes are bucketed, not echoed."""
+    secret = "token=should-never-escape"
+    audit = FakeAuditLogger([
+        _event("tenant-a", "user-a", secret, "public label"),
+        _event(
+            "tenant-a", "user-a", "training_operation",
+            "public training", training_event_type=secret,
+        ),
+    ])
+    monkeypatch.setattr(route, "get_audit_logger", lambda: audit)
+    monkeypatch.setattr(route, "get_training_audit_logger", lambda: FakeTrainingLogger([]))
+    monkeypatch.setattr(route, "get_service_registry", lambda: FakeRegistry(None))
+
+    result = await route.get_communications_center_observability(
+        current_user={"tenant_id": "tenant-a", "user_id": "user-a"}
+    )
+    assert result["audit"]["event_counts"] == {
+        "unclassified_event": 1,
+        "training_operation": 1,
+    }
+    assert result["audit"]["recent_events"][0]["event_type"] == "unclassified_event"
+    assert result["audit"]["recent_events"][0]["message"] == "unclassified_event"
+    assert result["training"]["event_counts"] == {"unclassified_event": 1}
+    assert secret not in str(result)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("principal", [
     {"tenant_id": "", "user_id": "user-a"},
     {"tenant_id": "tenant-a", "user_id": ""},
