@@ -109,7 +109,11 @@ class MemoryClaimStore:
             self._claims[claim_id].last_confirmed = datetime.now(tz=timezone.utc)
 
     def get_valid_claims(self, at: datetime | None = None) -> list[MemoryClaim]:
-        return [claim for claim in self._claims.values() if claim.is_valid(at)]
+        """Evaluate each claim against one coherent UTC snapshot instant."""
+        snapshot_at = at if at is not None else datetime.now(timezone.utc)
+        return [
+            claim for claim in self._claims.values() if claim.is_valid(snapshot_at)
+        ]
 
     def get_claims_by_status(self, status: ClaimStatus) -> list[MemoryClaim]:
         return [claim for claim in self._claims.values() if claim.status == status]
