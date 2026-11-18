@@ -232,7 +232,7 @@ def test_kcon770_real_failure_browser_dispatch_is_protected_and_not_skippable() 
     assert "ref: ${{ inputs.target_sha }}" in job
     assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
     assert 'test "$TARGET_SHA" = "$actual_sha"' in job
-    assert "python ../../../scripts/ci/verify_backend_target.py" in job
+    assert "python -m scripts.ci.verify_backend_target" in job
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
 
@@ -304,7 +304,7 @@ def test_kcon771_persona_browser_dispatch_is_protected_and_not_a_silent_skip() -
     assert "persist-credentials: false" in job
     assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
     assert 'test "$TARGET_SHA" = "$actual_sha"' in job
-    assert "python ../../../scripts/ci/verify_backend_target.py" in job
+    assert "python -m scripts.ci.verify_backend_target" in job
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
     assert 'if test "${{ inputs.scenario }}" != "copilotkit-persona" && test "${{ inputs.scenario }}" != "copilotkit-failure" && test "${{ inputs.scenario }}" != "copilotkit-context"; then' in job
@@ -353,7 +353,7 @@ def test_kcon490_real_personal_followup_dispatch_requires_verified_live_backend(
     assert "gh api repos/${GITHUB_REPOSITORY}/branches/main" in job
     assert job.count("python ../../../scripts/ci/verify_deployment_revision.py") == 2
     assert job.count("python ../../../scripts/ci/verify_vercel_deployment.py") == 2
-    assert "python ../../../scripts/ci/verify_backend_target.py" in job
+    assert "python -m scripts.ci.verify_backend_target" in job
     assert 'if test "${{ inputs.scenario }}" != "copilotkit-persona"' in job
 
     title = "Prove real signed-in follow-up draft CAS and personal context"
@@ -374,7 +374,7 @@ def test_kcon490_real_personal_followup_dispatch_requires_verified_live_backend(
         "secrets.VERCEL_AUTOMATION_BYPASS_SECRET",
     ):
         assert secret in step
-    assert job.index("python ../../../scripts/ci/verify_backend_target.py") < job.index(
+    assert job.index("python -m scripts.ci.verify_backend_target") < job.index(
         "      - name: " + title
     )
     # Credentials may be present only during the existing preflight and

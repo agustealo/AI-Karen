@@ -322,6 +322,7 @@ def run(
     cookie_file: str,
     configured_model: str,
     timeout: int,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     api = api_url.rstrip("/")
     native_root = native_ollama_root(ollama_url)
@@ -376,12 +377,20 @@ def run(
 
     # Do NOT supply preferred_llm_provider or preferred_model here.
     # This proves that the saved Settings choice reaches the actual runtime.
+    # An optional caller-owned session allows an independent, read-only
+    # PostgreSQL evidence probe without making another inference request.
+    if session_id is not None and not (
+        session_id.startswith("kcog_c3c_")
+        and len(session_id) == len("kcog_c3c_") + 32
+        and all(char in "0123456789abcdef" for char in session_id[9:])
+    ):
+        raise LiveProofError("Invalid governed durable proof session")
     response = _request(
         f"{api}/api/chat", timeout=timeout, cookies=cookie_file,
         method="POST",
         body={
             "messages": [{"content": "In one sentence, explain what a lighthouse does for ships at night.", "message_type": "user"}],
-            "session_id": f"ollama_settings_{uuid.uuid4().hex}",
+            "session_id": session_id or f"ollama_settings_{uuid.uuid4().hex}",
             "max_tokens": 512,
             "temperature": 0.0,
             "stream": False,
@@ -406,6 +415,7 @@ def main() -> int:
     parser.add_argument("--cookie-file", required=True)
     parser.add_argument("--model", default="")
     parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument("--session-id", default=None)
     args = parser.parse_args()
     try:
         if args.timeout <= 0:
@@ -414,7 +424,7 @@ def main() -> int:
             api_url=args.api_url, ollama_url=args.ollama_url,
             backend_ollama_url=args.backend_ollama_url,
             cookie_file=args.cookie_file, configured_model=args.model.strip(),
-            timeout=args.timeout,
+            timeout=args.timeout, session_id=args.session_id,
         )
     except (LiveProofError, ValueError) as exc:
         print(json.dumps({"status": "failed", "error_type": type(exc).__name__,

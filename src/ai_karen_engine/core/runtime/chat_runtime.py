@@ -857,6 +857,9 @@ class ChatRuntime:
             success=not transcript_failed,
             transcript_meta=transcript_result.to_metadata(),
             provider_meta=provider_meta,
+            selected_strategy_decision=trajectory.metadata.get(
+                "selected_strategy_decision_observation_v1",
+            ),
         )
 
         self._emitter.emit(
@@ -1661,6 +1664,9 @@ class ChatRuntime:
             success=success,
             transcript_meta=transcript_meta,
             provider_meta=provider_meta,
+            selected_strategy_decision=trajectory.metadata.get(
+                "selected_strategy_decision_observation_v1",
+            ),
         )
 
         # Completion includes preprocessing, model/tool execution, memory and
@@ -5567,10 +5573,26 @@ class ChatRuntime:
                         ),
                     },
                 )
-                await self._trajectory_recorder.record_decision_observation_async(
-                    trajectory,
-                    decision_observation=planned_strategy,
+                persisted_strategy = (
+                    await self._trajectory_recorder.record_decision_observation_async(
+                        trajectory,
+                        decision_observation=planned_strategy,
+                    )
                 )
+                if persisted_strategy is not None:
+                    # The runtime, not a caller or reviewer, freezes the exact
+                    # persisted selected-strategy decision. Keep the topology
+                    # decision as the original return/lineage contract.
+                    trajectory.metadata["selected_strategy_decision_observation_v1"] = {
+                        "schema_version": "selected_strategy_decision_observation_v1",
+                        "decision_observation_id": persisted_strategy.decision_observation_id,
+                        "trajectory_id": persisted_strategy.trajectory_id,
+                        "feature_snapshot_id": persisted_strategy.feature_snapshot_id,
+                        "policy_decision_id": decision.policy_decision_id,
+                        "policy_version": decision.policy_version,
+                        "selected_action": persisted_strategy.chosen_action,
+                        "ope_eligible": False,
+                    }
             await self._trajectory_recorder.persist_async(trajectory)
             return observation.decision_observation_id
         except Exception as exc:
@@ -6190,6 +6212,7 @@ class ChatRuntime:
         success: bool,
         transcript_meta: Optional[Dict[str, Any]] = None,
         provider_meta: Optional[Dict[str, Any]] = None,
+        selected_strategy_decision: Optional[Dict[str, Any]] = None,
     ) -> None:
         from ai_karen_engine.core.runtime.outcome.contracts import ExecutionStatus
 
@@ -6238,9 +6261,43 @@ class ChatRuntime:
             observed_model_calls=observed_model_calls,
             correlation_id=get_correlation_context().correlation_id,
         )
+        # Link observed execution to the original persisted *strategy*
+        # decision, but only when the selected execution's typed provider
+        # and durable-transcript evidence passed inspection. A planned
+        # strategy, fallback, unverified receipt, or failed learning write
+        # cannot replace the original topology decision reference.
+        linked_decision_id = decision_observation_id
+        if (
+            observed_strategy is not None
+            and observed_strategy.get("status") == "selected_runtime_path_observed"
+            and isinstance(selected_strategy_decision, dict)
+            and set(selected_strategy_decision) == {
+                "schema_version", "decision_observation_id", "trajectory_id",
+                "feature_snapshot_id", "policy_decision_id", "policy_version",
+                "selected_action", "ope_eligible",
+            }
+            and selected_strategy_decision.get("schema_version")
+            == "selected_strategy_decision_observation_v1"
+            and isinstance(selected_strategy_decision.get("decision_observation_id"), str)
+            and selected_strategy_decision["decision_observation_id"]
+            and selected_strategy_decision["decision_observation_id"]
+            != decision_observation_id
+            and selected_strategy_decision.get("trajectory_id") == trajectory_id
+            and isinstance(selected_strategy_decision.get("feature_snapshot_id"), str)
+            and selected_strategy_decision["feature_snapshot_id"]
+            and selected_strategy_decision.get("policy_decision_id")
+            == decision.policy_decision_id
+            and selected_strategy_decision.get("policy_version")
+            == decision.policy_version
+            and selected_strategy_decision.get("selected_action")
+            == observed_strategy.get("selected_action")
+            and selected_strategy_decision.get("ope_eligible") is False
+        ):
+            linked_decision_id = selected_strategy_decision["decision_observation_id"]
+
         await self._outcome_recorder.record_execution_outcome_async(
             trajectory_id=trajectory_id,
-            decision_observation_id=decision_observation_id,
+            decision_observation_id=linked_decision_id,
             status=(
                 ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE
             ),
@@ -6250,6 +6307,10 @@ class ChatRuntime:
             persistence_success=persistence_success,
             metadata={
                 "topology": decision.topology.value,
+                **(
+                    {"topology_decision_observation_id": decision_observation_id}
+                    if linked_decision_id != decision_observation_id else {}
+                ),
                 **(
                     {"selected_strategy_execution": observed_strategy}
                     if observed_strategy is not None else {}
