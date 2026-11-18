@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@copilotkit/react-core/v2", () => ({
@@ -134,6 +134,40 @@ describe("CopilotKit canonical intelligence rail", () => {
     );
     expect(screen.getAllByText("newest-model")).toHaveLength(2);
     expect(screen.queryByText("stale-model")).toBeNull();
+  });
+
+  it("selects an older verified response without reattributing latest execution", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-old", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-new", role: "assistant" },
+    ];
+    const receipts = ["assistant-old", "assistant-new"].map((messageId, index) => ({
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId,
+      value: {
+        actual_provider: "local",
+        actual_model: index === 0 ? "older-verified-model" : "latest-verified-model",
+        response_source: "local_inference",
+      },
+    }));
+    render(
+      <KarenVerifiedHistoryProvider parts={parseKarenVerifiedHistory(receipts, transcript)}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
+    expect(screen.queryByText("older-verified-model")).toBeNull();
+    const selectors = screen.getAllByLabelText("Inspect saved response");
+    expect(selectors).toHaveLength(2);
+    fireEvent.change(selectors[0], { target: { value: "assistant-old" } });
+    expect(screen.getAllByText("older-verified-model")).toHaveLength(2);
+    expect(screen.queryByText("latest-verified-model")).toBeNull();
+    fireEvent.change(selectors[1], { target: { value: "assistant-new" } });
+    expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
+    expect(screen.queryByText("older-verified-model")).toBeNull();
   });
 
   it.each([
