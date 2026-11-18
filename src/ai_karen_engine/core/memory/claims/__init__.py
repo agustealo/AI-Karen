@@ -57,10 +57,18 @@ class MemoryClaimStore:
             self._require_claim_scope(claim)
         return items
 
+    def _checked_replacement_id(self, claim: MemoryClaim) -> str:
+        """Reject a changed-owner record before replacing its logical key."""
+        claim_id = f"{claim.subject}:{claim.predicate}:{claim.object}"
+        existing = self._claims.get(claim_id)
+        if existing is not None:
+            self._require_claim_scope(existing)
+        return claim_id
+
     def add(self, claim: MemoryClaim) -> str:
         """Add only claims owned by this store's immutable tenant/user scope."""
         self._require_claim_scope(claim)
-        claim_id = f"{claim.subject}:{claim.predicate}:{claim.object}"
+        claim_id = self._checked_replacement_id(claim)
         self._claims[claim_id] = claim
         subject_claims = self._by_subject.setdefault(claim.subject, [])
         if claim_id not in subject_claims:
@@ -108,6 +116,7 @@ class MemoryClaimStore:
         )
         self._require_claim_scope(decision.previous)
         self._require_claim_scope(decision.incoming)
+        self._checked_replacement_id(decision.incoming)
         self._claims[claim_id] = decision.previous
         self.add(decision.incoming)
         return decision
@@ -119,6 +128,7 @@ class MemoryClaimStore:
         if old is None:
             return
         self._require_claim_scope(old)
+        self._checked_replacement_id(new_claim)
         now = datetime.now(tz=UTC)
         new_effective = self._temporal.effective_time(new_claim)
         old.status = ClaimStatus.SUPERSEDED

@@ -197,3 +197,61 @@ def test_contradiction_scan_prevalidates_all_records_before_mutation() -> None:
     assert overlapping.status is ClaimStatus.OBSERVED
     assert target.contradiction_refs == []
     assert overlapping.contradiction_refs == []
+
+
+def test_add_rejects_mutated_owner_in_existing_logical_slot() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    original = _claim()
+    claim_id = store.add(original)
+    original.user_id = USER_B
+
+    with pytest.raises(ValueError, match="scope mismatch"):
+        store.add(_claim())
+
+    original.user_id = USER_A
+    assert store.get(claim_id, **SCOPE_A) is original
+
+
+def test_evolve_rejects_foreign_existing_destination_before_writes() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    original = _claim(value="vim")
+    original_id = store.add(original)
+    destination = _claim(value="vscode")
+    destination_id = store.add(destination)
+    destination.tenant_id = TENANT_B
+    incoming = _claim(value="vscode")
+
+    with pytest.raises(ValueError, match="scope mismatch"):
+        store.evolve(
+            original_id,
+            incoming,
+            recorded_at=START + timedelta(days=1),
+        )
+
+    destination.tenant_id = TENANT_A
+    assert store.get(original_id, **SCOPE_A) is original
+    assert store.get(destination_id, **SCOPE_A) is destination
+    assert original.status is ClaimStatus.OBSERVED
+    assert original.valid_until is None
+    assert incoming.supersedes is None
+
+
+def test_supersede_rejects_foreign_existing_destination_before_writes() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    original = _claim(value="vim")
+    original_id = store.add(original)
+    destination = _claim(value="vscode")
+    destination_id = store.add(destination)
+    destination.user_id = USER_B
+    incoming = _claim(value="vscode")
+
+    with pytest.raises(ValueError, match="scope mismatch"):
+        store.supersede(original_id, incoming)
+
+    destination.user_id = USER_A
+    assert store.get(original_id, **SCOPE_A) is original
+    assert store.get(destination_id, **SCOPE_A) is destination
+    assert original.status is ClaimStatus.OBSERVED
+    assert original.superseded_at is None
+    assert original.valid_until is None
+    assert incoming.supersedes is None

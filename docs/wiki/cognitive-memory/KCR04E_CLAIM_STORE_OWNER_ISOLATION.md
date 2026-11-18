@@ -18,6 +18,20 @@ A second focused read of 16 additional runtime/composition modules, including `c
 
 These observations support the decision to keep this change in the existing in-process utility rather than adding a new store or altering the durable ledger. They do not prove that the public export has no external consumers or that caller-provided scope strings are authenticated.
 
+## Additional key-replacement integrity repair
+
+An exact-head adversarial reproduction showed that a retained mutable claim could
+be changed to a foreign user or tenant after insertion and then silently
+overwritten by a same-key `add()` or `evolve()`. Incoming-only scope checking
+did not protect the record already present at the destination key.
+
+`MemoryClaimStore._checked_replacement_id()` now validates an existing
+destination record against the bound owner before any replacement. This
+preflight is reused before `evolve()` and `supersede()` mutate a prior record.
+Three regression tests prove rejection and absence of partial writes. These
+are single-process integrity guarantees, not runtime authentication, locking,
+or database transaction isolation.
+
 ## Correct owner and behavior
 
 - Bind each `MemoryClaimStore` at construction to explicit immutable tenant and user identifiers; `user_id=None` represents a distinct tenant-level owner.
