@@ -295,6 +295,10 @@ def test_db_migration_preserves_source_fk_rls_and_no_client_grants():
         "FORCE ROW LEVEL SECURITY",
         "app.current_tenant_id",
         "app.current_user_id",
+        "REVOKE ALL ON public.conversation_presentation_pins FROM PUBLIC",
+        "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')",
+        "REVOKE ALL ON public.conversation_presentation_pins FROM anon",
+        "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')",
         "REVOKE ALL ON public.conversation_presentation_pins FROM authenticated",
         "conversation_presentation_pin_origin_unique",
         "conversation_presentation_pin_revision_check",
@@ -302,3 +306,22 @@ def test_db_migration_preserves_source_fk_rls_and_no_client_grants():
         assert required in source
     assert "card_html" not in source
     assert "presentation_payload" not in source
+
+
+def test_client_role_revocations_work_on_supabase_and_plain_postgres():
+    """Role checks must guard revokes for both client roles, not weaken RLS."""
+    source = Path(
+        "supabase/migrations/20261118213000_64_kui_presentation_pin_references.sql"
+    ).read_text()
+    block = source.split("DO $revoke_client_pin_access$", 1)[1].split(
+        "$revoke_client_pin_access$;", 1
+    )[0]
+    assert block.count("IF EXISTS (SELECT 1 FROM pg_roles") == 2
+    assert block.index("rolname = 'anon'") < block.index(
+        "REVOKE ALL ON public.conversation_presentation_pins FROM anon"
+    )
+    assert block.index("rolname = 'authenticated'") < block.index(
+        "REVOKE ALL ON public.conversation_presentation_pins FROM authenticated"
+    )
+    assert "FORCE ROW LEVEL SECURITY" in source
+    assert "GRANT " not in block
