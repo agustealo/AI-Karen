@@ -33,7 +33,11 @@ def test_realtime_chat_has_one_generation_authority() -> None:
 
     assert "from ai_karen_engine.services.streaming.stream_processor import" not in source
     assert "services.streaming.stream_processor" not in source
-    assert "get_chat_runtime().execute_stream" in source
+    assert "_terminalized_chat_json_events" in source
+    assert "get_chat_runtime().execute_stream" not in source
+    # Generation and first-terminal authority stay in the original chat route.
+    runtime = _read(ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py")
+    assert "async for chunk in get_chat_runtime().execute_stream(runtime_request)" in runtime
     assert "This is a simulated streaming response" not in source
     assert "_generate_fallback_chunk(" not in source
 

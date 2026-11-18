@@ -317,6 +317,7 @@ jobs:
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q
+          pytest tests/core/runtime/test_chat_transport_terminal_parity.py -q
 
       - name: Ollama live inventory and provider settings contracts
         run: |

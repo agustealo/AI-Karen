@@ -363,41 +363,34 @@ async def _verified_workspace_run_reference(
     )
 
 
-async def _sse(runtime_request: ChatExecutionRequest):
-    """Transport-only framing and fail-closed terminal integrity.
+async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
+    """Serialize runtime events once for every authenticated chat transport.
 
-    Runtime owns execution and model truth. Ingress emits an immediate,
-    authenticated transport comment before potentially slow context and model
-    preparation, then transparently forwards every runtime event. A graceful
-    runtime return without a terminal event cannot become silent HTTP 200.
+    This ingress-owned serializer never chooses models, constructs answers,
+    claims persistence, or changes RuntimePolicy decisions. The first COMPLETE
+    or ERROR is final. Missing terminal/serialization/runtime failures produce
+    a safe ERROR; cancellation propagates without a fabricated terminal.
     """
     correlation_id = runtime_request.context.correlation_id
-    terminal_seen = False
-
-    # SSE comment flushes headers/first bytes without pretending the model
-    # advanced. The browser ignores comments, so its shorter progress-status
-    # silence timeout is not activated during provider warmup.
-    yield ": stream_connected\n\n"
-
     try:
         async for chunk in get_chat_runtime().execute_stream(runtime_request):
+            encoded = json.dumps(
+                chunk.to_sse_payload(), ensure_ascii=False, allow_nan=False,
+            )
+            yield chunk.type, encoded
             if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
-                terminal_seen = True
-            yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
-            if terminal_seen:
-                # The first terminal event is final. A malformed upstream
-                # stream must not turn ERROR into a later COMPLETE or append
-                # content after completion. Runtime still owns the outcome.
-                break
+                return
     except Exception as exc:
-        logger.exception(
-            "Chat SSE runtime failed",
+        # Driver/provider errors may embed prompts, SQL parameters, or secrets.
+        # Record the type and correlation only, never the raw exception text.
+        logger.error(
+            "chat_stream_transport_failed",
             extra={
                 "correlation_id": correlation_id,
                 "error_type": type(exc).__name__,
             },
         )
-        error_event = ChatStreamChunk(
+        event = ChatStreamChunk(
             type=ChatStreamEventType.ERROR,
             content="Chat streaming failed before completion.",
             correlation_id=correlation_id,
@@ -407,26 +400,35 @@ async def _sse(runtime_request: ChatExecutionRequest):
                 "correlation_id": correlation_id,
             },
         )
-        yield f"data: {json.dumps(error_event.to_sse_payload())}\n\n"
-        terminal_seen = True
+        yield ChatStreamEventType.ERROR, json.dumps(event.to_sse_payload())
+        return
 
-    if not terminal_seen:
-        logger.error(
-            "Chat runtime returned without terminal SSE event",
-            extra={"correlation_id": correlation_id, "error_code": "CHAT_SSE_MISSING_TERMINAL"},
-        )
-        error_event = ChatStreamChunk(
-            type=ChatStreamEventType.ERROR,
-            content="The chat runtime stopped before completing its response.",
-            correlation_id=correlation_id,
-            metadata={
-                "error_code": "CHAT_SSE_MISSING_TERMINAL",
-                "error_type": "MissingTerminalEvent",
-                "correlation_id": correlation_id,
-            },
-        )
-        yield f"data: {json.dumps(error_event.to_sse_payload())}\n\n"
+    logger.error(
+        "chat_stream_missing_terminal",
+        extra={
+            "correlation_id": correlation_id,
+            "error_code": "CHAT_SSE_MISSING_TERMINAL",
+        },
+    )
+    event = ChatStreamChunk(
+        type=ChatStreamEventType.ERROR,
+        content="The chat runtime stopped before completing its response.",
+        correlation_id=correlation_id,
+        metadata={
+            "error_code": "CHAT_SSE_MISSING_TERMINAL",
+            "error_type": "MissingTerminalEvent",
+            "correlation_id": correlation_id,
+        },
+    )
+    yield ChatStreamEventType.ERROR, json.dumps(event.to_sse_payload())
 
+
+async def _sse(runtime_request: ChatExecutionRequest):
+    """Canonical SSE framing of one terminalized, authoritative runtime turn."""
+    # The first comment flushes headers without claiming model progress.
+    yield ": stream_connected\n\n"
+    async for _event_type, packet in _terminalized_chat_json_events(runtime_request):
+        yield f"data: {packet}\n\n"
     yield "data: [DONE]\n\n"
 
 
