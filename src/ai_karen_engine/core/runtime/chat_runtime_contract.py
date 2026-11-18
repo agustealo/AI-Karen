@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -11,6 +12,33 @@ if TYPE_CHECKING:
     from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
 
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
+
+
+# Only execution-bearing fields belong here. Mutable telemetry such as
+# degradation_state and audit_context is deliberately not an authorization.
+_MODEL_GRANT_FIELDS = (
+    "topology",
+    "allowed_capabilities",
+    "allowed_tools",
+    "allowed_plugins",
+    "allowed_agents",
+    "provider_constraints",
+    "resource_scope",
+    "approval_requirements",
+    "reasoning_modes",
+    "memory_scope",
+    "workflow_id",
+    "agent_topology",
+    "degraded_allowed",
+)
+
+
+def _model_grant_snapshot(plan: Any) -> Dict[str, Any]:
+    """Copy the original plan's execution grants, never its mutable references."""
+    return {
+        name: deepcopy(getattr(plan, name))
+        for name in _MODEL_GRANT_FIELDS
+    }
 
 
 class ChatExecutionMode(str, Enum):
@@ -87,6 +115,160 @@ class ChatExecutionContext:
     roles: List[str] = field(default_factory=list)
     permissions: List[str] = field(default_factory=list)
     authenticated_user: Optional["UserData"] = field(default=None, repr=False, compare=False)
+
+
+    def bind_runtime_model_authority(self, plan: Any, meter: Any) -> None:
+        """Pin original RuntimePolicy objects on the authenticated request.
+
+        Only ChatRuntime owns initial binding after constructing its plan and
+        meter. Keeping this state outside dataclass fields prevents copied
+        or serialized ChatExecutionContext values from inheriting authority.
+        """
+        from ai_karen_engine.core.runtime.contracts import (
+            AuthorizedExecutionPlan, ExecutionBudgetMeter,
+        )
+
+        self.require_authenticated_user()
+        if (
+            not isinstance(plan, AuthorizedExecutionPlan)
+            or not isinstance(meter, ExecutionBudgetMeter)
+            or meter.budget is not plan.budget
+            or not meter.retains_initial_budget_limits()
+            or not self.request_id
+            or not self.correlation_id
+            or not plan.matches_execution_scope(
+                user_id=self.user_id,
+                tenant_id=self.tenant_id,
+                session_id=self.session_id,
+                policy_decision_id=plan.policy_decision_id,
+            )
+        ):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        key = (
+            self.tenant_id,
+            self.user_id,
+            self.session_id or "",
+            self.request_id,
+            self.correlation_id,
+            plan.policy_decision_id,
+            plan.execution_id,
+        )
+        # A never-used ID is not a grant. Only the original RuntimePolicy
+        # issuer-returned decision bound by RuntimeDecisionPipeline can allow
+        # the first plan/meter registration. Cloned dataclasses lack that
+        # nonserialized witness, regardless of changed execution ID.
+        issuance = self.__dict__.get("_runtime_policy_issuance")
+        if (
+            not isinstance(issuance, tuple)
+            or len(issuance) != 2
+            or not issuance[0].verifies_chat_model_policy(
+                context=self, plan=plan,
+            )
+        ):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        binding = self.__dict__.get("_runtime_model_authority")
+        if binding is None:
+            self.__dict__["_runtime_model_authority"] = (plan, meter)
+            self.__dict__["_runtime_model_root_grants"] = (
+                _model_grant_snapshot(plan)
+            )
+            self.__dict__["_runtime_model_child_plans"] = []
+            self.__dict__["_runtime_model_authority_key"] = key
+        elif (
+            binding[0] is not plan
+            or binding[1] is not meter
+            or self.__dict__.get("_runtime_model_authority_key") != key
+            or self.__dict__.get("_runtime_model_root_grants")
+            != _model_grant_snapshot(plan)
+        ):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+
+    def original_runtime_model_plan(self, meter: Any) -> Any | None:
+        """Expose the original policy plan only for its original meter."""
+        binding = self.__dict__.get("_runtime_model_authority")
+        if (
+            binding is None
+            or binding[1] is not meter
+            or not meter.retains_initial_budget_limits()
+        ):
+            return None
+        root = binding[0]
+        if (
+            self.__dict__.get("_runtime_model_root_grants")
+            != _model_grant_snapshot(root)
+        ):
+            return None
+        key = self.__dict__.get("_runtime_model_authority_key")
+        if not isinstance(key, tuple):
+            return None
+        root = binding[0]
+        issuance = self.__dict__.get("_runtime_policy_issuance")
+        if (
+            not isinstance(issuance, tuple)
+            or len(issuance) != 2
+            or not issuance[0].verifies_chat_model_policy(
+                context=self, plan=root,
+            )
+        ):
+            return None
+        if key != (
+            self.tenant_id,
+            self.user_id,
+            self.session_id or "",
+            self.request_id,
+            self.correlation_id,
+            root.policy_decision_id,
+            root.execution_id,
+        ):
+            return None
+        return root
+
+    def register_runtime_model_child_plan(self, plan: Any, meter: Any) -> None:
+        """Register a Medusa-scoped derivative without minting a new grant."""
+        from dataclasses import replace
+
+        root = self.original_runtime_model_plan(meter)
+        if root is None or type(plan) is not type(root):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        if plan is root:
+            return
+        if (
+            plan.budget is not root.budget
+            or replace(
+                root,
+                allowed_tools=list(plan.allowed_tools),
+                allowed_plugins=list(plan.allowed_plugins),
+                allowed_agents=list(plan.allowed_agents),
+            ) != plan
+        ):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        original = self.__dict__.get("_runtime_model_root_grants")
+        if not isinstance(original, dict):
+            raise PermissionError("runtime_model_execution_authority_invalid")
+        for attribute in ("allowed_tools", "allowed_plugins", "allowed_agents"):
+            # An empty immutable root allowlist is a denial, not a wildcard.
+            policy_allowed = set(original[attribute])
+            if not set(getattr(plan, attribute)).issubset(policy_allowed):
+                raise PermissionError("runtime_model_execution_authority_invalid")
+        children = self.__dict__["_runtime_model_child_plans"]
+        if not any(child is plan for child, _ in children):
+            children.append((plan, _model_grant_snapshot(plan)))
+
+    def is_runtime_model_plan_authorized(self, plan: Any, meter: Any) -> bool:
+        """Only root and approved child object identities may execute."""
+        root = self.original_runtime_model_plan(meter)
+        return (
+            root is not None
+            and (
+                plan is root
+                or any(
+                    child is plan and approved == _model_grant_snapshot(plan)
+                    for child, approved in self.__dict__.get(
+                        "_runtime_model_child_plans", ()
+                    )
+                )
+            )
+        )
 
     def require_authenticated_user(self) -> "UserData":
         """Require the ingress principal and matching user and tenant scope."""

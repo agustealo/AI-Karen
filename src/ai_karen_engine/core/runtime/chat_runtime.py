@@ -425,6 +425,7 @@ class ChatRuntime:
                 ),
             )
         meter = ExecutionBudgetMeter(plan.budget)
+        request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         trajectory = self._trajectory_recorder.start()
         try:
@@ -1057,6 +1058,7 @@ class ChatRuntime:
             )
             return
         meter = ExecutionBudgetMeter(plan.budget)
+        request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         trajectory = self._trajectory_recorder.start()
         stream_start = time.time()

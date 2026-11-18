@@ -6,6 +6,7 @@ import asyncio
 import threading
 from dataclasses import replace
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -28,18 +29,22 @@ def _test_governed_admission():
     from ai_karen_engine.auth.models import UserData
     from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyDecision,
+        RuntimePolicyEnforcer,
+    )
     from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudget, ExecutionBudgetMeter
 
     budget = ExecutionBudget(max_model_calls=2, max_duration_ms=60000)
     plan = AuthorizedExecutionPlan(
-        execution_id="test-exec",
+        execution_id=f"test-exec-{uuid4().hex}",
         policy_decision_id="test-policy",
         authorized_user_id="test-user",
         authorized_tenant_id="test-tenant",
         authorized_session_id="test-session",
         budget=budget,
     )
-    return GovernedToolModelAdmission(
+    admission = GovernedToolModelAdmission(
         plan=plan,
         meter=ExecutionBudgetMeter(budget),
         user_id="test-user",
@@ -64,6 +69,24 @@ def _test_governed_admission():
             ),
         ),
     )
+    context = admission.authenticated_context
+    issuer = RuntimePolicyEnforcer()
+    issued_decision = PolicyDecision(
+        decision_id=plan.policy_decision_id,
+        policy_version="fixture",
+        allowed=True,
+        runtime_constraints={
+            "authorized_user_id": context.user_id,
+            "authorized_tenant_id": context.tenant_id,
+            "authorized_session_id": context.session_id,
+            "correlation_id": context.correlation_id,
+            "max_model_calls": plan.budget.max_model_calls,
+        },
+    )
+    issuer._record_issued_model_decision(issued_decision)
+    issuer.bind_chat_model_policy(context=context, decision=issued_decision)
+    context.bind_runtime_model_authority(admission.plan, admission.meter)
+    return admission
 
 
 @pytest.mark.asyncio
@@ -611,15 +634,25 @@ async def test_manager_embedding_uses_real_model_path_only() -> None:
         return [0.4, 0.2]
 
     manager.embedding_manager = SimpleNamespace(
+        model_name="local-embedding-model",
+        model_loaded=True,
+        model=object(),
         embed_authoritative=real_embedding,
         embed=lambda _: (_ for _ in ()).throw(
             AssertionError("Legacy synthetic embedding path invoked")
         ),
     )
-    assert await manager.generate_embedding("sample") == [0.4, 0.2]
+    admission = _test_governed_admission()
+    assert await manager.generate_embedding(
+        "sample", execution_admission=admission
+    ) == [0.4, 0.2]
     assert calls and calls[0] != loop_thread
+    assert admission.meter.model_calls == 1
     with pytest.raises(ProviderNotAvailable, match="embedding_execution_options_unsupported"):
-        await manager.generate_embedding("sample", model="unlisted")
+        await manager.generate_embedding(
+            "sample", model="unlisted", execution_admission=admission
+        )
+    assert admission.meter.model_calls == 1
 
 
 def test_model_manager_revalidates_registry_and_refreshes_endpoint_cache() -> None:

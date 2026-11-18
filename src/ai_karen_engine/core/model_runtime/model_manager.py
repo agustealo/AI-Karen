@@ -406,24 +406,27 @@ class ModelManager:
         execution_admission: GovernedToolModelAdmission | None = None,
         **kwargs: Any,
     ) -> List[float]:
-        """Return only an actual model embedding, never synthetic data."""
+        """Execute a genuine local encoder only under original request admission."""
+        # This canonical API has no ungoverned compatibility path. Check the
+        # authenticated request before accessing encoder state or provider data.
+        if not isinstance(execution_admission, GovernedToolModelAdmission):
+            raise PermissionError("governed_model_transport_admission_required")
+        execution_admission._require_scope()
         if kwargs:
             raise ProviderNotAvailable("embedding_execution_options_unsupported")
-        if execution_admission is not None:
-            if not isinstance(execution_admission, GovernedToolModelAdmission):
-                raise PermissionError("governed_model_transport_admission_required")
-            # Invalid input and an uninstalled model are not actual attempts.
-            # Deny before spending any original request quota.
-            if not isinstance(text, str) or not text.strip():
-                raise EmbeddingFailed("embedding_input_required")
-            if (
-                not getattr(self.embedding_manager, "model_loaded", False)
-                or getattr(self.embedding_manager, "model", None) is None
-            ):
-                raise EmbeddingFailed("embedding_model_unavailable")
-            await execution_admission.reserve_local_embedding(
-                model=self.embedding_manager.model_name,
-            )
+
+        # Invalid input and an uninstalled model are not actual attempts.
+        # Neither may spend the original request budget.
+        if not isinstance(text, str) or not text.strip():
+            raise EmbeddingFailed("embedding_input_required")
+        if (
+            not getattr(self.embedding_manager, "model_loaded", False)
+            or getattr(self.embedding_manager, "model", None) is None
+        ):
+            raise EmbeddingFailed("embedding_model_unavailable")
+        await execution_admission.reserve_local_embedding(
+            model=self.embedding_manager.model_name,
+        )
         return await asyncio.to_thread(self.embedding_manager.embed_authoritative, text)
 
     @classmethod
