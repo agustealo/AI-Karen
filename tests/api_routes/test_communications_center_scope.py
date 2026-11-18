@@ -95,12 +95,12 @@ async def test_communications_never_exposes_another_tenant_or_user(monkeypatch):
 
     assert result["audit"]["event_counts"] == {"training_operation": 2}
     assert result["audit"]["recent_events"] == [
-        {"event_type": "training_operation", "message": "my training", "timestamp": NOW.isoformat()},
-        {"event_type": "training_operation", "message": "old receipt", "timestamp": old["timestamp"]},
+        {"event_type": "training_operation", "message": "training_operation", "timestamp": NOW.isoformat()},
+        {"event_type": "training_operation", "message": "training_operation", "timestamp": old["timestamp"]},
     ]
     assert result["training"]["event_counts"] == {"training_started": 1}
     assert result["training"]["security_events"] == [
-        {"event_type": "security_violation", "message": "my alert", "timestamp": NOW.isoformat()}
+        {"event_type": "security_violation", "message": "security_violation", "timestamp": NOW.isoformat()}
     ]
     assert result["memory"]["feedback_metrics"]["used_shard_rate"] == 0.5
     assert result["memory"]["service_metrics"] == {}
@@ -113,6 +113,37 @@ async def test_communications_never_exposes_another_tenant_or_user(monkeypatch):
     for secret in ("other user secret", "other tenant secret", "global system secret", "cross-tenant security", "never-expose", "private@example.com"):
         assert secret not in serialized
     assert "observability-healthy" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_communications_never_projects_own_principal_freeform_error_text(monkeypatch):
+    """Owner scope never makes raw exception and credential text display-safe."""
+    secret = "api_key=internal-secret-value"
+    audit = FakeAuditLogger([
+        _event(
+            "tenant-a", "user-a", "training_operation",
+            f"Training execution failed: {secret}",
+            training_event_type="training_failed",
+        ),
+    ])
+    training = FakeTrainingLogger([
+        SimpleNamespace(
+            tenant_id="tenant-a", user_id="user-a",
+            event_type="security_violation",
+            message=f"Access failed: {secret}", timestamp=NOW,
+        ),
+    ])
+    monkeypatch.setattr(route, "get_audit_logger", lambda: audit)
+    monkeypatch.setattr(route, "get_training_audit_logger", lambda: training)
+    monkeypatch.setattr(route, "get_service_registry", lambda: FakeRegistry(None))
+
+    result = await route.get_communications_center_observability(
+        current_user={"tenant_id": "tenant-a", "user_id": "user-a"}
+    )
+    assert result["audit"]["recent_events"][0]["message"] == "training_operation"
+    assert result["training"]["security_events"][0]["message"] == "security_violation"
+    assert result["training"]["event_counts"] == {"training_failed": 1}
+    assert secret not in str(result)
 
 
 @pytest.mark.asyncio
