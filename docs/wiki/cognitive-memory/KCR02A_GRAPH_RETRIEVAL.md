@@ -51,3 +51,6 @@
 Direct manifests show HippoRAG pins `torch==2.5.1`, `igraph==0.11.8`, `openai>=3.3.1`, while KAREN pins `openai==2.32.0`. LightRAG pulls its own vector/graph/storage + LLM libraries. A pure-Python research probe avoids these packages and model downloads. Licenses: HippoRAG MIT, LightRAG MIT, according to their pinned upstream LICENSE files.
 
 **Decision:** Continue source study, retain KAREN's current runtime algorithm. No framework, PPR algorithm, graph backend or new package is approved for production.
+
+## CI execution gate
+The Main Quality backend job explicitly invokes this research fixture and the two earlier KCR-01 memory probes, as well as KAREN's original spreading-activation tests. Green status is not equivalent to real database or model benchmarks. **Pending** exact-head check execution on this research branch; no pass is assumed in advance.
