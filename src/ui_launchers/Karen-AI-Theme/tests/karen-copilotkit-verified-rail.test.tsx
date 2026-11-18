@@ -413,7 +413,7 @@ describe("CopilotKit canonical intelligence rail", () => {
     const disclosure = screen.getByTestId("karen-copilot-mobile-intelligence");
     expect(disclosure.tagName).toBe("DETAILS");
     expect(disclosure.hasAttribute("open")).toBe(false);
-    expect(disclosure.querySelector("summary")?.textContent).toContain("Conversation intelligence");
+    expect(disclosure.querySelector("summary")?.textContent).toContain("Response context");
     expect(disclosure.querySelector('[data-testid="canonical-conversation-rail"]')).not.toBeNull();
   });
 
