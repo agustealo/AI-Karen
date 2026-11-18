@@ -88,3 +88,7 @@ The existing `KarenCopilotVerifiedHistory` now exposes the canonical ordered ass
 **Remaining distinction:** This is an evidence-context selector, not yet a complete artifact workspace. Rich presentation cards still render through the canonical message presentation registry. Cross-message artifact navigation, scroll-follow selection, pinning, dock persistence and revision-aware artifact metadata are not implemented here and must remain gated until backend contracts and actual browser proof exist. At narrower viewports, verified context stays available through the existing disclosure.
 
 **Proof needed:** An authenticated saved conversation with multiple assistant turns (including one without receipt), selection of older and latest turns, no stale details after switching conversations, responsive keyboard inspection, CSS fidelity at 390/768/1024/1440/1920, and exact-head CI with E2E acceptance.
+
+## KUI-002B read-only response-linked presentation cards
+
+The context panel now renders existing `KarenPresentationRegistry` cards for the selected, previously authenticated assistant message. Their `presentation_id` and `evidence_ref` are inherited from verified saved history, never copied from model prose or client-generated identifiers. The original inline presentation remains available. This is an explicit **read-only visual projection**, not placement migration or a persisted pin. Pinning, cross-session dock restore, automatic scroll-follow and revision-aware artifact storage remain blocked on verified owned backend endpoints and tests.
