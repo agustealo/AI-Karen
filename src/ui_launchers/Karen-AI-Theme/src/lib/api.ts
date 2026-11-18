@@ -615,6 +615,9 @@ class ApiClient {
       }
     };
 
+    // Only idempotent reads may be retried or sent to a fallback origin.
+    // A mutation might have committed before a proxy/network reply failed.
+    const safeRead = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase());
     const preferredBaseUrl = this.getPreferredBaseUrl();
     const fallbackBaseUrl: string | null = this.getFallbackBaseUrl(preferredBaseUrl) || null;
 
@@ -622,19 +625,22 @@ class ApiClient {
     try {
       response = await send(preferredBaseUrl);
     } catch (error) {
-      if (!this.shouldRetryWithSameOrigin(error) || !this.hasFallbackBaseUrl(fallbackBaseUrl)) throw error;
+      if (!safeRead || !this.shouldRetryWithSameOrigin(error) || !this.hasFallbackBaseUrl(fallbackBaseUrl)) throw error;
       response = await send(fallbackBaseUrl);
     }
 
     // Logic for retries (500s or 404s on API routes)
-    if (this.shouldRetryWithDirectBackend(response, fallbackBaseUrl) ||
-        this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl)) {
+    if (safeRead && (this.shouldRetryWithDirectBackend(response, fallbackBaseUrl) ||
+        this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl))) {
       response = await send(fallbackBaseUrl);
     }
 
     // 401 Handling - Only attempt refresh if request was authenticated and refresh token is present
     if (response.status === 401) {
-      if (skipAuth) {
+      if (!safeRead) {
+        // Never refresh and replay an already-sent mutation. Surface the
+        // unauthorized response to the caller as a terminal error below.
+      } else if (skipAuth) {
         console.warn('[ApiClient] Unauthenticated request received 401:', endpoint);
       } else {
         const hasRefreshToken = typeof window !== 'undefined' && Boolean(localStorage.getItem('refresh_token'));
@@ -685,7 +691,7 @@ class ApiClient {
     }
 
     // 500 Retry for Copilot Assist
-    if (!response.ok && this.shouldRetryAssistServerError(endpoint, response)) {
+    if (!response.ok && safeRead && this.shouldRetryAssistServerError(endpoint, response)) {
       await this.sleep(250);
       response = await send(preferredBaseUrl);
     }
@@ -693,7 +699,6 @@ class ApiClient {
     // Only reads can be replayed after an ambiguous 502. A draft CAS PUT,
     // task POST, or any other mutation may have committed before its receipt
     // was lost. Replaying it can create false 409 conflicts or duplicate work.
-    const safeRead = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase());
     if (response.status === 502 && safeRead) {
       console.log('[ApiClient] 502 Bad Gateway detected, retrying with backoff for startup timing');
       await this.sleep(2000); // Wait 2s before retry
@@ -727,12 +732,14 @@ class ApiClient {
 
       // Handle 401 errors by redirecting to login
       if (response.status === 401 && typeof window !== 'undefined') {
-        if (!isDegradedMode) {
+        if (!isDegradedMode && safeRead) {
           console.warn('[ApiClient] Authentication failed; invalidating shared auth state');
           this.invalidateAuthSession('terminal_401');
           return undefined as T;
         } else {
-          // If it's a 401 but in degraded mode, we just throw the ApiError instead of redirecting
+          // Mutations are never replayed after a 401. An explicit human
+          // action is required to reissue a request after reauthentication.
+          if (!isDegradedMode) this.invalidateAuthSession('terminal_401');
           throw new ApiError(
             response.status,
             this.formatApiErrorMessage(errorData, fallbackMessage),
