@@ -36,7 +36,10 @@ def _claim(
     )
 
 
-@pytest.mark.parametrize("tenant_id", ["", " ", "default"])
+@pytest.mark.parametrize(
+    "tenant_id",
+    ["", " ", "default", " default", "default ", "DEFAULT", "\tteam-a", "team-a\n"],
+)
 def test_claim_store_rejects_missing_or_default_tenant(tenant_id: str) -> None:
     with pytest.raises(ValueError, match="explicit tenant"):
         MemoryClaimStore(tenant_id=tenant_id, user_id=USER_A)
@@ -47,6 +50,12 @@ def test_claim_store_requires_explicit_owner_and_rejects_blank_user() -> None:
         MemoryClaimStore()  # type: ignore[call-arg]
     with pytest.raises(ValueError, match="user scope"):
         MemoryClaimStore(tenant_id=TENANT_A, user_id="")
+
+
+@pytest.mark.parametrize("user_id", [" ", "\tuser-a", "user-a\n"])
+def test_claim_store_rejects_ambiguous_user_scope(user_id: str) -> None:
+    with pytest.raises(ValueError, match="user scope"):
+        MemoryClaimStore(tenant_id=TENANT_A, user_id=user_id)
 
 
 def test_identical_claim_keys_are_isolated_by_store_owner() -> None:

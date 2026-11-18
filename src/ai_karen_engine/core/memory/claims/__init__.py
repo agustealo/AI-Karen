@@ -23,10 +23,17 @@ class MemoryClaimStore:
     """Keep one tenant/owner's claim versions in one temporal snapshot scope."""
 
     def __init__(self, *, tenant_id: str, user_id: str | None) -> None:
-        if not isinstance(tenant_id, str) or not tenant_id.strip() or tenant_id == "default":
+        if (
+            not isinstance(tenant_id, str)
+            or not tenant_id
+            or tenant_id != tenant_id.strip()
+            or tenant_id.casefold() == "default"
+        ):
             raise ValueError("memory claim store requires an explicit tenant")
         if user_id is not None and (
-            not isinstance(user_id, str) or not user_id.strip()
+            not isinstance(user_id, str)
+            or not user_id
+            or user_id != user_id.strip()
         ):
             raise ValueError("memory claim store user scope is invalid")
         self._tenant_id = tenant_id
