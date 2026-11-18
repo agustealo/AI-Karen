@@ -156,17 +156,21 @@ class MemoryClaimStore:
         if replacement_id == claim_id:
             raise ValueError("supersession requires a distinct claim version")
         self._require_free_destination(replacement_id, claim_id)
-        now = datetime.now(tz=UTC)
+        # Validate legacy/offset timestamps before changing either object.
+        # The canonical interval normalizes naive timestamps to UTC.
+        prior_interval = self._temporal.interval(old)
         new_effective = self._temporal.effective_time(new_claim)
         if new_effective < self._temporal.effective_time(old):
             raise ValueError("backdated supersession requires temporal evolution")
-        old.status = ClaimStatus.SUPERSEDED
-        old.superseded_at = now
-        old.valid_until = (
-            min(old.valid_until, new_effective)
-            if old.valid_until
+        new_end = (
+            min(prior_interval.end, new_effective)
+            if prior_interval.end is not None
             else new_effective
         )
+        now = datetime.now(tz=UTC)
+        old.status = ClaimStatus.SUPERSEDED
+        old.superseded_at = now
+        old.valid_until = new_end
         new_claim.supersedes = self._temporal.claim_ref(old)
         if new_claim.valid_from is None:
             new_claim.valid_from = new_effective

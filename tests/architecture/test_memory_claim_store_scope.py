@@ -446,3 +446,46 @@ def test_supersede_existing_same_owner_destination_is_atomic() -> None:
     assert incoming.supersedes is None
     assert store.get_by_subject("user", **SCOPE_A) == [source, destination]
 
+
+def test_naive_legacy_end_is_normalized_before_supersession() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    source = _claim(value="vim")
+    source.valid_until = (START + timedelta(days=20)).replace(tzinfo=None)
+    source_id = store.add(source)
+    incoming = _claim(value="vscode")
+    changed_at = START + timedelta(days=10)
+    incoming.asserted_at = changed_at
+    incoming.event_time = changed_at
+    incoming.valid_from = changed_at
+
+    store.supersede(source_id, incoming)
+
+    assert source.status is ClaimStatus.SUPERSEDED
+    assert source.valid_until == changed_at
+    assert source.valid_until.tzinfo is UTC
+    assert incoming.supersedes == source_id
+    assert store.get_by_subject("user", **SCOPE_A) == [source, incoming]
+
+
+def test_invalid_legacy_interval_rejects_before_supersession_mutation() -> None:
+    store = MemoryClaimStore(**SCOPE_A)
+    source = _claim(value="vim")
+    invalid_end = (START - timedelta(days=1)).replace(tzinfo=None)
+    source.valid_until = invalid_end
+    source_id = store.add(source)
+    incoming = _claim(value="vscode")
+    changed_at = START + timedelta(days=10)
+    incoming.asserted_at = changed_at
+    incoming.event_time = changed_at
+    incoming.valid_from = changed_at
+
+    with pytest.raises(ValueError, match="end cannot precede start"):
+        store.supersede(source_id, incoming)
+
+    assert source.status is ClaimStatus.OBSERVED
+    assert source.superseded_at is None
+    assert source.valid_until is invalid_end
+    assert incoming.supersedes is None
+    assert store.get(source_id, **SCOPE_A) is source
+    assert store.get_by_subject("user", **SCOPE_A) == [source]
+
