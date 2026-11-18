@@ -82,6 +82,54 @@ The Vercel proxy now fails closed with a structured configuration error for a
 missing, invalid, insecure or Docker-only origin rather than attempting its
 loopback default. This diagnostic **does not deploy the missing backend**.
 
+## November 18, 2026: Vercel frontend credential ownership gate
+
+A read-only Vercel metadata audit of the existing `ai-karen` Next.js project
+observed 101 variable records, including **100 sensitive entries targeting
+both Production and Preview**. The inventory includes backend authentication
+signing, PostgreSQL, Redis and Hugging Face token variable names. No secret
+values were retrieved. This does not prove the contents are valid production
+credentials or that any credential was accessed by a preview deployment.
+
+The frontend is a Next.js transport/proxy, not the FastAPI auth, database,
+model-acquisition or inference owner. Direct inspection of the 23 frontend API
+route source files, the auth helper and the server-side backend proxy found
+no direct dependency on the listed backend-owned credentials. Imported
+dependencies and a complete deployment are still independent verification
+boundaries.
+
+**Correct the existing environment before consumer preview acceptance:**
+
+1. Inventory the actual frontend and backend service requirements without
+   printing or exporting credential values. Restrict the Vercel project to
+   frontend-required settings such as its approved server-only
+   `KAREN_BACKEND_URL`; retain credentials with the canonical backend.
+2. Remove backend-owned variables from **both** Vercel Production and Preview
+   configurations only after confirming the backend retains its separately
+   provisioned credentials. Do not copy credential values to the browser or
+   `NEXT_PUBLIC_*` names. If an actual secret is believed exposed, rotate it
+   at its issuing authority and propagate via governed secret management.
+3. Run the existing protected GitHub Actions workflow
+   `Vercel Frontend Environment Boundary` with the **exact reviewed main
+   SHA**. The workflow is `workflow_dispatch` on `main`, uses the
+   `beta-release` environment, and performs *read-only* Vercel
+   `GET /v10/projects/{idOrName}/env?decrypt=false`. It checks the entire
+   paginated metadata inventory, never requests decrypted values and never
+   changes the project. The protected environment must supply
+   `VERCEL_TOKEN`, `VERCEL_PROJECT_ID` and `VERCEL_ORG_ID`.
+4. Require the boundary inspection to pass before the next credentialed
+   frontend acceptance. Independently verify the latest immutable deployed
+   frontend commit and backend `GET /ready`; a passing environment scope
+   inspection is **not** evidence of backend or native-model readiness.
+
+The canonical inspection owner is
+`scripts/ci/verify_vercel_environment_scopes.py`, with offline regression
+tests in `tests/architecture/test_vercel_environment_scopes.py`.
+Source CI exercises its boundary contract without Vercel credentials.
+The on-demand protected workflow audits *real* project metadata. Any missing
+inventory, malformed scope, pagination ambiguity, inaccessible platform, or
+backend credential present in the frontend blocks the live inspection.
+
 ## Operator verification
 
 1. Verify the real FastAPI host is running and its `GET /ready` answers
