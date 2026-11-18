@@ -577,11 +577,12 @@ async def prove_verified_durable_runtime(
             preferred_provider="ollama",
             preferred_model=model,
             temperature=0.0,
-            # Match the existing authenticated Ollama Settings live proof.
-            # A truncated 256-token answer was observed, not a normal
-            # completed generation. Still reject any model output that
-            # remains truncated, degraded, or recovered through fallback.
-            max_tokens=512,
+            # The installed 135M CI model reached its output limit at both
+            # 256 and 512 tokens after an authorized verifier preflight.
+            # Give synthesis a bounded 1024-token allowance, beneath the
+            # central 2048-token ceiling. The existing proof still rejects
+            # incomplete, degraded, or fallback model generations.
+            max_tokens=1024,
             stream=stream,
             metadata={
                 "transport": "ci_verified_durable_runtime",
