@@ -189,6 +189,16 @@ jobs:
           set -euo pipefail
           python ../../../scripts/ci/verify_vercel_deployment.py
 
+      - name: Verify deployed revision before browser acceptance
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          python ../../../scripts/ci/verify_deployment_revision.py
+
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
@@ -200,15 +210,6 @@ jobs:
 
       - name: Install Chromium and system dependencies
         run: npx playwright install --with-deps chromium
-
-      - name: Verify deployed revision before browser acceptance
-        shell: bash
-        env:
-          TARGET_SHA: ${{ inputs.target_sha }}
-          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: |
-          set -euo pipefail
-          python ../../../scripts/ci/verify_deployment_revision.py
 
       - name: Prove live authenticated grounded search and replay
         shell: bash
