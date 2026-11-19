@@ -257,3 +257,40 @@ switching and logout denial, **not** deliberate in-flight A-response replay
 after B login, same-principal reauthentication races, injected network
 disconnects, scheduler execution, or actual deployed-SHA provenance. Keep
 those gates open until separately observed on an authorized environment.
+
+## KARI OS Application Settings five-viewport acceptance
+
+`settings-visual-acceptance.spec.ts` exercises the **merged canonical
+Application Settings shell** as a full dashboard page and a right-side
+Settings drawer. It keeps the existing real login fixture, runtime-owned
+panel data, and readonly keyboard/category navigation. There are no network
+intercepts, fake settings, changed user preferences, or backend writes.
+
+Provision an approved sanitized account with access to the dashboard. Provide
+credentials through the operator's trusted shell (do not commit them or enable
+shell command echoing). From `src/ui_launchers/Karen-AI-Theme/e2e`:
+
+```bash
+KAREN_SETTINGS_VISUAL_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+npx playwright test settings-visual-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+The local example uses explicitly authorized loopback only. For an approved
+HTTPS origin, omit `KAREN_LOCAL_CHAT_ACCEPTANCE`. Supply
+`KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` securely in the environment.
+
+Both modes check 390, 768, 1024, 1440 and 1920 CSS-pixel viewports, computed
+KARI OS graphite tokens, document and panel horizontal overflow, accessible
+category/section navigation, and keyboard selection. The sheet must remain
+**stacked even at desktop viewport widths**; only the full page gains the
+240px left rail.
+
+Traces, video, and automatic screenshots are off. For independently approved
+sanitized artifacts only, set `KAREN_SETTINGS_SANITIZED_CAPTURE=true`.
+Check the attachments for sensitive content before any distribution. The
+test does not prove persisted theme switching, successful settings mutation,
+or pixel-fidelity against a design reference. A skipped opt-in test or green
+GitHub source check **is not real browser acceptance evidence**.
