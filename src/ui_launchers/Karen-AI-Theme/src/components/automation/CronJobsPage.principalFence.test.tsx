@@ -1,11 +1,12 @@
 import React from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   currentUser: { tenant_id: "tenant-A", user_id: "user-A" },
   authenticated: true,
   get: vi.fn(),
+  put: vi.fn(),
 }));
 
 vi.mock("@/lib/useAuth", () => ({
@@ -27,7 +28,7 @@ vi.mock("@/lib/api", () => ({
   apiClient: {
     get: (...args: unknown[]) => mocks.get(...args),
     post: vi.fn(),
-    put: vi.fn(),
+    put: (...args: unknown[]) => mocks.put(...args),
     delete: vi.fn(),
   },
 }));
@@ -104,6 +105,38 @@ describe("Cron schedule principal isolation", () => {
     await act(async () => { second.resolve(schedule("current-principal-schedule")); });
     expect(await screen.findByText("current-principal-schedule")).toBeTruthy();
     expect(screen.queryByText("previous-principal-schedule")).toBeNull();
+  });
+
+  it("ignores a delayed old-account mutation refresh without cancelling the new read", async () => {
+    const oldToggle = deferred<unknown>();
+    const newList = deferred<TestSchedule[]>();
+    let reads = 0;
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/automation/cron") {
+        reads += 1;
+        return reads === 1 ? Promise.resolve(schedule("owned-by-A")) : newList.promise;
+      }
+      if (path === "/api/tasks" || path === "/api/automation/jobs") {
+        return Promise.resolve([]);
+      }
+      throw new Error("Unexpected URL " + path);
+    });
+    mocks.put.mockImplementation(() => oldToggle.promise);
+    const view = render(<CronJobsPage />);
+    await screen.findByText("owned-by-A");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Toggle owned-by-A schedule" }));
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+    mocks.currentUser = { tenant_id: "tenant-B", user_id: "user-B" };
+    view.rerender(<CronJobsPage />);
+    await waitFor(() => expect(reads).toBe(2));
+
+    // Completing A's old action must not invalidate or restart B's read.
+    await act(async () => { oldToggle.resolve({ ok: true }); });
+    expect(reads).toBe(2);
+    await act(async () => { newList.resolve(schedule("owned-by-B")); });
+    expect(await screen.findByText("owned-by-B")).toBeTruthy();
+    expect(screen.queryByText("owned-by-A")).toBeNull();
   });
 
   it("never reports a signed-out schedule list as verified empty", async () => {
