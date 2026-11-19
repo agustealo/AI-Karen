@@ -130,7 +130,7 @@ const MAX_BACKEND_RETRIES = 10;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
 
-export default function DashboardPage() {
+function DashboardWorkspace() {
   const { isAdmin } = useAuth();
   const { createNewSession } = useSession();
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
@@ -421,8 +421,6 @@ export default function DashboardPage() {
     );
 
   return (
-    <AuthWrapper>
-      <PrincipalScopedSessionProvider>
       <SidebarProvider>
         <div className="karen-app-shell flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background text-foreground">
           <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl md:px-4">
@@ -554,6 +552,14 @@ export default function DashboardPage() {
           </div>
         </div>
       </SidebarProvider>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <AuthWrapper>
+      <PrincipalScopedSessionProvider>
+        <DashboardWorkspace />
       </PrincipalScopedSessionProvider>
     </AuthWrapper>
   );
