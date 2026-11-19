@@ -874,6 +874,90 @@ async def get_ag_ui_run_observed_events(
     )
 
 
+@router.get("/chat/ag-ui/pins")
+async def get_ag_ui_authorized_pins(
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """List only freshly authorized, completed-run-attested saved pin pointers.
+
+    This is a non-executing, read-only transport adapter. All authorization
+    lives in the canonical runtime principal, conversation gateway and saved
+    presentation admission service. Neither raw pin ledger rows nor private
+    presentation payloads are exposed. Mutation APIs are not enabled.
+    """
+    features = get_runtime_settings().features
+    if not (
+        features.enable_ag_ui_bridge
+        and getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Pin readback unavailable")
+
+    correlation_id = str(uuid.uuid4())
+    try:
+        context = _execution_context(
+            user=user, session_id=correlation_id,
+            conversation_id=None,
+            request_id=correlation_id, correlation_id=correlation_id,
+        )
+        context.require_authenticated_user()
+    except (PermissionError, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=401, detail="Authenticated pin readback required",
+        ) from exc
+
+    from ai_karen_engine.core.runtime.presentation_pin_readback import (
+        PresentationPinReadback,
+    )
+
+    try:
+        verified = await PresentationPinReadback().list_authorized(context=context)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403, detail="Pin readback denied",
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "Authorized presentation pin readback unavailable",
+            extra={
+                "correlation_id": correlation_id,
+                "event": "presentation_pin_readback_unavailable",
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503, detail="Pin readback temporarily unavailable",
+            headers={"X-Correlation-Id": correlation_id},
+        ) from exc
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "schema_version": 1,
+            "read_only": True,
+            "pins": [
+                {
+                    "pin_id": pin.pin_id,
+                    "position": pin.position,
+                    "revision": pin.revision,
+                    "source": {
+                        "conversation_id": pin.admitted.reference.conversation_id,
+                        "assistant_message_id": pin.admitted.reference.assistant_message_id,
+                        "presentation_id": pin.admitted.reference.presentation_id,
+                        "evidence_ref": pin.admitted.reference.evidence_ref,
+                        "component_type": pin.admitted.component_type,
+                        "schema_version": pin.admitted.schema_version,
+                    },
+                }
+                for pin in verified
+            ],
+        },
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Correlation-Id": correlation_id,
+        },
+    )
+
+
 @router.get("/chat/ag-ui/threads/{thread_id}/history")
 async def get_ag_ui_owned_history(
     thread_id: str,
