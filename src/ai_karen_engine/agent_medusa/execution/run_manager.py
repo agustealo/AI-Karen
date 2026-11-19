@@ -638,6 +638,51 @@ class MedusaRunManager:
                         extra={"run_id": run.run_id},
                     )
                     continue
+                if not cancel_requested and run.durable_registered:
+                    # A remote cancellation may have committed in PostgreSQL
+                    # before its Redis signal failed. Only the live Redis
+                    # owner may recover that request, and an atomic Redis
+                    # request_cancel must recheck ownership before any local
+                    # task is interrupted.
+                    try:
+                        durable = await self._durable_ledger.get(
+                            run_id=run.run_id,
+                            tenant_id=run.tenant_id,
+                        )
+                    except DurableRunLedgerUnavailable:
+                        logger.warning(
+                            "Medusa durable cancellation recovery read unavailable",
+                            extra={"run_id": run.run_id, "tenant_id": run.tenant_id},
+                        )
+                        continue
+                    if (
+                        durable is not None
+                        and durable.get("status") == "cancellation_requested"
+                        and durable.get("tenant_id") == run.tenant_id
+                        and durable.get("owner_worker_id")
+                        == self._settings.worker_id
+                    ):
+                        try:
+                            await self._distributed_store.request_cancel(
+                                run_id=run.run_id,
+                                tenant_id=run.tenant_id,
+                            )
+                        except (
+                            DistributedRunStoreUnavailable,
+                            DistributedRunNotFound,
+                            DistributedRunNotCancellable,
+                            DistributedRunTenantMismatch,
+                        ) as exc:
+                            logger.warning(
+                                "Medusa durable cancellation recovery was not accepted by live lease",
+                                extra={
+                                    "run_id": run.run_id,
+                                    "tenant_id": run.tenant_id,
+                                    "error_type": type(exc).__name__,
+                                },
+                            )
+                            continue
+                        cancel_requested = True
                 if cancel_requested:
                     now = datetime.now(timezone.utc)
                     async with self._lock:
