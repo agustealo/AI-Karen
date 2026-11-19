@@ -1403,6 +1403,13 @@ async def stream_ag_ui_chat(
                 message=current_text,
                 session_id=session_id,
                 conversation_id=conversation_id,
+                # The validated AG-UI runId belongs to the same client run
+                # across retries; unlike response_id it is not regenerated
+                # during ingress. Runtime binds it to authenticated scope.
+                planner_idempotency_key=uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"ag-ui-planner:{request.threadId}:{request.runId}",
+                ),
                 workspace_run_id=workspace_ref,
                 preferred_llm_provider=requested_provider,
                 preferred_model=requested_model,
