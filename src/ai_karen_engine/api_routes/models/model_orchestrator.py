@@ -572,7 +572,17 @@ async def _read_download_setup(resource: str, operation: Callable[[], Awaitable[
     except HTTPException:
         raise
     except ModelOrchestratorError as exc:
-        raise handle_orchestrator_error(exc) from exc
+        # Retain the canonical domain status, never its private diagnostic data.
+        translated = handle_orchestrator_error(exc)
+        logger.warning(
+            "model_download_setup_domain_error resource=%s error_code=%s",
+            resource,
+            exc.code,
+        )
+        raise HTTPException(
+            status_code=translated.status_code,
+            detail="Model download setup unavailable",
+        ) from exc
     except Exception as exc:
         logger.error(
             "model_download_setup_unavailable resource=%s error_type=%s",
