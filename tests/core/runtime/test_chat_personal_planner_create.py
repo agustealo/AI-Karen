@@ -1,0 +1,227 @@
+"""Bounded, receipt-backed personal task creation through canonical ChatRuntime.
+
+This deliberately does not mock a successful live browser journey. Production
+acceptance still requires authenticated PostgreSQL and AG-UI observations.
+"""
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+
+from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+from ai_karen_engine.core.runtime.personal_planner_action import (
+    parse_personal_planner_create,
+)
+
+
+def _request(
+    query: str = "Create a personal task to review deployment in America/Detroit",
+    *,
+    request_id: str = "request-01",
+    correlation_id: str = "corr-01",
+):
+    tenant_id, user_id = uuid4(), uuid4()
+    principal = SimpleNamespace(
+        tenant_id=str(tenant_id), user_id=str(user_id), is_active=True,
+    )
+    plan = SimpleNamespace(allowed_capabilities=["planner.create"])
+    meter = SimpleNamespace(consume_tool_call=AsyncMock(return_value=True))
+    context = SimpleNamespace(
+        tenant_id=str(tenant_id),
+        user_id=str(user_id),
+        request_id=request_id,
+        correlation_id=correlation_id,
+        require_authenticated_user=lambda: principal,
+        require_conversation_id=lambda: "conversation-01",
+        original_runtime_model_plan=lambda original_meter: (
+            plan if original_meter is meter else None
+        ),
+    )
+    request = SimpleNamespace(
+        context=context,
+        metadata={},
+        messages=[{"role": "user", "content": query}],
+    )
+    return request, plan, meter, principal
+
+
+@pytest.mark.parametrize("query", [
+    "Create a task to review deployment",
+    "Add a personal task for finishing release",
+    "Please create a personal commitment to check the build",
+])
+def test_personal_task_creation_does_not_route_to_model_only(query):
+    result = resolve_capability_decision(query)
+    assert result.intent == "planner.create"
+    assert result.capability == "planner.create"
+    assert result.requires_live_data
+    assert result.requires_tool
+    assert not result.allow_llm_only
+
+
+@pytest.mark.parametrize("query", [
+    "How do I create a task?",
+    "Explain what a task is",
+    "Create a daily task to gather news every day",
+    "List my tasks",
+])
+def test_other_chat_and_automation_intents_are_not_hijacked(query):
+    assert resolve_capability_decision(query).intent != "planner.create"
+
+
+@pytest.mark.parametrize("query, expected", [
+    (
+        "Create a personal task to review the release in America/Detroit",
+        ("review the release", "America/Detroit"),
+    ),
+    (
+        "Please add a task for verifying builds timezone Asia/Tokyo.",
+        ("verifying builds", "Asia/Tokyo"),
+    ),
+    (
+        "Create a task to review the release tomorrow at 9 AM in America/Detroit",
+        None,
+    ),
+    ("Create a task to review release", None),
+    ("Create a task to review release in Not_A_Timezone/Nowhere", None),
+])
+def test_bounded_create_parser_does_not_invent_timezone_or_due_at(query, expected):
+    assert parse_personal_planner_create(query) == expected
+
+
+@pytest.mark.asyncio
+async def test_authorized_task_creates_only_after_matching_committed_receipt(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    request, plan, meter, principal = _request()
+    identifier = uuid4()
+    calls = []
+
+    async def write(action, *, authenticated_user, runtime_approval):
+        assert authenticated_user is principal
+        assert runtime_approval.matches(
+            tenant_id=uuid4() if False else __import__("uuid").UUID(principal.tenant_id),
+            owner_id=__import__("uuid").UUID(principal.user_id),
+            action=action,
+        )
+        calls.append(action)
+        commitment = SimpleNamespace(
+            id=identifier,
+            tenant_id=__import__("uuid").UUID(principal.tenant_id),
+            owner_id=__import__("uuid").UUID(principal.user_id),
+            title=action.title, timezone=action.timezone, revision=1,
+        )
+        receipt = SimpleNamespace(
+            commitment_id=identifier,
+            tenant_id=commitment.tenant_id,
+            idempotency_key=action.idempotency_key,
+            revision=1,
+            persisted_at=datetime.now(timezone.utc),
+            correlation_id=action.correlation_id,
+        )
+        return commitment, receipt
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    result = await ChatRuntime._execute_personal_planner_create(
+        request, plan, meter,
+    )
+
+    assert result.handled and result.success and not result.degraded
+    assert result.source_id == "planner.create"
+    assert result.payload["planner_created"] is True
+    assert result.payload["planner_receipt"]["commitment_id"] == str(identifier)
+    assert result.normalized_metadata()["presentation_payload"]["planner_receipt"]["commitment_id"] == str(identifier)
+    assert len(calls) == 1
+    meter.consume_tool_call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_denied_capability_or_unissued_plan_never_writes(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    write = AsyncMock(side_effect=AssertionError("Must not write"))
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request()
+    plan.allowed_capabilities = []
+    denied = await ChatRuntime._execute_personal_planner_create(
+        request, plan, meter,
+    )
+    assert not denied.success
+    assert denied.error == "planner_create_not_authorized"
+    plan.allowed_capabilities = ["planner.create"]
+    request.context.original_runtime_model_plan = lambda _: None
+    forged = await ChatRuntime._execute_personal_planner_create(
+        request, plan, meter,
+    )
+    assert not forged.success
+    assert forged.error == "planner_create_not_authorized"
+    write.assert_not_awaited()
+    meter.consume_tool_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_timezone_never_calls_persistence(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    write = AsyncMock(side_effect=AssertionError("Must not write"))
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request(
+        "Create a personal task to review deployment",
+    )
+    result = await ChatRuntime._execute_personal_planner_create(
+        request, plan, meter,
+    )
+    assert not result.success
+    assert result.payload["status"] == "needs_input"
+    assert result.payload["planner_created"] is False
+    write.assert_not_awaited()
+    meter.consume_tool_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_storage_error_does_not_produce_fake_success(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    write = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request()
+    result = await ChatRuntime._execute_personal_planner_create(
+        request, plan, meter,
+    )
+    assert not result.success and result.degraded
+    assert result.payload["planner_created"] is False
+    assert "not" in result.text.lower()
+    write.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_retry_uses_stable_idempotency_key(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    observed_keys = []
+
+    async def write(action, **kwargs):
+        observed_keys.append(action.idempotency_key)
+        raise RuntimeError("uncertain write result")
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request()
+    await ChatRuntime._execute_personal_planner_create(request, plan, meter)
+    request.context.correlation_id = "retry-correlation"
+    await ChatRuntime._execute_personal_planner_create(request, plan, meter)
+    assert len(observed_keys) == 2
+    assert observed_keys[0] == observed_keys[1]
