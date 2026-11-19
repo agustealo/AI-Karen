@@ -3,7 +3,7 @@
   "name": "content-intelligence",
   "display_name": "Content Intelligence",
   "version": "0.2.0",
-  "description": "Standalone, local-first and bounded analysis of host-authorized inline text documents and logical folder groups. No direct upload or index access.",
+  "description": "Standalone bounded analysis of host-authorized text sources; file exploration belongs to the independent shared File Explorer extension.",
   "purpose": "Analyze authorized invocation-supplied content without accessing files, global memory or external indexes.",
   "author": "KAREN Engineering",
   "license": "MIT",
@@ -54,8 +54,7 @@
         "enum": [
           "analyze",
           "search",
-          "compare",
-          "browse"
+          "compare"
         ]
       },
       "documents": {
