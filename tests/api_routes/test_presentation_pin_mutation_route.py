@@ -250,3 +250,38 @@ def test_operation_shapes_reject_cross_operation_fields_before_replay():
     )
     assert valid.operation == "reorder"
     assert valid.expected_revision == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorization", [None, "Bearer invalid-pin-ingress-token"])
+async def test_http_pin_mutation_requires_canonical_active_identity(
+    monkeypatch, authorization
+):
+    """Never admit unsigned or absent credentials through the real dependency.
+
+    This deliberately does NOT override bypass_user_context_func. It verifies
+    FastAPI's dependency boundary, not a production signed-session round trip.
+    """
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from ai_karen_engine.core.security.auth_config import auth_config
+
+    enable(monkeypatch)
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+    execute = runtime(monkeypatch)
+
+    app = FastAPI()
+    app.include_router(ingress.router)
+    headers = {"Authorization": authorization} if authorization else {}
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as http:
+        response = await http.post(
+            "/chat/ag-ui/pins/mutations",
+            json=request().model_dump(mode="json"),
+            headers=headers,
+        )
+
+    assert response.status_code == 401
+    execute.assert_not_awaited()
