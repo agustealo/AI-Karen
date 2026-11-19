@@ -94,6 +94,14 @@ def test_other_chat_and_automation_intents_are_not_hijacked(query):
         ("verifying builds", "Asia/Tokyo"),
     ),
     (
+        "Create a task to review logs timezone America/Argentina/Buenos_Aires",
+        ("review logs", "America/Argentina/Buenos_Aires"),
+    ),
+    (
+        "Create a task to review logs in UTC",
+        ("review logs", "UTC"),
+    ),
+    (
         "Create a task to review the release tomorrow at 9 AM in America/Detroit",
         None,
     ),
