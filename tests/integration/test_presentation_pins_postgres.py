@@ -476,6 +476,102 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     **unpin_args(uuid.uuid4(), duplicate_key, "conflict")
                 )
 
+            # Exercise the actual FastAPI transport -> runtime -> repository
+            # -> disposable PostgreSQL path. Authentication is supplied by a
+            # test-only dependency override; this does not certify production
+            # session middleware or an authenticated browser.
+            from fastapi import FastAPI
+            from httpx import ASGITransport, AsyncClient
+            from ai_karen_engine.api_routes.chat import runtime as pin_ingress
+            from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+
+            http_pin = await create_owned_pin("runtime-http-mutation")
+            http_key = str(uuid.uuid4())
+            current_principal = {"tenant_id": str(tenant_b), "user_id": str(owner_b)}
+            original_context_factory = pin_ingress._execution_context
+            original_settings_factory = pin_ingress.get_runtime_settings
+
+            def scoped_test_context(*, user, session_id, conversation_id, request_id, correlation_id):
+                # The principal comes from the overridden authenticated
+                # dependency, never from the HTTP JSON request.
+                return SimpleNamespace(
+                    tenant_id=user["tenant_id"],
+                    user_id=user["user_id"],
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    request_id=request_id,
+                    correlation_id=correlation_id,
+                    require_authenticated_user=lambda: None,
+                )
+
+            pin_ingress._execution_context = scoped_test_context
+            pin_ingress.get_runtime_settings = lambda: SimpleNamespace(
+                features=SimpleNamespace(
+                    enable_ag_ui_bridge=True,
+                    enable_ag_ui_durable_runs=True,
+                    enable_presentation_pin_mutations=True,
+                )
+            )
+            app = FastAPI()
+            app.include_router(pin_ingress.router)
+            app.dependency_overrides[bypass_user_context_func] = lambda: dict(current_principal)
+            transport = ASGITransport(app=app)
+            try:
+                async with AsyncClient(transport=transport, base_url="http://test") as http:
+                    mutation_url = "/chat/ag-ui/pins/mutations"
+                    body = {
+                        "operation": "unpin",
+                        "idempotency_key": http_key,
+                        "pin_id": str(http_pin),
+                    }
+                    # A same-tenant but different authenticated user cannot
+                    # modify the owner's pin even with its exact UUID.
+                    current_principal["user_id"] = str(owner_a)
+                    foreign = await http.post(mutation_url, json={
+                        **body, "idempotency_key": str(uuid.uuid4())
+                    })
+                    assert foreign.status_code == 200
+                    assert foreign.json()["receipt"]["outcome"] == "already_absent"
+                    assert await raw.fetchval("""
+                        SELECT count(*) FROM public.conversation_presentation_pins
+                        WHERE pin_id=$1
+                    """, http_pin) == 1
+
+                    current_principal["user_id"] = str(owner_b)
+                    committed = await http.post(mutation_url, json=body)
+                    assert committed.status_code == 200, committed.text
+                    receipt = committed.json()["receipt"]
+                    assert committed.headers["cache-control"] == "private, no-store"
+                    assert receipt["outcome"] == "unpinned"
+                    assert await raw.fetchval("""
+                        SELECT count(*) FROM public.conversation_presentation_pins
+                        WHERE pin_id=$1
+                    """, http_pin) == 0
+
+                    # Lost HTTP response is retried with the same logical
+                    # identity. Only the committed immutable receipt wins.
+                    replay = await http.post(mutation_url, json=body)
+                    assert replay.status_code == 200
+                    assert replay.json()["receipt"] == receipt
+                    assert await raw.fetchval("""
+                        SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                        WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3
+                    """, tenant_b, owner_b, uuid.UUID(http_key)) == 1
+
+                    changed = await http.post(mutation_url, json={
+                        **body, "pin_id": str(uuid.uuid4())
+                    })
+                    assert changed.status_code == 409
+                    assert "committed" not in changed.text
+
+                    invalid = await http.post(mutation_url, json={
+                        **body, "position": 2
+                    })
+                    assert invalid.status_code == 422
+            finally:
+                pin_ingress._execution_context = original_context_factory
+                pin_ingress.get_runtime_settings = original_settings_factory
+
             rollback_pin = await create_owned_pin("runtime-receipt-rollback")
             await raw.execute("""
                 CREATE FUNCTION public.reject_pin_receipt_test_insert()

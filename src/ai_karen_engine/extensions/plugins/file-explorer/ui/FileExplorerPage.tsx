@@ -35,6 +35,12 @@ export interface FileExplorerProps {
   multiSelect?: boolean;
   onSelect?: (references: ExplorerSelection[]) => void;
   onRefresh?: () => void;
+  /** The host owns pagination state and must reject stale/out-of-order responses. */
+  hasMore?: boolean;
+  nextCursor?: string | null;
+  onNextPage?: (cursor: string) => void;
+  /** Change this on every authorized page or identity/scope transition. */
+  pageKey?: string;
 }
 
 const MAX_SELECTION = 24;
@@ -67,7 +73,7 @@ function prettyBytes(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-export function SharedFileExplorer({
+function FileExplorerView({
   authorized = false,
   items,
   loading = false,
@@ -76,10 +82,38 @@ export function SharedFileExplorer({
   multiSelect = true,
   onSelect,
   onRefresh,
+  hasMore = false,
+  nextCursor = null,
+  onNextPage,
 }: FileExplorerProps) {
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  const pageEvidenceValid = typeof hasMore === 'boolean' && (
+    hasMore
+      ? typeof nextCursor === 'string' && nextCursor.length > 0 &&
+        nextCursor.length <= 768 && typeof onNextPage === 'function'
+      : nextCursor === null
+  );
+
+  function clearSelections() {
+    setLocalSelection([]);
+    onSelect?.([]);
+  }
+
+  function refresh() {
+    clearSelections();
+    onRefresh?.();
+  }
+
+  function nextPage() {
+    if (!loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
+      clearSelections();
+      setParentId(null);
+      setFilter('');
+      onNextPage?.(nextCursor);
+    }
+  }
 
   const inventory = useMemo(() => {
     if (!authorized || !Array.isArray(items) || items.length > 200) return null;
@@ -130,11 +164,12 @@ export function SharedFileExplorer({
     onSelect?.(references);
   }
 
-  if (!authorized || (!loading && inventory === null)) {
+  if (!authorized || Boolean(error) || !pageEvidenceValid || (!loading && inventory === null)) {
     return <section role="alert" className="flex flex-col items-start gap-3 rounded-lg border p-6 text-sm text-muted-foreground">
       <p>File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.</p>
       {authorized && error && <p className="text-destructive">{error}</p>}
-      {authorized && onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onRefresh}>Refresh</button>}
+      {authorized && !pageEvidenceValid && <p className="text-destructive">Invalid host pagination evidence.</p>}
+      {authorized && onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </section>;
   }
 
@@ -146,7 +181,7 @@ export function SharedFileExplorer({
           References only. File access is checked again by the consuming service.
         </p>
       </div>
-      {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onRefresh}>Refresh</button>}
+      {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
     <nav aria-label="Folder location" className="flex items-center gap-3 text-sm">
       <button type="button" className="rounded border px-3 py-2" onClick={() => { setParentId(null); setFilter(''); }}>Root</button>
@@ -170,7 +205,7 @@ export function SharedFileExplorer({
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className="flex min-w-0 items-center gap-2 rounded border p-2">
           <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)}
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error)}
             onChange={() => select(item)} />
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
@@ -182,10 +217,18 @@ export function SharedFileExplorer({
               </div>}
         </li>)}
       </ul>}
-    <footer className="text-xs text-muted-foreground">
-      {selectionSet.size} selected · {visible.length} shown · Maximum {MAX_SELECTION} selections
+    <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+      <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
+      {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
+        disabled={loading || Boolean(error) || !pageEvidenceValid} onClick={nextPage}>Next page</button>}
     </footer>
   </section>;
+}
+
+export function SharedFileExplorer(props: FileExplorerProps) {
+  // A new host-issued page identity resets local folder/filter/selection state.
+  // Authorization and stale-response rejection remain host responsibilities.
+  return <FileExplorerView key={props.pageKey ?? 'initial'} {...props} />;
 }
 
 export default function FileExplorerPage(props: FileExplorerProps) {

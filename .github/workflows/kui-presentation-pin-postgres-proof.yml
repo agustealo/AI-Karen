@@ -8,6 +8,10 @@ on:
       - "supabase/migrations/*kui_presentation_pin_references.sql"
       - "supabase/migrations/*kui_pin_mutation_receipts.sql"
       - "src/ai_karen_engine/core/runtime/presentation_pin_*.py"
+      - "src/ai_karen_engine/api_routes/chat/runtime.py"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "tests/api_routes/test_presentation_pin_mutation_route.py"
+      - "tests/api_routes/test_presentation_pin_readback_route.py"
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"
       - "tests/integration/test_presentation_pins_postgres.py"
@@ -19,6 +23,10 @@ on:
       - "supabase/migrations/*kui_presentation_pin_references.sql"
       - "supabase/migrations/*kui_pin_mutation_receipts.sql"
       - "src/ai_karen_engine/core/runtime/presentation_pin_*.py"
+      - "src/ai_karen_engine/api_routes/chat/runtime.py"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "tests/api_routes/test_presentation_pin_mutation_route.py"
+      - "tests/api_routes/test_presentation_pin_readback_route.py"
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"
       - "tests/integration/test_presentation_pins_postgres.py"
@@ -114,6 +122,8 @@ jobs:
             tests/core/runtime/test_presentation_pin_atomic_receipts.py \
             tests/core/runtime/test_presentation_pin_mutation.py \
             tests/core/runtime/test_presentation_pin_readback.py -q -rs
+          pytest tests/api_routes/test_presentation_pin_mutation_route.py \
+            tests/api_routes/test_presentation_pin_readback_route.py -q -rs
           pytest tests/integration/test_presentation_pins_postgres.py -q -rs
 
       - name: Record database acceptance boundary
@@ -122,4 +132,4 @@ jobs:
         run: |
           echo "This workflow verifies the actual pin migration against an isolated PostgreSQL container and disposable karen_presentation_pin_test database." >> "$GITHUB_STEP_SUMMARY"
           echo "The production first-boot smoke separately verifies deployment without Supabase client roles." >> "$GITHUB_STEP_SUMMARY"
-          echo "HTTP mutation auditing and authenticated browser pinning are NOT certified by this job." >> "$GITHUB_STEP_SUMMARY"
+          echo "Focused HTTP mutation/readback ingress tests run alongside the disposable PostgreSQL proof, but do not certify authenticated HTTP-to-database or browser acceptance." >> "$GITHUB_STEP_SUMMARY"

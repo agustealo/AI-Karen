@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
@@ -957,6 +957,176 @@ async def get_ag_ui_authorized_pins(
             "Cache-Control": "private, no-store",
             "X-Correlation-Id": correlation_id,
         },
+    )
+
+
+class PresentationPinMutationSourceRequest(BaseModel):
+    """Untrusted pointer identity, never authorization evidence."""
+
+    conversation_id: str = Field(..., min_length=36, max_length=36)
+    assistant_message_id: str = Field(..., min_length=36, max_length=36)
+    presentation_id: str = Field(..., min_length=1, max_length=160)
+    evidence_ref: str = Field(..., min_length=1, max_length=160)
+
+
+class PresentationPinMutationRequest(BaseModel):
+    """Logical mutation request; principal and evidence come from the server."""
+
+    operation: Literal["pin", "unpin", "reorder"]
+    idempotency_key: str = Field(..., min_length=36, max_length=36)
+    source: Optional[PresentationPinMutationSourceRequest] = None
+    pin_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
+    expected_revision: Optional[int] = Field(default=None, ge=1, le=9223372036854775805)
+    position: Optional[int] = Field(default=None, ge=0, lt=100)
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> "PresentationPinMutationRequest":
+        """Reject mismatched logical identities before any receipt replay."""
+        if self.operation == "pin":
+            if self.source is None or self.pin_id is not None or self.expected_revision is not None:
+                raise ValueError("PIN requires source and cannot specify pin ID or revision")
+        elif self.operation == "unpin":
+            if (
+                self.source is not None or self.pin_id is None
+                or self.expected_revision is not None or self.position is not None
+            ):
+                raise ValueError("UNPIN requires only a pin ID")
+        else:
+            if (
+                self.source is not None or self.pin_id is None
+                or self.expected_revision is None or self.position is None
+            ):
+                raise ValueError("REORDER requires pin ID, revision and position")
+        return self
+
+
+@router.post("/chat/ag-ui/pins/mutations")
+async def mutate_ag_ui_authorized_pin(
+    mutation: PresentationPinMutationRequest,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Thin authenticated ingress into the single receipt-aware runtime owner.
+
+    A successful HTTP response means only that a committed mutation receipt
+    exists. Presentation restoration still requires fresh readback admission.
+    No transport-supplied tenant, user, attestation, or receipt is authoritative.
+    """
+    flags = get_runtime_settings().features
+    if not (
+        flags.enable_ag_ui_bridge
+        and flags.enable_ag_ui_durable_runs
+        and getattr(flags, "enable_presentation_pin_mutations", False)
+    ):
+        raise HTTPException(status_code=404, detail="Pin mutations unavailable")
+
+    correlation_id = str(uuid.uuid4())
+    try:
+        context = _execution_context(
+            user=user,
+            session_id=correlation_id,
+            conversation_id=None,
+            request_id=correlation_id,
+            correlation_id=correlation_id,
+        )
+        context.require_authenticated_user()
+    except (PermissionError, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(status_code=401, detail="Authenticated pin mutation required") from exc
+
+    from ai_karen_engine.core.runtime.presentation_pin_admission import (
+        PresentationPinReference,
+    )
+    from ai_karen_engine.core.runtime.presentation_pin_mutation import (
+        PresentationPinMutation,
+    )
+    from ai_karen_engine.persistence.repositories.presentation_pin_repository import (
+        PresentationPinConflict,
+        PresentationPinUnavailable,
+    )
+
+    source = (
+        PresentationPinReference(
+            conversation_id=mutation.source.conversation_id,
+            assistant_message_id=mutation.source.assistant_message_id,
+            presentation_id=mutation.source.presentation_id,
+            evidence_ref=mutation.source.evidence_ref,
+        )
+        if mutation.source is not None
+        else None
+    )
+    try:
+        receipt = await PresentationPinMutation().execute(
+            context=context,
+            idempotency_key=mutation.idempotency_key,
+            operation=mutation.operation,
+            reference=source,
+            pin_id=mutation.pin_id,
+            expected_revision=mutation.expected_revision,
+            position=mutation.position,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid pin mutation") from exc
+    except PresentationPinConflict as exc:
+        raise HTTPException(status_code=409, detail="Pin mutation conflict") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Pin mutation denied") from exc
+    except PresentationPinUnavailable as exc:
+        logger.warning(
+            "pin_mutation_storage_unavailable",
+            extra={"event": "presentation_pin_mutation_unavailable", "correlation_id": correlation_id, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Pin mutation temporarily unavailable",
+            headers={"X-Correlation-Id": correlation_id},
+        ) from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Pin source unavailable") from exc
+        logger.error(
+            "pin_mutation_failed",
+            extra={"event": "presentation_pin_mutation_failed", "correlation_id": correlation_id, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Pin mutation temporarily unavailable",
+            headers={"X-Correlation-Id": correlation_id},
+        ) from exc
+    except Exception as exc:
+        logger.error(
+            "pin_mutation_failed",
+            extra={"event": "presentation_pin_mutation_failed", "correlation_id": correlation_id, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Pin mutation temporarily unavailable",
+            headers={"X-Correlation-Id": correlation_id},
+        ) from exc
+
+    logger.info(
+        "pin_mutation_receipt_committed",
+        extra={
+            "event": "presentation_pin_mutation_committed",
+            "correlation_id": correlation_id,
+            "receipt_id": receipt.receipt_id,
+            "operation": receipt.operation,
+            "outcome": receipt.outcome,
+        },
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "schema_version": 1,
+            "committed": True,
+            "receipt": {
+                "receipt_id": receipt.receipt_id,
+                "idempotency_key": receipt.idempotency_key,
+                "request_id": receipt.request_id,
+                "correlation_id": receipt.correlation_id,
+                "operation": receipt.operation,
+                "outcome": receipt.outcome,
+                "pin_id": receipt.pin_id,
+                "expected_revision": receipt.expected_revision,
+                "committed_revision": receipt.committed_revision,
+            },
+        },
+        headers={"Cache-Control": "private, no-store", "X-Correlation-Id": correlation_id},
     )
 
 
