@@ -17,10 +17,8 @@ SPEC.loader.exec_module(engine)
 
 def _documents():
     return [
-        {"id": "a", "name": "Plan", "text": "Alpha delivery depends on Vendor.
-Budget approved."},
-        {"id": "b", "name": "Notes", "text": "Vendor delivery status pending.
-Alpha owner notified."},
+        {"id": "a", "name": "Plan", "text": "Alpha delivery depends on Vendor.\nBudget approved."},
+        {"id": "b", "name": "Notes", "text": "Vendor delivery status pending.\nAlpha owner notified."},
     ]
 
 
