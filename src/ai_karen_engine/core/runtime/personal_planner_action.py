@@ -35,13 +35,13 @@ async def execute_authorized_planner_action(
             correlation_id=action.correlation_id,
         )
     assert action.commitment_id is not None and action.expected_revision is not None
-    assert action.title is not None
     return await owner.update(
         user=authenticated_user, commitment_id=action.commitment_id,
         mutation=CommitmentMutation(
             idempotency_key=action.idempotency_key,
             expected_revision=action.expected_revision,
             title=action.title,
+            status=action.status,
         ),
         correlation_id=action.correlation_id,
     )
