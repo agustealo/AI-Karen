@@ -65,7 +65,9 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
             SELECT count(*) FROM information_schema.tables
             WHERE table_schema = 'public'
               AND table_name IN ('tenants', 'auth_users', 'conversations',
-                                 'messages', 'conversation_presentation_pins')
+                                 'messages', 'conversation_presentation_pins',
+                                 'conversation_presentation_pin_mutation_receipts',
+                                 'auth_sessions')
         """)
         if existing:
             pytest.fail(
