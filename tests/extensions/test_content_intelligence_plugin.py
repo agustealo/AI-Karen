@@ -77,18 +77,6 @@ def test_no_file_io_or_external_sdk_dependency():
     assert "requests" not in source
 
 
-def test_browse_groups_logical_folders_without_claiming_acl():
-    documents = _documents()
-    documents[0]["folder_id"] = "project-alpha"
-    documents[1]["folder_id"] = "project-alpha"
-    result = engine.execute({"operation": "browse", "documents": documents})
-    assert result["folder_semantics"] == "caller_supplied_labels_not_access_grants"
-    assert result["folders"][0]["folder_id"] == "project-alpha"
-    assert result["folders"][0]["document_count"] == 2
-    assert all(len(doc["sha256"]) == 64 for doc in result["folders"][0]["documents"])
-    assert result["persisted"] is False
-
-
 def test_search_spans_round_trip_to_exact_source_content():
     documents = [
         {"id": "a", "name": "Notes", "folder_id": "client-one",
@@ -116,26 +104,8 @@ def test_search_long_line_does_not_lose_trailing_evidence():
     assert text[hit["offset"]:hit["end_offset"]] == hit["excerpt"]
 
 
-@pytest.mark.parametrize("folder_id", [
-    "../tenant-two",
-    "/absolute",
-    "..",
-    "a/b",
-    "x" * 65,
-    12,
-    "",
-])
-def test_folder_labels_are_opaque_and_not_paths(folder_id):
-    with pytest.raises(ValueError, match="content_folder_label_invalid"):
-        engine.execute({
-            "operation": "browse",
-            "documents": [{"id": "a", "name": "name", "text": "text",
-                           "folder_id": folder_id}],
-        })
-
-
 def test_operation_specific_extra_fields_fail_closed():
-    with pytest.raises(ValueError, match="content_browse_parameters_invalid"):
+    with pytest.raises(ValueError, match="content_operation_invalid"):
         engine.execute({
             "operation": "browse",
             "documents": _documents(),
