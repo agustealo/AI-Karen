@@ -231,12 +231,33 @@ export function FileExplorerInventoryHost({
       setSelectedSourceIds([]);
       return;
     }
-    const ids = new Set(currentPage.items.map((item) => item.source_id));
-    setSelectedSourceIds(
-      references.filter((reference) => ids.has(reference.source_id))
-        .slice(0, 24)
-        .map((reference) => reference.source_id),
-    );
+    // A plugin UI event is untrusted presentation input, not authority.
+    // Never accept a remembered ID with a forged/stale revision or hash.
+    // Reject the entire event rather than partially accepting mixed evidence.
+    if (!Array.isArray(references) || references.length > 24) {
+      setSelectedSourceIds([]);
+      return;
+    }
+    const byId = new Map(currentPage.items.map((item) => [item.source_id, item]));
+    const seen = new Set<string>();
+    const accepted: string[] = [];
+    for (const reference of references) {
+      const item = reference && typeof reference.source_id === 'string'
+        ? byId.get(reference.source_id) : undefined;
+      if (
+        !item ||
+        seen.has(item.source_id) ||
+        reference.kind !== item.kind ||
+        reference.revision !== item.revision ||
+        reference.sha256 !== item.sha256
+      ) {
+        setSelectedSourceIds([]);
+        return;
+      }
+      seen.add(item.source_id);
+      accepted.push(item.source_id);
+    }
+    setSelectedSourceIds(accepted);
   }, [currentPage, loading, currentError]);
 
   const onRefresh = useCallback(() => {
