@@ -79,3 +79,20 @@ def test_settings_real_browser_acceptance_is_opt_in_and_credential_safe() -> Non
     assert "page.keyboard.press(\"Escape\")" in suite
     assert "page.route(" not in suite
     assert "page.request.post(" not in suite
+
+
+def test_settings_browser_acceptance_reuses_protected_release_workflow() -> None:
+    workflow = (
+        ROOT / ".github/workflows/karen-history-browser-acceptance.yml"
+    ).read_text(encoding="utf-8")
+    assert "          - settings" in workflow
+    assert "authenticated-settings-visual-acceptance:" in workflow
+    assert "environment: karen-sanitized-browser-acceptance" in workflow
+    assert "KAREN_SETTINGS_ACCEPTANCE_URL" in workflow
+    assert "KAREN_SETTINGS_VISUAL_ACCEPTANCE: \"true\"" in workflow
+    assert "KAREN_SETTINGS_SANITIZED_CAPTURE: \"false\"" in workflow
+    assert "python scripts/ci/verify_vercel_deployment.py" in workflow
+    assert "python scripts/ci/verify_deployment_revision.py" in workflow
+    assert "e2e/settings-visual-acceptance.spec.ts" in workflow
+    assert "--project=chromium --reporter=list --retries=0" in workflow
+    assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in workflow

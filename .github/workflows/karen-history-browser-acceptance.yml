@@ -19,6 +19,7 @@ on:
           - copilotkit-context
           - copilotkit-failure
           - copilotkit-persona
+          - settings
       target_sha:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
@@ -718,3 +719,104 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/verify_docker_browser_host.sh
+
+  # KUI-SETTINGS: operator-triggered, credential-isolated responsive browser
+  # acceptance. Reuses the canonical protected release and provenance gates.
+  authenticated-settings-visual-acceptance:
+    if: inputs.scenario == 'settings' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: karen-sanitized-browser-acceptance
+    permissions:
+      contents: read
+    env:
+      TARGET_SHA: ${{ inputs.target_sha }}
+      KAREN_BASE_URL: ${{ vars.KAREN_SETTINGS_ACCEPTANCE_URL }}
+      KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
+      KAREN_SETTINGS_VISUAL_ACCEPTANCE: "true"
+      KAREN_SETTINGS_SANITIZED_CAPTURE: "false"
+      CI: "true"
+    defaults:
+      run:
+        working-directory: src/ui_launchers/Karen-AI-Theme
+
+    steps:
+      - name: Require exact approved current main for Settings acceptance
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Expected an exact reviewed 40-character SHA"; exit 1; }
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$TARGET_SHA" = "$GITHUB_SHA"
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$TARGET_SHA" || { echo "::error::Main changed before acceptance"; exit 1; }
+
+      - name: Check out exact reviewed Settings acceptance source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.target_sha }}
+          persist-credentials: false
+
+      - name: Verify independent Vercel deployment and live revision
+        working-directory: .
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved immutable Settings deployment URL"; exit 1; }
+          python scripts/ci/verify_vercel_deployment.py
+          python scripts/ci/verify_deployment_revision.py
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - name: Install reproducible browser dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for real Settings acceptance
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify authenticated Settings full-page and sheet at five viewports
+        shell: bash
+        env:
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing sanitized test identity"; exit 1; }
+          test -n "$KAREN_UX_PASSWORD" || { echo "::error::Missing sanitized test credential"; exit 1; }
+          npx playwright test e2e/settings-visual-acceptance.spec.ts \
+            --config=e2e/playwright.config.ts \
+            --project=chromium --reporter=list --retries=0
+
+      - name: Reattest deployed provenance and current main after browser proof
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ github.workspace }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          python scripts/ci/verify_vercel_deployment.py
+          python scripts/ci/verify_deployment_revision.py
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          test "$main_sha" = "$TARGET_SHA" || { echo "::error::Reviewed main moved during acceptance"; exit 1; }
+
+      # Do not upload artifacts, credentials, traces, video or screenshots.
