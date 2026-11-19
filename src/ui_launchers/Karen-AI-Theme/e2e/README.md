@@ -370,3 +370,26 @@ requires `KAREN_PLUGINS_SANITIZED_CAPTURE=true` and a dedicated sanitized
 account whose UI contains no personal data or secrets. Review screenshots
 manually against the approved design reference. A CI run that skips this
 opt-in suite is not browser or release acceptance.
+
+
+### Protected Settings acceptance on reviewed main
+
+The existing **KAREN Browser Acceptance** GitHub Actions workflow also offers
+the operator-triggered `settings` scenario. Dispatch it on `main`, with
+`target_sha` set to that same reviewed, current 40-character main commit and
+`deployment_target` set to `preview` or `production`. Supply the approved,
+**immutable HTTPS Vercel deployment URL** in the protected environment variable
+`KAREN_SETTINGS_ACCEPTANCE_URL`. The environment
+`karen-sanitized-browser-acceptance` must provide authorized
+`KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` secrets and the canonical
+Vercel provenance credentials/IDs used by other protected acceptance jobs.
+
+The job fails closed before browser setup if the Git ref, checked-out SHA,
+independent Vercel Git provenance, live deployment revision, or environment
+configuration does not match. It attests both platform and live deployment
+identity again after the browser run. The acceptance suite is opted in only
+for that job; no screenshots, traces, video, report uploads, fake backend
+data, or browser test retries are permitted. An absent deployment, unconfigured
+secret, Vercel quota block or stale main SHA **fails or blocks acceptance**;
+it never counts as a browser pass. Protect environment approvals and never
+copy real account values into workflow inputs or logs.
