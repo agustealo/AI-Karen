@@ -635,3 +635,120 @@ async def test_completion_invalid_receipt_never_reports_success(monkeypatch):
     )
     assert result.error == "planner_mutation_receipt_invalid"
     assert result.payload["planner_completed"] is False
+
+
+@pytest.mark.asyncio
+async def test_completion_retry_uses_same_owner_scoped_key_across_transport_responses(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    task_id = uuid4()
+    query = f"Complete task {task_id} revision 2"
+    first, first_plan, first_meter, principal = _request(
+        query, request_id="response-a", correlation_id="correlation-a",
+    )
+    second, second_plan, second_meter, _ = _request(
+        query, request_id="response-b", correlation_id="correlation-b",
+    )
+    first_plan.allowed_capabilities = ["planner.update"]
+    second_plan.allowed_capabilities = ["planner.update"]
+    second.context.tenant_id = first.context.tenant_id
+    second.context.user_id = first.context.user_id
+    second.context.require_authenticated_user = first.context.require_authenticated_user
+    observed = []
+
+    async def uncertain_write(action, **kwargs):
+        observed.append((action.idempotency_key, action.correlation_id))
+        raise RuntimeError("uncertain PostgreSQL result")
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", uncertain_write,
+    )
+    decision = SimpleNamespace(
+        intent="planner.update", is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    first_result = await ChatRuntime._execute_personal_planner_mutation(
+        first, decision, first_plan, first_meter,
+    )
+    second_result = await ChatRuntime._execute_personal_planner_mutation(
+        second, decision, second_plan, second_meter,
+    )
+    assert not first_result.success and not second_result.success
+    assert first_result.payload["planner_completed"] is False
+    assert second_result.payload["planner_completed"] is False
+    assert observed[0][0] == observed[1][0]
+    assert observed[0][1] != observed[1][1]
+
+
+@pytest.mark.asyncio
+async def test_completion_changed_revision_with_same_key_cannot_claim_success(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    task_id = uuid4()
+    one, plan, meter, principal = _request(
+        f"Complete task {task_id} revision 1",
+    )
+    plan.allowed_capabilities = ["planner.update"]
+    attempts = []
+
+    async def conflict_on_changed_action(action, **kwargs):
+        attempts.append(action)
+        raise RuntimeError("repository idempotency conflict")
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action",
+        conflict_on_changed_action,
+    )
+    decision = SimpleNamespace(
+        intent="planner.update", is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    result = await ChatRuntime._execute_personal_planner_mutation(
+        one, decision, plan, meter,
+    )
+    assert not result.success
+    assert result.error == "planner_mutation_unavailable"
+    assert result.payload["planner_completed"] is False
+    assert len(attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_completion_foreign_owner_receipt_is_rejected(monkeypatch):
+    from ai_karen_engine.core.planner.contracts import CommitmentStatus
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    task_id = uuid4()
+    request, plan, meter, principal = _request(
+        f"Complete task {task_id} revision 1",
+    )
+    plan.allowed_capabilities = ["planner.update"]
+
+    async def malicious_write(action, **kwargs):
+        return (
+            SimpleNamespace(
+                id=task_id, tenant_id=UUID(principal.tenant_id),
+                owner_id=uuid4(), title="Another user's task",
+                status=CommitmentStatus.COMPLETED, revision=2,
+            ),
+            SimpleNamespace(
+                commitment_id=task_id, tenant_id=UUID(principal.tenant_id),
+                idempotency_key=action.idempotency_key, revision=2,
+                persisted_at=datetime.now(timezone.utc),
+                correlation_id=action.correlation_id,
+            ),
+        )
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action",
+        malicious_write,
+    )
+    decision = SimpleNamespace(
+        intent="planner.update", is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    result = await ChatRuntime._execute_personal_planner_mutation(
+        request, decision, plan, meter,
+    )
+    assert not result.success
+    assert result.error == "planner_mutation_receipt_invalid"
+    assert result.payload["planner_completed"] is False
