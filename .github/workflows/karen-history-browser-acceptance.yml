@@ -20,6 +20,7 @@ on:
           - copilotkit-failure
           - copilotkit-persona
           - settings
+          - navigation
       target_sha:
         description: Exact reviewed 40-character main commit SHA for search acceptance
         type: string
@@ -723,7 +724,7 @@ jobs:
   # KUI-SETTINGS: operator-triggered, credential-isolated responsive browser
   # acceptance. Reuses the canonical protected release and provenance gates.
   authenticated-settings-visual-acceptance:
-    if: inputs.scenario == 'settings' && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: karen-sanitized-browser-acceptance
@@ -734,6 +735,9 @@ jobs:
       KAREN_BASE_URL: ${{ vars.KAREN_SETTINGS_ACCEPTANCE_URL }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
       KAREN_SETTINGS_VISUAL_ACCEPTANCE: "true"
+      KAREN_NAV_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'navigation' && 'true' || 'false' }}
+      KAREN_NAV_SANITIZED_CAPTURE: "false"
+      KAREN_SANITIZED_ACCOUNT: "true"
       KAREN_SETTINGS_VERIFIED_DEPLOYMENT: "true"
       KAREN_SETTINGS_SANITIZED_CAPTURE: "false"
       CI: "true"
@@ -799,9 +803,15 @@ jobs:
           set -euo pipefail
           test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing sanitized test identity"; exit 1; }
           test -n "$KAREN_UX_PASSWORD" || { echo "::error::Missing sanitized test credential"; exit 1; }
-          npx playwright test e2e/settings-visual-acceptance.spec.ts \
-            --config=e2e/playwright.config.ts \
-            --project=chromium --reporter=list --retries=0
+          if [[ "${{ inputs.scenario }}" == "navigation" ]]; then
+            npx playwright test e2e/ux-user-journeys.spec.ts \
+              --config=e2e/playwright.config.ts \
+              --project=chromium --grep="UX-16" --reporter=list --retries=0
+          else
+            npx playwright test e2e/settings-visual-acceptance.spec.ts \
+              --config=e2e/playwright.config.ts \
+              --project=chromium --reporter=list --retries=0
+          fi
 
       - name: Reattest deployed provenance and current main after browser proof
         working-directory: .

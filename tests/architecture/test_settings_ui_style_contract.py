@@ -120,7 +120,7 @@ def test_settings_browser_privacy_is_enforced_by_playwright_configuration() -> N
     ).read_text(encoding="utf-8")
     assert "const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'true'" in config
     assert "  settingsAcceptance;" in config
-    assert "retries: localBenchmark || settingsAcceptance ? 0" in config
+    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance ? 0" in config
     assert "reporter: settingsAcceptance" in config
     assert "? [['list']]" in config
     assert "screenshot: privateBrowserRun ? 'off'" in config

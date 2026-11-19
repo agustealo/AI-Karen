@@ -59,3 +59,30 @@ primary destination reachability and mobile drawer dismissal at 390/768/1024/
 1440/1920 CSS px, and attaches an individual screenshot for each viewport.
 Do not treat skipped, absent, or unreviewed browser artifacts as acceptance;
 retain them privately and inspect for personal/tenant data before sharing.
+
+
+## Protected real-browser acceptance (KUI-NAV-ACCEPT-02)
+
+The canonical `.github/workflows/karen-history-browser-acceptance.yml`
+workflow accepts `scenario: navigation` on **current reviewed `main`**,
+reusing the protected `karen-sanitized-browser-acceptance` environment,
+approved Settings deployment origin, independently verified immutable Vercel
+revision and the existing sanitized account secrets.
+
+Dispatch with `scenario=navigation`, `target_sha` equal to the *currently
+deployed and reviewed* 40-character `main` commit, and the operator-approved
+preview or production deployment target. If deployment provenance or credentials
+are unavailable, the job must fail, not skip and not impersonate success.
+
+For this protected scenario, the Playwright runner uses a list reporter, zero
+retries, no traces, no videos, no automatic screenshots, and no artifact upload.
+It executes only UX-16. The UI is exercised at 390, 768, 1024, 1440, and
+1920 CSS px and must prove visible navigation, computed font values, and
+mobile drawer dismissal. This is an **observed DOM/layout contract**, not
+pixel-perfect sign-off.
+
+Sanitized screenshot attachments are deliberately off in the protected job.
+A separate locally approved sanitized run may set
+`KAREN_NAV_SANITIZED_CAPTURE=true`, with private artifacts and manual
+inspection. Never upload authenticated browser evidence without privacy
+review. Passing source CI is not evidence that the protected job has run.
