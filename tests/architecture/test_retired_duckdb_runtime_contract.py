@@ -79,17 +79,21 @@ def test_runtime_requirements_do_not_reinstall_retired_database() -> None:
 def test_no_live_duckdb_imports_or_flags_in_runtime_sources() -> None:
     """Guard every first-party runtime source, not just the known entry points."""
     roots = (
-        ROOT / "src/ai_karen_engine",
-        ROOT / "src/api",
+        ROOT / "src",
         ROOT / "scripts/ci",
+        ROOT / "scripts/deploy",
+        ROOT / "deploy/render",
     )
     source_suffixes = {".py", ".js", ".ts", ".tsx", ".sh", ".yaml", ".yml", ".toml"}
     retired_code_patterns = (
-        re.compile(r"(?i)\\bimport\\s+duckdb\\b"),
-        re.compile(r"(?i)\\bfrom\\s+duckdb\\s+import\\b"),
-        re.compile(r"(?i)\\bduckdb\\s*\\.\\s*connect\\s*\\("),
-        re.compile(r"\\bKARI_DUCKDB_PASSWORD\\b"),
-        re.compile(r"\\bKARI_ENABLE_DUCKDB\\b"),
+        re.compile(r"(?i)\bimport\s+duckdb\b"),
+        re.compile(r"(?i)\bfrom\s+duckdb\s+import\b"),
+        re.compile(r"(?i)\bduckdb\s*\.\s*connect\s*\("),
+        re.compile(r"(?i)\bDuckDBClient\b"),
+        re.compile(r"(?i)\bstorage[./]adapters[./]duckdb\b"),
+        re.compile(r"(?i)\bfrom\s+\.duckdb\s+import\b"),
+        re.compile(r"\bKARI_DUCKDB_PASSWORD\b"),
+        re.compile(r"\bKARI_ENABLE_DUCKDB\b"),
     )
     violations: list[str] = []
     for root in roots:
@@ -105,3 +109,17 @@ def test_no_live_duckdb_imports_or_flags_in_runtime_sources() -> None:
                 if any(pattern.search(line) for pattern in retired_code_patterns):
                     violations.append(f"{candidate.relative_to(ROOT)}:{lineno}")
     assert not violations, "Retired database still wired in source: " + ", ".join(violations)
+
+
+def test_render_blueprint_and_secret_inspector_drop_retired_database() -> None:
+    blueprint = (ROOT / "deploy/render/render.yaml").read_text(encoding="utf-8")
+    inspector = (ROOT / "scripts/deploy/inspect_render_beta_environment.py").read_text(encoding="utf-8")
+    assert "KARI_DUCKDB_PASSWORD" not in blueprint
+    assert "KARI_ENABLE_DUCKDB" not in blueprint
+    assert "KARI_DUCKDB_PASSWORD" not in inspector
+    for required in ("DATABASE_URL", "POSTGRES_URL", "AUTH_DATABASE_URL", "REDIS_URL", "KARI_JOB_ENC_KEY"):
+        assert required in blueprint
+
+
+def test_retired_duckdb_adapter_is_absent() -> None:
+    assert not (ROOT / "src/ai_karen_engine/storage/adapters/duckdb.py").exists()
