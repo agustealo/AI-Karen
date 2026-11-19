@@ -21,8 +21,9 @@ on:
           - copilotkit-persona
           - settings
           - navigation
+          - file-explorer
       target_sha:
-        description: Exact reviewed 40-character main commit SHA for search acceptance
+        description: Exact reviewed 40-character main commit SHA for protected acceptance
         type: string
         required: false
       deployment_target:
@@ -721,10 +722,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/ci/verify_docker_browser_host.sh
 
-  # KUI-SETTINGS: operator-triggered, credential-isolated responsive browser
-  # acceptance. Reuses the canonical protected release and provenance gates.
+  # KUI: protected settings, navigation, and file-explorer browser acceptance.
+  # Reuse the approved main/deployment/credential boundary, not a second runner.
   authenticated-settings-visual-acceptance:
-    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'file-explorer') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: karen-sanitized-browser-acceptance
@@ -732,9 +733,11 @@ jobs:
       contents: read
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
-      KAREN_BASE_URL: ${{ vars.KAREN_SETTINGS_ACCEPTANCE_URL }}
+      KAREN_BASE_URL: ${{ inputs.scenario == 'file-explorer' && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL || vars.KAREN_SETTINGS_ACCEPTANCE_URL }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
-      KAREN_SETTINGS_VISUAL_ACCEPTANCE: "true"
+      KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'file-explorer' && 'false' || 'true' }}
+      KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
+      KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: "true"
       KAREN_NAV_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'navigation' && 'true' || 'false' }}
       KAREN_NAV_SANITIZED_CAPTURE: "false"
       KAREN_SANITIZED_ACCOUNT: "true"
@@ -746,7 +749,7 @@ jobs:
         working-directory: src/ui_launchers/Karen-AI-Theme
 
     steps:
-      - name: Require exact approved current main for Settings acceptance
+      - name: Require exact approved current main for protected browser acceptance
         working-directory: .
         shell: bash
         env:
@@ -759,7 +762,7 @@ jobs:
           main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
           test "$main_sha" = "$TARGET_SHA" || { echo "::error::Main changed before acceptance"; exit 1; }
 
-      - name: Check out exact reviewed Settings acceptance source
+      - name: Check out exact reviewed browser acceptance source
         uses: actions/checkout@v5
         with:
           ref: ${{ inputs.target_sha }}
@@ -777,7 +780,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved immutable Settings deployment URL"; exit 1; }
+          test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved immutable browser acceptance deployment URL"; exit 1; }
           python scripts/ci/verify_vercel_deployment.py
           python scripts/ci/verify_deployment_revision.py
 
@@ -790,10 +793,10 @@ jobs:
       - name: Install reproducible browser dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Install Chromium for real Settings acceptance
+      - name: Install Chromium for protected browser acceptance
         run: npx playwright install --with-deps chromium
 
-      - name: Verify authenticated Settings full-page and sheet at five viewports
+      - name: Verify authenticated workspace browser acceptance
         shell: bash
         env:
           KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
@@ -807,6 +810,10 @@ jobs:
             npx playwright test e2e/ux-user-journeys.spec.ts \
               --config=e2e/playwright.config.ts \
               --project=chromium --grep="UX-16" --reporter=list --retries=0
+          elif [[ "${{ inputs.scenario }}" == "file-explorer" ]]; then
+            npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
+              --config=e2e/playwright.config.ts \
+              --project=chromium --reporter=list --retries=0
           else
             npx playwright test e2e/settings-visual-acceptance.spec.ts \
               --config=e2e/playwright.config.ts \
