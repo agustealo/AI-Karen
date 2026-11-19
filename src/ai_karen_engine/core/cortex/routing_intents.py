@@ -54,7 +54,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         # validate timezone and timing, and obtain a durable receipt.
         "triggers": ["create a personal task", "add a task to", "create a task to"],
         "patterns": [
-            r"^(?:please\\s+)?(?:create|add|make)\\s+(?:me\\s+)?(?:a\\s+)?(?:personal\\s+)?(?:task|commitment)\\s+(?:to|for)\\s+.+$",
+            r"^(?:please\s+)?(?:create|add|make)\s+(?:me\s+)?(?:a\s+)?(?:personal\s+)?(?:task|commitment)\s+(?:to|for)\s+.+$",
         ],
         "required_capability": "planner.create",
         "requires_live_data": True,
