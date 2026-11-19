@@ -506,3 +506,17 @@
     transition: none;
   }
 }
+
+[data-kari-root] .kari-nav-footer-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 0 1px;
+  border-top: 1px solid var(--kari-line);
+  color: var(--kari-text-muted);
+  font-family: var(--kari-font-body);
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.015em;
+}
