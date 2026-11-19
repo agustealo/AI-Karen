@@ -181,7 +181,7 @@ function FileExplorerView({
           References only. File access is checked again by the consuming service.
         </p>
       </div>
-      {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onRefresh}>Refresh</button>}
+      {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
     <nav aria-label="Folder location" className="flex items-center gap-3 text-sm">
       <button type="button" className="rounded border px-3 py-2" onClick={() => { setParentId(null); setFilter(''); }}>Root</button>
