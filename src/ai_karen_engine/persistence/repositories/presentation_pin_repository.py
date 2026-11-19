@@ -184,80 +184,10 @@ class PresentationPinRepository:
         completed_run_attestations: Mapping[str, tuple[str, str]],
         position: int = 0,
     ) -> StoredPresentationPin:
-        tenant = _uuid(authenticated_tenant_id)
-        user = _uuid(authenticated_user_id)
-        pos = _check_position(position)
-        # The caller MUST have fetched owned_snapshot via the canonical
-        # ConversationRuntimeGateway, and these attestations from the trusted
-        # completed-run ledger. Never derive proof from request metadata.
-        admitted = admit_presentation_pin_reference(
-            snapshot=owned_snapshot,
-            authenticated_tenant_id=tenant,
-            authenticated_user_id=user,
-            reference=reference,
-            attestations=completed_run_attestations,
+        """Disabled legacy write API: receipts are mandatory for all mutations."""
+        raise PresentationPinUnavailable(
+            "Legacy pin mutation disabled; use authenticated receipt-aware runtime"
         )
-        ref = admitted.reference
-        conversation = _uuid(ref.conversation_id)
-        message = _uuid(ref.assistant_message_id)
-        params = {
-            "tenant": tenant,
-            "user": user,
-            "conversation": conversation,
-            "message": message,
-            "presentation": ref.presentation_id,
-            "evidence": ref.evidence_ref,
-            "position": pos,
-        }
-        try:
-            async with async_transaction_scope(tenant, user_id=user) as session:
-                # One principal-wide lock serializes capacity decisions and
-                # duplicate first-writers without a second lock subsystem.
-                await session.execute(text("""
-                    SELECT pg_advisory_xact_lock(
-                        hashtextextended(:tenant || ':' || :user, 0)
-                    )
-                """), params)
-                existing = (await session.execute(text(f"""
-                    SELECT {_SELECT_COLUMNS}
-                    FROM public.conversation_presentation_pins
-                    WHERE tenant_id = :tenant
-                      AND user_id = :user
-                      AND conversation_id = :conversation
-                      AND assistant_message_id = :message
-                      AND presentation_id = :presentation
-                    FOR UPDATE
-                """), params)).mappings().first()
-                if existing is not None:
-                    if existing["evidence_ref"] != ref.evidence_ref:
-                        raise PresentationPinConflict("Stored pin source has changed")
-                    return _pin(existing)
-                count = (await session.execute(text("""
-                    SELECT count(*) FROM public.conversation_presentation_pins
-                    WHERE tenant_id = :tenant AND user_id = :user
-                """), params)).scalar_one()
-                if count >= _MAX_PINS:
-                    raise PresentationPinConflict("Pin capacity reached")
-                created = (await session.execute(text(f"""
-                    INSERT INTO public.conversation_presentation_pins (
-                        tenant_id, user_id, conversation_id,
-                        assistant_message_id, presentation_id,
-                        evidence_ref, position
-                    ) VALUES (
-                        :tenant, :user, :conversation, :message,
-                        :presentation, :evidence, :position
-                    )
-                    RETURNING {_SELECT_COLUMNS}
-                """), params)).mappings().one()
-                return _pin(created)
-        except PresentationPinConflict:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "Presentation pin creation failed",
-                extra={"event": "presentation_pin_write_failed", "error_type": type(exc).__name__},
-            )
-            raise PresentationPinUnavailable("Pin storage unavailable") from exc
 
 
 
@@ -578,35 +508,10 @@ class PresentationPinRepository:
         expected_revision: int,
         position: int,
     ) -> StoredPresentationPin:
-        """One-pin optimistic CAS; never call a positional update a full reorder."""
-        tenant, user, identity = map(
-            _uuid, (authenticated_tenant_id, authenticated_user_id, pin_id)
+        """Disabled legacy reorder: all writes must commit immutable receipts."""
+        raise PresentationPinUnavailable(
+            "Legacy reorder mutation disabled; use authenticated receipt-aware runtime"
         )
-        revision, pos = _check_revision(expected_revision), _check_position(position)
-        try:
-            async with async_transaction_scope(tenant, user_id=user) as session:
-                row = (await session.execute(text(f"""
-                    UPDATE public.conversation_presentation_pins
-                    SET position = :position, revision = revision + 1,
-                        updated_at = clock_timestamp()
-                    WHERE tenant_id = :tenant AND user_id = :user
-                      AND pin_id = :pin AND revision = :revision
-                    RETURNING {_SELECT_COLUMNS}
-                """), {
-                    "tenant": tenant, "user": user, "pin": identity,
-                    "position": pos, "revision": revision,
-                })).mappings().first()
-                if row is None:
-                    raise PresentationPinConflict("Pin revision or ownership conflict")
-                return _pin(row)
-        except PresentationPinConflict:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "Presentation pin reorder failed",
-                extra={"event": "presentation_pin_reorder_failed", "error_type": type(exc).__name__},
-            )
-            raise PresentationPinUnavailable("Pin storage unavailable") from exc
 
     async def unpin(
         self,
@@ -615,21 +520,7 @@ class PresentationPinRepository:
         authenticated_user_id: str,
         pin_id: str,
     ) -> bool:
-        """Idempotent delete in the authenticated scope; false means absent."""
-        tenant, user, identity = map(
-            _uuid, (authenticated_tenant_id, authenticated_user_id, pin_id)
+        """Disabled legacy delete: all writes must commit immutable receipts."""
+        raise PresentationPinUnavailable(
+            "Legacy unpin mutation disabled; use authenticated receipt-aware runtime"
         )
-        try:
-            async with async_transaction_scope(tenant, user_id=user) as session:
-                row = (await session.execute(text("""
-                    DELETE FROM public.conversation_presentation_pins
-                    WHERE tenant_id = :tenant AND user_id = :user AND pin_id = :pin
-                    RETURNING pin_id
-                """), {"tenant": tenant, "user": user, "pin": identity})).first()
-                return row is not None
-        except Exception as exc:
-            logger.warning(
-                "Presentation unpin failed",
-                extra={"event": "presentation_pin_delete_failed", "error_type": type(exc).__name__},
-            )
-            raise PresentationPinUnavailable("Pin storage unavailable") from exc
