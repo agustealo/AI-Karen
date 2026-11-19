@@ -191,11 +191,15 @@ describe("canonical auth service session generation", () => {
 
     await expect(api.refreshAccessToken()).rejects.toThrow("Network interrupted");
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // A later explicit attempt is a new user/runtime decision, not an automatic
-    // retry of the uncertain mutation.
+    // Recovery here represents an independently established new login.
+    // Never resend the original credential after an ambiguous rotation.
+    localStorage.setItem("access_token", "fresh-login-access");
+    localStorage.setItem("refresh_token", "fresh-login-refresh");
     await expect(api.refreshAccessToken()).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(localStorage.getItem("refresh_token")).toBe("next-refresh");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).refresh_token)
+      .toBe("fresh-login-refresh");
   });
 
   it("does not clear a new login when an earlier logout finally completes", async () => {
