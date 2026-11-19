@@ -3579,9 +3579,14 @@ class ChatRuntime:
             user = context.require_authenticated_user()
             owner = PlannerPrincipal.from_authenticated_user(user)
             conversation_id = context.require_conversation_id()
-            request_id = str(context.request_id or "").strip()
-            if not request_id or not context.correlation_id:
-                raise ValueError("Missing runtime request identity")
+            # Response/request IDs are minted by transport ingress on every
+            # invocation and MUST NOT authorize an independent mutation retry.
+            # The client must preserve a typed per-action key across retries.
+            mutation_key = (request.metadata or {}).get(
+                "planner_mutation_idempotency_key"
+            )
+            if not context.correlation_id:
+                raise ValueError("Missing runtime correlation identity")
         except (PermissionError, ValueError) as exc:
             return unavailable(
                 "planner_create_principal_unverified",
@@ -3612,6 +3617,17 @@ class ChatRuntime:
             )
 
         title, timezone = parsed
+        try:
+            if not isinstance(mutation_key, str):
+                raise ValueError("Missing mutation idempotency key")
+            supplied_idempotency = uuid.UUID(mutation_key)
+            if supplied_idempotency.int == 0:
+                raise ValueError("Nil mutation idempotency key")
+        except (ValueError, TypeError, AttributeError):
+            return unavailable(
+                "planner_create_idempotency_required",
+                "Task creation requires a retry-stable action ID. No task was saved.",
+            )
         action = AuthorizedPlannerAction(
             action=PlannerAction.CREATE,
             title=title,
@@ -3619,7 +3635,7 @@ class ChatRuntime:
             idempotency_key=uuid.uuid5(
                 uuid.NAMESPACE_URL,
                 f"personal-planner-create:{owner.tenant_id}:{owner.owner_id}:"
-                f"{conversation_id}:{request_id}",
+                f"{conversation_id}:{supplied_idempotency}",
             ),
             correlation_id=context.correlation_id,
             explicit_user_authorization=True,
