@@ -286,7 +286,16 @@ test("KUI-COMMS: authenticated Medusa run receipts render and refresh", async ({
   });
   await expect(receipt).toBeVisible();
   await expect(receipt).toContainText(visibleRun.status);
-  await expect(receipt).toContainText("Started");
+  const expectedStartTime = await page.evaluate((startedAt) => {
+    const started = new Date(startedAt);
+    const month = started.toLocaleString("en-US", { month: "short" });
+    const day = started.getDate();
+    const hour = String(started.getHours()).padStart(2, "0");
+    const minute = String(started.getMinutes()).padStart(2, "0");
+    return `Started ${month} ${day}, ${hour}:${minute}`;
+  }, visibleRun.startedAt);
+  await expect(receipt).toContainText(expectedStartTime);
+  await expect(receipt).not.toContainText("Time unavailable");
   await expect(card).toContainText("does not imply an independently verified result");
 
   const refreshedRequest = page.waitForResponse(isOwnedRunResponse, { timeout: 30_000 });
