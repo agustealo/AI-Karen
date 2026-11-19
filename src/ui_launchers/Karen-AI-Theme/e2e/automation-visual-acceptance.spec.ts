@@ -48,20 +48,23 @@ function approvedTarget(): URL {
 async function openWorkspace(
   page: Page, label: string, advanced: boolean,
 ): Promise<void> {
-  let navigation = page.getByRole("button", { name: label, exact: true });
-  if (!await navigation.last().isVisible().catch(() => false)) {
+  // Mobile navigation may be collapsed independently of the advanced group.
+  const advancedToggle = page.getByTestId("advanced-tools-toggle");
+  const requiredToggle = advanced
+    ? advancedToggle
+    : page.getByRole("button", { name: label, exact: true });
+  if (!await requiredToggle.last().isVisible().catch(() => false)) {
     const sidebarToggle = page.locator('[data-sidebar="trigger"]').first();
     await expect(sidebarToggle).toBeVisible();
     await sidebarToggle.click();
   }
   if (advanced) {
-    const advancedToggle = page.getByTestId("advanced-tools-toggle");
     await expect(advancedToggle).toBeVisible();
     if (await advancedToggle.getAttribute("aria-expanded") !== "true") {
       await advancedToggle.click();
     }
   }
-  navigation = page.getByRole("button", { name: label, exact: true });
+  const navigation = page.getByRole("button", { name: label, exact: true });
   await expect(navigation.last()).toBeVisible();
   await navigation.last().click();
 }
