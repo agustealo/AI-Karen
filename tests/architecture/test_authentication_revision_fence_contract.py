@@ -28,6 +28,11 @@ def test_provider_fences_outdated_auth_resolution() -> None:
     assert "revision !== authOperationRevision.current" in source
     assert "revision === authOperationRevision.current" in source
     assert "authOperationRevision.current += 1;" in source
+    assert "const foregroundAuthPending = useRef(false)" in source
+    assert "if (foregroundAuthPending.current) return;" in source
+    assert "foregroundAuthPending.current = true;" in source
+    assert "foregroundAuthPending.current = false;" in source
+    assert "event.key !== null" in source
     assert "authService.validateSession()" in source
     assert "authService.login(credentials)" in source
     assert "authService.logout()" in source
