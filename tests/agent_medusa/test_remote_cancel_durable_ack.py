@@ -121,7 +121,8 @@ async def test_postgres_failure_does_not_write_redis_signal(failure: str) -> Non
     events: list[str] = []
     manager, shared, durable = build_manager(events, failure=failure)
     error = (
-        DurableRunLedgerUnavailable if failure == "unavailable"
+        DurableRunLedgerUnavailable
+        if failure == "unavailable"
         else DurableRunLedgerConflict
     )
     with pytest.raises(error):
