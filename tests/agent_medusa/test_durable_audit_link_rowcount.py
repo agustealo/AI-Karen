@@ -62,7 +62,7 @@ async def test_audit_link_fails_closed_without_exactly_one_scoped_run(updated_ro
     sql, params = postgres.session.statements[1]
     assert "tenant_id = CAST(:tenant_id AS uuid)" in sql
     assert "audit_event_ref IS NULL" in sql
-    assert "audit_event_ref = :audit_event_ref" in sql
+    assert "audit_event_ref = CAST(:audit_event_ref AS text)" in sql
     assert params["run_id"] == "run-1"
     assert params["tenant_id"] == str(UUID("11111111-1111-1111-1111-111111111111"))
     assert params["audit_event_ref"] == "audit-1"
