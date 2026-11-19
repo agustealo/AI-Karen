@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -36,7 +36,7 @@ class UpdateMemoryRequest(BaseModel):
     is_correct: bool | None = None
 
 
-def _retired_memory_control() -> None:
+def _retired_memory_control() -> NoReturn:
     """Fail closed until a canonical owner can verify the actual operation."""
     raise HTTPException(
         status_code=503,
@@ -51,7 +51,6 @@ async def inspect_memory(
 ) -> list[MemoryItem]:
     """An empty response must not masquerade as an authoritative memory view."""
     _retired_memory_control()
-    raise AssertionError("unreachable")
 
 
 @router.patch("/{memory_id}")
