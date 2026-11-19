@@ -243,6 +243,15 @@ export default function TasksPage() {
   const [editingConfig, setEditingConfig] = useState<{ agentName: string; instructions: string; onSave: (newInstructions: string) => void; } | null>(null);
   const [tempInstructions, setTempInstructions] = useState("");
 
+  useEffect(() => {
+    setTaskName(""); setTaskDescription(""); setAcceptanceCriteria("");
+    setVerificationSchemaJson(""); setNewPrimaryAgent("");
+    setNewPrimaryAgentInstructions(""); setNewSubAgents([]);
+    setEditingConfig(null); setTempInstructions("");
+    setOpenHistoryTask(null); setReviewHistory([]); setHistoryError("");
+    setOpenToolReceiptsTask(null); setToolReceipts([]); setToolReceiptError("");
+  }, [principal]);
+
   const liveAgents = verifiedAgents ? agents : [];
   const getAgentLabel = (agentId?: string) => {
     if (!agentId) {
@@ -252,6 +261,7 @@ export default function TasksPage() {
   };
 
   const handleAddSubAgent = (agentToAdd: AgentOption) => {
+    if (!verifiedAgents) return;
     if (!newSubAgents.some(agent => agent.agentId === agentToAdd.agent_id)) {
       setNewSubAgents([
         ...newSubAgents,
@@ -514,13 +524,13 @@ export default function TasksPage() {
             <AutomationListNotice kind="loading" message="Restoring your session..." />
           ) : !isAuthenticated ? (
             <AutomationListNotice kind="authentication" message="Sign in to view task definitions." />
-          ) : isLoading ? (
+          ) : isLoading || !verifiedTasks ? (
             <AutomationListNotice kind="loading" message="Loading tasks from backend..." />
           ) : tasksFetchError ? (
             <AutomationListNotice kind="unavailable" message="Task definitions could not be verified with the backend." />
           ) : tasks.length === 0 ? (
             <AutomationListNotice kind="empty" message="No live task definitions yet." />
-          ) : tasks.map((task: Task, index: number) => (
+          ) : verifiedTasks && tasks.map((task: Task, index: number) => (
             <Card className="karen-automation-card" key={task.id || index}>
               <CardHeader>
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -868,7 +878,7 @@ export default function TasksPage() {
                 </div>
             </CardContent>
             <CardFooter>
-              <Button className="w-full" onClick={handleCreateTask} disabled={isAgentsLoading || liveAgents.length === 0}>
+              <Button className="w-full" onClick={handleCreateTask} disabled={!principal || !verifiedAgents || isAgentsLoading || liveAgents.length === 0}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Create Task
               </Button>
