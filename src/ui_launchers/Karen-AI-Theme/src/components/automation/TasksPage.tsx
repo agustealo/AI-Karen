@@ -139,6 +139,7 @@ export default function TasksPage() {
   const dataRevision = useRef(0);
   const [tasksOwner, setTasksOwner] = useState<string | null>(null);
   const [agentsOwner, setAgentsOwner] = useState<string | null>(null);
+  const [formOwner, setFormOwner] = useState(principal);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -238,12 +239,14 @@ export default function TasksPage() {
   const [newPrimaryAgent, setNewPrimaryAgent] = useState<string>("");
   const [newPrimaryAgentInstructions, setNewPrimaryAgentInstructions] = useState("");
   const [newSubAgents, setNewSubAgents] = useState<SubAgent[]>([]);
+  const visibleSubAgents = formOwner === principal ? newSubAgents : [];
   
   // State for the instruction editing dialog
   const [editingConfig, setEditingConfig] = useState<{ agentName: string; instructions: string; onSave: (newInstructions: string) => void; } | null>(null);
   const [tempInstructions, setTempInstructions] = useState("");
 
   useEffect(() => {
+    setFormOwner(principal);
     setTaskName(""); setTaskDescription(""); setAcceptanceCriteria("");
     setVerificationSchemaJson(""); setNewPrimaryAgent("");
     setNewPrimaryAgentInstructions(""); setNewSubAgents([]);
@@ -261,7 +264,7 @@ export default function TasksPage() {
   };
 
   const handleAddSubAgent = (agentToAdd: AgentOption) => {
-    if (!verifiedAgents) return;
+    if (!verifiedAgents || formOwner !== principal) return;
     if (!newSubAgents.some(agent => agent.agentId === agentToAdd.agent_id)) {
       setNewSubAgents([
         ...newSubAgents,
@@ -430,7 +433,7 @@ export default function TasksPage() {
   };
 
   const handleCreateTask = async () => {
-    if (!principal || !verifiedAgents) {
+    if (!principal || !verifiedAgents || formOwner !== principal) {
       setErrorMsg("Sign in to manage tasks.");
       return;
     }
@@ -469,7 +472,7 @@ export default function TasksPage() {
         primaryAgent: newPrimaryAgent,
         primaryAgentInstructions: newPrimaryAgentInstructions,
         taskType: taskName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
-        subAgents: newSubAgents
+        subAgents: visibleSubAgents
       });
       if (principalRef.current !== actionPrincipal) return;
       setTaskName("");
@@ -747,14 +750,14 @@ export default function TasksPage() {
             <CardContent className="space-y-4">
                <div className="space-y-1.5">
                   <Label htmlFor="task-name">Task Name</Label>
-                  <Input id="task-name" placeholder="e.g., Summarize Morning News" value={taskName} onChange={(e) => setTaskName(e.target.value)} />
+                  <Input id="task-name" placeholder="e.g., Summarize Morning News" value={formOwner === principal ? taskName : ""} onChange={(e) => setTaskName(e.target.value)} />
                </div>
                <div className="space-y-1.5">
                   <Label htmlFor="task-description">Task Description</Label>
                   <Textarea
                     id="task-description"
                     placeholder="Describe what this task should do."
-                    value={taskDescription}
+                    value={formOwner === principal ? taskDescription : ""}
                     onChange={(e) => setTaskDescription(e.target.value)}
                     rows={4}
                   />
@@ -763,7 +766,7 @@ export default function TasksPage() {
                  <Label htmlFor="task-acceptance-criteria">Acceptance criteria (for human verification)</Label>
                  <Textarea id="task-acceptance-criteria" maxLength={4000}
                    placeholder="What must be true before you consider this task completed?"
-                   value={acceptanceCriteria}
+                   value={formOwner === principal ? acceptanceCriteria : ""}
                    onChange={(e) => setAcceptanceCriteria(e.target.value)}
                    rows={3}
                  />
@@ -772,7 +775,7 @@ export default function TasksPage() {
                  <Label htmlFor="task-machine-schema">Optional machine-checkable JSON output schema</Label>
                  <Textarea id="task-machine-schema" maxLength={8192}
                    placeholder='{"type":"object","required":["summary"],"properties":{"summary":{"type":"string"}}}'
-                   value={verificationSchemaJson}
+                   value={formOwner === principal ? verificationSchemaJson : ""}
                    onChange={(e) => setVerificationSchemaJson(e.target.value)}
                    rows={4}
                  />
@@ -783,7 +786,7 @@ export default function TasksPage() {
                <div className="space-y-1.5">
                    <Label htmlFor="task-primary-agent">Assign Primary Agent</Label>
                    <div className="flex items-center space-x-2">
-                      <Select value={newPrimaryAgent} onValueChange={setNewPrimaryAgent}>
+                      <Select value={formOwner === principal ? newPrimaryAgent : ""} onValueChange={setNewPrimaryAgent}>
                         <SelectTrigger id="task-primary-agent">
                           <SelectValue placeholder={isAgentsLoading ? "Loading live agents..." : "Select a primary agent"} />
                         </SelectTrigger>
@@ -798,7 +801,7 @@ export default function TasksPage() {
                       <Button 
                         variant="outline" 
                         size="icon" 
-                        disabled={!newPrimaryAgent}
+                        disabled={formOwner !== principal || !verifiedAgents || !newPrimaryAgent}
                         onClick={() => openInstructionEditor(newPrimaryAgent!, newPrimaryAgentInstructions, setNewPrimaryAgentInstructions)}
                        >
                          <Settings className="h-4 w-4" />
@@ -808,9 +811,9 @@ export default function TasksPage() {
                 <div className="space-y-1.5">
                     <Label>Assign Sub-Agents (Optional)</Label>
                     <div className="p-3 border rounded-md h-40 overflow-y-auto space-y-2 bg-muted/30">
-                      {newSubAgents.length === 0 ? (
+                      {visibleSubAgents.length === 0 ? (
                             <p className="text-xs text-center text-muted-foreground py-1">No sub-agents assigned.</p>
-                       ) : newSubAgents.map((agent, index) => (
+                       ) : visibleSubAgents.map((agent, index) => (
                          <div key={agent.agentId || agent.name} className="flex items-center space-x-2 p-2 rounded-md bg-background border">
                              <Bot className="h-4 w-4 text-muted-foreground" />
                              <span className="text-sm flex-1">{agent.name}</span>
@@ -855,7 +858,7 @@ export default function TasksPage() {
                                         <Button 
                                           size="sm"
                                           onClick={() => handleAddSubAgent(agent)}
-                                          disabled={newSubAgents.some(sa => sa.agentId === agent.agent_id) || newPrimaryAgent === agent.agent_id}
+                                          disabled={!verifiedAgents || formOwner !== principal || visibleSubAgents.some(sa => sa.agentId === agent.agent_id) || newPrimaryAgent === agent.agent_id}
                                           variant="secondary"
                                         >
                                           <PlusCircle className="mr-2 h-4 w-4" />
@@ -878,7 +881,7 @@ export default function TasksPage() {
                 </div>
             </CardContent>
             <CardFooter>
-              <Button className="w-full" onClick={handleCreateTask} disabled={!principal || !verifiedAgents || isAgentsLoading || liveAgents.length === 0}>
+              <Button className="w-full" onClick={handleCreateTask} disabled={!principal || !verifiedAgents || formOwner !== principal || isAgentsLoading || liveAgents.length === 0}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Create Task
               </Button>
@@ -895,7 +898,7 @@ export default function TasksPage() {
       </Alert>
 
        {/* Instruction Editor Dialog */}
-      <Dialog open={!!editingConfig} onOpenChange={(isOpen) => !isOpen && setEditingConfig(null)}>
+      <Dialog open={formOwner === principal && !!editingConfig} onOpenChange={(isOpen) => !isOpen && setEditingConfig(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Configure Instructions for <span className="text-primary">{editingConfig?.agentName}</span></DialogTitle>
