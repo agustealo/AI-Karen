@@ -54,6 +54,7 @@ function validSource(value: unknown): value is ExplorerItem {
     entry.name.length <= 256 &&
     typeof entry.revision === 'string' &&
     entry.revision.length > 0 &&
+    typeof entry.size_bytes === 'number' &&
     Number.isSafeInteger(entry.size_bytes) &&
     Number(entry.size_bytes) >= 0 &&
     (entry.sha256 === null ||
