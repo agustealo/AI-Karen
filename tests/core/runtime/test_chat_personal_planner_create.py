@@ -7,7 +7,7 @@ acceptance still requires authenticated PostgreSQL and AG-UI observations.
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -104,15 +104,15 @@ async def test_authorized_task_creates_only_after_matching_committed_receipt(mon
     async def write(action, *, authenticated_user, runtime_approval):
         assert authenticated_user is principal
         assert runtime_approval.matches(
-            tenant_id=uuid4() if False else __import__("uuid").UUID(principal.tenant_id),
-            owner_id=__import__("uuid").UUID(principal.user_id),
+            tenant_id=UUID(principal.tenant_id),
+            owner_id=UUID(principal.user_id),
             action=action,
         )
         calls.append(action)
         commitment = SimpleNamespace(
             id=identifier,
-            tenant_id=__import__("uuid").UUID(principal.tenant_id),
-            owner_id=__import__("uuid").UUID(principal.user_id),
+            tenant_id=UUID(principal.tenant_id),
+            owner_id=UUID(principal.user_id),
             title=action.title, timezone=action.timezone, revision=1,
         )
         receipt = SimpleNamespace(
@@ -136,7 +136,7 @@ async def test_authorized_task_creates_only_after_matching_committed_receipt(mon
     assert result.source_id == "planner.create"
     assert result.payload["planner_created"] is True
     assert result.payload["planner_receipt"]["commitment_id"] == str(identifier)
-    assert result.normalized_metadata()["presentation_payload"]["planner_receipt"]["commitment_id"] == str(identifier)
+    assert result.normalized_metadata()["structured_content"]["planner_receipt"]["commitment_id"] == str(identifier)
     assert len(calls) == 1
     meter.consume_tool_call.assert_awaited_once()
 
