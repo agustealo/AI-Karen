@@ -348,3 +348,71 @@ test('UX-15: mobile sidebar reveals primary and advanced navigation', async ({
     'Mobile sheet and advanced destinations rendered; navigation not submitted',
   );
 });
+
+
+test('UX-16: Kari OS navigation typography and reachability across approved widths', async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !hasCredentials ||
+      process.env.KAREN_NAV_VISUAL_ACCEPTANCE !== 'true' ||
+      process.env.KAREN_SANITIZED_ACCOUNT !== 'true',
+    'Requires explicit approval for a sanitized authenticated five-viewport navigation run.',
+  );
+  await signIn(page);
+
+  for (const width of [390, 768, 1024, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    const mobile = width < 768;
+    if (mobile) {
+      await page.locator('[data-sidebar="trigger"]').click();
+    }
+    const nav = mobile
+      ? page.locator('[data-sidebar="sidebar"][data-mobile="true"]')
+      : page.locator('[data-sidebar="sidebar"]:not([data-mobile])');
+    const heading = nav.locator('.kari-nav-wordmark');
+    const chat = nav.getByRole('button', { name: 'Chat', exact: true });
+    await expect(heading).toBeVisible();
+    await expect(chat).toBeVisible();
+    await expect(nav.getByRole('button', { name: 'Tools & plugins' })).toBeVisible();
+
+    const style = await chat.evaluate((el) => {
+      const navRoot = el.closest('[data-kari-root]');
+      const computed = getComputedStyle(el);
+      return {
+        fontFamily: computed.fontFamily,
+        fontSize: computed.fontSize,
+        lineHeight: computed.lineHeight,
+        expectedFamily: navRoot
+          ? getComputedStyle(navRoot).getPropertyValue('--kari-font-body').trim()
+          : '',
+      };
+    });
+    expect(style.expectedFamily).toContain('Inter');
+    expect(style.fontFamily).toContain('Inter');
+    expect(style.fontSize).toBe('14px');
+    expect(Number.parseFloat(style.lineHeight)).toBeGreaterThanOrEqual(20);
+
+    const image = await page.screenshot({ animations: 'disabled' });
+    await testInfo.attach('UX-16-navigation-' + width, {
+      body: image,
+      contentType: 'image/png',
+    });
+
+    if (mobile) {
+      await nav.getByRole('button', { name: 'Activity' }).click();
+      await expect(nav).toBeHidden();
+    }
+  }
+
+  await testInfo.attach('UX-16-evidence', {
+    body: Buffer.from(JSON.stringify({
+      target_revision: process.env.KAREN_UX_TARGET_REVISION || null,
+      viewport_widths: [390, 768, 1024, 1440, 1920],
+      inspected: ['canonical brand', 'primary navigation', 'Inter typography', 'mobile drawer dismissal'],
+      authenticated_sanitized_account: true,
+      observed_at: new Date().toISOString(),
+    }, null, 2)),
+    contentType: 'application/json',
+  });
+});
