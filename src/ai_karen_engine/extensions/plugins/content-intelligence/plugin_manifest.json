@@ -2,8 +2,8 @@
   "id": "content-intelligence",
   "name": "content-intelligence",
   "display_name": "Content Intelligence",
-  "version": "0.1.0",
-  "description": "Standalone, local-first content intelligence extension for explicitly supplied text documents, scoped search, comparison and relationship hints.",
+  "version": "0.2.0",
+  "description": "Standalone, local-first and bounded analysis of host-authorized inline text documents and logical folder groups. No direct upload or index access.",
   "purpose": "Analyze authorized invocation-supplied content without accessing files, global memory or external indexes.",
   "author": "KAREN Engineering",
   "license": "MIT",
@@ -54,7 +54,8 @@
         "enum": [
           "analyze",
           "search",
-          "compare"
+          "compare",
+          "browse"
         ]
       },
       "documents": {
@@ -78,6 +79,12 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 100000
+            },
+            "folder_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
             }
           },
           "required": [
