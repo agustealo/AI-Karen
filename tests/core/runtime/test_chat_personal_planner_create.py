@@ -761,6 +761,10 @@ async def test_completion_foreign_owner_receipt_is_rejected(monkeypatch):
     "Finish my personal task",
     "Complete all my tasks",
     "Complete the deployment task",
+    "Complete my task.",
+    "Finish my personal task!",
+    "Complete all my tasks.",
+    "Can you complete my task?",
     "Mark my task",
     "Mark all my tasks as completed",
 ])
@@ -771,3 +775,15 @@ def test_incomplete_completion_commands_must_route_to_fail_closed_planner(query)
     assert route.requires_tool is True
     assert route.requires_live_data is True
     assert route.allow_llm_only is False
+
+
+@pytest.mark.parametrize("query", [
+    "Complete this sentence about tasks",
+    "Finish the paragraph about commitments",
+    "How do I complete a task?",
+    "Complete this essay on task management",
+    "Finish the report about tasks",
+])
+def test_completion_routing_does_not_hijack_unrelated_writing(query):
+    route = resolve_capability_decision(query)
+    assert route.intent != "planner.update"
