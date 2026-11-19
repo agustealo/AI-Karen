@@ -3,6 +3,8 @@
 
 import React, { useCallback } from "react";
 import useAuth from "@/lib/useAuth";
+import { AutomationListNotice } from "@/components/automation/AutomationListNotice";
+import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +57,7 @@ export default function SequencesPage() {
   const [jobs, setJobs] = React.useState<Job[]>([]);
   const [availableTasks, setAvailableTasks] = React.useState<Task[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
+  const [jobsFetchError, setJobsFetchError] = React.useState(false);
   const [isTasksLoading, setIsTasksLoading] = React.useState(true);
   const [errorMsg, setErrorMsg] = React.useState("");
 
@@ -65,6 +68,7 @@ export default function SequencesPage() {
 
   const fetchJobs = useCallback(async () => {
     if (!isAuthenticated) {
+      setJobsFetchError(false);
       setJobs([]);
       setErrorMsg("Sign in to manage jobs.");
       setIsLoading(false);
@@ -72,12 +76,15 @@ export default function SequencesPage() {
     }
 
     setIsLoading(true);
+    setJobsFetchError(false);
     setErrorMsg("");
     try {
       const { apiClient } = await import('@/lib/api');
       const data: Job[] = await apiClient.get<Job[]>('/api/automation/jobs/');
+      setJobsFetchError(false);
       setJobs(data || []);
     } catch (err) {
+      setJobsFetchError(true);
       console.error(err);
       setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch jobs.');
     } finally {
@@ -209,16 +216,12 @@ export default function SequencesPage() {
   return (
     <>
       <div className="karen-automation karen-automation-workflow space-y-6">
-        <header className="karen-automation-hero karen-surface relative overflow-hidden rounded-2xl px-5 py-6 sm:px-8 sm:py-8">
-          <div className="relative z-10 flex min-w-0 items-start gap-4">
-            <div className="rounded-xl border border-primary/20 bg-primary/10 p-3 text-primary"><Workflow className="h-6 w-6" aria-hidden="true" /></div>
-            <div className="min-w-0 space-y-2">
-              <p className="karen-panel-label">KARI OS / AUTOMATIONS / SEQUENCE WORKFLOWS</p>
-              <h2 className="karen-page-title">Jobs</h2>
-              <p className="karen-page-description">Orchestrate multiple tasks into a single persistent workflow.</p>
-            </div>
-          </div>
-        </header>
+        <AutomationWorkflowHeader
+          icon={Workflow}
+          section="SEQUENCE WORKFLOWS"
+          title="Jobs"
+          description="Orchestrate multiple tasks into a single persistent workflow."
+        />
         
         {errorMsg && (
           <Alert variant="destructive">
@@ -236,11 +239,15 @@ export default function SequencesPage() {
             </div>
             
             {isAuthLoading ? (
-              <div className="text-center p-8 text-muted-foreground animate-pulse">Restoring your session...</div>
+              <AutomationListNotice kind="loading" message="Restoring your session..." />
+            ) : !isAuthenticated ? (
+              <AutomationListNotice kind="authentication" message="Sign in to view job definitions." />
             ) : isLoading ? (
-              <div className="text-center p-8 text-muted-foreground animate-pulse">Loading jobs from backend...</div>
+              <AutomationListNotice kind="loading" message="Loading jobs from backend..." />
+            ) : jobsFetchError ? (
+              <AutomationListNotice kind="unavailable" message="Job definitions could not be verified with the backend." />
             ) : jobs.length === 0 ? (
-              <div className="p-8 text-center border rounded-xl bg-muted/20 text-muted-foreground">No jobs defined yet.</div>
+              <AutomationListNotice kind="empty" message="No jobs defined yet." />
             ) : jobs.map((job: Job, index: number) => (
               <Card className="karen-automation-card" key={job.id || index}>
                 <CardHeader>
