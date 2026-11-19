@@ -52,7 +52,6 @@ def readback(monkeypatch, *, entries=(), failure=None):
         run.return_value = tuple(entries)
     else:
         run.side_effect = failure
-    factory = Mock(return_value=SimpleNamespace(list_authorized=run))
     monkeypatch.setattr(
         PresentationPinReadback, "list_authorized",
         run,
