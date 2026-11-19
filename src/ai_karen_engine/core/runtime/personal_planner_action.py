@@ -74,10 +74,18 @@ def parse_personal_planner_create(query: str) -> tuple[str, str] | None:
     timezone = match.group("timezone")
     if not (1 <= len(title) <= 240 and 1 <= len(timezone) <= 128):
         return None
+    # No due_at, recurrence or notification contract is attached to this
+    # action. Decline explicit scheduling language rather than committing a
+    # task whose displayed title implies an appointment/reminder was created.
     if re.search(
-        r"\b(?:today|tomorrow|tonight|next\s+(?:week|month|"
-        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b"
-        r"|\b(?:at|by)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
+        r"\b(?:today|tomorrow|tonight|yesterday|this\s+(?:morning|afternoon|evening|"
+        r"week|weekend|month)|next\s+\w+|on\s+(?:monday|tuesday|wednesday|"
+        r"thursday|friday|saturday|sunday)|every\s+(?:day|week|month|"
+        r"year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
+        r"daily|weekly|monthly|yearly|recurring|remind\s+me)\b"
+        r"|\b(?:at|by|before|after|until|on)\s+\d{1,4}(?::\d{2})?"
+        r"(?:[/-]\d{1,2}(?:[/-]\d{1,4})?)?\s*(?:am|pm)?\b"
+        r"|\b\d{4}-\d{2}-\d{2}\b",
         title,
         re.IGNORECASE,
     ):
