@@ -56,6 +56,18 @@ function UserNameConsumer() {
   return <span data-testid="user-name">{auth.user?.full_name || 'none'}</span>;
 }
 
+function AuthRaceConsumer() {
+  const auth = useAuth();
+  return (
+    <div>
+      <span data-testid="race-user">{auth.user?.email ?? "signed-out"}</span>
+      <button type="button" onClick={() => void auth.refreshSession()}>race-refresh</button>
+      <button type="button" onClick={() => void auth.login({ email: "new@example.test", password: "test" })}>race-login</button>
+      <button type="button" onClick={() => void auth.logout()}>race-logout</button>
+    </div>
+  );
+}
+
 function RefreshConsumer() {
   const auth = useAuth();
   return (
@@ -161,5 +173,39 @@ describe('AuthProvider', () => {
 
     expect(validateSession).toHaveBeenCalledTimes(1);
   });
+
+  it('ignores an older refresh after a newer login succeeds', async () => {
+    let release!: (valid: boolean) => void;
+    validateSession
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise<boolean>(resolve => { release = resolve; }));
+    login.mockResolvedValue({ user: { ...user, email: "new@example.test" } });
+
+    render(<AuthProvider><AuthRaceConsumer /></AuthProvider>);
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe(user.email));
+
+    await act(async () => { screen.getByRole('button', { name: 'race-refresh' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'race-login' }).click(); });
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe('new@example.test'));
+
+    await act(async () => { release(false); });
+    expect(screen.getByTestId('race-user').textContent).toBe('new@example.test');
+    expect(clearAuth).not.toHaveBeenCalled();
+  });
+
+  it('ignores delayed old logout completion after a newer login succeeds', async () => {
+    let release!: () => void;
+    logout.mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
+    login.mockResolvedValue({ user: { ...user, email: "new@example.test" } });
+
+    render(<AuthProvider><AuthRaceConsumer /></AuthProvider>);
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe(user.email));
+    await act(async () => { screen.getByRole('button', { name: 'race-logout' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'race-login' }).click(); });
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe('new@example.test'));
+    await act(async () => { release(); });
+    expect(screen.getByTestId('race-user').textContent).toBe('new@example.test');
+  });
+
 
 });
