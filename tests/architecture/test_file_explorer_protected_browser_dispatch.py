@@ -46,6 +46,6 @@ def test_live_file_explorer_acceptance_is_not_a_mock_or_skipped_proof():
     assert "expect(firstPage.has_more" in source
     assert "route.fulfill(" not in source
     assert "page.route(" not in source
-    assert "setTimeout(" not in source
+    assert "page.waitForTimeout(" not in source
     for viewport in (390, 768, 1024, 1440):
         assert f"width: {viewport}" in source
