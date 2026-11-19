@@ -1,6 +1,6 @@
 # KAREN File Explorer: Shared Plugin Developer Wiki
 
-**Status: v0.1.0 host-inventory contract implemented; live upload integration and UI unimplemented.**
+**Status: v0.2.0 host-inventory and reusable UI contracts implemented; live uploaded-file integration not implemented.**
 
 ## Ownership
 
@@ -22,13 +22,13 @@ Inventory entries use exact fields `source_id`, `parent_id`, `kind` (`file` or `
 
 A consumer asks the kernel for the `file-explorer` capability, receives authorized selection references, and passes those references to the existing authoritative source owner for a fresh permission and revision check. It never trusts selection receipts alone as read permission. Read-by-ID and processing must enforce current tenant/actor/document ACL, retention, consent and revision before accessing bytes.
 
-Future UX should expose one shared file picker and navigator, embeddable in plugin surfaces or invoked as a standard selection workflow. Provider-specific stores must be adapters behind its source registry, never hardwired into every consuming plugin.
+The standalone UI contribution provides one shared controlled file picker and navigator, embeddable through the existing plugin host when authorized inventory props are supplied. Provider-specific stores must be adapters behind its source registry, never hardwired into every consuming plugin.
 
 ## Required next slices
 
 1. Audit and identify the actual durable source/ACL authority for uploads. The historical `FileContextStore` alone is not a sufficient governed enterprise source.
 2. Add a host-issued trusted inventory provider capability with source ACL/revision checks and server-side paging. Do not invent grants in a client or plugin.
-3. Add reusable explorer UI and selection contract, with focus management, accessibility, large-directory pagination and no fake provider availability.
+3. Connect the implemented [reusable explorer UI](02-shared-ui.md) to a trusted live host inventory provider; prove keyboard/focus behavior, pagination, and no fake provider availability.
 4. Integrate Content Intelligence by reference after reauthorization; preserve source lineage and prove tenant, revision and deletion boundaries.
 5. Expand backends through optional adapters (local file authority and explicitly connected cloud sources) with consistent capabilities and no duplicate explorer.
 
@@ -48,3 +48,7 @@ The optional `artifact_source.py` adapter uses KAREN's existing `ArtifactStore` 
 This adapter must be injected by the trusted host after execution policy resolution. Existing `ArtifactStore.list_artifacts()` lists all artifacts in a tenant and has no owner-scoped cursor; the adapter filters to the authenticated owner and fails closed if more than 200 owner records would be needed. It **does not yet provide scalable pagination**, authorized cross-user sharing, virtual folders, or a live registered UI. An artifact content checksum is not an ACL revision: consumers must perform fresh checks before opening bytes. Do not wire an untrusted plugin payload directly into the repository constructor or grant selection by metadata alone.
 
 Tests: `pytest tests/extensions/test_file_explorer_artifact_source.py -q`.
+
+## Frontend integration
+
+See [Shared UI and selection contract](02-shared-ui.md). It is a controlled component, not a separate backend or an authorization source.

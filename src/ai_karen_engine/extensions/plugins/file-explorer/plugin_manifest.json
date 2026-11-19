@@ -2,7 +2,7 @@
   "id": "file-explorer",
   "name": "file-explorer",
   "display_name": "File Explorer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Standalone shared file and folder explorer for host-authorized inventory snapshots; no direct filesystem access.",
   "purpose": "Provide one governed explorer capability reusable by other extensions.",
   "author": "KAREN Engineering",
@@ -17,7 +17,7 @@
     "local-first"
   ],
   "capabilities": {
-    "provides_ui": false,
+    "provides_ui": true,
     "provides_api": false,
     "prompt_first": true
   },
@@ -77,5 +77,30 @@
       "operation"
     ],
     "additional_properties": false
+  },
+  "ui": {
+    "hook_zones": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "File Explorer",
+        "icon": "folder-open",
+        "order": 35
+      }
+    ],
+    "source_path": "ui",
+    "entry_file": "FileExplorerPage.tsx",
+    "menu": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "File Explorer",
+        "icon": "folder-open",
+        "order": 35
+      }
+    ]
+  },
+  "entry": {
+    "id": "file-explorer-main",
+    "default": true,
+    "entry_file": "FileExplorerPage.tsx"
   }
 }

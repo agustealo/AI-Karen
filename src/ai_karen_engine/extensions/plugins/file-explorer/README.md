@@ -1,6 +1,6 @@
 # File Explorer: Shared standalone extension
 
-**v0.1.0 scope:** a governed navigation/selection projection over a host-authorized, bounded inventory. It does NOT yet connect to live uploaded files, access the filesystem, offer a UI, or resolve source bytes.
+**v0.2.0 scope:** a governed navigation/selection projection and a controlled reusable UI. It does NOT yet connect to live uploaded files, access the filesystem, offer an authenticated UI data endpoint, or resolve source bytes.
 
 All file/folder navigation belongs to this extension. Content Intelligence, Writing Studio and other plugins consume its canonical selection references through the existing governed plugin execution mechanism. No plugin may implement a competing explorer.
 
@@ -16,3 +16,7 @@ The optional `artifact_source.py` adapter uses KAREN's existing `ArtifactStore` 
 This adapter must be injected by the trusted host after execution policy resolution. Existing `ArtifactStore.list_artifacts()` lists all artifacts in a tenant and has no owner-scoped cursor; the adapter filters to the authenticated owner and fails closed if more than 200 owner records would be needed. It **does not yet provide scalable pagination**, authorized cross-user sharing, virtual folders, or a live registered UI. An artifact content checksum is not an ACL revision: consumers must perform fresh checks before opening bytes. Do not wire an untrusted plugin payload directly into the repository constructor or grant selection by metadata alone.
 
 Tests: `pytest tests/extensions/test_file_explorer_artifact_source.py -q`.
+
+## Shared graphical UI
+
+The plugin-owned `ui/FileExplorerPage.tsx` component supplies a reusable picker and explorer through KAREN's existing plugin UI materialization. It only renders authorized host-supplied inventory props; without these it displays an unavailable state. No custom Core page, API, or direct file fetch exists. See [UI contract](../../../../../docs/plugins/file-explorer/02-shared-ui.md).
