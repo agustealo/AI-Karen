@@ -44,6 +44,15 @@ is `required_env_vars` in
 production runtime contract changes. Do not create an independent second
 production secrets registry.
 
+**Post-incident correction (2026-11-19):** The DuckDB password in the
+November 15 crash log is historical evidence, **not an active required secret**.
+DuckDB is retired. PR #1091 removed the source startup requirement and Compose
+flag. The canonical Render Blueprint and its read-only environment inspector
+must also exclude `KARI_DUCKDB_PASSWORD`. Do not create or rotate a DuckDB
+credential in Render to satisfy an obsolete check. All remaining required
+PostgreSQL, Redis and cryptographic keys still need operator-owned secure
+configuration and independent deployment readiness proof.
+
 ## Ownership and recovery order
 
 ### 1. Keep the existing Render resources; correct live branch provenance
