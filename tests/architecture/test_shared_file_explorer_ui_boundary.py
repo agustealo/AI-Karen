@@ -62,3 +62,10 @@ def test_pagination_is_host_driven_and_invalid_evidence_fails_closed():
     assert "onSelect?.([])" in ui
     assert "fetch(" not in ui
     assert "localStorage" not in ui
+
+
+def test_both_refresh_controls_clear_host_selection_before_loading():
+    ui = (PLUGIN / "ui/FileExplorerPage.tsx").read_text(encoding="utf-8")
+    assert ui.count('onClick={refresh}>Refresh</button>') == 2
+    assert 'onClick={onRefresh}>Refresh</button>' not in ui
+    assert ui.index('onSelect?.([])') < ui.index('onRefresh?.()')
