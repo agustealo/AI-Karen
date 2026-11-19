@@ -748,7 +748,7 @@ class PostgresDurableRunLedger:
                                 heartbeat_at = :event_at,
                                 error_type = :error_type,
                                 metadata = CASE
-                                    WHEN :outcome_status IS NULL THEN metadata
+                                    WHEN CAST(:outcome_status AS text) IS NULL THEN metadata
                                     ELSE jsonb_set(
                                         COALESCE(metadata, '{}'::jsonb),
                                         '{outcome_status}',
