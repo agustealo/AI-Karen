@@ -124,6 +124,40 @@ async def upload_artifact(
     )
 
 
+@router.get("/archived", response_model=List[ArtifactMetadataResponse])
+async def list_archived_artifacts(
+    conversation_id: Optional[str] = None,
+    message_id: Optional[str] = None,
+    current_user = Depends(get_current_user),
+):
+    """List archived artifacts."""
+    store = _get_artifact_store()
+    tenant_id, user_id = _artifact_principal(current_user)
+    result = await store.list_archived(str(tenant_id), conversation_id, message_id)
+    if not result.success:
+        raise HTTPException(status_code=500, detail=result.error or "List archived failed")
+
+    items = []
+    for artifact in result.data or []:
+        if artifact.tenant_id != tenant_id or artifact.user_id != user_id:
+            continue
+        items.append(ArtifactMetadataResponse(
+            id=artifact.id,
+            tenant_id=artifact.tenant_id,
+            user_id=artifact.user_id,
+            conversation_id=artifact.conversation_id,
+            message_id=artifact.message_id,
+            kind=artifact.kind,
+            mime_type=artifact.mime_type,
+            filename=artifact.filename,
+            size_bytes=artifact.size_bytes,
+            sha256=artifact.sha256,
+            created_at=artifact.created_at.isoformat() if artifact.created_at else "",
+            deleted_at=artifact.deleted_at.isoformat() if artifact.deleted_at else None,
+        ))
+    return items
+
+
 @router.get("/{artifact_id}", response_model=ArtifactMetadataResponse)
 async def get_artifact_metadata(
     artifact_id: str,
@@ -228,40 +262,6 @@ async def restore_artifact(
     if not result.success:
         raise HTTPException(status_code=500, detail=result.error or "Restore failed")
     return {"restored": True}
-
-
-@router.get("/archived", response_model=List[ArtifactMetadataResponse])
-async def list_archived_artifacts(
-    conversation_id: Optional[str] = None,
-    message_id: Optional[str] = None,
-    current_user = Depends(get_current_user),
-):
-    """List archived artifacts."""
-    store = _get_artifact_store()
-    tenant_id, user_id = _artifact_principal(current_user)
-    result = await store.list_archived(str(tenant_id), conversation_id, message_id)
-    if not result.success:
-        raise HTTPException(status_code=500, detail=result.error or "List archived failed")
-
-    items = []
-    for artifact in result.data or []:
-        if artifact.tenant_id != tenant_id or artifact.user_id != user_id:
-            continue
-        items.append(ArtifactMetadataResponse(
-            id=artifact.id,
-            tenant_id=artifact.tenant_id,
-            user_id=artifact.user_id,
-            conversation_id=artifact.conversation_id,
-            message_id=artifact.message_id,
-            kind=artifact.kind,
-            mime_type=artifact.mime_type,
-            filename=artifact.filename,
-            size_bytes=artifact.size_bytes,
-            sha256=artifact.sha256,
-            created_at=artifact.created_at.isoformat() if artifact.created_at else "",
-            deleted_at=artifact.deleted_at.isoformat() if artifact.deleted_at else None,
-        ))
-    return items
 
 
 @router.delete("/{artifact_id}/purge")
