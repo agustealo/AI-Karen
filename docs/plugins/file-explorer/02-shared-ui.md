@@ -23,3 +23,11 @@ Responsive file/folder listing, folder navigation, text filtering, single or mul
 ## Not accepted
 
 Live uploaded-file listing, pagination, standalone backend UI API, authorized preview/download, nested folder permissions, automated plugin-to-plugin mount, visual browser regression, and third-party cloud stores. They must not be advertised as working without host integration and observed acceptance.
+
+## Controlled keyset-page navigation (implemented UI contract)
+
+The existing `SharedFileExplorer` now accepts `hasMore`, `nextCursor`, `onNextPage(cursor)` and `pageKey` from the trusted authenticated host, in addition to the original controlled inventory and selection props. It never fetches data, caches cursors, or treats pagination evidence as authorization. A missing callback, absent/oversized cursor or inconsistent terminal-page evidence makes the explorer unavailable instead of silently presenting an incomplete inventory as complete. Selecting **Next page** clears local selection and filters and asks the host to retrieve the next server-authorized page. The UI remains limited to 200 entries per supplied page and 24 selections per page.
+
+The host **must** produce a new `pageKey` on every accepted page or identity/authorization-scope transition. That remounts the controlled viewer and clears local folder, filter and selection state. Host callers must also cancel or ignore stale/out-of-order responses, never combine pages from different users, tenants or authorizations, and resolve errors separately from genuinely empty inventories. `onRefresh` clears selection before the host requests a fresh authorized page. This is not an authorization boundary: consumers still revalidate source ACL, deletion status and revision at the canonical owner before bytes are accessed.
+
+**Outstanding:** The authenticated UI host has not yet connected these props to `FileExplorerInventoryHost` through a canonical runtime endpoint. No successful live uploaded-file browser acceptance, cross-page persistent selection or authorized download is claimed. UI contract regression: `pytest tests/architecture/test_shared_file_explorer_ui_boundary.py -q`.

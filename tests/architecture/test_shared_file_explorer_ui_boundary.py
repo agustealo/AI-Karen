@@ -43,4 +43,29 @@ def test_authorized_inventory_failure_preserves_error_and_retry():
     ui = (PLUGIN / "ui/FileExplorerPage.tsx").read_text(encoding="utf-8")
     assert "authorized && error &&" in ui
     assert "authorized && onRefresh &&" in ui
-    assert 'onClick={onRefresh}>Refresh</button>' in ui
+    assert 'onClick={refresh}>Refresh</button>' in ui
+
+
+def test_pagination_is_host_driven_and_invalid_evidence_fails_closed():
+    ui = (PLUGIN / "ui/FileExplorerPage.tsx").read_text(encoding="utf-8")
+    assert "onNextPage?: (cursor: string) => void" in ui
+    assert "hasMore?: boolean" in ui
+    assert "nextCursor?: string | null" in ui
+    assert "pageEvidenceValid" in ui
+    assert "!pageEvidenceValid" in ui
+    assert "onNextPage?.(nextCursor)" in ui
+    assert "disabled={loading || Boolean(error) || !pageEvidenceValid}" in ui
+    assert "Boolean(error) || !pageEvidenceValid" in ui
+    assert "Invalid host pagination evidence." in ui
+    assert "key={props.pageKey ?? 'initial'}" in ui
+    assert "clearSelections();" in ui
+    assert "onSelect?.([])" in ui
+    assert "fetch(" not in ui
+    assert "localStorage" not in ui
+
+
+def test_both_refresh_controls_clear_host_selection_before_loading():
+    ui = (PLUGIN / "ui/FileExplorerPage.tsx").read_text(encoding="utf-8")
+    assert ui.count('onClick={refresh}>Refresh</button>') == 2
+    assert 'onClick={onRefresh}>Refresh</button>' not in ui
+    assert ui.index('onSelect?.([])') < ui.index('onRefresh?.()')
