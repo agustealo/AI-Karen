@@ -1,6 +1,7 @@
 "use client";
 
 import { dispatchAuthUserUpdated } from './auth-events';
+import { runCoordinatedRefresh } from './auth-refresh-coordinator';
 
 /**
  * Authentication Service for Karen AI Theme
@@ -462,7 +463,7 @@ class AuthService {
       throw new Error('Token refresh temporarily blocked after recent auth failure');
     }
 
-    this.refreshInFlight = (async () => {
+    const coordinated = runCoordinatedRefresh(async () => {
       try {
         const refreshToken = localStorage.getItem('refresh_token');
         if (!refreshToken) {
@@ -532,12 +533,18 @@ class AuthService {
       }
       
       throw error;
-    } finally {
-      if (revision === this.authenticationRevision) this.refreshInFlight = null;
     }
-  })();
+  });
 
-    return this.refreshInFlight;
+    // Release even when ApiClient owns the shared network rotation and this
+    // callback never executes. Do not clear a newer refresh generation.
+    const refreshPromise: Promise<string> = coordinated.finally(() => {
+      if (this.refreshInFlight === refreshPromise) {
+        this.refreshInFlight = null;
+      }
+    });
+    this.refreshInFlight = refreshPromise;
+    return refreshPromise;
   }
 
   /**

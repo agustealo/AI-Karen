@@ -3,6 +3,7 @@
 import type { RuntimeProviderCatalogResponse } from '@/lib/model-runtime-inventory';
 import { authService } from '@/lib/auth';
 import { dispatchAuthInvalidated } from '@/lib/auth-events';
+import { runCoordinatedRefresh } from '@/lib/auth-refresh-coordinator';
 
 // API service for HTTP requests
 const SAME_ORIGIN_API_BASE_URL = '';
@@ -534,7 +535,10 @@ class ApiClient {
     // Share a single credential-rotating request across concurrent API calls.
     if (this.refreshInFlight) return this.refreshInFlight;
 
-    const refresh = this.executeRefreshAccessToken();
+    const refresh = runCoordinatedRefresh(async () => {
+      await this.executeRefreshAccessToken();
+      return localStorage.getItem('access_token') || '';
+    }).then(() => undefined);
     this.refreshInFlight = refresh;
     try {
       await refresh;
