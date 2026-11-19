@@ -221,8 +221,16 @@ class OperationalHealthService:
 
     @classmethod
     def redis_required(cls) -> bool:
-        """Single runtime authority for Redis-backed STM dependency policy."""
-        return cls._env_bool("KARI_ENABLE_MEMORY_SERVICE", default=True)
+        """Central requirement for Redis-backed memory and rate-limit safety.
+
+        Disabling memory does not make Redis optional while a Redis-backed
+        limiter is enforcing authenticated or global request admission.
+        """
+        return any((
+            cls._env_bool("KARI_ENABLE_MEMORY_SERVICE", default=True),
+            cls._env_bool("ENABLE_RATE_LIMITING", default=True),
+            cls._env_bool("AUTH_ENABLE_RATE_LIMITING", default=True),
+        ))
 
     @staticmethod
     def _env_bool(name: str, *, default: bool) -> bool:
