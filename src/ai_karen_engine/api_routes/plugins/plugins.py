@@ -113,6 +113,27 @@ class PluginMetricsResponse(BaseModel):
     recent_executions: List[Dict[str, Any]]
 
 
+class FileExplorerInventoryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: str
+    parent_id: None = None
+    kind: Literal["file"]
+    name: str
+    revision: str
+    size_bytes: int
+    sha256: str
+
+
+class FileExplorerInventoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: List[FileExplorerInventoryEntry]
+    has_more: bool
+    next_cursor: Optional[str] = None
+    inventory_semantics: Literal["owner_metadata_page_not_live_acl"]
+    request_id: str
+    correlation_id: str
+
+
 def _response_meta(request: Request) -> Dict[str, str]:
     correlation_id = (
         getattr(request.state, "correlation_id", None)
@@ -400,6 +421,70 @@ async def get_search_article(
             detail="Article not found",
         )
     return {"article_id": article_id, "full_content": document}
+
+
+@router.get("/file-explorer/inventory", response_model=FileExplorerInventoryResponse)
+async def list_file_explorer_inventory(
+    request: Request,
+    limit: int = Query(100, ge=1, le=200),
+    cursor: Optional[str] = Query(None, min_length=1, max_length=768),
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerInventoryResponse:
+    """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
+    user_id = str(current_user.get("user_id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    if not user_id or not tenant_id or tenant_id in {"default", "dev-tenant"}:
+        raise HTTPException(status_code=401, detail="Authenticated user and tenant required")
+
+    rbac = get_rbac_manager()
+    permitted = rbac.has_permission(current_user, Permission.DATA_READ)
+    meta = _response_meta(request)
+    rbac.audit_access_attempt(
+        current_user,
+        Permission.DATA_READ,
+        resource=request.url.path,
+        granted=permitted,
+        request=request,
+        additional_context={
+            "operation": "file_explorer_owner_inventory",
+            "request_id": meta["request_id"],
+            "correlation_id": meta["correlation_id"],
+        },
+    )
+    if not permitted:
+        raise HTTPException(status_code=403, detail="File inventory read access denied")
+
+    try:
+        page = await plugin_service.list_file_explorer_owner_page(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"],
+            correlation_id=meta["correlation_id"],
+            limit=limit,
+            cursor=cursor,
+        )
+        return FileExplorerInventoryResponse.model_validate(page)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="File inventory access denied") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="File inventory request invalid") from None
+    except Exception as exc:
+        logger.warning(
+            "file_explorer_owner_inventory_unavailable",
+            extra={
+                "request_id": meta["request_id"],
+                "correlation_id": meta["correlation_id"],
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503, detail="File inventory is unavailable"
+        ) from None
 
 
 @router.get("/categories")

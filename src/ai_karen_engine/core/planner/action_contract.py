@@ -11,6 +11,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ai_karen_engine.core.planner.contracts import CommitmentStatus
+
 
 class PlannerAction(str, Enum):
     CREATE = "create"
@@ -27,6 +29,7 @@ class AuthorizedPlannerAction(BaseModel):
     commitment_id: UUID | None = None
     expected_revision: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=240)
+    status: CommitmentStatus | None = None
     timezone: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
@@ -38,11 +41,13 @@ class AuthorizedPlannerAction(BaseModel):
             or self.expected_revision is not None
             or self.title is None
             or self.timezone is None
+            or self.status is not None
         ):
             raise ValueError("Create requires title and timezone, not revision")
         if self.action is PlannerAction.UPDATE and (
             self.commitment_id is None or self.expected_revision is None
-            or self.title is None or self.timezone is not None
+            or (self.title is None and self.status is None)
+            or self.timezone is not None
         ):
-            raise ValueError("Update requires identity, revision and title")
+            raise ValueError("Update requires identity, revision and a title or status")
         return self

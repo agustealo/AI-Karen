@@ -23,6 +23,7 @@ import { useAuth } from "@/lib/useAuth";
 import SettingsDialogComponent from "@/components/settings/SettingsDialog";
 import PersonaSettings from "@/components/settings/PersonaSettings";
 import { PluginHost } from "@/components/plugins/PluginHost";
+import { FileExplorerInventoryHost } from "@/components/plugins/FileExplorerInventoryHost";
 import { PluginErrorBoundary } from "@/plugin_host/PluginErrorBoundary";
 import PluginOverviewPage from "@/components/plugins/PluginOverviewPage";
 import PocketTTSWorkspace from "@/components/plugins/PocketTTSWorkspace";
@@ -352,7 +353,18 @@ function DashboardWorkspace() {
           }
         >
           <PluginErrorBoundary pluginId={viewMap[activeMainView]}>
-            <PluginHost pluginId={viewMap[activeMainView]} />
+            {viewMap[activeMainView] === "file-explorer" ? (
+              <FileExplorerInventoryHost>
+                {(componentProps) => (
+                  <PluginHost
+                    pluginId={viewMap[activeMainView]}
+                    componentProps={componentProps}
+                  />
+                )}
+              </FileExplorerInventoryHost>
+            ) : (
+              <PluginHost pluginId={viewMap[activeMainView]} />
+            )}
           </PluginErrorBoundary>
         </Suspense>
       );

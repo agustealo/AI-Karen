@@ -52,3 +52,25 @@ Tests: `pytest tests/extensions/test_file_explorer_artifact_source.py -q`.
 ## Frontend integration
 
 See [Shared UI and selection contract](02-shared-ui.md). It is a controlled component, not a separate backend or an authorization source.
+
+## Governed runtime inventory host (new integration slice)
+
+`extensions/file_explorer_inventory.py` now provides `FileExplorerInventoryHost`, a host-only orchestration bridge for one canonical owner-scoped metadata page. It accepts an already-authorized `ExtensionExecutionContext`, typed `AuthorizedExecutionPlan`, the **existing** `PluginKernel`, and a trusted `ArtifactSourceAdapter` supplied through runtime composition. It does **not** authorize a browser request itself, create a storage service, or register an API route.
+
+Before reading metadata it rejects unbound tenant/user identities, incompatible policy decisions, missing plugin eligibility, a disabled or invalid plugin, browser-supplied inventory/grant keys, invalid limits, and malformed cursor envelopes. It then uses `ArtifactSourceAdapter.list_owner_sources_page()`, injects the page as a host-owned resource snapshot, and calls `PluginKernel.execute()` with the original typed authorization plan. The kernel retains the final action, RBAC, lifecycle, tenant, permission, audit and budget enforcement. A denied execution fails closed. Successful responses carry only authorized metadata references and continuation information, not file bytes or storage locations.
+
+**Integration still required:** The authenticated runtime/API ingress must create this class with canonical dependencies after policy evaluation, and the UI host must consume its result through controlled paging callbacks. This service alone does not make live browsing operational. Cross-user sharing, arbitrary folders and file download remain unsupported. The cursor remains non-authoritative. Every consumer must revalidate access and revision before file content is opened.
+
+Focused regression suite: `pytest tests/extensions/test_file_explorer_host_inventory.py -q`.
+
+## Authenticated owner-inventory API (integration slice)
+
+`GET /api/plugins/file-explorer/inventory?limit=100&cursor=...` is registered within the **existing** canonical plugin API router. It requires the normal authenticated principal with a non-synthetic tenant and the existing `Permission.DATA_READ` RBAC grant, with an audited access decision. The route accepts only bounded `limit` (1–200) and an optional opaque cursor; no caller-provided tenant, owner, grant, policy decision, source inventory, or plugin executable is accepted.
+
+The canonical `PluginService.list_file_explorer_owner_page` checks entitlement and plugin enabled state, issues a fresh typed decision using its existing `RuntimePolicyEnforcer`, constructs an identity-bound execution context, and delegates to `FileExplorerInventoryHost` and `PluginKernel.execute`. Its source is the plugin's existing `ArtifactSourceAdapter` over `RepositoryFactory.create_artifact_store`, scoped to the signed-in tenant and owner. The API returns only reference metadata (`items`, `has_more`, `next_cursor`, `inventory_semantics`, `request_id`, `correlation_id`), never bytes, URIs, or authorization tokens. Access/policy denial returns 403, malformed parameters 422, and unavailable persistence 503. It does not silently substitute an empty inventory.
+
+**Security boundary:** The cursor is positioning, not a grant; storage remains tenant/owner constrained. Browser selection cannot authorize byte reads, which require fresh owner and revision checks at the consuming service. Disabled plugins return denied. In development, synthetic auth identities cannot use this endpoint.
+
+**Still outstanding:** The authenticated browser host must call this endpoint and bind the returned page to the existing controlled `SharedFileExplorer` props; client-side generation/cancellation must ignore stale responses on principal, policy or page changes. Upload/download consumer integration, authorized cross-user sharing and multi-page cumulative selection are not implemented by this API. Full local Postgres/query-plan and browser E2E acceptance remain additional certification gates.
+
+Focused suite: `pytest tests/api/test_file_explorer_inventory_api.py tests/extensions/test_file_explorer_host_inventory.py -q`.
