@@ -39,3 +39,15 @@ The canonical dashboard plugin route now wraps the existing dynamically loaded `
 The authenticated browser API client retrieves `/api/plugins/file-explorer/inventory` from the existing plugin router. The host validates the reference-only response, displays only the currently authorized server page (maximum 200 entries), carries the exact continuation cursor to Next page, clears selection on refresh and page changes, and assigns `pageKey` from the authenticated principal and accepted page generation. It gates rendering on tenant/user/role/permission identity and ignores late responses from unmounted, previous-page, or previous-principal fetches. An unavailable or malformed response never becomes an authorized empty list; the UI visibly reports loading, errors, and retry. The browser never calls storage APIs, uploads files, or uses localStorage for inventory.
 
 This is UI source integration, **not yet certification** of real hosted login/API/production PostgreSQL use. Before consumer-ready status, perform authenticated end-to-end browser acceptance with a real owner account and multiple pages, concurrent refresh/navigation, logout or tenant switch during pending requests, disabled plugin, removed artifact/revision, and responsive/focus behavior at 390, 768, 1024 and 1440 pixels. The source fetch uses the canonical `apiClient`, which owns authentication and token refresh; unresolved promises are ignored by generation/cleanup guards rather than granting access to old responses. Any later byte consumer must freshly revalidate owner and revision in backend runtime.
+
+## Current-page selection integrity
+
+The dashboard's `FileExplorerInventoryHost` treats `onSelect` references as
+untrusted presentation events. It now requires **each** selected entry to
+match the authenticated current page on `source_id`, `revision`, `sha256`,
+and `kind`. Duplicate IDs, stale revisions, altered digests, foreign-page
+IDs, forged kinds, oversized selections and mixed valid/invalid lists fail
+closed with selection cleared. This guard does not convert a selection into a
+storage authorization receipt; all future byte consumers still need fresh
+server-side owner and revision checks. Regression coverage lives in the
+existing `FileExplorerInventoryHost.test.tsx` suite.
