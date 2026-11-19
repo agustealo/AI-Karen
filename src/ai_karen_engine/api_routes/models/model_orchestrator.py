@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -565,6 +565,36 @@ async def get_download_runtime_telemetry(
     return await _control_service().get_runtime_telemetry()
 
 
+async def _read_download_setup(resource: str, operation: Callable[[], Awaitable[Any]]) -> Any:
+    """Translate canonical setup read failures without revealing backend details."""
+    try:
+        return await operation()
+    except HTTPException:
+        raise
+    except ModelOrchestratorError as exc:
+        # Retain the canonical domain status, never its private diagnostic data.
+        translated = handle_orchestrator_error(exc)
+        logger.warning(
+            "model_download_setup_domain_error resource=%s error_code=%s",
+            resource,
+            exc.code,
+        )
+        raise HTTPException(
+            status_code=translated.status_code,
+            detail="Model download setup unavailable",
+        ) from exc
+    except Exception as exc:
+        logger.error(
+            "model_download_setup_unavailable resource=%s error_type=%s",
+            resource,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Model download setup temporarily unavailable",
+        ) from exc
+
+
 @router.get("/download/recommendations", response_model=Dict[str, Any])
 async def get_download_recommendations(
     current_user: Any = Depends(get_current_user),
@@ -573,8 +603,9 @@ async def get_download_recommendations(
     # models. Use the already-authenticated model route principal, never
     # a client-supplied tenant identifier.
     tenant_id = str(_principal_payload(current_user).get("tenant_id") or "")
-    return await _control_service().get_recommendations(
-        tenant_id=tenant_id or None,
+    return await _read_download_setup(
+        "recommendations",
+        lambda: _control_service().get_recommendations(tenant_id=tenant_id or None),
     )
 
 
@@ -601,13 +632,18 @@ async def update_download_storage(
 @router.get("/download/channels", response_model=Dict[str, Any])
 async def get_download_channels(current_user: Any = Depends(get_current_user)):
     del current_user
-    return await _control_service().get_channels()
+    return await _read_download_setup(
+        "channels", lambda: _control_service().get_channels()
+    )
 
 
 @router.get("/download/policy", response_model=DownloadPolicyResponse)
 async def get_download_policy(current_user: Any = Depends(get_current_user)):
     del current_user
-    return DownloadPolicyResponse(**(await _control_service().get_policy()))
+    payload = await _read_download_setup(
+        "policy", lambda: _control_service().get_policy()
+    )
+    return DownloadPolicyResponse(**payload)
 
 
 @router.put("/download/policy", response_model=DownloadPolicyResponse)
