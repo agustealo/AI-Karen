@@ -223,3 +223,98 @@ export const getDegradedResponseMessage = (error: unknown): string => {
 
   return DEFAULT_FAILURE_MESSAGE;
 };
+
+
+/**
+ * Safe presentation of CopilotKit/AG-UI terminal failures.
+ *
+ * CopilotKit can replace a backend RUN_ERROR with "Unable to complete the
+ * response" or reject runAgent() without retaining its error payload.
+ * Interpret only known codes and HTTP status values. Raw thrown messages,
+ * stack traces, URLs, headers and provider payloads must never reach the UI.
+ *
+ * An unknown outcome must never suggest the prompt was not persisted, so the
+ * user is directed to verified conversation history before manual retry.
+ */
+const RUN_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
+  CHAT_TRANSCRIPT_PERSISTENCE_FAILED:
+    'Karen generated a response, but its conversation history could not be verified as saved. Check conversation history before sending the prompt again.',
+  CHAT_EVENT_JOURNAL_UNAVAILABLE:
+    'The chat event journal was unavailable. Karen cannot verify the run outcome. Check conversation history and backend health before retrying.',
+  CHAT_STREAM_UPSTREAM_TERMINATED:
+    'The backend connection ended before Karen confirmed completion. Check API and Redis readiness, then inspect conversation history before retrying.',
+  CHAT_STREAM_UPSTREAM_INTERRUPTED:
+    'The backend stream was interrupted before completion. Check API connectivity and the verified conversation history before retrying.',
+  CHAT_SSE_MISSING_TERMINAL:
+    'Karen received an incomplete response stream without a confirmed finish. Check conversation history and API readiness before retrying.',
+  CHAT_STREAM_RUNTIME_EXCEPTION:
+    'The chat runtime failed during generation. Check runtime logs, the selected model and provider availability, then inspect history before retrying.',
+  CHAT_RUNTIME_ERROR:
+    'Karen reported a chat runtime failure. Check runtime logs and available models, then inspect history before retrying.',
+  CHAT_EXECUTION_FAILED:
+    'The chat execution failed. Check provider availability and backend logs, then inspect history before retrying.',
+  CHAT_RUN_LEASE_LOST:
+    'Karen lost the verified ownership of this run. Check the latest run status and conversation history before retrying.',
+  CHAT_STREAM_CANCELLED:
+    'The chat run was cancelled. Check verified history for any partial response before starting another run.',
+  BACKEND_TARGET_NOT_CONFIGURED:
+    'The chat backend address is not configured. An administrator must repair the deployment connection before prompts can run.',
+};
+
+const RUN_FAILURE_UNKNOWN =
+  'Karen could not verify completion, and the chat transport did not provide a recognized failure code. Check API readiness, the selected model and verified conversation history before retrying.';
+
+const RUN_FAILURE_CODE = /^[A-Z][A-Z0-9_]{2,127}$/;
+
+function runFailureDetail(value: unknown): {
+  code: string | null;
+  status: number | null;
+} {
+  const candidates: unknown[] = [value];
+  const visited = new Set<unknown>();
+  let status: number | null = null;
+  for (let index = 0; index < candidates.length && index < 10; index += 1) {
+    const item = candidates[index];
+    if (!isRecord(item) || visited.has(item)) continue;
+    visited.add(item);
+
+    const code = item.code ?? item.error_code;
+    if (typeof code === 'string' && RUN_FAILURE_CODE.test(code) &&
+        Object.prototype.hasOwnProperty.call(RUN_FAILURE_GUIDANCE, code)) {
+      return { code, status };
+    }
+
+    if (typeof item.status === 'number' &&
+        Number.isInteger(item.status) && item.status >= 400 && item.status <= 599) {
+      status = item.status;
+    }
+
+    for (const key of ['event', 'error', 'cause', 'detail', 'response']) {
+      if (isRecord(item[key])) candidates.push(item[key]);
+    }
+  }
+  return { code: null, status };
+}
+
+export function getCopilotRunFailureMessage(failure: unknown): string {
+  const { code, status } = runFailureDetail(failure);
+  if (code !== null) {
+    return `${RUN_FAILURE_GUIDANCE[code]} (Code: ${code})`;
+  }
+  if (status === 401 || status === 403) {
+    return 'Your chat session was rejected. Sign in again, then check conversation history before resending. (HTTP ' + status + ')';
+  }
+  if (status === 429) {
+    return 'Karen is rate-limited. Check conversation history before retrying after the limit resets. (HTTP 429)';
+  }
+  if (status === 408 || status === 504) {
+    return 'The chat request timed out. Its final outcome is unknown. Check conversation history and backend connectivity before retrying. (HTTP ' + status + ')';
+  }
+  if (status === 503 || status === 502) {
+    return 'The chat backend or a required dependency is unavailable. Check API, Redis and model availability, then verified history before retrying. (HTTP ' + status + ')';
+  }
+  if (status !== null) {
+    return 'The chat request was rejected by the server (HTTP ' + status + '). Check verified history and backend logs before retrying.';
+  }
+  return RUN_FAILURE_UNKNOWN;
+}
