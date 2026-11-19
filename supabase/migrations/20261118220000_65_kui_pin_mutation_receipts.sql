@@ -84,6 +84,20 @@ RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $immutable_pin_receipt$
 BEGIN
+    -- Parent-table FK cascades must remain possible for governed account and
+    -- tenant erasure. PostgreSQL has already removed the parent row when its
+    -- referential-action trigger deletes the dependent receipt. A direct
+    -- receipt DELETE while the parent still exists remains prohibited.
+    -- UPDATE is never permitted.
+    IF TG_OP = 'DELETE' AND (
+        NOT EXISTS (
+            SELECT 1 FROM public.tenants WHERE id = OLD.tenant_id
+        ) OR NOT EXISTS (
+            SELECT 1 FROM public.auth_users WHERE user_id = OLD.user_id
+        )
+    ) THEN
+        RETURN OLD;
+    END IF;
     RAISE EXCEPTION 'Committed presentation pin receipt is immutable'
         USING ERRCODE = '55000';
 END;
