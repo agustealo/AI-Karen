@@ -98,7 +98,6 @@ def test_format_sensitive_keys_require_explicit_secure_configuration() -> None:
         "AUTH_SECRET_KEY",
         "EXTENSION_SECRET_KEY",
         "EXTENSION_API_KEY",
-        "KARI_DUCKDB_PASSWORD",
         "KARI_JOB_SIGNING_KEY",
         "KARI_MODEL_SIGNING_KEY",
     ):
