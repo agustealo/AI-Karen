@@ -455,7 +455,10 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 ),
             )
             assert first.receipt_id == retry.receipt_id
-            assert first.request_id == retry.request_id == "original"
+            # Either concurrent request can win the advisory lock. Both must
+            # observe the immutable request ID recorded by that winner.
+            assert first.request_id == retry.request_id
+            assert first.request_id in {"original", "retried"}
             assert first.outcome == retry.outcome == "unpinned"
             assert await raw.fetchval("""
                 SELECT count(*) FROM public.conversation_presentation_pins
