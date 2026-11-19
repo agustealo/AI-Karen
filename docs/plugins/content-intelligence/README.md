@@ -24,9 +24,8 @@ The plugin must never turn index metadata into file access permissions. An index
 
 The manifest is `plugin_manifest.json` with entrypoint `handler:MainExtension`. It is disabled by default and requests no memory, user-data, or network permissions. It uses the canonical extension host's `run(params, execution_context)` invocation.
 
-Four read-only operations are functional on **inline invocation-supplied text**, not on arbitrary files:
+Three read-only operations are functional on **inline invocation-supplied text**, not on arbitrary files:
 
-- `browse`: groups already-authorized documents by optional opaque `folder_id` values, returns inventories and content fingerprints. Folder labels do not grant access.
 - `analyze`: SHA-256 text fingerprints, character counts, deterministic term frequencies and shared-term document pairs.
 - `search`: bounded line-level lexical matching with input-text character offsets.
 - `compare`: term intersection/differences and Jaccard similarity between two documents.
@@ -35,9 +34,9 @@ These are strictly lexical features. Shared terms are **not** verified entity ed
 
 ## 3. Execution contract
 
-`operation` is `analyze`, `search`, `compare`, or `browse`; `documents` is an array of 1 to 12 objects, each with required keys `id`, `name`, and `text` and optional `folder_id` (a bounded opaque label, not a filesystem path or authorization claim). `search` additionally requires `query`. `compare` requires `left_id` and `right_id`.
+`operation` is `analyze`, `search`, or `compare`; `documents` is an array of 1 to 12 objects, each with required keys `id`, `name`, and `text`. `search` additionally requires `query`. `compare` requires `left_id` and `right_id`.
 
-Limits: 100,000 characters per document, 300,000 characters total, 512 characters per query, and 12 returned search results. Each search excerpt is an exact substring of the supplied document, with `offset`, `end_offset`, and SHA-256 fingerprint for source-coordinate verification. Browse groups only the documents explicitly supplied in the authorized invocation. No filesystem paths, remote URLs, arbitrary object metadata or unrestricted field names are allowed.
+Limits: 100,000 characters per document, 300,000 characters total, 512 characters per query, and 12 returned search results. Each search excerpt is an exact substring of the supplied document, with `offset`, `end_offset`, and SHA-256 fingerprint for source-coordinate verification. Browsing and choosing files belongs to the independent shared File Explorer extension. No filesystem paths, remote URLs, arbitrary object metadata or unrestricted field names are allowed.
 
 Execution context must be an instance of the host's `ExtensionExecutionContext` with explicit UUID tenant and user identifiers. It must be supplied by the trusted host; request data must not manufacture one. Host RBAC and invocation policy remain mandatory. A caller must not pass confidential content until the canonical upload owner has authorized its disclosure to this plugin.
 
@@ -101,3 +100,7 @@ Run local test slice: `pytest tests/extensions/test_content_intelligence_plugin.
 - Existing sample plugin: `src/ai_karen_engine/extensions/plugins/pocket-tts/`
 - Retired unscoped adapter: `src/ai_karen_engine/integrations/sr_llamaindex_adapter.py`
 - Memory authority: `src/ai_karen_engine/core/memory/README.md`
+
+## Shared explorer ownership
+
+Browsing, folder navigation, selection and file metadata belong exclusively to the independently installable **File Explorer** extension. Content Intelligence only consumes explicitly authorized source content passed via its execution contract. Do not implement a second explorer or grant file access based on a caller-supplied folder label.
