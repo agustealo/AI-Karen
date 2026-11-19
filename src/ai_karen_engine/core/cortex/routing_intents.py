@@ -67,7 +67,7 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "triggers": ["complete task", "complete my task", "mark task", "finish task"],
         "patterns": [
             r"^(?:please\s+)?(?:complete|finish|mark(?:\s+as\s+completed|\s+completed)?)"
-            r"(?:\s+all)?\s+(?:(?:my|the)\s+)?(?:personal\s+)?(?:tasks?|commitments?)(?:\s+.*)?$",
+            r"\s+.*\b(?:tasks?|commitments?)\b(?:\s+.*)?$",
         ],
         "required_capability": "planner.update",
         "requires_live_data": True,
