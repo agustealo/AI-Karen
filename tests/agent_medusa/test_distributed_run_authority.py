@@ -369,11 +369,13 @@ class _RecoveryLedger:
         owner_worker_id: str = "worker-a",
         tenant_id: str = "tenant-a",
         fail_read: bool = False,
+        slow_read: bool = False,
     ) -> None:
         self.status = status
         self.owner_worker_id = owner_worker_id
         self.tenant_id = tenant_id
         self.fail_read = fail_read
+        self.slow_read = slow_read
         self.reads = 0
         self.acceptance_attempts = 0
 
@@ -382,12 +384,18 @@ class _RecoveryLedger:
             DurableRunLedgerUnavailable,
         )
 
+        from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+            _canonical_tenant_id,
+        )
+
         self.reads += 1
         if self.fail_read:
             raise DurableRunLedgerUnavailable("injected PostgreSQL outage")
+        if self.slow_read:
+            await asyncio.sleep(60)
         return {
             "run_id": run_id,
-            "tenant_id": self.tenant_id,
+            "tenant_id": _canonical_tenant_id(self.tenant_id),
             "status": self.status,
             "owner_worker_id": self.owner_worker_id,
             "audit_event_ref": "original-remote-audit",
@@ -579,6 +587,113 @@ async def test_durable_recovery_requires_redis_atomic_live_acceptance() -> None:
             run.heartbeat_task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await run.heartbeat_task
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+async def test_owner_recovers_cancellation_for_canonical_legacy_tenant() -> None:
+    """PostgreSQL canonical UUIDs must match a legacy live tenant scope."""
+
+    from dataclasses import replace
+
+    store = SharedFakeRunStore()
+    owner = MedusaRunManager(
+        settings=_settings("worker-a"),
+        distributed_store=store,
+    )
+    task = asyncio.create_task(asyncio.sleep(60))
+    run = None
+    try:
+        run = await owner.register(
+            run_id="legacy-tenant-cancellation",
+            correlation_id="corr-legacy-tenant",
+            tenant_id="default",
+            user_id="user-a",
+            task=task,
+        )
+        ledger = _RecoveryLedger(tenant_id="default")
+        run.durable_registered = True
+        owner._durable_ledger = ledger
+        owner._settings = replace(
+            owner._settings,
+            durable_run_ledger_enabled=True,
+            durable_run_ledger_required=True,
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3.5)
+        assert store.records[run.run_id]["cancel_requested"] is True
+        assert ledger.acceptance_attempts == 1
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            try:
+                await run.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+
+@pytest.mark.asyncio
+async def test_slow_postgres_recovery_read_cannot_block_lease_heartbeat() -> None:
+    """A stalled durable lookup times out so Redis ownership keeps renewing."""
+
+    from dataclasses import replace
+
+    store = SharedFakeRunStore()
+    owner = MedusaRunManager(
+        settings=_settings("worker-a"),
+        distributed_store=store,
+    )
+    ledger = _RecoveryLedger(slow_read=True)
+    renewed = asyncio.Event()
+    calls = 0
+    original_heartbeat = store.heartbeat
+
+    async def counting_heartbeat(*, run_id: str, worker_id: str) -> bool:
+        nonlocal calls
+        result = await original_heartbeat(run_id=run_id, worker_id=worker_id)
+        calls += 1
+        if calls >= 2:
+            renewed.set()
+        return result
+
+    store.heartbeat = counting_heartbeat
+    task = asyncio.create_task(asyncio.sleep(60))
+    run = None
+    try:
+        run = await owner.register(
+            run_id="postgres-stall-recovery",
+            correlation_id="corr-postgres-stall",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            task=task,
+        )
+        run.durable_registered = True
+        owner._durable_ledger = ledger
+        owner._settings = replace(
+            owner._settings,
+            durable_run_ledger_enabled=True,
+            durable_run_ledger_required=True,
+        )
+        await asyncio.wait_for(renewed.wait(), timeout=4.5)
+        assert ledger.reads >= 1
+        assert not task.done()
+        assert not task.cancelling()
+        assert store.records[run.run_id]["status"] == "running"
+        assert store.records[run.run_id]["cancel_requested"] is False
+        assert ledger.acceptance_attempts == 0
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            try:
+                await run.heartbeat_task
+            except asyncio.CancelledError:
+                pass
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
