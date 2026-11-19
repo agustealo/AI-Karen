@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
 const editor = read("src/components/settings/PersonaSettings.tsx");
 const shell = read("src/app/dashboard/page.tsx");
+const navRegistry = read("src/components/navigation/workspace-navigation-registry.ts");
 
 describe("Persona Studio canonical integration", () => {
   it("mounts the existing settings editor as a workspace, not a second conversation", () => {
-    expect(shell).toContain('key: "personaStudio"');
+    expect(navRegistry).toContain('key: "personaStudio"');
+    expect(shell).toContain('<KariWorkspaceNavigation');
     expect(shell).toContain('data-testid="persona-studio-workspace"');
     expect(shell).toContain("<PersonaSettings />");
     expect(shell.match(/<SessionProvider storagePrincipal=/g)).toHaveLength(1);

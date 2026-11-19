@@ -173,6 +173,20 @@ describe("canonical auth service session generation", () => {
       expect(localStorage.getItem("refresh_token")).toBe("shared-rotated-refresh");
       expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).refresh_token)
         .toBe("previous-refresh");
+
+      // In the API-first case AuthService joined an already-running refresh.
+      // Its own callback never ran, but its service-local lock must still
+      // release so the next token rotation uses the new refresh credential.
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+        access_token: "subsequent-access",
+        refresh_token: "subsequent-rotated-refresh",
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      await expect(authService.refreshToken()).resolves.toBe("subsequent-access");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).refresh_token)
+        .toBe("shared-rotated-refresh");
+      expect(localStorage.getItem("access_token")).toBe("subsequent-access");
+      expect(localStorage.getItem("refresh_token")).toBe("subsequent-rotated-refresh");
     },
   );
 
