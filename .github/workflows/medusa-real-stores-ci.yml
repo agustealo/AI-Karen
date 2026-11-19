@@ -1,0 +1,80 @@
+name: Medusa Real Stores Acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "tests/integration/test_live_medusa_cancellation_stores.py"
+      - "src/ai_karen_engine/agent_medusa/execution/**"
+      - "src/ai_karen_engine/config/agent_medusa.py"
+      - "supabase/migrations/*agent_medusa_run_ledger*.sql"
+      - ".github/workflows/medusa-real-stores-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tests/integration/test_live_medusa_cancellation_stores.py"
+      - "src/ai_karen_engine/agent_medusa/execution/**"
+      - "supabase/migrations/*agent_medusa_run_ledger*.sql"
+      - ".github/workflows/medusa-real-stores-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  medusa-real-postgres-redis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: karen_medusa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d karen_medusa_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONPATH: src
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_medusa_ci
+      REDIS_URL: redis://127.0.0.1:6379/0
+      KAREN_MEDUSA_REAL_STORES_ACCEPTANCE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install canonical service-backed proof dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio "sqlalchemy[asyncio]" \
+            asyncpg psycopg2-binary redis pydantic pydantic-settings \
+            python-dotenv PyYAML structlog prometheus-client
+      - name: Prove durable owner recovery with actual PostgreSQL and Redis
+        run: |
+          python -m compileall -q tests/integration/test_live_medusa_cancellation_stores.py
+          pytest -q -rs tests/integration/test_live_medusa_cancellation_stores.py
+      - name: Declare scope of observed acceptance
+        if: always()
+        run: |
+          echo "This CI uses disposable real PostgreSQL/Redis services and two Medusa manager instances." >> "$GITHUB_STEP_SUMMARY"
+          echo "Separate OS worker processes, controlled crash/restart, and approved target-host acceptance remain NOT_RUN." >> "$GITHUB_STEP_SUMMARY"
