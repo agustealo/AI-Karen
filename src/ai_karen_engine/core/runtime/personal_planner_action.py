@@ -61,10 +61,10 @@ def parse_personal_planner_create(query: str) -> tuple[str, str] | None:
         return None
     normalized = " ".join(query.strip().split())
     match = re.fullmatch(
-        r"(?:please\\s+)?(?:create|add|make)\\s+(?:me\\s+)?(?:a\\s+)?"
-        r"(?:personal\\s+)?(?:task|commitment)\\s+(?:to|for)\\s+"
-        r"(?P<title>.+?)\\s+(?:in\\s+|timezone\\s+)"
-        r"(?P<timezone>[A-Za-z_]+/[A-Za-z_+\\-]+)[.!]?",
+        r"(?:please\s+)?(?:create|add|make)\s+(?:me\s+)?(?:a\s+)?"
+        r"(?:personal\s+)?(?:task|commitment)\s+(?:to|for)\s+"
+        r"(?P<title>.+?)\s+(?:in\s+|timezone\s+)"
+        r"(?P<timezone>[A-Za-z_]+/[A-Za-z_+\-]+)[.!]?",
         normalized,
         flags=re.IGNORECASE,
     )
@@ -75,9 +75,9 @@ def parse_personal_planner_create(query: str) -> tuple[str, str] | None:
     if not (1 <= len(title) <= 240 and 1 <= len(timezone) <= 128):
         return None
     if re.search(
-        r"\\b(?:today|tomorrow|tonight|next\\s+(?:week|month|"
-        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday))\\b"
-        r"|\\b(?:at|by)\\s+\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?\\b",
+        r"\b(?:today|tomorrow|tonight|next\s+(?:week|month|"
+        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b"
+        r"|\b(?:at|by)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b",
         title,
         re.IGNORECASE,
     ):
