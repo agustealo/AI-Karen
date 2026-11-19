@@ -144,3 +144,36 @@ async def test_setup_policy_success_keeps_response_contract(
     result = await setup_api.get_download_policy(current_user={})
     assert result.master_enabled is True
     assert result.max_concurrent_downloads == 2
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resource", ["recommendations", "policy", "channels"])
+async def test_setup_domain_errors_keep_status_but_redact_private_details(
+    monkeypatch: pytest.MonkeyPatch, resource: str
+) -> None:
+    from ai_karen_engine.core.model_runtime.management.model_orchestrator_service import (
+        E_NET,
+        ModelOrchestratorError,
+    )
+
+    secret = "private-source-access-token"
+    failure = ModelOrchestratorError(
+        E_NET, secret, {"credential": secret}
+    )
+    service = SimpleNamespace(
+        get_recommendations=AsyncMock(side_effect=failure),
+        get_policy=AsyncMock(side_effect=failure),
+        get_channels=AsyncMock(side_effect=failure),
+    )
+    monkeypatch.setattr(setup_api, "_control_service", lambda: service)
+    endpoints = {
+        "recommendations": lambda: setup_api.get_download_recommendations(
+            current_user={"tenant_id": "11111111-1111-4111-8111-111111111111"}
+        ),
+        "policy": lambda: setup_api.get_download_policy(current_user={}),
+        "channels": lambda: setup_api.get_download_channels(current_user={}),
+    }
+    with pytest.raises(HTTPException) as captured:
+        await endpoints[resource]()
+    assert captured.value.status_code == 503
+    assert secret not in str(captured.value.detail)
+    assert isinstance(captured.value.detail, str)
