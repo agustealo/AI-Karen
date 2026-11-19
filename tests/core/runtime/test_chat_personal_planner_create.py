@@ -310,3 +310,28 @@ async def test_invalid_persistence_receipt_cannot_report_task_saved(monkeypatch)
     assert not result.success
     assert result.error == "planner_create_receipt_invalid"
     assert result.payload["planner_created"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision", [
+    _decision(direct=False),
+    _decision(direct=True, graph=True),
+])
+async def test_non_direct_or_graph_planner_intent_cannot_trigger_mutation(
+    monkeypatch, decision,
+):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    write = AsyncMock(side_effect=AssertionError("Must not write"))
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request()
+    result = await ChatRuntime._execute_personal_planner_create(
+        request, decision, plan, meter,
+    )
+    assert not result.success
+    assert result.error == "planner_create_requires_direct_authority"
+    assert result.payload["planner_created"] is False
+    write.assert_not_awaited()
+    meter.consume_tool_call.assert_not_awaited()
