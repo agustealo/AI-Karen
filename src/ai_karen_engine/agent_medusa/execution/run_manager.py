@@ -33,6 +33,7 @@ from .durable_run_ledger import (
     DurableRunLedgerConflict,
     DurableRunLedgerUnavailable,
     PostgresDurableRunLedger,
+    _canonical_tenant_id,
 )
 
 logger = get_logger(__name__)
@@ -644,21 +645,36 @@ class MedusaRunManager:
                     # owner may recover that request, and an atomic Redis
                     # request_cancel must recheck ownership before any local
                     # task is interrupted.
+                    # Keep PostgreSQL pool waits inside the time remaining
+                    # before the next Redis lease renewal. A slow durable
+                    # lookup must not turn a healthy owner into an orphan.
+                    recovery_read_budget = (
+                        self._settings.run_lease_ttl_seconds
+                        - self._settings.run_heartbeat_interval_seconds
+                    ) / 2
                     try:
-                        durable = await self._durable_ledger.get(
-                            run_id=run.run_id,
-                            tenant_id=run.tenant_id,
+                        durable = await asyncio.wait_for(
+                            self._durable_ledger.get(
+                                run_id=run.run_id,
+                                tenant_id=run.tenant_id,
+                            ),
+                            timeout=recovery_read_budget,
                         )
-                    except DurableRunLedgerUnavailable:
+                    except (DurableRunLedgerUnavailable, asyncio.TimeoutError) as exc:
                         logger.warning(
                             "Medusa durable cancellation recovery read unavailable",
-                            extra={"run_id": run.run_id, "tenant_id": run.tenant_id},
+                            extra={
+                                "run_id": run.run_id,
+                                "tenant_id": run.tenant_id,
+                                "error_type": type(exc).__name__,
+                            },
                         )
                         continue
                     if (
                         durable is not None
                         and durable.get("status") == "cancellation_requested"
-                        and durable.get("tenant_id") == run.tenant_id
+                        and durable.get("tenant_id")
+                        == _canonical_tenant_id(run.tenant_id)
                         and durable.get("owner_worker_id") == self._settings.worker_id
                     ):
                         try:
