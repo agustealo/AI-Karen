@@ -182,6 +182,7 @@ export default function SequencesPage() {
     const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.delete(`/api/automation/jobs/${id}`);
       if (principalRef.current !== actionPrincipal) return;
       void fetchJobs();
@@ -199,6 +200,7 @@ export default function SequencesPage() {
     const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.post(`/api/automation/jobs/${id}/execute`, {});
       if (principalRef.current !== actionPrincipal) return;
       alert("Job execution started.");
