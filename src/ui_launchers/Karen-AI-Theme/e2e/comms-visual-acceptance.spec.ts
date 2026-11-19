@@ -197,3 +197,110 @@ test("KUI-COMMS: live identity-scoped evidence and five responsive viewports", a
   expect(refreshed.status()).toBe(200);
   await expect(root.getByRole("status")).toContainText("Live snapshot");
 });
+
+
+/**
+ * An independently opted-in real Medusa proof.
+ *
+ * Use an approved, sanitized account which already has at least one genuine
+ * Medusa execution with a recorded start time. Do not seed or mock it here:
+ * only the runtime may author execution records. This suite deliberately
+ * fails if no qualifying real record exists.
+ */
+test("KUI-COMMS: authenticated Medusa run receipts render and refresh", async ({ page }) => {
+  test.skip(
+    !enabled || process.env.KAREN_COMMS_AGENT_FEED_ACCEPTANCE !== "true",
+    "Requires KAREN_COMMS_VISUAL_ACCEPTANCE=true and KAREN_COMMS_AGENT_FEED_ACCEPTANCE=true",
+  );
+  test.setTimeout(2 * 60_000);
+  if (!email || !password) {
+    throw new Error("Dedicated sanitized KAREN_UX_EMAIL and KAREN_UX_PASSWORD are required");
+  }
+
+  const origin = validateTarget().origin;
+  const endpoint = "/api/agent-runtime/my-runs";
+  const isOwnedRunResponse = (response: import("@playwright/test").Response): boolean => {
+    const url = new URL(response.url());
+    return url.origin === origin &&
+      url.pathname === endpoint &&
+      response.request().method() === "GET";
+  };
+
+  await signInApprovedKaren(page, email, password, {
+    allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1",
+  });
+  expect(new URL(page.url()).origin).toBe(origin);
+
+  const firstRequest = page.waitForResponse(isOwnedRunResponse, { timeout: 30_000 });
+  await openCommunications(page);
+  const first = await firstRequest;
+  expect(first.status(), "Canonical owner-scoped Medusa endpoint must authorize this principal").toBe(200);
+
+  const body: unknown = await first.json();
+  if (!body || typeof body !== "object" || !("runs" in body) ||
+      !Array.isArray(body.runs) || !("total" in body) ||
+      typeof body.total !== "number" || !("generated_at" in body) ||
+      typeof body.generated_at !== "string") {
+    throw new Error("Real Medusa endpoint returned an invalid execution-list contract");
+  }
+  const runs: unknown[] = body.runs;
+  expect(runs.length, "Sanitized principal needs an existing real Medusa run for this acceptance").toBeGreaterThan(0);
+  expect(body.total).toBeGreaterThanOrEqual(runs.length);
+
+  const owned = runs.map((item) => {
+    if (!item || typeof item !== "object" ||
+        !("run_id" in item) || typeof item.run_id !== "string" ||
+        !("tenant_id" in item) || typeof item.tenant_id !== "string" ||
+        !("user_id" in item) || typeof item.user_id !== "string" ||
+        !("status" in item) || typeof item.status !== "string" ||
+        !("started_at" in item) || typeof item.started_at !== "string") {
+      throw new Error("Real Medusa response lacks required run ownership or receipt fields");
+    }
+    return {
+      id: item.run_id,
+      tenant: item.tenant_id,
+      user: item.user_id,
+      status: item.status,
+      startedAt: item.started_at,
+    };
+  });
+  const principal = owned[0];
+  expect(principal.tenant.length).toBeGreaterThan(0);
+  expect(principal.user.length).toBeGreaterThan(0);
+  for (const run of owned) {
+    expect(run.tenant, "Mixed-tenant Medusa response must not be accepted").toBe(principal.tenant);
+    expect(run.user, "Mixed-owner Medusa response must not be accepted").toBe(principal.user);
+    expect(run.id.length).toBeGreaterThan(0);
+    expect(run.id.length).toBeLessThanOrEqual(128);
+    expect(Number.isNaN(Date.parse(run.startedAt))).toBe(false);
+  }
+
+  const card = page.getByTestId("comms-owned-runs");
+  await expect(card.getByText("Recent agent executions")).toBeVisible();
+  await expect(card.getByTestId("comms-owned-run-count")).toContainText(
+    String(owned.length) + " recorded",
+  );
+  const visibleRun = owned[0];
+  const receipt = card.getByRole("listitem").filter({
+    hasText: "Execution " + visibleRun.id.slice(0, 8),
+  });
+  await expect(receipt).toBeVisible();
+  await expect(receipt).toContainText(visibleRun.status);
+  const expectedStartTime = await page.evaluate((startedAt) => {
+    const started = new Date(startedAt);
+    const month = started.toLocaleString("en-US", { month: "short" });
+    const day = started.getDate();
+    const hour = String(started.getHours()).padStart(2, "0");
+    const minute = String(started.getMinutes()).padStart(2, "0");
+    return `Started ${month} ${day}, ${hour}:${minute}`;
+  }, visibleRun.startedAt);
+  await expect(receipt).toContainText(expectedStartTime);
+  await expect(receipt).not.toContainText("Time unavailable");
+  await expect(card).toContainText("does not imply an independently verified result");
+
+  const refreshedRequest = page.waitForResponse(isOwnedRunResponse, { timeout: 30_000 });
+  await page.getByTestId("comms-center").getByRole("button", { name: "Refresh" }).click();
+  const refreshed = await refreshedRequest;
+  expect(refreshed.status(), "Refresh must make another authenticated Medusa request").toBe(200);
+  await expect(card.getByTestId("comms-owned-run-count")).not.toContainText("Unverified");
+});
