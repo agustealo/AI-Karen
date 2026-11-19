@@ -1,0 +1,465 @@
+"""Service-backed Medusa durable cancellation acceptance.
+
+Uses actual isolated PostgreSQL and Redis services, two independently
+configured Medusa managers, real SQL transitions and Redis Lua leases.
+This is not a separate-process crash/restart or deployed host test.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+import asyncpg
+import pytest
+
+from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+    DistributedRunNotCancellable,
+    RedisDistributedRunStore,
+)
+from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+    PostgresDurableRunLedger,
+)
+from ai_karen_engine.agent_medusa.execution.run_manager import (
+    MedusaRunManager,
+    RunTenantMismatchError,
+)
+from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+from ai_karen_engine.persistence.postgres import get_postgres_engine
+from ai_karen_engine.platform.memory.redis import RedisConnectionManager
+
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("KAREN_MEDUSA_REAL_STORES_ACCEPTANCE") != "1",
+    reason="Requires explicitly provisioned isolated PostgreSQL and Redis",
+)
+
+
+async def _prepare_disposable_schema() -> None:
+    """Apply the existing forward migrations, never runtime-generated DDL."""
+
+    root = Path(__file__).resolve().parents[2]
+    connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+    try:
+        exists = await connection.fetchval(
+            "SELECT to_regclass('public.agent_medusa_runs')"
+        )
+        assert exists is None, "Refusing to modify a database with existing Medusa runs"
+        for migration in (
+            "20260828042000_12_agent_medusa_run_ledger.sql",
+            "20260828063000_13_agent_medusa_run_ledger_reconciliation.sql",
+        ):
+            await connection.execute(
+                (root / "supabase" / "migrations" / migration).read_text(
+                    encoding="utf-8"
+                )
+            )
+    finally:
+        await connection.close()
+
+
+def _settings(*, worker: str, prefix: str) -> AgentMedusaRuntimeSettings:
+    return AgentMedusaRuntimeSettings(
+        distributed_run_control_enabled=True,
+        durable_run_ledger_enabled=True,
+        durable_run_ledger_required=True,
+        run_lease_ttl_seconds=8,
+        run_heartbeat_interval_seconds=1,
+        run_terminal_retention_seconds=60,
+        run_orphan_grace_seconds=16,
+        run_key_prefix=prefix,
+        worker_id=worker,
+    )
+
+
+async def _run_acceptance() -> None:
+    await _prepare_disposable_schema()
+    redis = RedisConnectionManager(redis_url=os.environ["REDIS_URL"])
+    assert await redis.initialize(), "Real Redis must be available, never degraded"
+    assert redis.client is not None
+    postgres = get_postgres_engine()
+    ledger = PostgresDurableRunLedger(postgres=postgres)
+    marker = uuid4().hex
+    prefix = f"ci:medusa:real:{marker}"
+    tenant_a, tenant_b = str(uuid4()), str(uuid4())
+    run_id = f"ci-medusa-{marker}"
+    audit_ref = f"ci-audit-{marker}"
+    owner_settings = _settings(worker=f"ci-owner-{marker}", prefix=prefix)
+    remote_settings = _settings(worker=f"ci-remote-{marker}", prefix=prefix)
+    owner = MedusaRunManager(
+        settings=owner_settings,
+        distributed_store=RedisDistributedRunStore(
+            settings=owner_settings, redis_manager=redis
+        ),
+        durable_ledger=ledger,
+    )
+    remote = MedusaRunManager(
+        settings=remote_settings,
+        distributed_store=RedisDistributedRunStore(
+            settings=remote_settings, redis_manager=redis
+        ),
+        durable_ledger=ledger,
+    )
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def workload() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    task = asyncio.create_task(workload())
+    run = None
+    try:
+        await started.wait()
+        run = await owner.register(
+            run_id=run_id,
+            correlation_id=f"ci-correlation-{marker}",
+            request_id=f"ci-request-{marker}",
+            session_id=f"ci-session-{marker}",
+            policy_decision_id=f"ci-policy-{marker}",
+            tenant_id=tenant_a,
+            user_id="ci-user-a",
+            task=task,
+        )
+        assert run.shared_registered and run.durable_registered
+
+        # A tenant-B requester must never observe or cancel tenant-A's run.
+        assert await ledger.get(run_id=run_id, tenant_id=tenant_b) is None
+        with pytest.raises(RunTenantMismatchError):
+            await remote.cancel(run_id=run_id, tenant_id=tenant_b)
+
+        # Simulate an already committed remote durable request whose Redis
+        # publication was lost. These are genuine SQL and Redis operations,
+        # not mocks of their persistence protocols.
+        await ledger.mark_cancelling(
+            run_id=run_id,
+            tenant_id=tenant_a,
+            requested_at=datetime.now(timezone.utc),
+            audit_event_ref=audit_ref,
+            source="admin_cancel",
+        )
+        pending = await ledger.get(run_id=run_id, tenant_id=tenant_a)
+        assert pending is not None
+        assert pending["status"] == "cancellation_requested"
+        assert pending["audit_event_ref"] == audit_ref
+        shared_before = await owner._distributed_store.get(
+            run_id=run_id, tenant_id=tenant_a
+        )
+        assert shared_before["status"] == "running"
+
+        # The actual lease-owning manager must recover the Redis signal,
+        # interrupt its real asyncio task, and never claim terminality first.
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=6)
+        assert cancelled.is_set()
+        shared_after = await owner._distributed_store.get(
+            run_id=run_id, tenant_id=tenant_a
+        )
+        assert shared_after["status"] == "cancelling"
+        pending = await ledger.get(run_id=run_id, tenant_id=tenant_a)
+        assert pending is not None and pending["status"] == "cancellation_requested"
+
+        # Explicitly emulate the coordinator's observed-task-finalizer after
+        # actual CancelledError; requesting cancellation alone is insufficient.
+        await owner.mark_cancelled(run_id)
+        final = await ledger.get(run_id=run_id, tenant_id=tenant_a)
+        assert final is not None and final["status"] == "cancelled"
+        assert final["audit_event_ref"] == audit_ref
+
+        connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT from_status, to_status, source, audit_event_ref
+                FROM agent_medusa_run_transitions
+                WHERE run_id = $1 ORDER BY transition_id
+                """,
+                run_id,
+            )
+            assert [row["to_status"] for row in rows] == [
+                "created", "running", "cancellation_requested", "cancelled"
+            ]
+            assert rows[2]["audit_event_ref"] == audit_ref
+            assert rows[2]["source"] == "admin_cancel"
+            assert rows[3]["source"] == "runtime"
+        finally:
+            await connection.close()
+        await _cross_process_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
+            foreign_tenant_id=tenant_b, marker=marker
+        )
+        await _postgres_lock_stall_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker
+        )
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            try:
+                await run.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await redis.close()
+        await postgres.cleanup()
+
+
+def test_real_postgres_redis_lost_signal_owner_recovery() -> None:
+    """Source CI integration: actual services, not a deployment acceptance."""
+
+    asyncio.run(_run_acceptance())
+
+async def _read_worker_event(
+    process: asyncio.subprocess.Process, expected: str, *, timeout: float = 15
+) -> dict[str, object]:
+    """Require an explicit event from the actual OS child, not a mock signal."""
+
+    assert process.stdout is not None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        line = await asyncio.wait_for(
+            process.stdout.readline(), timeout=max(0.1, deadline - loop.time())
+        )
+        if not line:
+            assert process.stderr is not None
+            error = await process.stderr.read()
+            raise AssertionError(
+                f"Worker exited before {expected}; code={process.returncode}; "
+                f"stderr={error.decode(errors='replace')[-2000:]}"
+            )
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get("event") == expected:
+            assert event.get("pid") == process.pid
+            return event
+        if loop.time() >= deadline:
+            raise AssertionError(f"Missing worker event: {expected}")
+
+
+async def _cross_process_acceptance(
+    *, redis: RedisConnectionManager, ledger: PostgresDurableRunLedger,
+    prefix: str, tenant_id: str, foreign_tenant_id: str, marker: str
+) -> None:
+    """Observe separate worker PID recovery and crash/replaced-lease fencing."""
+
+    helper = Path(__file__).with_name("medusa_real_store_worker.py")
+    assert helper.is_file()
+    remote_settings = _settings(
+        worker=f"ci-requester-{marker}", prefix=prefix
+    )
+    remote_store = RedisDistributedRunStore(
+        settings=remote_settings, redis_manager=redis
+    )
+    remote = MedusaRunManager(
+        settings=remote_settings,
+        distributed_store=remote_store,
+        durable_ledger=ledger,
+    )
+
+    async def spawn(run_id: str, worker_id: str) -> asyncio.subprocess.Process:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-u", str(helper), run_id, tenant_id, worker_id, prefix,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        await _read_worker_event(process, "ready")
+        return process
+
+    for scenario in ("lost-signal", "worker-crash"):
+        run_id = f"ci-process-{scenario}-{marker}"
+        worker_id = f"ci-owner-{scenario}-{marker}"
+        process = await spawn(run_id, worker_id)
+        try:
+            assert process.pid != os.getpid()
+            assert await ledger.get(run_id=run_id, tenant_id=foreign_tenant_id) is None
+            with pytest.raises(RunTenantMismatchError):
+                await remote.cancel(run_id=run_id, tenant_id=foreign_tenant_id)
+
+            if scenario == "lost-signal":
+                audit_ref = f"ci-process-audit-{marker}"
+                # Observe the unsignalled Redis state before committing the
+                # durable request: the owning heartbeat may recover immediately
+                # after commit, and that correct recovery must not race this test.
+                shared = await remote_store.get(run_id=run_id, tenant_id=tenant_id)
+                assert shared["status"] == "running"
+                await ledger.mark_cancelling(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    requested_at=datetime.now(timezone.utc),
+                    audit_event_ref=audit_ref,
+                    source="admin_cancel",
+                )
+                # The requester never invokes Redis request_cancel.
+                await _read_worker_event(process, "cancelled", timeout=12)
+                assert await asyncio.wait_for(process.wait(), timeout=8) == 0
+                final = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+                assert final is not None and final["status"] == "cancelled"
+                assert final["audit_event_ref"] == audit_ref
+                connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+                try:
+                    rows = await connection.fetch(
+                        """
+                        SELECT to_status, source, audit_event_ref
+                        FROM agent_medusa_run_transitions
+                        WHERE run_id = $1 ORDER BY transition_id
+                        """, run_id
+                    )
+                    assert [row["to_status"] for row in rows] == [
+                        "created", "running", "cancellation_requested", "cancelled"
+                    ]
+                    assert rows[2]["audit_event_ref"] == audit_ref
+                    assert rows[3]["source"] == "runtime"
+                finally:
+                    await connection.close()
+            else:
+                # A killed owner cannot produce terminal acknowledgement.
+                process.kill()
+                assert await asyncio.wait_for(process.wait(), timeout=8) != 0
+                durable = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+                assert durable is not None and durable["status"] == "running"
+                assert durable["completed_at"] is None
+
+                # After expiry no live owner may accept a cancellation signal.
+                await asyncio.sleep(remote_settings.run_lease_ttl_seconds + 1)
+                shared = await remote_store.get(run_id=run_id, tenant_id=tenant_id)
+                assert shared["status"] == "orphaned"
+                with pytest.raises(DistributedRunNotCancellable):
+                    await remote_store.request_cancel(
+                        run_id=run_id, tenant_id=tenant_id
+                    )
+
+                # Even a replacement string in the Redis claim key cannot
+                # authorize the stale original worker metadata as an owner.
+                assert redis.client is not None
+                await redis.client.set(
+                    f"{prefix}:claim:{run_id}",
+                    f"ci-replacement-{marker}", ex=8,
+                )
+                with pytest.raises(DistributedRunNotCancellable):
+                    await remote_store.request_cancel(
+                        run_id=run_id, tenant_id=tenant_id
+                    )
+                with pytest.raises(RuntimeError):
+                    await remote_store.heartbeat(
+                        run_id=run_id, worker_id=worker_id
+                    )
+                durable = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+                assert durable is not None and durable["status"] == "running"
+                assert durable["audit_event_ref"] is None
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await asyncio.wait_for(process.wait(), timeout=8)
+
+
+async def _postgres_lock_stall_acceptance(
+    *, redis: RedisConnectionManager, ledger: PostgresDurableRunLedger,
+    prefix: str, tenant_id: str, marker: str
+) -> None:
+    """Prove a blocked real SQL read cannot expire an otherwise healthy Redis owner.
+
+    The existing durable recovery read is bounded by the runtime. This test
+    holds an actual PostgreSQL ACCESS EXCLUSIVE lock longer than the original
+    Redis lease TTL, while checking the real lease and local task continuously.
+    The lock is scoped to the disposable CI schema created by this test.
+    """
+    assert redis.client is not None
+    run_id = f"ci-postgres-stall-{marker}"
+    worker_id = f"ci-stalled-owner-{marker}"
+    settings = _settings(worker=worker_id, prefix=prefix)
+    manager = MedusaRunManager(
+        settings=settings,
+        distributed_store=RedisDistributedRunStore(
+            settings=settings, redis_manager=redis
+        ),
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(45))
+    run = None
+    locker = None
+    try:
+        run = await manager.register(
+            run_id=run_id,
+            correlation_id=f"ci-correlation-{run_id}",
+            request_id=f"ci-request-{run_id}",
+            tenant_id=tenant_id,
+            user_id="ci-stall-user",
+            task=task,
+        )
+        assert run.shared_registered and run.durable_registered
+        claim_key = f"{prefix}:claim:{run_id}"
+        locker = await asyncpg.connect(os.environ["DATABASE_URL"])
+        # No other session can read the durable run row during this transaction.
+        async with locker.transaction():
+            await locker.execute(
+                "LOCK TABLE agent_medusa_runs IN ACCESS EXCLUSIVE MODE"
+            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + settings.run_lease_ttl_seconds + 1.5
+            while loop.time() < deadline:
+                assert await redis.client.pttl(claim_key) > 0, (
+                    "Redis lease expired while PostgreSQL lookup was blocked"
+                )
+                assert not task.done(), (
+                    "A stalled PostgreSQL read must not cancel a live task"
+                )
+                await asyncio.sleep(0.2)
+
+        # The SQL lock is gone, and cancellation must still use the original
+        # valid Redis owner. An accepted request is not yet a terminal result.
+        assert await redis.client.pttl(claim_key) > 0
+        pending = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert pending is not None and pending["status"] == "running"
+        assert pending["completed_at"] is None
+        audit_ref = f"ci-stall-audit-{marker}"
+        await ledger.mark_cancelling(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            requested_at=datetime.now(timezone.utc),
+            audit_event_ref=audit_ref,
+            source="admin_cancel",
+        )
+        # Shield prevents the test timeout from manufacturing a CancelledError.
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=10)
+        before_terminal = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert before_terminal is not None
+        assert before_terminal["status"] == "cancellation_requested"
+        assert before_terminal["audit_event_ref"] == audit_ref
+        await manager.mark_cancelled(run_id)
+        final = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert final is not None and final["status"] == "cancelled"
+        assert final["audit_event_ref"] == audit_ref
+    finally:
+        if locker is not None:
+            await locker.close()
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            try:
+                await run.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

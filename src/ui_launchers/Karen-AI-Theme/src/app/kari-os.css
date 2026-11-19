@@ -163,7 +163,8 @@
  * scoped: unrelated routes, parent dashboard and auth remain unchanged.
  */
 :is([data-kari-root][data-testid="karen-copilot-consumer-chat"],
-    [data-kari-root][data-testid="comms-center"]) {
+    [data-kari-root][data-testid="comms-center"],
+    [data-kari-root][data-testid="plugins-overview"]) {
   --background: 240 7% 4%;
   --foreground: 300 4% 89%;
   --card: 220 8% 8%;
@@ -270,5 +271,65 @@
 @media (min-width: 1600px) {
   [data-kari-root] .karen-pinned-dock {
     display: flex;
+  }
+}
+
+/*
+ * KUI-SETTINGS: opt-in graphite settings workspace. The shell owns only
+ * navigation and presentation. Child panels still own real backend state.
+ * Semantic variables remain scoped so other dashboard pages are unchanged.
+ */
+[data-kari-root][data-testid="karen-settings-workspace"] {
+  --background: 240 7% 4%;
+  --foreground: 300 4% 89%;
+  --card: 220 8% 8%;
+  --card-foreground: 300 4% 89%;
+  --popover: 220 8% 8%;
+  --popover-foreground: 300 4% 89%;
+  --primary: 237 100% 87%;
+  --primary-foreground: 237 100% 14%;
+  --secondary: 240 7% 14%;
+  --secondary-foreground: 300 4% 89%;
+  --muted: 240 7% 14%;
+  --muted-foreground: 226 5% 61%;
+  --accent: 186 83% 61%;
+  --accent-foreground: 189 100% 11%;
+  --border: 240 6% 19%;
+  --input: 240 6% 23%;
+  --ring: 237 100% 87%;
+  --radius: 0.75rem;
+  font-family: var(--kari-font-body);
+  background: var(--kari-canvas);
+  color: var(--kari-text);
+}
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-hero,
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-section-nav,
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-panel-heading {
+  border-color: var(--kari-line);
+  background-color: var(--kari-panel);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.025);
+}
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-hero {
+  background-image:
+    radial-gradient(ellipse at 0% 0%, rgb(94 107 255 / 0.14), transparent 65%),
+    linear-gradient(145deg, var(--kari-raised), var(--kari-panel) 72%);
+}
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-categories {
+  border-color: var(--kari-line);
+  background: var(--kari-panel);
+}
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-authority {
+  border-color: var(--kari-line-strong);
+  background: var(--kari-card);
+}
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-section-nav {
+  background: var(--kari-card);
+}
+[data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-active {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 767px) {
+  [data-kari-root][data-testid="karen-settings-workspace"] .karen-settings-panel-heading {
+    padding: 16px;
   }
 }

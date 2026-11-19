@@ -1,49 +1,64 @@
+"""Retired direct LlamaIndex structural-retrieval integration.
+
+Historical SRRetriever callers may still import this adapter. It cannot safely
+retrieve enterprise or personal documents: the legacy contract has no trusted
+actor/resource identity, and its metadata_filter did not constrain index queries.
+
+Keep the compatibility type fail-closed until a canonical, authenticated document
+retrieval owner supplies a versioned, ACL-checked adapter. Do not turn document
+metadata into authorization or reinstate silent ingestion failures.
+"""
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-try:
-    # LlamaIndex v0.10+ style imports (adjust if your version differs)
-    from llama_index.core import VectorStoreIndex
-except Exception as e:  # pragma: no cover
-    VectorStoreIndex = None  # type: ignore
-
 from ai_karen_engine.core.reasoning.retrieval.adapters import SRRetriever
 
 
-class LlamaIndexSRAdapter(SRRetriever):
-    """Adapter to use LlamaIndex as Kari's SR retriever.
+class LlamaIndexAuthorizationRequired(PermissionError):
+    """Direct LlamaIndex access lacks canonical document authorization."""
 
-    Assumes you've built a VectorStoreIndex externally and inject it.
+
+class LlamaIndexSRAdapter(SRRetriever):
+    """Compatibility adapter that refuses ungoverned document operations.
+
+    An externally built index is not a trusted authorization boundary. In
+    particular, a caller-controlled metadata_filter cannot prove access to the
+    referenced source documents or that their consent/revision is current.
     """
+
     def __init__(self, index: Any) -> None:
-        if VectorStoreIndex is None:
-            raise RuntimeError("LlamaIndex not available; install and configure before using this adapter.")
+        if index is None:
+            raise ValueError("A configured LlamaIndex index is required")
         self.index = index
 
-    def query(self, text: str, *, top_k: int = 5, metadata_filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        # LlamaIndex QueryEngine returns response + source_nodes; we normalize to Kari schema
-        qe = self.index.as_query_engine(similarity_top_k=top_k)
-        resp = qe.query(text)
-        out: List[Dict[str, Any]] = []
-        for node in getattr(resp, "source_nodes", []) or []:
-            score = getattr(node, "score", 0.0) or 0.0
-            payload_text = getattr(getattr(node, "node", None), "get_content", lambda: "")()
-            metadata = getattr(getattr(node, "node", None), "metadata", {}) or {}
-            out.append({"score": float(score), "payload": {"text": payload_text, **metadata}})
-        return out
+    def query(
+        self,
+        text: str,
+        *,
+        top_k: int = 5,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Never execute direct index queries outside governed retrieval."""
+        raise LlamaIndexAuthorizationRequired(
+            "Direct LlamaIndex retrieval unavailable: canonical document "
+            "authorization and source revision checks are required"
+        )
 
-    def ingest(self, text: str, metadata: Optional[Dict[str, Any]] = None, *, ttl_seconds: Optional[float] = None, force: bool = False) -> Optional[int]:
-        # Basic ingestion via index doc addition (id is not guaranteed; return None safely)
-        try:
-            doc = None
-            try:
-                from llama_index.core import Document
-                doc = Document(text=text, metadata=metadata or {})
-            except Exception:
-                # Fallback for older versions
-                doc = {"text": text, "metadata": metadata or {}}
-            self.index.insert(doc)  # type: ignore
-            return None
-        except Exception:
-            return None
+    def ingest(
+        self,
+        text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        *,
+        ttl_seconds: Optional[float] = None,
+        force: bool = False,
+    ) -> Optional[int]:
+        """Never acknowledge insertion without a durable governed receipt."""
+        raise LlamaIndexAuthorizationRequired(
+            "Direct LlamaIndex ingestion unavailable: canonical document "
+            "ownership and persistence receipts are required"
+        )
+
+
+__all__ = ["LlamaIndexSRAdapter", "LlamaIndexAuthorizationRequired"]

@@ -1,5 +1,6 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 
 /**
  * KUI-AUTOMATION: real authenticated browser acceptance.
@@ -45,29 +46,6 @@ function approvedTarget(): URL {
   return target;
 }
 
-async function openWorkspace(
-  page: Page, label: string, advanced: boolean,
-): Promise<void> {
-  // Mobile navigation may be collapsed independently of the advanced group.
-  const advancedToggle = page.getByTestId("advanced-tools-toggle");
-  const requiredToggle = advanced
-    ? advancedToggle
-    : page.getByRole("button", { name: label, exact: true });
-  if (!await requiredToggle.last().isVisible().catch(() => false)) {
-    const sidebarToggle = page.locator('[data-sidebar="trigger"]').first();
-    await expect(sidebarToggle).toBeVisible();
-    await sidebarToggle.click();
-  }
-  if (advanced) {
-    await expect(advancedToggle).toBeVisible();
-    if (await advancedToggle.getAttribute("aria-expanded") !== "true") {
-      await advancedToggle.click();
-    }
-  }
-  const navigation = page.getByRole("button", { name: label, exact: true });
-  await expect(navigation.last()).toBeVisible();
-  await navigation.last().click();
-}
 
 function realListResponse(page: Page, pathname: string, origin: string) {
   return page.waitForResponse(response => {
@@ -94,7 +72,7 @@ test("KUI-AUTOMATION: owner-authenticated lists, responsive surfaces and keyboar
 
   for (const workspace of workspaces) {
     const responsePromise = realListResponse(page, workspace.api, target.origin);
-    await openWorkspace(page, workspace.label, workspace.advanced);
+    await openAutomationWorkspace(page, workspace.label, workspace.advanced);
     const response = await responsePromise;
     expect(response.status(), `${workspace.label} must return real authenticated HTTP 200`).toBe(200);
 

@@ -57,6 +57,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     error: null,
   });
   const initialResolutionCompleteRef = useRef(false);
+  // Prevent old validation/refresh completions overwriting a later auth action.
+  const authOperationRevision = useRef(0);
+  const foregroundAuthPending = useRef(false);
 
   const applyCanonicalState = useCallback((isValid: boolean) => {
     const user = isValid ? authService.getCurrentUser() : null;
@@ -78,6 +81,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const initializeAuth = useCallback(async () => {
+    // Background validation cannot cancel an explicit login or logout.
+    if (foregroundAuthPending.current) return;
+    const revision = ++authOperationRevision.current;
     const blockRendering = !initialResolutionCompleteRef.current;
 
     if (blockRendering) {
@@ -104,8 +110,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const isValid = await authService.validateSession();
+      if (revision !== authOperationRevision.current) return;
       applyCanonicalState(isValid);
     } catch (error) {
+      if (revision !== authOperationRevision.current) return;
       const currentUser = authService.getCurrentUser();
       const canPreserveResolvedSession =
         initialResolutionCompleteRef.current &&
@@ -138,6 +146,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyCanonicalState]);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
+    foregroundAuthPending.current = true;
+    const revision = ++authOperationRevision.current;
     setState((previous) => ({
       ...previous,
       isLoading: true,
@@ -146,6 +156,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       const response = await authService.login(credentials);
+      if (revision !== authOperationRevision.current) throw new Error("Login superseded by newer authentication action");
       const user = response.user ?? authService.getCurrentUser();
 
       initialResolutionCompleteRef.current = true;
@@ -157,25 +168,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       return response;
     } catch (error) {
+      if (revision !== authOperationRevision.current) throw error;
       setState((previous) => ({
         ...previous,
         isLoading: false,
         error: error instanceof Error ? error.message : 'Login failed',
       }));
       throw error;
+    } finally {
+      if (revision === authOperationRevision.current) foregroundAuthPending.current = false;
     }
   }, []);
 
   const logout = useCallback(async () => {
+    foregroundAuthPending.current = true;
+    const revision = ++authOperationRevision.current;
     try {
       await authService.logout();
     } finally {
-      initialResolutionCompleteRef.current = true;
-      setState(unauthenticatedState);
+      if (revision === authOperationRevision.current) {
+        initialResolutionCompleteRef.current = true;
+        setState(unauthenticatedState);
+        foregroundAuthPending.current = false;
+      }
     }
   }, []);
 
   const refreshSession = useCallback(async () => {
+    if (foregroundAuthPending.current) return;
+    const revision = ++authOperationRevision.current;
     // Background refresh must never replace the already-rendered application
     // with a blocking auth loader.
     setState((previous) => ({
@@ -185,8 +206,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       const isValid = await authService.validateSession();
+      if (revision !== authOperationRevision.current) return;
       applyCanonicalState(isValid);
     } catch (error) {
+      if (revision !== authOperationRevision.current) return;
       setState((previous) => ({
         ...previous,
         isLoading: false,
@@ -219,7 +242,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    const handleStorageChange = () => {
+    const handleStorageChange = (event: StorageEvent) => {
+      // Ignore unrelated cross-tab app settings and cache modifications.
+      if (event.key !== null && ![
+        'access_token', 'refresh_token', 'user_data',
+        'kari_session_expected', 'kari_login_success_at',
+      ].includes(event.key)) return;
+      if (foregroundAuthPending.current) return;
       if (timeoutId) clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
         void initializeAuth();
@@ -227,12 +256,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const handleAuthInvalidated = () => {
+      if (foregroundAuthPending.current) return;
+      authOperationRevision.current += 1;
       authService.clearAuth();
       initialResolutionCompleteRef.current = true;
       setState(unauthenticatedState);
     };
 
     const handleUserUpdated = () => {
+      if (foregroundAuthPending.current) return;
+      authOperationRevision.current += 1;
       const user = authService.getCurrentUser();
       if (!user) return;
       setState((previous) => ({

@@ -206,3 +206,167 @@ browser run. This contract does not yet prove principal-switch stale response
 fencing, backend-disconnect fault injection, visual pixel parity, or
 production deployment revision identity. Those remain separate acceptance
 gates and must be recorded independently.
+
+
+## Two-account Automation isolation acceptance
+
+`automation-two-account-acceptance.spec.ts` is a separate **opt-in, real
+backend** A-to-B session acceptance gate. It does not create/delete tasks,
+execute jobs, replay fabricated API responses, or intercept network traffic.
+It reuses the existing approved-origin authentication fixture and the same
+Dashboard navigation helper as the visual acceptance spec.
+
+Before running, provision **two distinct, authorized, sanitized accounts**
+with their own existing, uniquely named task, job and Cron resources.
+Markers must exactly match each resource's backend `name`, or Cron
+`taskName` when present. Each account must be able to read its own three
+workspaces, but **not** the other account's marker-bearing resources. These
+data prerequisites are intentionally fail-closed, not synthesized by a test.
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme/e2e
+KAREN_AUTOMATION_TWO_ACCOUNT_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+KAREN_UX_ACCOUNT_B_EMAIL="$KAREN_UX_ACCOUNT_B_EMAIL" \
+KAREN_UX_ACCOUNT_B_PASSWORD="$KAREN_UX_ACCOUNT_B_PASSWORD" \
+KAREN_UX_ACCOUNT_A_TASK_MARKER="$KAREN_UX_ACCOUNT_A_TASK_MARKER" \
+KAREN_UX_ACCOUNT_B_TASK_MARKER="$KAREN_UX_ACCOUNT_B_TASK_MARKER" \
+KAREN_UX_ACCOUNT_A_JOB_MARKER="$KAREN_UX_ACCOUNT_A_JOB_MARKER" \
+KAREN_UX_ACCOUNT_B_JOB_MARKER="$KAREN_UX_ACCOUNT_B_JOB_MARKER" \
+KAREN_UX_ACCOUNT_A_CRON_MARKER="$KAREN_UX_ACCOUNT_A_CRON_MARKER" \
+KAREN_UX_ACCOUNT_B_CRON_MARKER="$KAREN_UX_ACCOUNT_B_CRON_MARKER" \
+npx playwright test automation-two-account-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+For an approved HTTPS release host, omit `KAREN_LOCAL_CHAT_ACCEPTANCE`.
+Provide real credentials and marker names through a trusted local environment
+or protected CI environment; never commit them to source or logs. No
+screenshots, videos or traces are recorded. The test asserts HTTP 200 JSON
+lists for each identity, verifies the appropriate marker and rejects the
+other identity's marker, signs out through **My Account**, requires an
+unauthenticated API read to return 401 or 403, then signs in as account B
+and repeats those assertions.
+
+A green source/CI contract or skipped opt-in test is not evidence of a
+completed host execution. This suite validates sequential real-account
+switching and logout denial, **not** deliberate in-flight A-response replay
+after B login, same-principal reauthentication races, injected network
+disconnects, scheduler execution, or actual deployed-SHA provenance. Keep
+those gates open until separately observed on an authorized environment.
+
+## KARI OS Application Settings five-viewport acceptance
+
+`settings-visual-acceptance.spec.ts` exercises the **merged canonical
+Application Settings shell** as a full dashboard page and a right-side
+Settings drawer. It keeps the existing real login fixture, runtime-owned
+panel data, and readonly keyboard/category navigation. There are no network
+intercepts, fake settings, changed user preferences, or backend writes.
+
+Provision an approved sanitized account with access to the dashboard. Provide
+credentials through the operator's trusted shell (do not commit them or enable
+shell command echoing). From `src/ui_launchers/Karen-AI-Theme/e2e`:
+
+```bash
+KAREN_SETTINGS_VISUAL_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+npx playwright test settings-visual-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+The local example uses explicitly authorized loopback only. For an approved
+HTTPS origin, omit `KAREN_LOCAL_CHAT_ACCEPTANCE`. Supply
+`KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` securely in the environment.
+
+Both modes check 390, 768, 1024, 1440 and 1920 CSS-pixel viewports, computed
+KARI OS graphite tokens, document and panel horizontal overflow, accessible
+category/section navigation, and keyboard selection. The sheet must remain
+**stacked even at desktop viewport widths**; only the full page gains the
+240px left rail.
+
+Traces, video, and automatic screenshots are off. For independently approved
+sanitized artifacts only, set `KAREN_SETTINGS_SANITIZED_CAPTURE=true`.
+Check the attachments for sensitive content before any distribution. The
+test does not prove persisted theme switching, successful settings mutation,
+or pixel-fidelity against a design reference. A skipped opt-in test or green
+GitHub source check **is not real browser acceptance evidence**.
+
+
+## Real Automation network-disconnect and same-account re-login acceptance
+
+`automation-transport-recovery.spec.ts` is a separate opt-in, authenticated
+browser test. It verifies that an existing sanitized Jobs resource is read
+from the real backend, a single deliberately aborted GET produces a visible
+**unavailable** notice rather than a false **empty** notice, and a fresh
+unmodified backend GET restores the resource. It then signs out through the
+real account UI, requires backend denial (401/403), and signs into a fresh
+session for the **same** account to verify a new real resource read.
+
+Provision a healthy, authorized, sanitized host and a dedicated account with
+a uniquely named, already existing Jobs resource. Provide credentials via
+trusted environment variables, never a committed fixture:
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme/e2e
+KAREN_AUTOMATION_TRANSPORT_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+KAREN_UX_ACCOUNT_A_JOB_MARKER="$KAREN_UX_ACCOUNT_A_JOB_MARKER" \
+npx playwright test automation-transport-recovery.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+For a reviewed HTTPS release origin, omit the local-loopback flag. The
+existing approved login helper validates the origin before accepting
+credentials. The suite disables traces, screenshots, and videos; do not
+upload credential-bearing browser artifacts. The one fault is an intentional
+`route.abort("failed")` of a browser GET, with no fabricated HTTP response,
+no fake JSON, and no mutating automation call. Every successful recovery is
+a real backend response.
+
+This test **does not** establish a real-host pass until explicitly executed
+against that host. It also does not prove controlled old-session response
+delivery after a new login, cross-tab logout races, or deployment revision
+provenance. Those remain separate release acceptance gates.
+
+
+## Plugins & Tools: authenticated five-viewport acceptance
+
+The opt-in `plugins-visual-acceptance.spec.ts` verifies the **merged** Kari OS
+Plugins & Tools overview against the *real* authenticated extension registry.
+The browser records `GET /api/extensions/list` during login, validates its
+contract and compares displayed registry counts and card totals with that exact
+response. It does not infer active execution, fake connection readiness, or
+mutate any plugin. Lifecycle mutations require separate authorized acceptance.
+
+From `src/ui_launchers/Karen-AI-Theme/e2e`, with an approved running local
+backend/frontend and a dedicated sanitized account:
+
+```bash
+KAREN_PLUGINS_VISUAL_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+npx playwright test plugins-visual-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+On an approved HTTPS host, omit the local-acceptance flag.
+The sign-in fixture rejects non-loopback HTTP and credential-bearing URLs.
+The test checks 390, 768, 1024, 1440 and 1920px geometry, shared Kari OS
+tokens, visible plugin counts and keyboard-reachable installation navigation.
+It does **not** click plugin lifecycle buttons or claim backend permission
+verification from button appearance alone.
+
+Video, traces and automatic screenshots are disabled. Optional evidence
+requires `KAREN_PLUGINS_SANITIZED_CAPTURE=true` and a dedicated sanitized
+account whose UI contains no personal data or secrets. Review screenshots
+manually against the approved design reference. A CI run that skips this
+opt-in suite is not browser or release acceptance.

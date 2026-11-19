@@ -56,6 +56,18 @@ function UserNameConsumer() {
   return <span data-testid="user-name">{auth.user?.full_name || 'none'}</span>;
 }
 
+function AuthRaceConsumer() {
+  const auth = useAuth();
+  return (
+    <div>
+      <span data-testid="race-user">{auth.user?.email ?? "signed-out"}</span>
+      <button type="button" onClick={() => void auth.refreshSession()}>race-refresh</button>
+      <button type="button" onClick={() => void auth.login({ email: "new@example.test", password: "test" })}>race-login</button>
+      <button type="button" onClick={() => void auth.logout()}>race-logout</button>
+    </div>
+  );
+}
+
 function RefreshConsumer() {
   const auth = useAuth();
   return (
@@ -159,6 +171,73 @@ describe('AuthProvider', () => {
       expect(screen.getByTestId('user-name').textContent).toBe('Updated User');
     });
 
+    expect(validateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an older refresh after a newer login succeeds', async () => {
+    let release!: (valid: boolean) => void;
+    validateSession
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => new Promise<boolean>(resolve => { release = resolve; }));
+    login.mockResolvedValue({ user: { ...user, email: "new@example.test" } });
+
+    render(<AuthProvider><AuthRaceConsumer /></AuthProvider>);
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe(user.email));
+
+    await act(async () => { screen.getByRole('button', { name: 'race-refresh' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'race-login' }).click(); });
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe('new@example.test'));
+
+    await act(async () => { release(false); });
+    expect(screen.getByTestId('race-user').textContent).toBe('new@example.test');
+    expect(clearAuth).not.toHaveBeenCalled();
+  });
+
+  it('ignores delayed old logout completion after a newer login succeeds', async () => {
+    let release!: () => void;
+    logout.mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
+    login.mockResolvedValue({ user: { ...user, email: "new@example.test" } });
+
+    render(<AuthProvider><AuthRaceConsumer /></AuthProvider>);
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe(user.email));
+    await act(async () => { screen.getByRole('button', { name: 'race-logout' }).click(); });
+    await act(async () => { screen.getByRole('button', { name: 'race-login' }).click(); });
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe('new@example.test'));
+    await act(async () => { release(); });
+    expect(screen.getByTestId('race-user').textContent).toBe('new@example.test');
+  });
+
+
+  it('does not let profile updates cancel an in-flight explicit logout', async () => {
+    let finishLogout!: () => void;
+    logout.mockImplementation(() => new Promise<void>(resolve => { finishLogout = resolve; }));
+    render(<AuthProvider><AuthRaceConsumer /></AuthProvider>);
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe(user.email));
+
+    await act(async () => { screen.getByRole('button', { name: 'race-logout' }).click(); });
+    act(() => { window.dispatchEvent(new Event(AUTH_USER_UPDATED_EVENT)); });
+    await act(async () => { finishLogout(); });
+
+    expect(screen.getByTestId('race-user').textContent).toBe('signed-out');
+  });
+
+  it('does not let unrelated or authentication storage events cancel a pending login', async () => {
+    let finishLogin!: (value: unknown) => void;
+    login.mockImplementation(() => new Promise(resolve => { finishLogin = resolve; }));
+    render(<AuthProvider><AuthRaceConsumer /></AuthProvider>);
+    await waitFor(() => expect(screen.getByTestId('race-user').textContent).toBe(user.email));
+    expect(validateSession).toHaveBeenCalledTimes(1);
+
+    await act(async () => { screen.getByRole('button', { name: 'race-login' }).click(); });
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: 'theme' }));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'access_token' }));
+    });
+    await act(async () => {
+      finishLogin({ user: { ...user, email: 'new@example.test' } });
+    });
+
+    expect(screen.getByTestId('race-user').textContent).toBe('new@example.test');
     expect(validateSession).toHaveBeenCalledTimes(1);
   });
 
