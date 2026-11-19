@@ -53,7 +53,15 @@ type SequenceTask = {
  * @description Page for creating and managing multi-step Jobs (formerly Sequences) via /api/automation/jobs.
  */
 export default function SequencesPage() {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
+  const principal = isAuthenticated && user?.tenant_id && user.user_id
+    ? JSON.stringify([user.tenant_id, user.user_id]) : "";
+  const principalRef = React.useRef(principal);
+  principalRef.current = principal;
+  const jobsRevision = React.useRef(0);
+  const tasksRevision = React.useRef(0);
+  const [jobsOwner, setJobsOwner] = React.useState<string | null>(null);
+  const [tasksOwner, setTasksOwner] = React.useState<string | null>(null);
   const [jobs, setJobs] = React.useState<Job[]>([]);
   const [availableTasks, setAvailableTasks] = React.useState<Task[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -67,57 +75,70 @@ export default function SequencesPage() {
   const [jobTrigger, setJobTrigger] = React.useState("Manual Run");
 
   const fetchJobs = useCallback(async () => {
-    if (!isAuthenticated) {
-      setJobsFetchError(false);
-      setJobs([]);
-      setErrorMsg("Sign in to manage jobs.");
-      setIsLoading(false);
+    const owner = principal;
+    if (principalRef.current !== owner) return;
+    const revision = ++jobsRevision.current;
+    if (!owner) {
+      setJobs([]); setJobsOwner(null); setJobsFetchError(false);
+      setErrorMsg("Sign in to manage jobs."); setIsLoading(false);
       return;
     }
-
-    setIsLoading(true);
-    setJobsFetchError(false);
-    setErrorMsg("");
+    setIsLoading(true); setJobsOwner(null); setJobsFetchError(false); setErrorMsg("");
     try {
-      const { apiClient } = await import('@/lib/api');
-      const data: Job[] = await apiClient.get<Job[]>('/api/automation/jobs/');
-      setJobsFetchError(false);
-      setJobs(data || []);
-    } catch (err) {
-      setJobsFetchError(true);
-      console.error(err);
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch jobs.');
+      const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== owner || jobsRevision.current !== revision) return;
+      const data = await apiClient.get<Job[]>("/api/automation/jobs/");
+      if (principalRef.current !== owner || jobsRevision.current !== revision) return;
+      if (!Array.isArray(data)) throw new Error("Invalid job list from backend.");
+      setJobs(data); setJobsOwner(owner);
+    } catch (error) {
+      if (principalRef.current !== owner || jobsRevision.current !== revision) return;
+      setJobs([]); setJobsOwner(owner); setJobsFetchError(true);
+      setErrorMsg(error instanceof Error ? error.message : "Failed to fetch jobs.");
     } finally {
-      setIsLoading(false);
+      if (principalRef.current === owner && jobsRevision.current === revision) setIsLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   const fetchTasks = useCallback(async () => {
-    if (!isAuthenticated) {
-      setAvailableTasks([]);
-      setIsTasksLoading(false);
+    const owner = principal;
+    if (principalRef.current !== owner) return;
+    const revision = ++tasksRevision.current;
+    if (!owner) {
+      setAvailableTasks([]); setTasksOwner(null); setIsTasksLoading(false);
       return;
     }
-
-    setIsTasksLoading(true);
+    setIsTasksLoading(true); setTasksOwner(null);
     try {
-      const { apiClient } = await import('@/lib/api');
-      const data: Task[] = await apiClient.get<Task[]>('/api/tasks/');
-      setAvailableTasks(data || []);
-    } catch (err) {
-      console.error("Failed to fetch tasks for sequences:", err);
+      const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== owner || tasksRevision.current !== revision) return;
+      const data = await apiClient.get<Task[]>("/api/tasks/");
+      if (principalRef.current !== owner || tasksRevision.current !== revision) return;
+      if (!Array.isArray(data)) throw new Error("Invalid task list from backend.");
+      setAvailableTasks(data); setTasksOwner(owner);
+    } catch (error) {
+      if (principalRef.current !== owner || tasksRevision.current !== revision) return;
+      setAvailableTasks([]); setTasksOwner(null);
+      console.error("Failed to fetch tasks for sequences", error);
     } finally {
-      setIsTasksLoading(false);
+      if (principalRef.current === owner && tasksRevision.current === revision) setIsTasksLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   React.useEffect(() => {
-    if (isAuthLoading) {
-      return;
-    }
-    fetchJobs();
-    fetchTasks();
-  }, [isAuthenticated, isAuthLoading, fetchJobs, fetchTasks]);
+    if (isAuthLoading) return;
+    void fetchJobs(); void fetchTasks();
+    return () => { jobsRevision.current += 1; tasksRevision.current += 1; };
+  }, [isAuthLoading, fetchJobs, fetchTasks]);
+
+  React.useEffect(() => {
+    setNewJobTasks([]); setJobName(""); setJobDescription(""); setJobTrigger("Manual Run");
+    setEditingConfig(null); setTempInstructions("");
+  }, [principal]);
+
+  const verifiedJobs = !!principal && jobsOwner === principal;
+  const verifiedTasks = !!principal && tasksOwner === principal;
+  const visibleTasks = verifiedTasks ? availableTasks : [];
 
   // State for the task list
   const [newJobTasks, setNewJobTasks] = React.useState<SequenceTask[]>([]);
@@ -127,6 +148,7 @@ export default function SequencesPage() {
   const [tempInstructions, setTempInstructions] = React.useState("");
 
   const handleAddTaskToJob = (task: Task) => {
+    if (!verifiedTasks) return;
     setNewJobTasks([...newJobTasks, { name: task.name, instructions: task.instructions || '', id: task.id }]);
   };
 
@@ -149,37 +171,43 @@ export default function SequencesPage() {
   };
 
   const handleDeleteJob = async (id: string) => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedJobs) {
       setErrorMsg("Sign in to manage jobs.");
       return;
     }
     if (!confirm("Are you sure you want to delete this job?")) return;
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
       await apiClient.delete(`/api/automation/jobs/${id}`);
-      fetchJobs();
+      if (principalRef.current !== actionPrincipal) return;
+      void fetchJobs();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to delete job: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
   const handleExecuteJob = async (id: string) => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedJobs) {
       setErrorMsg("Sign in to manage jobs.");
       return;
     }
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
       await apiClient.post(`/api/automation/jobs/${id}/execute`, {});
+      if (principalRef.current !== actionPrincipal) return;
       alert("Job execution started.");
       fetchJobs();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to execute job: " + (err as Error).message);
     }
   };
 
   const handleCreateJob = async () => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedTasks) {
       setErrorMsg("Sign in to manage jobs.");
       return;
     }
@@ -192,14 +220,17 @@ export default function SequencesPage() {
       return;
     }
 
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.post('/api/automation/jobs/', {
         name: jobName,
         description: jobDescription,
         tasks: newJobTasks.map(t => ({ name: t.name, agent: "Configured Agent", instructions: t.instructions })),
         trigger: jobTrigger
       });
+      if (principalRef.current !== actionPrincipal) return;
       
       // Reset form
       setJobName("");
@@ -208,6 +239,7 @@ export default function SequencesPage() {
       
       fetchJobs();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to create job: " + (err instanceof Error ? err.message : String(err)));
     }
   };
