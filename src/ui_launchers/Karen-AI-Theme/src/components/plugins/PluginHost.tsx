@@ -30,6 +30,8 @@ import { setPluginMountState } from '../../plugin_host/registry';
 export interface PluginHostProps {
   pluginId: string;
   fallback?: React.ReactNode;
+  /** Host-supplied data only; plugin components cannot use this as an ACL grant. */
+  componentProps?: Record<string, unknown>;
 }
 
 type LoadedPluginComponent =
@@ -102,7 +104,7 @@ function PluginUnavailableState({
   );
 }
 
-export function PluginHost({ pluginId, fallback }: PluginHostProps) {
+export function PluginHost({ pluginId, fallback, componentProps }: PluginHostProps) {
   const normalizedId = useMemo(
     () => normalizePluginId(cleanString(pluginId)),
     [pluginId],
@@ -209,7 +211,7 @@ export function PluginHost({ pluginId, fallback }: PluginHostProps) {
     >
       <PluginErrorBoundary pluginId={pluginId}>
         <PluginMountTracker pluginId={pluginId}>
-          {React.createElement(pluginComponent)}
+          {React.createElement(pluginComponent, componentProps ?? {})}
         </PluginMountTracker>
       </PluginErrorBoundary>
     </Suspense>
