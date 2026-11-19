@@ -170,8 +170,7 @@ and requires a real authenticated HTTP 200 JSON list from each of
 `/api/tasks/`, `/api/automation/jobs/`, and `/api/automation/cron`.
 No route interception or synthetic list fixtures are allowed.
 
-Use a dedicated sanitized account with access to the three endpoints and an
-approved, healthy deployment. Example local invocation:
+Use a dedicated sanitized account with access to the three endpoints, a persisted\n**System** display-theme preference, and an approved, healthy deployment.\nThe suite asserts the resolved document theme after changing browser color\nscheme. It fails closed when an explicit Dark/Light account setting overrides\nthe browser preference; it never silently reports both themes as tested. Example local invocation:
 
 ```bash
 cd src/ui_launchers/Karen-AI-Theme/e2e
