@@ -50,11 +50,12 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function loadCronJobsWithRetry(): Promise<CronJob[]> {
+async function loadCronJobsWithRetry(isCurrent: () => boolean): Promise<CronJob[]> {
   const retryDelaysMs = [250, 750];
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    if (!isCurrent()) throw new Error("Schedule request superseded by a new principal or revision");
     try {
       // Do not share an in-flight authenticated response across components,
       // principals, or sessions.
@@ -64,6 +65,7 @@ async function loadCronJobsWithRetry(): Promise<CronJob[]> {
 
       if (error instanceof ApiError && (error.status === 404 || error.status === 429) && attempt < retryDelaysMs.length) {
         await sleep(retryDelaysMs[attempt]);
+        if (!isCurrent()) throw new Error("Schedule request superseded before retry");
         continue;
       }
 
@@ -147,7 +149,10 @@ export default function CronJobsPage() {
     setFetchError(false);
     setJobsOwner(null);
     try {
-      const res = await loadCronJobsWithRetry();
+      const res = await loadCronJobsWithRetry(() =>
+        currentPrincipal.current === requestPrincipal &&
+        jobsRevision.current === revision,
+      );
       if (currentPrincipal.current !== requestPrincipal ||
           jobsRevision.current !== revision) return;
       setJobs(res);
@@ -182,6 +187,15 @@ export default function CronJobsPage() {
       dependenciesRevision.current += 1;
     };
   }, [fetchJobs, fetchDependencies, isAuthLoading]);
+
+  useEffect(() => {
+    // Form selections belong to the active principal and cannot be reused
+    // after switching accounts or tenants.
+    setTargetId("");
+    setTaskName("");
+    setSchedule("");
+    setType("Sequence");
+  }, [principal]);
 
   const verifiedJobs = jobsOwner === principal && !!principal;
   const verifiedDependencies = dependenciesOwner === principal && !!principal;
@@ -367,7 +381,7 @@ export default function CronJobsPage() {
                </div>
             </CardContent>
             <CardFooter>
-              <Button onClick={handleCreateJob} className="w-full" disabled={!targetId || !schedule}>
+              <Button onClick={handleCreateJob} className="w-full" disabled={!principal || !verifiedDependencies || !targetId || !schedule}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Schedule Job
               </Button>
