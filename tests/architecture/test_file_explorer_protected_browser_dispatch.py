@@ -13,6 +13,7 @@ def test_existing_protected_browser_workflow_owns_live_file_explorer_dispatch():
     assert "inputs.scenario == 'file-explorer'" in source
     assert "github.ref == 'refs/heads/main'" in source
     assert "KAREN_FILE_EXPLORER_ACCEPTANCE_URL" in source
+    assert "inputs.scenario != 'file-explorer' && vars.KAREN_SETTINGS_ACCEPTANCE_URL" in source
     assert 'KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: "true"' in source
     assert "file-explorer-real-acceptance.spec.ts" in source
     assert "verify_vercel_deployment.py" in source
@@ -41,6 +42,7 @@ def test_live_file_explorer_acceptance_is_not_a_mock_or_skipped_proof():
     assert 'KAREN_FILE_EXPLORER_ACCEPTANCE === "true"' in source
     assert "KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE" in source
     assert "signInApprovedKaren" in source
+    assert 'import { expect, test } from "./fixtures/verified-search-deployment";' in source
     assert "/api/plugins/file-explorer/inventory" in source
     assert "firstPage.items.length" in source
     assert "expect(firstPage.has_more" in source
