@@ -19,7 +19,7 @@ import pytest
 pytestmark = pytest.mark.asyncio
 
 
-async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion() -> None:
+async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeypatch) -> None:
     if (
         os.environ.get("KAREN_TEST_PIN_POSTGRES") != "1"
         or os.environ.get("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
@@ -380,6 +380,133 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion() -> No
             SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
             WHERE tenant_id=$1
         """, tenant_a) == 0
+
+
+        # Execute the ACTUAL new repository SQLAlchemy transaction path, not
+        # only raw migration DML. The canonical transaction manager still
+        # supplies principal RLS and commit/rollback, while this disposable
+        # fixture uses the restricted backend role.
+        from contextlib import asynccontextmanager
+        from types import SimpleNamespace
+        import asyncio
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from ai_karen_engine.persistence.postgres import transactions
+        from ai_karen_engine.persistence.repositories import presentation_pin_repository
+        from ai_karen_engine.persistence.repositories.presentation_pin_repository import (
+            PresentationPinConflict,
+            PresentationPinRepository,
+            PresentationPinUnavailable,
+        )
+
+        engine = create_async_engine(
+            dsn.replace("postgresql://", "postgresql+asyncpg://", 1),
+        )
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        monkeypatch.setattr(
+            transactions, "get_postgres_engine",
+            lambda: SimpleNamespace(async_session_factory=maker),
+        )
+
+        @asynccontextmanager
+        async def actual_scoped_role(tenant_id: str, *, user_id: str):
+            async with transactions.async_transaction_scope(
+                tenant_id, user_id=user_id
+            ) as session:
+                await session.execute(text(f'SET LOCAL ROLE "{backend}"'))
+                yield session
+
+        monkeypatch.setattr(
+            presentation_pin_repository, "async_transaction_scope",
+            actual_scoped_role,
+        )
+        repository = PresentationPinRepository()
+        async def create_owned_pin(name: str):
+            return await raw.fetchval("""
+                INSERT INTO public.conversation_presentation_pins
+                    (tenant_id,user_id,conversation_id,assistant_message_id,
+                     presentation_id,evidence_ref,position)
+                VALUES ($1,$2,$3,$4,$5,'runtime-proof',0)
+                RETURNING pin_id
+            """, tenant_b, owner_b, thread_b, message_b, name)
+
+        def unpin_args(identity, key, req="original"):
+            return dict(
+                authenticated_tenant_id=str(tenant_b),
+                authenticated_user_id=str(owner_b),
+                idempotency_key=str(key),
+                request_id=req,
+                correlation_id="receipt-runtime-postgres",
+                operation="unpin",
+                pin_id=str(identity),
+            )
+
+        try:
+            concurrent_pin = await create_owned_pin("runtime-concurrent")
+            duplicate_key = uuid.uuid4()
+            args = unpin_args(concurrent_pin, duplicate_key)
+            # The first transaction holds the canonical principal-wide
+            # advisory lock; both concurrent retries must return the EXACT
+            # same immutable receipt without duplicate DELETE.
+            first, retry = await asyncio.gather(
+                repository.mutate_with_receipt(**args),
+                repository.mutate_with_receipt(
+                    **unpin_args(concurrent_pin, duplicate_key, "retried")
+                ),
+            )
+            assert first.receipt_id == retry.receipt_id
+            # Either concurrent request can win the advisory lock. Both must
+            # observe the immutable request ID recorded by that winner.
+            assert first.request_id == retry.request_id
+            assert first.request_id in {"original", "retried"}
+            assert first.outcome == retry.outcome == "unpinned"
+            assert await raw.fetchval("""
+                SELECT count(*) FROM public.conversation_presentation_pins
+                WHERE pin_id=$1
+            """, concurrent_pin) == 0
+            assert await raw.fetchval("""
+                SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3
+            """, tenant_b, owner_b, duplicate_key) == 1
+
+            # An identical key with a different authenticated operation
+            # identity is a conflict, never a second mutation.
+            with pytest.raises(PresentationPinConflict):
+                await repository.mutate_with_receipt(
+                    **unpin_args(uuid.uuid4(), duplicate_key, "conflict")
+                )
+
+            rollback_pin = await create_owned_pin("runtime-receipt-rollback")
+            await raw.execute("""
+                CREATE FUNCTION public.reject_pin_receipt_test_insert()
+                RETURNS trigger LANGUAGE plpgsql AS $pin_reject$
+                BEGIN
+                  RAISE EXCEPTION 'disposable receipt insert rejected';
+                END;
+                $pin_reject$;
+                CREATE TRIGGER reject_pin_receipt_test_insert
+                BEFORE INSERT ON public.conversation_presentation_pin_mutation_receipts
+                FOR EACH ROW EXECUTE FUNCTION public.reject_pin_receipt_test_insert();
+            """)
+            try:
+                with pytest.raises(PresentationPinUnavailable):
+                    await repository.mutate_with_receipt(
+                        **unpin_args(rollback_pin, uuid.uuid4(), "failed")
+                    )
+                # SQLAlchemy's RLS-scoped transaction must have rolled back
+                # the DELETE when the receipt INSERT raised.
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pins
+                    WHERE pin_id=$1
+                """, rollback_pin) == 1
+            finally:
+                await raw.execute("""
+                    DROP TRIGGER IF EXISTS reject_pin_receipt_test_insert
+                      ON public.conversation_presentation_pin_mutation_receipts;
+                    DROP FUNCTION IF EXISTS public.reject_pin_receipt_test_insert();
+                """)
+        finally:
+            await engine.dispose()
     finally:
         # Cleanup is restricted to the dedicated database and these test
         # objects; no production or shared schema is ever used.

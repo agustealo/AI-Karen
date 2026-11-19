@@ -141,48 +141,22 @@ def session_scope(monkeypatch, outputs):
 
 
 @pytest.mark.asyncio
-async def test_pin_admission_precedes_database_access(monkeypatch):
-    called = AsyncMock()
-    monkeypatch.setattr(module, "async_transaction_scope", called)
+async def test_legacy_unreceipted_mutations_are_disabled_before_sql(monkeypatch):
+    """A caller cannot bypass immutable receipt persistence via older APIs."""
+    called = []
+
+    @asynccontextmanager
+    async def forbidden_scope(*args, **kwargs):
+        called.append((args, kwargs))
+        raise AssertionError("Legacy write must never open a transaction")
+        yield
+
+    monkeypatch.setattr(module, "async_transaction_scope", forbidden_scope)
+    repository = PresentationPinRepository()
     snap = snapshot()
-    with pytest.raises(PinSourceUnavailable):
-        await PresentationPinRepository().pin(
-            authenticated_tenant_id=TENANT,
-            authenticated_user_id=USER,
-            owned_snapshot=snap,
-            reference=replace(ref(), evidence_ref="forged"),
-            completed_run_attestations=attestations(snap),
-        )
-    called.assert_not_awaited()
 
-
-@pytest.mark.asyncio
-async def test_duplicate_pin_is_idempotent_and_does_not_change_revision(monkeypatch):
-    fake, scopes = session_scope(monkeypatch, [
-        Result(), Result(first=row(revision=4, position=5))
-    ])
-    snap = snapshot()
-    result = await PresentationPinRepository().pin(
-        authenticated_tenant_id=TENANT,
-        authenticated_user_id=USER,
-        owned_snapshot=snap,
-        reference=ref(),
-        completed_run_attestations=attestations(snap),
-        position=1,
-    )
-    assert isinstance(result, StoredPresentationPin)
-    assert result.revision == 4 and result.position == 5
-    assert len(fake.statements) == 2
-    assert scopes == [(TENANT, USER)]
-    assert "pg_advisory_xact_lock" in fake.statements[0]
-
-
-@pytest.mark.asyncio
-async def test_changed_source_rejects_duplicate_pin(monkeypatch):
-    session_scope(monkeypatch, [Result(), Result(first=row(evidence="other"))])
-    snap = snapshot()
-    with pytest.raises(PresentationPinConflict):
-        await PresentationPinRepository().pin(
+    with pytest.raises(module.PresentationPinUnavailable, match="Legacy pin"):
+        await repository.pin(
             authenticated_tenant_id=TENANT,
             authenticated_user_id=USER,
             owned_snapshot=snap,
@@ -190,75 +164,22 @@ async def test_changed_source_rejects_duplicate_pin(monkeypatch):
             completed_run_attestations=attestations(snap),
         )
 
-
-@pytest.mark.asyncio
-async def test_successful_pin_is_single_transaction_and_bounded(monkeypatch):
-    fake, scopes = session_scope(monkeypatch, [
-        Result(), Result(first=None), Result(scalar=9),
-        Result(first=row()),
-    ])
-    snap = snapshot()
-    created = await PresentationPinRepository().pin(
-        authenticated_tenant_id=TENANT,
-        authenticated_user_id=USER,
-        owned_snapshot=snap,
-        reference=ref(),
-        completed_run_attestations=attestations(snap),
-    )
-    assert created.pin_id == PIN
-    assert len(fake.statements) == 4
-    assert "INSERT INTO public.conversation_presentation_pins" in fake.statements[3]
-    assert scopes == [(TENANT, USER)]
-
-
-@pytest.mark.asyncio
-async def test_capacity_is_closed_before_insert(monkeypatch):
-    fake, _ = session_scope(monkeypatch, [
-        Result(), Result(first=None), Result(scalar=100),
-    ])
-    snap = snapshot()
-    with pytest.raises(PresentationPinConflict, match="capacity"):
-        await PresentationPinRepository().pin(
+    with pytest.raises(module.PresentationPinUnavailable, match="Legacy reorder"):
+        await repository.reorder_one(
             authenticated_tenant_id=TENANT,
             authenticated_user_id=USER,
-            owned_snapshot=snap,
-            reference=ref(),
-            completed_run_attestations=attestations(snap),
-        )
-    assert len(fake.statements) == 3
-
-
-@pytest.mark.asyncio
-async def test_reorder_is_revision_cas_and_does_not_hide_stale_conflict(monkeypatch):
-    fake, scopes = session_scope(monkeypatch, [Result(first=row(revision=5, position=2))])
-    updated = await PresentationPinRepository().reorder_one(
-        authenticated_tenant_id=TENANT, authenticated_user_id=USER,
-        pin_id=PIN, expected_revision=4, position=2,
-    )
-    assert updated.revision == 5
-    assert "revision = :revision" in fake.statements[0]
-    assert fake.params[0]["revision"] == 4
-    assert scopes == [(TENANT, USER)]
-    session_scope(monkeypatch, [Result(first=None)])
-    with pytest.raises(PresentationPinConflict):
-        await PresentationPinRepository().reorder_one(
-            authenticated_tenant_id=TENANT, authenticated_user_id=USER,
-            pin_id=PIN, expected_revision=4, position=2,
+            pin_id=PIN,
+            expected_revision=1,
+            position=2,
         )
 
-
-@pytest.mark.asyncio
-async def test_unpin_is_idempotent_and_scoped(monkeypatch):
-    fake, scopes = session_scope(monkeypatch, [Result(first=(PIN,))])
-    assert await PresentationPinRepository().unpin(
-        authenticated_tenant_id=TENANT, authenticated_user_id=USER, pin_id=PIN
-    )
-    assert "DELETE FROM public.conversation_presentation_pins" in fake.statements[0]
-    assert scopes == [(TENANT, USER)]
-    session_scope(monkeypatch, [Result(first=None)])
-    assert not await PresentationPinRepository().unpin(
-        authenticated_tenant_id=TENANT, authenticated_user_id=USER, pin_id=PIN
-    )
+    with pytest.raises(module.PresentationPinUnavailable, match="Legacy unpin"):
+        await repository.unpin(
+            authenticated_tenant_id=TENANT,
+            authenticated_user_id=USER,
+            pin_id=PIN,
+        )
+    assert not called
 
 
 @pytest.mark.asyncio
