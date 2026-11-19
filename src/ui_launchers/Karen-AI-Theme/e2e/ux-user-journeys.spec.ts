@@ -1,4 +1,6 @@
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { type Page, type TestInfo } from '@playwright/test';
+import { expect, test } from './fixtures/verified-search-deployment';
+import { signInApprovedKaren } from './fixtures/approved-karen-login';
 
 /**
  * Real-deployment user-journey checks.
@@ -269,8 +271,7 @@ test('UX-13: advanced navigation is discoverable without overwhelming the first 
   const toggle = page.getByTestId('advanced-tools-toggle');
   const advanced = page.getByTestId('advanced-tools-content');
 
-  await expect(page.getByText('Start here')).toBeVisible();
-  await expect(page.getByText('Explore', { exact: true })).toBeVisible();
+  await expect(page.getByText('Workspace', { exact: true })).toBeVisible();
   await expect(page.getByText('Automations', { exact: true })).toBeVisible();
   await expect(page.getByText('Tools & plugins', { exact: true })).toBeVisible();
 
@@ -279,7 +280,7 @@ test('UX-13: advanced navigation is discoverable without overwhelming the first 
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(advanced).toBeVisible();
-  await expect(advanced.getByText('Tasks', { exact: true })).toBeVisible();
+  await expect(advanced.getByText('Agents', { exact: true })).toBeVisible();
   await expect(advanced.getByText('Cron Jobs', { exact: true })).toBeVisible();
 
   await captureEvidence(
@@ -288,7 +289,7 @@ test('UX-13: advanced navigation is discoverable without overwhelming the first 
     'UX-13',
     'Open authenticated dashboard and expand Advanced tools',
     'Core destinations visible; detailed routes discoverable but initially collapsed',
-    'Advanced tools expanded and Tasks / Cron Jobs became visible',
+    'Advanced tools expanded and Agents / Cron Jobs became visible',
   );
 });
 
@@ -303,7 +304,7 @@ test('UX-14: mobile navigation returns focus to the selected workspace', async (
   await trigger.click();
   const drawer = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
   await expect(drawer).toBeVisible();
-  await drawer.getByRole('button', { name: 'Messages & channels' }).click();
+  await drawer.getByRole('button', { name: 'Activity' }).click();
   await expect(drawer).toBeHidden({ timeout: 10_000 });
   await expect(page.getByTestId('workspace-scroll-region')).toBeVisible();
 
@@ -311,7 +312,7 @@ test('UX-14: mobile navigation returns focus to the selected workspace', async (
     page,
     testInfo,
     'UX-14',
-    'Open navigation on a 390px mobile viewport and choose Messages & channels',
+    'Open navigation on a 390px mobile viewport and choose Activity',
     'The mobile drawer closes and the workspace remains usable',
     'Mobile navigation drawer closed following a destination selection',
   );
@@ -330,8 +331,8 @@ test('UX-15: mobile sidebar reveals primary and advanced navigation', async ({
 
   const mobileNav = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
   await expect(mobileNav).toBeVisible();
-  await expect(mobileNav.getByText('Start here')).toBeVisible();
-  await expect(mobileNav.getByText('Messages & channels', { exact: true })).toBeVisible();
+  await expect(mobileNav.getByText('Workspace', { exact: true })).toBeVisible();
+  await expect(mobileNav.getByText('Activity', { exact: true })).toBeVisible();
   await expect(mobileNav.getByText('Tools & plugins', { exact: true })).toBeVisible();
 
   const advanced = mobileNav.getByTestId('advanced-tools-toggle');
@@ -348,4 +349,79 @@ test('UX-15: mobile sidebar reveals primary and advanced navigation', async ({
     'Readable primary navigation and discoverable advanced sections in mobile sheet',
     'Mobile sheet and advanced destinations rendered; navigation not submitted',
   );
+});
+
+
+test('UX-16: Kari OS navigation typography and reachability across approved widths', async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    !hasCredentials ||
+      process.env.KAREN_NAV_VISUAL_ACCEPTANCE !== 'true' ||
+      process.env.KAREN_SANITIZED_ACCOUNT !== 'true',
+    'Requires explicit approval for a sanitized authenticated five-viewport navigation run.',
+  );
+  if (!email || !password) throw new Error('Sanitized acceptance credentials unavailable');
+  await signInApprovedKaren(page, email, password, {
+    allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1',
+  });
+  await expect(page.getByTestId('chat-input')).toBeVisible();
+
+  for (const width of [390, 768, 1024, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    const mobile = width < 768;
+    if (mobile) {
+      await page.locator('[data-sidebar="trigger"]').click();
+    }
+    const nav = mobile
+      ? page.locator('[data-sidebar="sidebar"][data-mobile="true"]')
+      : page.locator('[data-sidebar="sidebar"]:not([data-mobile])');
+    const heading = nav.locator('.kari-nav-wordmark');
+    const chat = nav.getByRole('button', { name: 'Chat', exact: true });
+    await expect(heading).toBeVisible();
+    await expect(chat).toBeVisible();
+    await expect(nav.getByRole('button', { name: 'Tools & plugins' })).toBeVisible();
+
+    const style = await chat.evaluate((el) => {
+      const navRoot = el.closest('[data-kari-root]');
+      const computed = getComputedStyle(el);
+      return {
+        fontFamily: computed.fontFamily,
+        fontSize: computed.fontSize,
+        lineHeight: computed.lineHeight,
+        expectedFamily: navRoot
+          ? getComputedStyle(navRoot).getPropertyValue('--kari-font-body').trim()
+          : '',
+      };
+    });
+    expect(style.expectedFamily).toContain('Inter');
+    expect(style.fontFamily).toContain('Inter');
+    expect(style.fontSize).toBe('14px');
+    expect(Number.parseFloat(style.lineHeight)).toBeGreaterThanOrEqual(20);
+
+    if (process.env.KAREN_NAV_SANITIZED_CAPTURE === 'true') {
+      const image = await page.screenshot({ animations: 'disabled' });
+      await testInfo.attach('UX-16-navigation-' + width, {
+        body: image,
+        contentType: 'image/png',
+      });
+    }
+
+    if (mobile) {
+      await nav.getByRole('button', { name: 'Activity' }).click();
+      await expect(nav).toBeHidden();
+    }
+  }
+
+  await testInfo.attach('UX-16-evidence', {
+    body: Buffer.from(JSON.stringify({
+      target_revision: process.env.KAREN_UX_TARGET_REVISION || null,
+      viewport_widths: [390, 768, 1024, 1440, 1920],
+      inspected: ['canonical brand', 'primary navigation', 'Inter typography', 'mobile drawer dismissal'],
+      authenticated_sanitized_account: true,
+      screenshots_attached: process.env.KAREN_NAV_SANITIZED_CAPTURE === 'true',
+      observed_at: new Date().toISOString(),
+    }, null, 2)),
+    contentType: 'application/json',
+  });
 });

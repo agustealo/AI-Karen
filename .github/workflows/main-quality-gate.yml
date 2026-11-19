@@ -302,7 +302,7 @@ jobs:
 
       - name: Governed history and explicit continuation proofs
         run: |
-          pytest tests/api_routes/test_ag_ui_governed_history.py tests/api_routes/test_owned_history_projection.py tests/core/runtime/test_owned_history_duplicate_identity.py -q
+          pytest tests/api_routes/test_ag_ui_governed_history.py tests/api_routes/test_owned_history_projection.py tests/api_routes/test_presentation_pin_readback_route.py tests/core/runtime/test_owned_history_duplicate_identity.py -q
 
       - name: Classifier burn contracts
         run: |
@@ -321,6 +321,7 @@ jobs:
       - name: Ollama live inventory and provider settings contracts
         run: |
           pytest tests/core/model_runtime/test_provider_registry_endpoints.py -q
+          pytest tests/core/runtime/test_chat_transport_terminal_parity.py -q
           pytest tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_structured_tool_provider_execution.py tests/core/model_runtime/test_personal_model_transport_grant.py -q
           pytest tests/core/expression/test_gateway_selected_provider_precedence.py -q
           pytest tests/core/model_runtime/test_ollama_native_inventory.py -q

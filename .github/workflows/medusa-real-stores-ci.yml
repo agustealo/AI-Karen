@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "tests/integration/test_live_medusa_cancellation_stores.py"
+      - "tests/integration/medusa_real_store_worker.py"
       - "src/ai_karen_engine/agent_medusa/execution/**"
       - "src/ai_karen_engine/config/agent_medusa.py"
       - "supabase/migrations/*agent_medusa_run_ledger*.sql"
@@ -71,10 +72,10 @@ jobs:
             python-dotenv PyYAML structlog prometheus-client
       - name: Prove durable owner recovery with actual PostgreSQL and Redis
         run: |
-          python -m compileall -q tests/integration/test_live_medusa_cancellation_stores.py
+          python -m compileall -q tests/integration/test_live_medusa_cancellation_stores.py tests/integration/medusa_real_store_worker.py
           pytest -q -rs tests/integration/test_live_medusa_cancellation_stores.py
       - name: Declare scope of observed acceptance
         if: always()
         run: |
-          echo "This CI uses disposable real PostgreSQL/Redis services and two Medusa manager instances." >> "$GITHUB_STEP_SUMMARY"
-          echo "Separate OS worker processes, controlled crash/restart, and approved target-host acceptance remain NOT_RUN." >> "$GITHUB_STEP_SUMMARY"
+          echo "This CI uses disposable real PostgreSQL/Redis services and distinct manager and OS worker process proofs." >> "$GITHUB_STEP_SUMMARY"
+          echo "Real OS process termination, lease expiration and replacement metadata are tested; surviving-worker restart and approved target-host acceptance remain NOT_RUN." >> "$GITHUB_STEP_SUMMARY"
