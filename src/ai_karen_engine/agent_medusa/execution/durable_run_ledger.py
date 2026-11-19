@@ -359,7 +359,7 @@ class PostgresDurableRunLedger:
                     raise DurableRunLedgerConflict(
                         f"Run {run_id} is {current}, not cancellable"
                     )
-                await session.execute(
+                result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
                         SET status = 'cancellation_requested',
