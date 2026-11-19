@@ -440,3 +440,197 @@ def test_copilot_assist_preserves_mutation_key_independent_of_response(monkeypat
     assert a.context.request_id != b.context.request_id
     assert a.metadata["planner_mutation_idempotency_key"] == str(key)
     assert b.metadata["planner_mutation_idempotency_key"] == str(key)
+
+
+@pytest.mark.parametrize("query,expected_revision", [
+    ("Complete task {id} revision 1", 1),
+    ("Please finish my personal task {id} at revision 4", 4),
+    ("Mark task {id} revision 13 as completed", 13),
+])
+def test_completion_parser_requires_explicit_owned_lookup_inputs(query, expected_revision):
+    from ai_karen_engine.core.runtime.personal_planner_action import (
+        parse_personal_planner_completion,
+    )
+
+    task_id = uuid4()
+    assert parse_personal_planner_completion(query.format(id=task_id)) == (
+        task_id, expected_revision,
+    )
+
+
+@pytest.mark.parametrize("query", [
+    "Complete my task",
+    "Complete the deployment task",
+    "Finish task abc revision 1",
+    "Complete task 00000000-0000-0000-0000-000000000000 revision 1",
+    "Complete task 00e8da66-bfa1-49b8-8037-e1bf7014aa7a",
+    "Complete task 00e8da66-bfa1-49b8-8037-e1bf7014aa7a revision 0",
+    "Complete all my tasks",
+    "How do I complete a task?",
+])
+def test_completion_parser_does_not_guess_task_or_revision(query):
+    from ai_karen_engine.core.runtime.personal_planner_action import (
+        parse_personal_planner_completion,
+    )
+
+    assert parse_personal_planner_completion(query) is None
+
+
+@pytest.mark.parametrize("verb", ["Complete", "Finish", "Mark"])
+def test_completion_routes_to_authorized_planner_update_not_model(verb):
+    task_id = uuid4()
+    route = resolve_capability_decision(f"{verb} task {task_id} revision 2")
+    assert route.intent == "planner.update"
+    assert route.capability == "planner.update"
+    assert route.requires_live_data is True
+    assert route.requires_tool is True
+    assert route.allow_llm_only is False
+
+
+@pytest.mark.asyncio
+async def test_completion_requires_scope_revision_and_valid_receipt(monkeypatch):
+    from ai_karen_engine.core.planner.contracts import CommitmentStatus
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    task_id = uuid4()
+    request, plan, meter, principal = _request(
+        f"Complete task {task_id} revision 4",
+    )
+    plan.allowed_capabilities = ["planner.update"]
+    observed = []
+
+    async def write(action, *, authenticated_user, runtime_approval):
+        assert authenticated_user is principal
+        assert runtime_approval.matches(
+            tenant_id=UUID(principal.tenant_id),
+            owner_id=UUID(principal.user_id),
+            action=action,
+        )
+        assert action.commitment_id == task_id
+        assert action.expected_revision == 4
+        assert action.title is None and action.timezone is None
+        assert action.status is CommitmentStatus.COMPLETED
+        observed.append(action)
+        commitment = SimpleNamespace(
+            id=task_id,
+            tenant_id=UUID(principal.tenant_id),
+            owner_id=UUID(principal.user_id),
+            title="Review deployment",
+            status=CommitmentStatus.COMPLETED,
+            revision=5,
+        )
+        receipt = SimpleNamespace(
+            commitment_id=task_id,
+            tenant_id=commitment.tenant_id,
+            idempotency_key=action.idempotency_key,
+            revision=5,
+            persisted_at=datetime.now(timezone.utc),
+            correlation_id=action.correlation_id,
+        )
+        return commitment, receipt
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    decision = SimpleNamespace(
+        intent="planner.update",
+        is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    result = await ChatRuntime._execute_personal_planner_mutation(
+        request, decision, plan, meter,
+    )
+    assert result.success and result.payload["planner_completed"] is True
+    assert result.payload["planner_receipt"]["commitment_id"] == str(task_id)
+    assert result.payload["planner_receipt"]["revision"] == 5
+    assert len(observed) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_query", [
+    "Complete the deployment task",
+    "Complete all my tasks",
+    "Complete task 00e8da66-bfa1-49b8-8037-e1bf7014aa7a",
+])
+async def test_completion_missing_reference_never_writes(monkeypatch, invalid_query):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    write = AsyncMock(side_effect=AssertionError("Must not write"))
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request(invalid_query)
+    plan.allowed_capabilities = ["planner.update"]
+    decision = SimpleNamespace(
+        intent="planner.update", is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    result = await ChatRuntime._execute_personal_planner_mutation(
+        request, decision, plan, meter,
+    )
+    assert not result.success and result.payload["status"] == "needs_input"
+    assert result.payload["planner_completed"] is False
+    write.assert_not_awaited()
+    meter.consume_tool_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_completion_denied_capability_never_writes(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    write = AsyncMock(side_effect=AssertionError("Must not write"))
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request(f"Complete task {uuid4()} revision 1")
+    decision = SimpleNamespace(
+        intent="planner.update", is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    result = await ChatRuntime._execute_personal_planner_mutation(
+        request, decision, plan, meter,
+    )
+    assert result.error == "planner_mutation_not_authorized"
+    assert result.payload["planner_completed"] is False
+    write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_completion_invalid_receipt_never_reports_success(monkeypatch):
+    from ai_karen_engine.core.planner.contracts import CommitmentStatus
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    task_id = uuid4()
+    request, plan, meter, principal = _request(
+        f"Complete task {task_id} revision 2",
+    )
+    plan.allowed_capabilities = ["planner.update"]
+
+    async def invalid_write(action, **kwargs):
+        return (
+            SimpleNamespace(
+                id=task_id, tenant_id=UUID(principal.tenant_id),
+                owner_id=UUID(principal.user_id),
+                title="Task", status=CommitmentStatus.TODO, revision=3,
+            ),
+            SimpleNamespace(
+                commitment_id=task_id, tenant_id=UUID(principal.tenant_id),
+                idempotency_key=action.idempotency_key, revision=3,
+                persisted_at=datetime.now(timezone.utc),
+                correlation_id=action.correlation_id,
+            ),
+        )
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action",
+        invalid_write,
+    )
+    decision = SimpleNamespace(
+        intent="planner.update", is_graph_required=False,
+        policy_constraints={"direct_capability": True},
+    )
+    result = await ChatRuntime._execute_personal_planner_mutation(
+        request, decision, plan, meter,
+    )
+    assert result.error == "planner_mutation_receipt_invalid"
+    assert result.payload["planner_completed"] is False
