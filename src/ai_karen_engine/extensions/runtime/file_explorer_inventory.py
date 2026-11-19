@@ -38,7 +38,8 @@ def _canonical_uuid(value: str) -> bool:
     if not isinstance(value, str):
         return False
     try:
-        return str(uuid.UUID(value)) == value
+        parsed = uuid.UUID(value)
+        return parsed.version is not None and str(parsed) == value
     except (ValueError, TypeError, AttributeError):
         return False
 
