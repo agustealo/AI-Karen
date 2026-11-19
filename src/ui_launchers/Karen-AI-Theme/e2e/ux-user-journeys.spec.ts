@@ -1,4 +1,6 @@
-import { expect, test, type Page, type TestInfo } from '@playwright/test';
+import { type Page, type TestInfo } from '@playwright/test';
+import { expect, test } from './fixtures/verified-search-deployment';
+import { signInApprovedKaren } from './fixtures/approved-karen-login';
 
 /**
  * Real-deployment user-journey checks.
@@ -359,7 +361,11 @@ test('UX-16: Kari OS navigation typography and reachability across approved widt
       process.env.KAREN_SANITIZED_ACCOUNT !== 'true',
     'Requires explicit approval for a sanitized authenticated five-viewport navigation run.',
   );
-  await signIn(page);
+  if (!email || !password) throw new Error('Sanitized acceptance credentials unavailable');
+  await signInApprovedKaren(page, email, password, {
+    allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1',
+  });
+  await expect(page.getByTestId('chat-input')).toBeVisible();
 
   for (const width of [390, 768, 1024, 1440, 1920]) {
     await page.setViewportSize({ width, height: 900 });
@@ -393,11 +399,13 @@ test('UX-16: Kari OS navigation typography and reachability across approved widt
     expect(style.fontSize).toBe('14px');
     expect(Number.parseFloat(style.lineHeight)).toBeGreaterThanOrEqual(20);
 
-    const image = await page.screenshot({ animations: 'disabled' });
-    await testInfo.attach('UX-16-navigation-' + width, {
-      body: image,
-      contentType: 'image/png',
-    });
+    if (process.env.KAREN_NAV_SANITIZED_CAPTURE === 'true') {
+      const image = await page.screenshot({ animations: 'disabled' });
+      await testInfo.attach('UX-16-navigation-' + width, {
+        body: image,
+        contentType: 'image/png',
+      });
+    }
 
     if (mobile) {
       await nav.getByRole('button', { name: 'Activity' }).click();
@@ -411,6 +419,7 @@ test('UX-16: Kari OS navigation typography and reachability across approved widt
       viewport_widths: [390, 768, 1024, 1440, 1920],
       inspected: ['canonical brand', 'primary navigation', 'Inter typography', 'mobile drawer dismissal'],
       authenticated_sanitized_account: true,
+      screenshots_attached: process.env.KAREN_NAV_SANITIZED_CAPTURE === 'true',
       observed_at: new Date().toISOString(),
     }, null, 2)),
     contentType: 'application/json',
