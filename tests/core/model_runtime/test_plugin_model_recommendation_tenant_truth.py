@@ -127,3 +127,29 @@ async def test_pocket_recommendations_reject_symlink_and_outside_model_root(
     receipts[0]["install_path"] = str(alias)
     symlink = await service.get_recommendations(tenant_id=TENANT_A)
     assert symlink["recommendations"][0]["installed"] is False
+
+
+@pytest.mark.asyncio
+async def test_recommendation_remote_metadata_failure_redacts_server_logs(
+    control, caplog: pytest.LogCaptureFixture,
+):
+    """Secret-bearing source exceptions must never become telemetry messages."""
+    import logging
+
+    service, _receipts, _snapshot = control
+    secret = "hf-source-secret-do-not-log"
+    service._orchestrator.get_model_info.side_effect = RuntimeError(secret)
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="ai_karen_engine.core.model_runtime.model_download_control_service",
+    ):
+        result = await service.get_recommendations(tenant_id=TENANT_A)
+
+    item = result["recommendations"][0]
+    assert item["metadata_verified"] is False
+    assert item["resolved_revision"] is None
+    assert secret not in str(item.get("verification_error"))
+    assert secret not in caplog.text
+    assert "model_download_recommendation_metadata_unavailable" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
