@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "src/ai_karen_engine/core/planner/**"
+      - "src/ai_karen_engine/core/cortex/routing_intents.py"
+      - "src/ai_karen_engine/core/runtime/personal_planner_action.py"
+      - "src/ai_karen_engine/core/runtime/chat_runtime.py"
+      - "tests/core/runtime/test_chat_personal_planner_create.py"
       - "src/ai_karen_engine/persistence/repositories/personal_planner_repository.py"
       - "src/ai_karen_engine/services/personal_planner.py"
       - "src/ai_karen_engine/core/runtime/presentation_contract.py"
