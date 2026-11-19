@@ -477,6 +477,13 @@ missing enabled plugin, unavailable backend, fabricated empty result, or
 responsive overflow is a failure. It does not silently downgrade to a
 mock-based UI contract.
 
+The observed browser run also checks a genuine file checkbox selection at all
+four widths, verifies that the host retains the same selected file during
+responsive transitions, ensures **Next page** clears the prior-page selection,
+requires the exact backend-issued keyset cursor in the next HTTP request, and
+proves **Refresh** drops both stale selection and cursor. These are browser
+presentation assertions against real server inventory, not file-byte grants.
+
 This credential-bearing run disables traces, videos and automatic screenshots;
 avoid uploading raw browser profiles or account inventory to CI artifacts.
 Keep exact deployed revision and operator authorization evidence separately.
