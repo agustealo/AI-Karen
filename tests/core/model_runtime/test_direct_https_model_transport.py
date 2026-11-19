@@ -264,3 +264,30 @@ def test_direct_https_rejects_incomplete_looped_page_listing(
             MODEL, REVISION, [f"{prefix}/*.safetensors"], [], "operator_token",
         )
     assert seen == [start, next_url]
+
+
+def test_direct_https_detects_masked_gated_lfs_oid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = f"{PREFIX}/embeddings"
+    url = (
+        f"https://huggingface.co/api/models/{MODEL}/tree/{REVISION}/{prefix}"
+        "?recursive=true&expand=true"
+    )
+
+    def page(*args, **kwargs):
+        return Response(json.dumps([
+            {
+                "path": f"{prefix}/voice.safetensors",
+                "type": "file",
+                "size": 13,
+                "lfs": {"oid": "*" * 64},
+            }
+        ]).encode(), "application/json")
+
+    monkeypatch.setattr(transport, "_open", page)
+    with pytest.raises(transport.DirectHttpsDownloadError, match="access denied"):
+        transport._discover(
+            MODEL, REVISION, [f"{prefix}/*.safetensors"], [], None,
+        )
+
