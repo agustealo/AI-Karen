@@ -372,7 +372,12 @@ class SecureAuthMiddleware:
                     "/api/auth/me",
                 ]
             )
-        return any(path.startswith(pattern) for pattern in public_patterns)
+        # The canonical operational readiness probe is intentionally public:
+        # container and web startup checks have no user session. Keep this an
+        # exact match so /ready/admin or other paths never gain an auth bypass.
+        return path == "/ready" or any(
+            path.startswith(pattern) for pattern in public_patterns
+        )
 
     async def validate_token(self, token: str) -> Dict[str, Any]:
         """Never report JWT signature validity as authenticated session truth."""
