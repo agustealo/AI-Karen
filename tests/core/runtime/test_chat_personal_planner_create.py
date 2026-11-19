@@ -114,6 +114,12 @@ def test_other_chat_and_automation_intents_are_not_hijacked(query):
     ),
     ("Create a task to review release", None),
     ("Create a task to review release in Not_A_Timezone/Nowhere", None),
+    ("Create a task to review release on Friday in America/Detroit", None),
+    ("Create a task to review release next month in America/Detroit", None),
+    ("Create a task to review release every day in America/Detroit", None),
+    ("Create a task to review release at 09:30 in America/Detroit", None),
+    ("Create a task to review release before 5 PM in America/Detroit", None),
+    ("Create a task to review release on 2026-11-20 in America/Detroit", None),
 ])
 def test_bounded_create_parser_does_not_invent_timezone_or_due_at(query, expected):
     assert parse_personal_planner_create(query) == expected
