@@ -51,7 +51,7 @@ def test_cron_no_false_health_or_empty_state_on_fetch_failure() -> None:
     assert "handleDelete(job.id)" in source
     assert "setFetchError(true)" in source
     assert "jobs.length === 0 ?" in source
-    assert "!isAuthLoading && isAuthenticated && !loading && !fetchError && jobs.map" in source
+    assert "!isAuthLoading && isAuthenticated && !loading && !fetchError && verifiedJobs && jobs.map" in source
     assert 'kind="unavailable"' in source
     assert 'kind="empty"' in source
     assert "Schedules unavailable" in source
@@ -112,3 +112,54 @@ def test_empty_states_require_verified_authenticated_list_reads() -> None:
     for source in (tasks, jobs, cron):
         assert "isAuthLoading ? (" in source
         assert "!isAuthenticated ? (" in source
+
+
+def test_cron_fences_delayed_responses_by_tenant_user_and_revision() -> None:
+    source = _view("CronJobsPage.tsx")
+    assert 'JSON.stringify([user.tenant_id, user.user_id])' in source
+    assert "currentPrincipal.current = principal" in source
+    assert "jobsRevision.current !== revision" in source
+    assert "dependenciesRevision.current !== revision" in source
+    assert "jobsOwner === principal" in source
+    assert "dependenciesOwner === principal" in source
+    assert "verifiedJobs && jobs.map" in source
+    assert "visibleTasks.map" in source
+    assert "visibleSequences.map" in source
+    assert "if (!principal || !verifiedDependencies) return;" in source
+    assert "if (!principal || !verifiedJobs) return;" in source
+    assert "cronJobsFetchPromise" not in source
+    assert "if (currentPrincipal.current !== requestPrincipal) return;" in source
+    assert "if (currentPrincipal.current !== actionPrincipal) return;" in source
+    assert 'loadCronJobsWithRetry(() =>' in source
+    assert "setTargetId(\"\")" in source
+    assert "setSchedule(\"\")" in source
+
+
+def test_tasks_and_jobs_fence_request_results_and_actions_by_current_principal() -> None:
+    for name in ("TasksPage.tsx", "JobsPage.tsx"):
+        source = _view(name)
+        assert 'JSON.stringify([user.tenant_id, user.user_id])' in source
+        assert "principalRef.current = principal" in source
+        assert "principalRef.current !== owner" in source
+        assert "principalRef.current !== actionPrincipal" in source
+        assert "setFormOwner(principal)" in source
+        assert "formOwner === principal" in source
+        assert "principal" in source
+
+    tasks = _view("TasksPage.tsx")
+    jobs = _view("JobsPage.tsx")
+    assert "dataRevision.current !== revision" in tasks
+    assert "historyRequestId.current += 1" in tasks
+    assert "toolReceiptRequestId.current += 1" in tasks
+    assert "tasksOwner === principal" in tasks
+    assert "agentsOwner === principal" in tasks
+    assert "verifiedTasks && tasks.map" in tasks
+    assert "principalRef.current === actionPrincipal && reqId" in tasks
+    assert "principalRef.current === actionPrincipal && currentRequestId" in tasks
+    assert "jobsRevision.current !== revision" in jobs
+    assert "tasksRevision.current !== revision" in jobs
+    assert "jobsOwner === principal" in jobs
+    assert "tasksOwner === principal" in jobs
+    assert "verifiedJobs && jobs.map" in jobs
+    assert "visibleTasks.map" in jobs
+    assert "visibleJobTasks.map" in jobs
