@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { useState, useEffect, useCallback } from "react";
 import useAuth from "@/lib/useAuth";
+import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
 import { ApiError, apiClient } from "@/lib/api";
 
 interface CronJob {
@@ -188,16 +189,12 @@ export default function CronJobsPage() {
 
   return (
     <div className="karen-automation karen-automation-workflow space-y-6">
-      <header className="karen-automation-hero karen-surface relative overflow-hidden rounded-2xl px-5 py-6 sm:px-8 sm:py-8">
-          <div className="relative z-10 flex min-w-0 items-start gap-4">
-            <div className="rounded-xl border border-primary/20 bg-primary/10 p-3 text-primary"><Clock className="h-6 w-6" aria-hidden="true" /></div>
-            <div className="min-w-0 space-y-2">
-              <p className="karen-panel-label">KARI OS / AUTOMATIONS / SCHEDULE CONTROL</p>
-              <h2 className="karen-page-title">Cron Job Assignments</h2>
-              <p className="karen-page-description">Manage live scheduled automations executing on the backend.</p>
-            </div>
-          </div>
-        </header>
+      <AutomationWorkflowHeader
+          icon={Clock}
+          section="SCHEDULE CONTROL"
+          title="Cron Job Assignments"
+          description="Manage live scheduled automations executing on the backend."
+        />
       
       <Alert>
         <Clock className="h-4 w-4" />

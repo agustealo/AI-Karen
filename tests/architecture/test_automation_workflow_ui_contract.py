@@ -14,9 +14,10 @@ def test_workflow_pages_reuse_merged_automation_design() -> None:
     for name in ("TasksPage.tsx", "JobsPage.tsx", "CronJobsPage.tsx"):
         source = _view(name)
         assert 'className="karen-automation karen-automation-workflow space-y-6"' in source
-        assert "karen-automation-hero karen-surface" in source
+        assert "<AutomationWorkflowHeader" in source
+        assert 'from "@/components/automation/AutomationWorkflowHeader"' in source
         assert "karen-automation-card" in source
-        assert "karen-page-description" in source
+        assert "karen-page-description" not in source
         assert "xl:grid-cols-3" in source
         assert "xl:sticky xl:top-20" in source
         assert "lg:grid-cols-3 gap-8" not in source
@@ -54,3 +55,24 @@ def test_cron_no_false_health_or_empty_state_on_fetch_failure() -> None:
     assert "Schedules unavailable" in source
     assert "Scheduler Connected" not in source
     assert "aria-label={`Toggle ${job.taskName || job.name} schedule`}" in source
+
+
+def test_workflow_header_single_presentation_authority() -> None:
+    header = _view("AutomationWorkflowHeader.tsx")
+    assert 'karen-automation-hero karen-surface' in header
+    assert 'karen-page-description' in header
+    assert 'karen-panel-label' in header
+    assert 'icon: LucideIcon' in header
+    assert 'aria-hidden="true"' in header
+    assert 'KARI OS / AUTOMATIONS / {section}' in header
+    expected = {
+        "TasksPage.tsx": ('icon={ScrollText}', 'section="TASK DEFINITIONS"'),
+        "JobsPage.tsx": ('icon={Workflow}', 'section="SEQUENCE WORKFLOWS"'),
+        "CronJobsPage.tsx": ('icon={Clock}', 'section="SCHEDULE CONTROL"'),
+    }
+    for filename, attributes in expected.items():
+        page = _view(filename)
+        for attribute in attributes:
+            assert attribute in page
+        assert "<header className=\"karen-automation-hero" not in page
+        assert page.count("<AutomationWorkflowHeader") == 1
