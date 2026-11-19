@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import useAuth from "@/lib/useAuth";
+import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -446,16 +447,12 @@ export default function TasksPage() {
   return (
     <TooltipProvider>
     <div className="karen-automation karen-automation-workflow space-y-6">
-      <header className="karen-automation-hero karen-surface relative overflow-hidden rounded-2xl px-5 py-6 sm:px-8 sm:py-8">
-          <div className="relative z-10 flex min-w-0 items-start gap-4">
-            <div className="rounded-xl border border-primary/20 bg-primary/10 p-3 text-primary"><ScrollText className="h-6 w-6" aria-hidden="true" /></div>
-            <div className="min-w-0 space-y-2">
-              <p className="karen-panel-label">KARI OS / AUTOMATIONS / TASK DEFINITIONS</p>
-              <h2 className="karen-page-title">Task Management</h2>
-              <p className="karen-page-description">Define specific, single-objective tasks for your agents and monitor execution.</p>
-            </div>
-          </div>
-        </header>
+      <AutomationWorkflowHeader
+          icon={ScrollText}
+          section="TASK DEFINITIONS"
+          title="Task Management"
+          description="Define specific, single-objective tasks for your agents and monitor execution."
+        />
       
       {errorMsg && (
         <Alert variant="destructive">
