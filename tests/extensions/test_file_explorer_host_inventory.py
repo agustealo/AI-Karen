@@ -9,7 +9,7 @@ import pytest
 
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
 from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
-from ai_karen_engine.extensions.runtime.file_explorer_inventory import (
+from ai_karen_engine.extensions.file_explorer_inventory import (
     FileExplorerInventoryHost,
 )
 
