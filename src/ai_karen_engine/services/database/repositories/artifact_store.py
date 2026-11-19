@@ -73,6 +73,22 @@ class ArtifactStore(Repository):
         """List artifacts filtered by tenant and optional scope."""
 
     @abstractmethod
+    async def list_owner_artifacts_page(
+        self,
+        tenant_id: str,
+        user_id: str,
+        *,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> RepositoryResult[Sequence[Artifact]]:
+        """List only one authenticated owner's active metadata using keyset paging.
+
+        The result's metadata carries has_more: bool and next_cursor: str | None.
+        Cursors select a position, never confer access. No bytes or storage
+        locations are exposed by the explorer projection.
+        """
+
+    @abstractmethod
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
         """Delete an artifact (metadata + bytes)."""
 

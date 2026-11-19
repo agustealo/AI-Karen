@@ -5,8 +5,11 @@ Stores artifact bytes in Supabase Storage and metadata in PostgreSQL.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import json
+import uuid
 import logging
 import time
 from datetime import datetime
@@ -184,6 +187,131 @@ class SupabaseArtifactStore(ArtifactStore):
         except Exception as exc:
             logger.error("list_artifacts failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
+
+    @staticmethod
+    def _decode_owner_cursor(
+        cursor: Optional[str], tenant_id: str, user_id: str
+    ) -> Optional[tuple[datetime, str]]:
+        if cursor is None:
+            return None
+        if not isinstance(cursor, str) or not 1 <= len(cursor) <= 768:
+            raise ValueError("artifact_owner_cursor_invalid")
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            raw = base64.b64decode(
+                (cursor + padding).encode("ascii"), altchars=b"-_", validate=True
+            )
+            value = json.loads(raw)
+            if (
+                not isinstance(value, dict)
+                or set(value) != {"v", "tenant_id", "user_id", "created_at", "file_id"}
+                or value["v"] != 1
+                or value["tenant_id"] != tenant_id
+                or value["user_id"] != user_id
+                or not isinstance(value["created_at"], str)
+                or len(value["created_at"]) > 64
+                or not isinstance(value["file_id"], str)
+            ):
+                raise ValueError("scope")
+            before_time = datetime.fromisoformat(value["created_at"])
+            before_id = str(uuid.UUID(value["file_id"]))
+            if before_id != value["file_id"]:
+                raise ValueError("id")
+            return before_time, before_id
+        except (UnicodeError, ValueError, TypeError, KeyError, OverflowError, binascii.Error) as exc:
+            raise ValueError("artifact_owner_cursor_invalid") from exc
+
+    @staticmethod
+    def _encode_owner_cursor(
+        artifact: Artifact, tenant_id: str, user_id: str
+    ) -> str:
+        payload = {
+            "v": 1,
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "created_at": artifact.created_at.isoformat(),
+            "file_id": artifact.id,
+        }
+        return base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+
+    @instrument_repository(operation="list_owner_artifacts_page", repository="SupabaseArtifactStore")
+    async def list_owner_artifacts_page(
+        self,
+        tenant_id: str,
+        user_id: str,
+        *,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> RepositoryResult[Sequence[Artifact]]:
+        """Stable, bounded owner-only metadata listing. No storage reads.
+
+        The cursor is scope-bound and cannot bypass the tenant/owner SQL filters.
+        This is not an ACL grant: every content use needs fresh authorization.
+        """
+        try:
+            tenant = str(uuid.UUID(tenant_id))
+            owner = str(uuid.UUID(user_id))
+            if (
+                not isinstance(tenant_id, str)
+                or not isinstance(user_id, str)
+                or tenant_id != tenant
+                or user_id != owner
+                or type(limit) is not int
+                or not 1 <= limit <= 200
+            ):
+                raise ValueError("artifact_owner_page_scope_invalid")
+            before = self._decode_owner_cursor(cursor, tenant, owner)
+        except (ValueError, TypeError, AttributeError) as exc:
+            return RepositoryResult(
+                success=False, error=f"artifact_owner_page_invalid: {exc}"
+            )
+
+        params: Dict[str, Any] = {
+            "tenant_id": tenant,
+            "user_id": owner,
+            "page_limit": limit + 1,
+        }
+        cursor_clause = ""
+        if before is not None:
+            params["before_created"] = before[0]
+            params["before_id"] = before[1]
+            cursor_clause = (
+                "AND (created_at < :before_created OR "
+                "(created_at = :before_created AND file_id < :before_id))"
+            )
+        sql = f"""
+            SELECT file_id, tenant_id, owner_user_id, name, mime_type,
+                   bytes, storage_uri, sha256, metadata, created_at, deleted_at
+            FROM files
+            WHERE tenant_id = :tenant_id
+              AND owner_user_id = :user_id
+              AND deleted_at IS NULL
+              {cursor_clause}
+            ORDER BY created_at DESC, file_id DESC
+            LIMIT :page_limit
+        """
+        try:
+            async with await self._session() as session:
+                result = await session.execute(text(sql), params)
+                rows = list(result.fetchall())
+            has_more = len(rows) > limit
+            page = [self._row_to_artifact(row) for row in rows[:limit]]
+            next_cursor = (
+                self._encode_owner_cursor(page[-1], tenant, owner)
+                if has_more and page else None
+            )
+            return RepositoryResult(
+                success=True,
+                data=page,
+                metadata={"has_more": has_more, "next_cursor": next_cursor},
+            )
+        except Exception:
+            logger.exception("Owner-scoped artifact metadata page unavailable")
+            return RepositoryResult(
+                success=False, error="artifact_owner_page_unavailable"
+            )
 
     @instrument_repository(operation="delete", repository="SupabaseArtifactStore")
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
