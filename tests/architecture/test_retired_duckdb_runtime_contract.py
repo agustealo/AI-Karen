@@ -7,7 +7,6 @@ modifying PostgreSQL/Redis, cryptographic key checks or migration history.
 from __future__ import annotations
 
 import ast
-import re
 from pathlib import Path
 
 
@@ -72,5 +71,5 @@ def test_runtime_requirements_do_not_reinstall_retired_database() -> None:
         for line in requirements.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert not any(re.match(r"(?i)^duckdb(?:\\s|[=<>!~;\\[]|$)", line) for line in active)
-    assert any(re.match(r"(?i)^redis(?:\\s|[=<>!~;\\[]|$)", line) for line in active)
+    assert not any(line.lower().split("=", 1)[0].split("[", 1)[0].strip().startswith("duckdb") for line in active)
+    assert any(line.lower().split("=", 1)[0].strip() == "redis" for line in active)
