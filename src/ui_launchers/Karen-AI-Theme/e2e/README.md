@@ -206,3 +206,54 @@ browser run. This contract does not yet prove principal-switch stale response
 fencing, backend-disconnect fault injection, visual pixel parity, or
 production deployment revision identity. Those remain separate acceptance
 gates and must be recorded independently.
+
+
+## Two-account Automation isolation acceptance
+
+`automation-two-account-acceptance.spec.ts` is a separate **opt-in, real
+backend** A-to-B session acceptance gate. It does not create/delete tasks,
+execute jobs, replay fabricated API responses, or intercept network traffic.
+It reuses the existing approved-origin authentication fixture and the same
+Dashboard navigation helper as the visual acceptance spec.
+
+Before running, provision **two distinct, authorized, sanitized accounts**
+with their own existing, uniquely named task, job and Cron resources.
+Markers must exactly match each resource's backend `name`, or Cron
+`taskName` when present. Each account must be able to read its own three
+workspaces, but **not** the other account's marker-bearing resources. These
+data prerequisites are intentionally fail-closed, not synthesized by a test.
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme/e2e
+KAREN_AUTOMATION_TWO_ACCOUNT_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+KAREN_UX_ACCOUNT_B_EMAIL="$KAREN_UX_ACCOUNT_B_EMAIL" \
+KAREN_UX_ACCOUNT_B_PASSWORD="$KAREN_UX_ACCOUNT_B_PASSWORD" \
+KAREN_UX_ACCOUNT_A_TASK_MARKER="$KAREN_UX_ACCOUNT_A_TASK_MARKER" \
+KAREN_UX_ACCOUNT_B_TASK_MARKER="$KAREN_UX_ACCOUNT_B_TASK_MARKER" \
+KAREN_UX_ACCOUNT_A_JOB_MARKER="$KAREN_UX_ACCOUNT_A_JOB_MARKER" \
+KAREN_UX_ACCOUNT_B_JOB_MARKER="$KAREN_UX_ACCOUNT_B_JOB_MARKER" \
+KAREN_UX_ACCOUNT_A_CRON_MARKER="$KAREN_UX_ACCOUNT_A_CRON_MARKER" \
+KAREN_UX_ACCOUNT_B_CRON_MARKER="$KAREN_UX_ACCOUNT_B_CRON_MARKER" \
+npx playwright test automation-two-account-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+For an approved HTTPS release host, omit `KAREN_LOCAL_CHAT_ACCEPTANCE`.
+Provide real credentials and marker names through a trusted local environment
+or protected CI environment; never commit them to source or logs. No
+screenshots, videos or traces are recorded. The test asserts HTTP 200 JSON
+lists for each identity, verifies the appropriate marker and rejects the
+other identity's marker, signs out through **My Account**, requires an
+unauthenticated API read to return 401 or 403, then signs in as account B
+and repeats those assertions.
+
+A green source/CI contract or skipped opt-in test is not evidence of a
+completed host execution. This suite validates sequential real-account
+switching and logout denial, **not** deliberate in-flight A-response replay
+after B login, same-principal reauthentication races, injected network
+disconnects, scheduler execution, or actual deployed-SHA provenance. Keep
+those gates open until separately observed on an authorized environment.
