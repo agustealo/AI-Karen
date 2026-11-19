@@ -107,7 +107,7 @@ function FileExplorerView({
   }
 
   function nextPage() {
-    if (!loading && authorized && pageEvidenceValid && hasMore && nextCursor) {
+    if (!loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
       clearSelections();
       setParentId(null);
       setFilter('');
@@ -164,7 +164,7 @@ function FileExplorerView({
     onSelect?.(references);
   }
 
-  if (!authorized || !pageEvidenceValid || (!loading && inventory === null)) {
+  if (!authorized || Boolean(error) || !pageEvidenceValid || (!loading && inventory === null)) {
     return <section role="alert" className="flex flex-col items-start gap-3 rounded-lg border p-6 text-sm text-muted-foreground">
       <p>File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.</p>
       {authorized && error && <p className="text-destructive">{error}</p>}
@@ -205,7 +205,7 @@ function FileExplorerView({
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className="flex min-w-0 items-center gap-2 rounded border p-2">
           <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading}
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error)}
             onChange={() => select(item)} />
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
@@ -220,7 +220,7 @@ function FileExplorerView({
     <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
       <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
-        disabled={loading || !pageEvidenceValid} onClick={nextPage}>Next page</button>}
+        disabled={loading || Boolean(error) || !pageEvidenceValid} onClick={nextPage}>Next page</button>}
     </footer>
   </section>;
 }
