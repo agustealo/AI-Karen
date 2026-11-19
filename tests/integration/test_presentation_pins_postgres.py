@@ -65,7 +65,9 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
             SELECT count(*) FROM information_schema.tables
             WHERE table_schema = 'public'
               AND table_name IN ('tenants', 'auth_users', 'conversations',
-                                 'messages', 'conversation_presentation_pins')
+                                 'messages', 'conversation_presentation_pins',
+                                 'conversation_presentation_pin_mutation_receipts',
+                                 'auth_sessions')
         """)
         if existing:
             pytest.fail(
@@ -476,101 +478,223 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     **unpin_args(uuid.uuid4(), duplicate_key, "conflict")
                 )
 
-            # Exercise the actual FastAPI transport -> runtime -> repository
-            # -> disposable PostgreSQL path. Authentication is supplied by a
-            # test-only dependency override; this does not certify production
-            # session middleware or an authenticated browser.
+            # Exercise the canonical signed-JWT -> durable AuthService session
+            # -> FastAPI route -> runtime -> actual PostgreSQL receipt path.
+            # Both the auth-session query and pin transaction use the same
+            # isolated disposable database; no authentication dependency or
+            # execution-context override is installed.
+            from contextlib import asynccontextmanager
+            from datetime import datetime, timedelta
+            import jwt
             from fastapi import FastAPI
             from httpx import ASGITransport, AsyncClient
             from ai_karen_engine.api_routes.chat import runtime as pin_ingress
-            from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+            from ai_karen_engine.auth import auth_middleware, auth_service as auth_facade
+            from ai_karen_engine.auth.auth_middleware import SecureAuthMiddleware
+            from ai_karen_engine.core.security.auth_config import auth_config
+            from ai_karen_engine.database.models import AuthSession
+            from ai_karen_engine.services.auth.auth_service import AuthService
+
+            # The pin-specific disposable schema predates general AuthUser
+            # fields. Extend only this throwaway fixture for canonical ORM
+            # session validation; never migrate a shared application schema.
+            await raw.execute("""
+                ALTER TABLE public.auth_users
+                    ADD COLUMN email varchar(255),
+                    ADD COLUMN username varchar(255),
+                    ADD COLUMN full_name varchar(255),
+                    ADD COLUMN password_hash varchar(255),
+                    ADD COLUMN tenant_id uuid REFERENCES public.tenants(id),
+                    ADD COLUMN roles jsonb NOT NULL DEFAULT '[]'::jsonb,
+                    ADD COLUMN preferences jsonb DEFAULT '{}'::jsonb,
+                    ADD COLUMN is_verified boolean NOT NULL DEFAULT true,
+                    ADD COLUMN is_active boolean NOT NULL DEFAULT true,
+                    ADD COLUMN two_factor_enabled boolean NOT NULL DEFAULT false,
+                    ADD COLUMN two_factor_secret varchar(32),
+                    ADD COLUMN created_at timestamp NOT NULL DEFAULT now(),
+                    ADD COLUMN updated_at timestamp NOT NULL DEFAULT now(),
+                    ADD COLUMN last_login timestamp,
+                    ADD COLUMN failed_login_attempts integer NOT NULL DEFAULT 0,
+                    ADD COLUMN locked_until timestamp;
+            """)
+            await raw.execute("""
+                UPDATE public.auth_users
+                SET tenant_id=$1,
+                    email=user_id::text || '@example.invalid',
+                    username=user_id::text,
+                    roles='["user"]'::jsonb
+            """, tenant_b)
+            async with engine.begin() as connection:
+                await connection.run_sync(AuthSession.__table__.create)
+
+            secret = "isolated-disposable-pin-session-test-secret"
+
+            def signed_token(user_id: uuid.UUID, tenant_id: uuid.UUID) -> str:
+                now = datetime.utcnow()
+                return jwt.encode(
+                    {
+                        "sub": str(user_id),
+                        "tenant_id": str(tenant_id),
+                        # Stale client claims must never grant permissions.
+                        "roles": ["admin"],
+                        "permissions": ["pin:override"],
+                        "iss": "ai-karen",
+                        "aud": "ai-karen-users",
+                        "iat": now,
+                        "exp": now + timedelta(minutes=15),
+                    },
+                    secret,
+                    algorithm="HS256",
+                )
+
+            owner_token = signed_token(owner_b, tenant_b)
+            foreign_token = signed_token(owner_a, tenant_b)
+
+            for actor, access_token in (
+                (owner_b, owner_token),
+                (owner_a, foreign_token),
+            ):
+                await raw.execute("""
+                    INSERT INTO public.auth_sessions
+                        (session_id, user_id, access_token, refresh_token,
+                         expires_in, created_at, last_accessed, is_active)
+                    VALUES ($1,$2,$3,$4,3600,now(),now(),true)
+                """, uuid.uuid4(), actor, access_token, str(uuid.uuid4()))
+
+            @asynccontextmanager
+            async def auth_session_scope():
+                async with maker() as session:
+                    async with session.begin():
+                        yield session
+
+            auth_service = object.__new__(AuthService)
+            auth_service._initialized = True
+            auth_service._config = SimpleNamespace(
+                jwt_secret_key=secret,
+                jwt_algorithm="HS256",
+            )
+            auth_service._user_cache = {}
+            auth_service._session_scope = auth_session_scope
+
+            async def get_disposable_auth_service():
+                return auth_service
+
+            verifier = object.__new__(SecureAuthMiddleware)
+            verifier.jwt_secret = secret
+            verifier.jwt_algorithm = "HS256"
+            # This is only the advisory Redis check. Durable PostgreSQL
+            # AuthService.validate_session remains mandatory on every token.
+            verifier._is_token_revoked = lambda token_id: False
+            monkeypatch.setattr(
+                auth_middleware, "get_auth_middleware", lambda: verifier
+            )
+            monkeypatch.setattr(
+                auth_facade, "get_auth_service", get_disposable_auth_service
+            )
+            monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+            monkeypatch.setattr(
+                pin_ingress,
+                "get_runtime_settings",
+                lambda: SimpleNamespace(
+                    features=SimpleNamespace(
+                        enable_ag_ui_bridge=True,
+                        enable_ag_ui_durable_runs=True,
+                        enable_presentation_pin_mutations=True,
+                    )
+                ),
+            )
 
             http_pin = await create_owned_pin("runtime-http-mutation")
             http_key = str(uuid.uuid4())
-            current_principal = {"tenant_id": str(tenant_b), "user_id": str(owner_b)}
-            original_context_factory = pin_ingress._execution_context
-            original_settings_factory = pin_ingress.get_runtime_settings
-
-            def scoped_test_context(*, user, session_id, conversation_id, request_id, correlation_id):
-                # The principal comes from the overridden authenticated
-                # dependency, never from the HTTP JSON request.
-                return SimpleNamespace(
-                    tenant_id=user["tenant_id"],
-                    user_id=user["user_id"],
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    request_id=request_id,
-                    correlation_id=correlation_id,
-                    require_authenticated_user=lambda: None,
-                )
-
-            pin_ingress._execution_context = scoped_test_context
-            pin_ingress.get_runtime_settings = lambda: SimpleNamespace(
-                features=SimpleNamespace(
-                    enable_ag_ui_bridge=True,
-                    enable_ag_ui_durable_runs=True,
-                    enable_presentation_pin_mutations=True,
-                )
-            )
             app = FastAPI()
             app.include_router(pin_ingress.router)
-            app.dependency_overrides[bypass_user_context_func] = lambda: dict(current_principal)
             transport = ASGITransport(app=app)
-            try:
-                async with AsyncClient(transport=transport, base_url="http://test") as http:
-                    mutation_url = "/chat/ag-ui/pins/mutations"
-                    body = {
-                        "operation": "unpin",
-                        "idempotency_key": http_key,
-                        "pin_id": str(http_pin),
-                    }
-                    # A same-tenant but different authenticated user cannot
-                    # modify the owner's pin even with its exact UUID.
-                    current_principal["user_id"] = str(owner_a)
-                    foreign = await http.post(mutation_url, json={
-                        **body, "idempotency_key": str(uuid.uuid4())
-                    })
-                    assert foreign.status_code == 200
-                    assert foreign.json()["receipt"]["outcome"] == "already_absent"
-                    assert await raw.fetchval("""
-                        SELECT count(*) FROM public.conversation_presentation_pins
-                        WHERE pin_id=$1
-                    """, http_pin) == 1
+            async with AsyncClient(transport=transport, base_url="http://test") as http:
+                mutation_url = "/chat/ag-ui/pins/mutations"
+                body = {
+                    "operation": "unpin",
+                    "idempotency_key": http_key,
+                    "pin_id": str(http_pin),
+                }
+                owner_headers = {"Authorization": f"Bearer {owner_token}"}
+                foreign_headers = {"Authorization": f"Bearer {foreign_token}"}
 
-                    current_principal["user_id"] = str(owner_b)
-                    committed = await http.post(mutation_url, json=body)
-                    assert committed.status_code == 200, committed.text
-                    receipt = committed.json()["receipt"]
-                    assert committed.headers["cache-control"] == "private, no-store"
-                    assert receipt["outcome"] == "unpinned"
-                    assert await raw.fetchval("""
-                        SELECT count(*) FROM public.conversation_presentation_pins
-                        WHERE pin_id=$1
-                    """, http_pin) == 0
+                # Signed, active foreign identity still cannot modify a
+                # same-tenant owner's pin or acquire its authoritative receipt.
+                foreign = await http.post(
+                    mutation_url,
+                    json={**body, "idempotency_key": str(uuid.uuid4())},
+                    headers=foreign_headers,
+                )
+                assert foreign.status_code == 200, foreign.text
+                assert foreign.json()["receipt"]["outcome"] == "already_absent"
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pins
+                    WHERE pin_id=$1
+                """, http_pin) == 1
 
-                    # Lost HTTP response is retried with the same logical
-                    # identity. Only the committed immutable receipt wins.
-                    replay = await http.post(mutation_url, json=body)
-                    assert replay.status_code == 200
-                    assert replay.json()["receipt"] == receipt
-                    assert await raw.fetchval("""
-                        SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
-                        WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3
-                    """, tenant_b, owner_b, uuid.UUID(http_key)) == 1
+                committed = await http.post(
+                    mutation_url, json=body, headers=owner_headers
+                )
+                assert committed.status_code == 200, committed.text
+                receipt = committed.json()["receipt"]
+                assert committed.headers["cache-control"] == "private, no-store"
+                assert committed.json()["committed"] is True
+                assert receipt["outcome"] == "unpinned"
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pins
+                    WHERE pin_id=$1
+                """, http_pin) == 0
 
-                    changed = await http.post(mutation_url, json={
-                        **body, "pin_id": str(uuid.uuid4())
-                    })
-                    assert changed.status_code == 409
-                    assert "committed" not in changed.text
+                # Exact authenticated retry returns the original immutable
+                # receipt after the pin row is gone.
+                replay = await http.post(
+                    mutation_url, json=body, headers=owner_headers
+                )
+                assert replay.status_code == 200
+                assert replay.json()["receipt"] == receipt
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                    WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3
+                """, tenant_b, owner_b, uuid.UUID(http_key)) == 1
 
-                    invalid = await http.post(mutation_url, json={
-                        **body, "position": 2
-                    })
-                    assert invalid.status_code == 422
-            finally:
-                pin_ingress._execution_context = original_context_factory
-                pin_ingress.get_runtime_settings = original_settings_factory
+                changed = await http.post(
+                    mutation_url,
+                    json={**body, "pin_id": str(uuid.uuid4())},
+                    headers=owner_headers,
+                )
+                assert changed.status_code == 409
+                assert "committed" not in changed.text
+
+                invalid = await http.post(
+                    mutation_url,
+                    json={**body, "position": 2},
+                    headers=owner_headers,
+                )
+                assert invalid.status_code == 422
+
+                # Revocation in the actual auth_sessions table must reject a
+                # still-cryptographically-valid JWT before pin mutation.
+                revoked_pin = await create_owned_pin("runtime-http-revoked")
+                await raw.execute("""
+                    UPDATE public.auth_sessions
+                    SET is_active=false WHERE access_token=$1
+                """, owner_token)
+                revoked = await http.post(
+                    mutation_url,
+                    json={
+                        **body,
+                        "idempotency_key": str(uuid.uuid4()),
+                        "pin_id": str(revoked_pin),
+                    },
+                    headers=owner_headers,
+                )
+                assert revoked.status_code == 401, revoked.text
+                assert "committed" not in revoked.text
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pins
+                    WHERE pin_id=$1
+                """, revoked_pin) == 1
 
             rollback_pin = await create_owned_pin("runtime-receipt-rollback")
             await raw.execute("""
@@ -616,7 +740,7 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 for table in (
                     "conversation_presentation_pin_mutation_receipts",
                     "conversation_presentation_pins", "messages", "conversations",
-                    "auth_users", "tenants",
+                    "auth_sessions", "auth_users", "tenants",
                 ):
                     await raw.execute(f'DROP TABLE IF EXISTS public.{table} CASCADE')
                 # PostgreSQL does not drop standalone trigger functions with tables.
