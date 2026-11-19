@@ -363,41 +363,34 @@ async def _verified_workspace_run_reference(
     )
 
 
-async def _sse(runtime_request: ChatExecutionRequest):
-    """Transport-only framing and fail-closed terminal integrity.
+async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
+    """Serialize runtime events once for every authenticated chat transport.
 
-    Runtime owns execution and model truth. Ingress emits an immediate,
-    authenticated transport comment before potentially slow context and model
-    preparation, then transparently forwards every runtime event. A graceful
-    runtime return without a terminal event cannot become silent HTTP 200.
+    This ingress-owned serializer never chooses models, constructs answers,
+    claims persistence, or changes RuntimePolicy decisions. The first COMPLETE
+    or ERROR is final. Missing terminal/serialization/runtime failures produce
+    a safe ERROR; cancellation propagates without a fabricated terminal.
     """
     correlation_id = runtime_request.context.correlation_id
-    terminal_seen = False
-
-    # SSE comment flushes headers/first bytes without pretending the model
-    # advanced. The browser ignores comments, so its shorter progress-status
-    # silence timeout is not activated during provider warmup.
-    yield ": stream_connected\n\n"
-
     try:
         async for chunk in get_chat_runtime().execute_stream(runtime_request):
+            encoded = json.dumps(
+                chunk.to_sse_payload(), ensure_ascii=False, allow_nan=False,
+            )
+            yield chunk.type, encoded
             if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
-                terminal_seen = True
-            yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
-            if terminal_seen:
-                # The first terminal event is final. A malformed upstream
-                # stream must not turn ERROR into a later COMPLETE or append
-                # content after completion. Runtime still owns the outcome.
-                break
+                return
     except Exception as exc:
-        logger.exception(
-            "Chat SSE runtime failed",
+        # Driver/provider errors may embed prompts, SQL parameters, or secrets.
+        # Record the type and correlation only, never the raw exception text.
+        logger.error(
+            "chat_stream_transport_failed",
             extra={
                 "correlation_id": correlation_id,
                 "error_type": type(exc).__name__,
             },
         )
-        error_event = ChatStreamChunk(
+        event = ChatStreamChunk(
             type=ChatStreamEventType.ERROR,
             content="Chat streaming failed before completion.",
             correlation_id=correlation_id,
@@ -407,26 +400,35 @@ async def _sse(runtime_request: ChatExecutionRequest):
                 "correlation_id": correlation_id,
             },
         )
-        yield f"data: {json.dumps(error_event.to_sse_payload())}\n\n"
-        terminal_seen = True
+        yield ChatStreamEventType.ERROR, json.dumps(event.to_sse_payload())
+        return
 
-    if not terminal_seen:
-        logger.error(
-            "Chat runtime returned without terminal SSE event",
-            extra={"correlation_id": correlation_id, "error_code": "CHAT_SSE_MISSING_TERMINAL"},
-        )
-        error_event = ChatStreamChunk(
-            type=ChatStreamEventType.ERROR,
-            content="The chat runtime stopped before completing its response.",
-            correlation_id=correlation_id,
-            metadata={
-                "error_code": "CHAT_SSE_MISSING_TERMINAL",
-                "error_type": "MissingTerminalEvent",
-                "correlation_id": correlation_id,
-            },
-        )
-        yield f"data: {json.dumps(error_event.to_sse_payload())}\n\n"
+    logger.error(
+        "chat_stream_missing_terminal",
+        extra={
+            "correlation_id": correlation_id,
+            "error_code": "CHAT_SSE_MISSING_TERMINAL",
+        },
+    )
+    event = ChatStreamChunk(
+        type=ChatStreamEventType.ERROR,
+        content="The chat runtime stopped before completing its response.",
+        correlation_id=correlation_id,
+        metadata={
+            "error_code": "CHAT_SSE_MISSING_TERMINAL",
+            "error_type": "MissingTerminalEvent",
+            "correlation_id": correlation_id,
+        },
+    )
+    yield ChatStreamEventType.ERROR, json.dumps(event.to_sse_payload())
 
+
+async def _sse(runtime_request: ChatExecutionRequest):
+    """Canonical SSE framing of one terminalized, authoritative runtime turn."""
+    # The first comment flushes headers without claiming model progress.
+    yield ": stream_connected\n\n"
+    async for _event_type, packet in _terminalized_chat_json_events(runtime_request):
+        yield f"data: {packet}\n\n"
     yield "data: [DONE]\n\n"
 
 
@@ -871,6 +873,90 @@ async def get_ag_ui_run_observed_events(
     return JSONResponse(
         status_code=200, content=result,
         headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get("/chat/ag-ui/pins")
+async def get_ag_ui_authorized_pins(
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """List only freshly authorized, completed-run-attested saved pin pointers.
+
+    This is a non-executing, read-only transport adapter. All authorization
+    lives in the canonical runtime principal, conversation gateway and saved
+    presentation admission service. Neither raw pin ledger rows nor private
+    presentation payloads are exposed. Mutation APIs are not enabled.
+    """
+    features = get_runtime_settings().features
+    if not (
+        features.enable_ag_ui_bridge
+        and getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Pin readback unavailable")
+
+    correlation_id = str(uuid.uuid4())
+    try:
+        context = _execution_context(
+            user=user, session_id=correlation_id,
+            conversation_id=None,
+            request_id=correlation_id, correlation_id=correlation_id,
+        )
+        context.require_authenticated_user()
+    except (PermissionError, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=401, detail="Authenticated pin readback required",
+        ) from exc
+
+    from ai_karen_engine.core.runtime.presentation_pin_readback import (
+        PresentationPinReadback,
+    )
+
+    try:
+        verified = await PresentationPinReadback().list_authorized(context=context)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403, detail="Pin readback denied",
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "Authorized presentation pin readback unavailable",
+            extra={
+                "correlation_id": correlation_id,
+                "event": "presentation_pin_readback_unavailable",
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503, detail="Pin readback temporarily unavailable",
+            headers={"X-Correlation-Id": correlation_id},
+        ) from exc
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "schema_version": 1,
+            "read_only": True,
+            "pins": [
+                {
+                    "pin_id": pin.pin_id,
+                    "position": pin.position,
+                    "revision": pin.revision,
+                    "source": {
+                        "conversation_id": pin.admitted.reference.conversation_id,
+                        "assistant_message_id": pin.admitted.reference.assistant_message_id,
+                        "presentation_id": pin.admitted.reference.presentation_id,
+                        "evidence_ref": pin.admitted.reference.evidence_ref,
+                        "component_type": pin.admitted.component_type,
+                        "schema_version": pin.admitted.schema_version,
+                    },
+                }
+                for pin in verified
+            ],
+        },
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Correlation-Id": correlation_id,
+        },
     )
 
 

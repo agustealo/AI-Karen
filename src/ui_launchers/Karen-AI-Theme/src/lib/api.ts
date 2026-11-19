@@ -3,6 +3,7 @@
 import type { RuntimeProviderCatalogResponse } from '@/lib/model-runtime-inventory';
 import { authService } from '@/lib/auth';
 import { dispatchAuthInvalidated } from '@/lib/auth-events';
+import { runCoordinatedRefresh } from '@/lib/auth-refresh-coordinator';
 
 // API service for HTTP requests
 const SAME_ORIGIN_API_BASE_URL = '';
@@ -534,7 +535,10 @@ class ApiClient {
     // Share a single credential-rotating request across concurrent API calls.
     if (this.refreshInFlight) return this.refreshInFlight;
 
-    const refresh = this.executeRefreshAccessToken();
+    const refresh = runCoordinatedRefresh(async () => {
+      await this.executeRefreshAccessToken();
+      return localStorage.getItem('access_token') || '';
+    }).then(() => undefined);
     this.refreshInFlight = refresh;
     try {
       await refresh;
@@ -566,14 +570,19 @@ class ApiClient {
       }
 
       const data = await response.json();
-      if (!data.access_token) {
-        throw new Error('Invalid refresh response: missing access_token');
+      if (typeof data.access_token !== 'string' || !data.access_token.trim() ||
+          typeof data.refresh_token !== 'string' || !data.refresh_token.trim() ||
+          data.refresh_token === refreshToken) {
+        throw new Error('Invalid refresh response: missing or unrotated token pair');
       }
 
       // A late refresh response must never restore a logged-out or changed session.
       if (localStorage.getItem('refresh_token') !== refreshToken) {
         throw new Error('Refresh session changed during request');
       }
+      // Persist the rotated pair synchronously. Keeping the consumed refresh
+      // credential would trigger the backend's replay detector on next refresh.
+      localStorage.setItem('refresh_token', data.refresh_token);
       localStorage.setItem('access_token', data.access_token);
       // Clear any refresh attempt flags on success
       localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);

@@ -33,9 +33,26 @@ def test_realtime_chat_has_one_generation_authority() -> None:
 
     assert "from ai_karen_engine.services.streaming.stream_processor import" not in source
     assert "services.streaming.stream_processor" not in source
-    assert "get_chat_runtime().execute_stream" in source
+    assert "_terminalized_chat_json_events" in source
+    assert "get_chat_runtime().execute_stream" not in source
+    # Generation and first-terminal authority stay in the original chat route.
+    runtime = _read(ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py")
+    assert "async for chunk in get_chat_runtime().execute_stream(runtime_request)" in runtime
     assert "This is a simulated streaming response" not in source
     assert "_generate_fallback_chunk(" not in source
+
+
+def test_websocket_gateway_import_does_not_eagerly_load_retired_simulator() -> None:
+    """An optional metrics import cannot make basic chat route imports fail."""
+    package = _read(
+        ROOT / "src/ai_karen_engine/services/streaming/__init__.py"
+    )
+    assert "def __getattr__(name: str):" in package
+    assert not any(
+        line.startswith("from .stream_processor import ")
+        for line in package.splitlines()
+    )
+    assert 'if name == "AsyncStreamProcessor":' in package
 
 
 def test_legacy_stream_processor_is_not_imported_by_chat_routes() -> None:

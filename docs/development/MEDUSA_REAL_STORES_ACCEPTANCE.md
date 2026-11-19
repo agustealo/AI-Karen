@@ -23,3 +23,42 @@ observed cancellation; an accepted request is not itself terminal evidence.
 Remaining gates: separate worker OS processes; crashed-owner and replaced-lease
 fencing; PostgreSQL latency/failure while Redis renewal continues; production
 role-backed RLS; and an authenticated target installation's audit-readback.
+
+## KCON-471: Distinct OS owner process and crash-fencing acceptance (candidate)
+
+The same disposable real-store CI now launches a separate Python OS process
+running the original Medusa manager with independent Redis/PostgreSQL clients.
+The requester remains outside that PID. The owner reports an explicit ready
+and cancelled event, the requester commits cancellation to PostgreSQL without
+signaling Redis, and the child finalizes only after its own task observes
+cancellation. PostgreSQL transitions and original audit reference are read
+back by the requester after the child exits.
+
+A second child is terminated by the test process. Its durable row must remain
+running, never fabricate a cancelled terminal outcome. After its real Redis
+lease expires, cancellation is refused; replacing the lease value without
+matching owner metadata still cannot authorize cancellation or old-owner
+heartbeat. These are controlled process-termination and stale-lease checks,
+not proof that a restarted worker can resume a killed asyncio task.
+
+Remaining: production-role tenant RLS, authenticated target-host audit readback,
+recovering workers after infrastructure restart, and real network partition
+or PostgreSQL pool-starvation timing. No test may declare those passed.
+
+## KCON-471: PostgreSQL read stall versus live Redis lease (candidate)
+
+The existing real-store suite now holds a genuine PostgreSQL
+`ACCESS EXCLUSIVE` table lock on the disposable Medusa run table for
+longer than the configured Redis lease TTL. It polls the actual lease
+TTL and checks the owner task remains active while the canonical
+`MedusaRunManager` times out its durable recovery reads and renews
+Redis ownership. Once the lock is released, the test commits a
+durable-only cancellation request, observes an independently occurring
+`CancelledError` with a shielded test timeout, and verifies that
+terminal `cancelled` is recorded only after task interruption.
+
+This proves bounded recovery-read behavior under **SQL lock contention**
+on disposable CI infrastructure, not full PostgreSQL unavailability,
+connection-pool exhaustion, Redis network partition, post-crash task
+resurrection or production-host execution. Exact-head source CI and
+real-service execution are required before claiming that proof passed.
