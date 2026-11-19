@@ -1,6 +1,7 @@
 "use client";
 
 import { dispatchAuthUserUpdated } from './auth-events';
+import { runCoordinatedRefresh } from './auth-refresh-coordinator';
 
 /**
  * Authentication Service for Karen AI Theme
@@ -462,7 +463,7 @@ class AuthService {
       throw new Error('Token refresh temporarily blocked after recent auth failure');
     }
 
-    this.refreshInFlight = (async () => {
+    this.refreshInFlight = runCoordinatedRefresh(async () => {
       try {
         const refreshToken = localStorage.getItem('refresh_token');
         if (!refreshToken) {
@@ -535,7 +536,7 @@ class AuthService {
     } finally {
       if (revision === this.authenticationRevision) this.refreshInFlight = null;
     }
-  })();
+  });
 
     return this.refreshInFlight;
   }
