@@ -39,4 +39,8 @@ def test_real_automation_browser_acceptance_targets_current_navigation() -> None
         assert endpoint in spec
     assert '"dark", "light"' in spec
     assert "toBeFocused()" in spec
-    assert "documentWidth" in spec\n    assert "toHaveClass(new RegExp(" in spec\n    assert 'page.keyboard.press("Tab")' in spec\n    assert "reachedByKeyboard" in spec\n    assert "await focused.focus()" not in spec
+    assert "documentWidth" in spec
+    assert "toHaveClass(new RegExp(" in spec
+    assert 'page.keyboard.press("Tab")' in spec
+    assert "reachedByKeyboard" in spec
+    assert "await focused.focus()" not in spec
