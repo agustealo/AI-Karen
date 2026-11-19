@@ -18,6 +18,17 @@ from ai_karen_engine.core.runtime.personal_planner_action import (
 )
 
 
+@pytest.fixture(autouse=True)
+def planner_write_enabled(monkeypatch):
+    import ai_karen_engine.server.config as config_module
+
+    monkeypatch.setattr(
+        config_module,
+        "settings",
+        SimpleNamespace(enable_personal_planner_write_api=True),
+    )
+
+
 def _request(
     query: str = "Create a personal task to review deployment in America/Detroit",
     *,
@@ -225,3 +236,62 @@ async def test_retry_uses_stable_idempotency_key(monkeypatch):
     await ChatRuntime._execute_personal_planner_create(request, plan, meter)
     assert len(observed_keys) == 2
     assert observed_keys[0] == observed_keys[1]
+
+
+@pytest.mark.asyncio
+async def test_disabled_write_flag_prevents_any_mutation(monkeypatch):
+    import ai_karen_engine.server.config as config_module
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    monkeypatch.setattr(
+        config_module,
+        "settings",
+        SimpleNamespace(enable_personal_planner_write_api=False),
+    )
+    write = AsyncMock(side_effect=AssertionError("Disabled planner must not write"))
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action", write,
+    )
+    request, plan, meter, _ = _request()
+    result = await ChatRuntime._execute_personal_planner_create(
+        request, plan, meter,
+    )
+    assert result.error == "planner_create_disabled"
+    assert result.payload["planner_created"] is False
+    assert not result.success
+    write.assert_not_awaited()
+    meter.consume_tool_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_persistence_receipt_cannot_report_task_saved(monkeypatch):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    request, plan, meter, principal = _request()
+    async def mismatched_write(action, **kwargs):
+        commitment = SimpleNamespace(
+            id=uuid4(),
+            tenant_id=UUID(principal.tenant_id),
+            owner_id=UUID(principal.user_id),
+            title=action.title, timezone=action.timezone, revision=1,
+        )
+        receipt = SimpleNamespace(
+            commitment_id=uuid4(),
+            tenant_id=commitment.tenant_id,
+            idempotency_key=action.idempotency_key,
+            revision=1,
+            persisted_at=datetime.now(timezone.utc),
+            correlation_id=action.correlation_id,
+        )
+        return commitment, receipt
+
+    monkeypatch.setattr(
+        personal_planner_action, "execute_authorized_planner_action",
+        mismatched_write,
+    )
+    result = await ChatRuntime._execute_personal_planner_create(
+        request, plan, meter,
+    )
+    assert not result.success
+    assert result.error == "planner_create_receipt_invalid"
+    assert result.payload["planner_created"] is False
