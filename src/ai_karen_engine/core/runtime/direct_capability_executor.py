@@ -74,6 +74,7 @@ class DirectCapabilityResult:
                 "crawl_provider",
                 "timer_receipt",
                 "automation_receipt",
+                "planner_receipt",
                 "missing_fields",
                 "plugin_inspection",
                 "plugin_action_receipt",
@@ -1225,11 +1226,11 @@ class DirectCapabilityExecutor:
             return await self._execute_automation_create(request, plan, meter)
 
         if decision.intent == "planner.read":
-            from ai_karen_engine.config.runtime import get_runtime_settings
+            from ai_karen_engine.server.config import settings
             from ai_karen_engine.services.personal_planner import PersonalPlannerService
 
             started_at = time.perf_counter()
-            if not get_runtime_settings().enable_personal_planner_read_api:
+            if not settings.enable_personal_planner_read_api:
                 return DirectCapabilityResult(
                     handled=True, text="Planner reads are disabled.",
                     error="planner_read_disabled", degraded=True,

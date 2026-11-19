@@ -21,6 +21,35 @@ The repository [README](../../README.md) already reuses the reviewed historical 
 | Abort ownership and recovered orphan lock | `src/ui_launchers/Karen-AI-Theme/src/components/chat/const/requestHandlers.tsx` | Stop releases the UI after stream unwinds; no false terminal completion; restored orphan can stop |
 | Server/local transcript reconciliation | `src/ui_launchers/Karen-AI-Theme/src/components/chat/ChatInterface.tsx` | Reload confirms durable message identity, ordering, status, and response provenance |
 
+## Personal-task chat acceptance (not yet live-certified)
+
+The current task-create implementation is a bounded, **unscheduled personal
+commitment**. It is not an agent-task execution or recurring automation.
+
+- The canonical `KAREN_ENABLE_PERSONAL_PLANNER_WRITE_API` feature flag must be
+  enabled deliberately on the target API. It defaults to disabled. Planner
+  reads use the independent `KAREN_ENABLE_PERSONAL_PLANNER_READ_API` flag.
+- Example supported request: `Create a personal task to review my project in America/Detroit`.
+  RuntimePolicy must authorize `planner.create`, the original runtime plan
+  must still be bound, and the authenticated owner must have `PLANNER_WRITE`.
+- The task is saved only when `PersonalPlannerService` returns a matching
+  committed PostgreSQL receipt. An uncertain write must not produce a
+  successful save indicator or allow a model-only fallback.
+- Requests containing due dates/times, or lacking an explicit valid IANA
+  timezone, must not silently create an incomplete task. Due-at scheduling,
+  conversation-driven status updates, and task notifications require separate
+  verified action contracts.
+- Retrying the same authenticated request retains a stable idempotency key.
+  Changing task details under that request ID must not create a duplicate.
+- Current source/unit tests are not equivalent to authenticated browser
+  acceptance. **Live AG-UI send → authorized write → receipt → readback →
+  refresh remains NOT RUN** until captured on a sanitized target deployment.
+
+Required task acceptance evidence: request/correlation identity, original
+policy decision and permitted capability, canonical user/tenant scope, exact
+committed receipt, a readback from a new session, failed-write UI behavior, and
+a stopped or interrupted request with no falsely asserted saved task.
+
 ## Executable acceptance journeys
 
 Use the already-owned Playwright browser config at `src/ui_launchers/Karen-AI-Theme/e2e/playwright.config.ts`. The generic E2E rail stores **engineering evidence**, not marketing screenshots. The canonical five-screen showcase authority is `src/ui_launchers/Karen-AI-Theme/e2e/showcase/`, governed by `.github/workflows/presentation-capture.yml`.

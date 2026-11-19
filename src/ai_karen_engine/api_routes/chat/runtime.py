@@ -93,6 +93,8 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
     approval_id: Optional[str] = Field(default=None, max_length=64)
+    # Only a client-held per-action key may authorize retry-safe planner writes.
+    planner_idempotency_key: Optional[uuid.UUID] = None
     stream: bool = False
     session_id: Optional[str] = Field(
         default=None,
@@ -159,6 +161,7 @@ class ChatStreamRequest(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)
     approval_id: Optional[str] = Field(default=None, max_length=64)
+    planner_idempotency_key: Optional[uuid.UUID] = None
     timezone: Optional[str] = Field(default=None, max_length=100)
 
     @field_validator("timezone")
@@ -342,6 +345,8 @@ def _stream_execution_request(
             ],
             **({"user_timezone": request.timezone} if request.timezone else {}),
             **({"approval_id": request.approval_id} if request.approval_id else {}),
+            **({"planner_mutation_idempotency_key": str(request.planner_idempotency_key)}
+               if request.planner_idempotency_key else {}),
         },
     )
 
@@ -471,6 +476,8 @@ async def create_chat_response(
                 "transport": "http",
                 **({"user_timezone": request.timezone} if request.timezone else {}),
                 **({"approval_id": request.approval_id} if request.approval_id else {}),
+                **({"planner_mutation_idempotency_key": str(request.planner_idempotency_key)}
+                   if request.planner_idempotency_key else {}),
             },
         )
 
@@ -1396,6 +1403,13 @@ async def stream_ag_ui_chat(
                 message=current_text,
                 session_id=session_id,
                 conversation_id=conversation_id,
+                # The validated AG-UI runId belongs to the same client run
+                # across retries; unlike response_id it is not regenerated
+                # during ingress. Runtime binds it to authenticated scope.
+                planner_idempotency_key=uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"ag-ui-planner:{request.threadId}:{request.runId}",
+                ),
                 workspace_run_id=workspace_ref,
                 preferred_llm_provider=requested_provider,
                 preferred_model=requested_model,

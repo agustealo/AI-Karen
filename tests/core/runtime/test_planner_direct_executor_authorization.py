@@ -23,11 +23,13 @@ def _request(authenticated=True):
 
 @pytest.mark.asyncio
 async def test_planner_denied_plan_cannot_call_service(monkeypatch):
-    import ai_karen_engine.config.runtime as settings_module
+    import ai_karen_engine.server.config as settings_module
     import ai_karen_engine.services.personal_planner as planner_module
 
-    monkeypatch.setattr(settings_module, "get_runtime_settings",
-                        lambda: SimpleNamespace(enable_personal_planner_read_api=True))
+    monkeypatch.setattr(
+        settings_module, "settings",
+        SimpleNamespace(enable_personal_planner_read_api=True),
+    )
     service = AsyncMock()
     monkeypatch.setattr(planner_module, "PersonalPlannerService", lambda: service)
     result = await DirectCapabilityExecutor().execute(
@@ -43,11 +45,13 @@ async def test_planner_denied_plan_cannot_call_service(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_planner_missing_principal_denied_before_read(monkeypatch):
-    import ai_karen_engine.config.runtime as settings_module
+    import ai_karen_engine.server.config as settings_module
     import ai_karen_engine.services.personal_planner as planner_module
 
-    monkeypatch.setattr(settings_module, "get_runtime_settings",
-                        lambda: SimpleNamespace(enable_personal_planner_read_api=True))
+    monkeypatch.setattr(
+        settings_module, "settings",
+        SimpleNamespace(enable_personal_planner_read_api=True),
+    )
     service = AsyncMock()
     monkeypatch.setattr(planner_module, "PersonalPlannerService", lambda: service)
     result = await DirectCapabilityExecutor().execute(
@@ -63,11 +67,13 @@ async def test_planner_missing_principal_denied_before_read(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_authorized_planner_read_returns_real_service_envelope(monkeypatch):
-    import ai_karen_engine.config.runtime as settings_module
+    import ai_karen_engine.server.config as settings_module
     import ai_karen_engine.services.personal_planner as planner_module
 
-    monkeypatch.setattr(settings_module, "get_runtime_settings",
-                        lambda: SimpleNamespace(enable_personal_planner_read_api=True))
+    monkeypatch.setattr(
+        settings_module, "settings",
+        SimpleNamespace(enable_personal_planner_read_api=True),
+    )
     envelope = {
         "schema_version": 1, "presentation_id": "planner-corr-1",
         "component_type": "planner.task_list",

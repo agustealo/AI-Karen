@@ -875,3 +875,38 @@ async def test_daily_chat_rejects_duplicate_fields_without_false_clarification(
     assert result.payload["automation_created"] is False
     assert ChatRuntime._pending_clarification_from_result(request, result) is None
     forbidden.assert_not_awaited()
+
+
+@pytest.mark.parametrize("query", [
+    "Create a task to review deployment in America/Detroit",
+    "Please create a personal task to review deployment in UTC",
+])
+def test_personal_task_create_resolves_to_policy_gated_direct_capability(query):
+    routed = resolve_capability_decision(query)
+    assert routed.intent == "planner.create"
+    assert routed.capability == "planner.create"
+    assert routed.requires_tool is True
+    assert routed.requires_live_data is True
+    assert routed.allow_llm_only is False
+
+    topology = {"tool_requirements": [], "plugin_candidates": []}
+    capabilities = {"required": []}
+    assert CortexExecutionDecider._apply_direct_capability_route(
+        routed, topology=topology, capabilities=capabilities,
+    )
+    assert capabilities["required"] == ["planner.create"]
+    assert topology["tool_requirements"] == []
+    assert topology["plugin_candidates"] == []
+    assert DirectCapabilityExecutor().can_handle(ExecutionDecision(
+        intent="planner.create",
+        policy_constraints={"direct_capability": True},
+    ))
+
+
+@pytest.mark.parametrize("query", [
+    "Create a daily task to check deployments every day",
+    "List my tasks",
+    "How do I create a task to check deployments?",
+])
+def test_personal_task_mutation_route_does_not_capture_other_capabilities(query):
+    assert resolve_capability_decision(query).intent != "planner.create"
