@@ -227,3 +227,21 @@ def test_server_and_web_consumer_health_projection_share_a_contract() -> None:
     assert "components" in operational
     assert ".configuration !== 'ready'" in web
     assert ".database !== 'ready'" in web
+
+
+def test_redis_remains_required_when_rate_limit_enforcement_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.core.runtime.operational_health import OperationalHealthService
+
+    monkeypatch.setenv("KARI_ENABLE_MEMORY_SERVICE", "false")
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "false")
+    monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "true")
+    assert OperationalHealthService.redis_required() is True
+
+    monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "false")
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "true")
+    assert OperationalHealthService.redis_required() is True
+
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "false")
+    assert OperationalHealthService.redis_required() is False
