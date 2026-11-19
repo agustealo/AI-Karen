@@ -659,8 +659,7 @@ class MedusaRunManager:
                         durable is not None
                         and durable.get("status") == "cancellation_requested"
                         and durable.get("tenant_id") == run.tenant_id
-                        and durable.get("owner_worker_id")
-                        == self._settings.worker_id
+                        and durable.get("owner_worker_id") == self._settings.worker_id
                     ):
                         try:
                             await self._distributed_store.request_cancel(
