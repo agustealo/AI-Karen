@@ -7,6 +7,7 @@ This adapter is not an intent classifier, tool registry or route.
 from __future__ import annotations
 
 import re
+from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ai_karen_engine.auth.models import UserData
@@ -100,3 +101,33 @@ def parse_personal_planner_create(query: str) -> tuple[str, str] | None:
     except (ZoneInfoNotFoundError, ValueError):
         return None
     return title, timezone
+
+
+def parse_personal_planner_completion(query: str) -> tuple[UUID, int] | None:
+    """Accept only a fully specified task UUID and optimistic-lock revision.
+
+    A task name or conversational pronoun is not an authorized task reference.
+    ChatRuntime uses the returned values only after a scoped policy decision.
+    """
+    if not isinstance(query, str) or len(query) > 512:
+        return None
+    match = re.fullmatch(
+        r"(?:please\s+)?(?:complete|finish|mark\s+as\s+completed|"
+        r"mark\s+completed|mark)\s+"
+        r"(?:my\s+)?(?:personal\s+)?(?:task|commitment)\s+"
+        r"(?P<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s+"
+        r"(?:at\s+)?revision\s+(?P<revision>[1-9][0-9]{0,8})"
+        r"(?:\s+as\s+(?:completed|done))?[.!]?",
+        " ".join(query.strip().split()),
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    try:
+        task_id = UUID(match.group("id"))
+        if task_id.int == 0:
+            return None
+        return task_id, int(match.group("revision"))
+    except ValueError:
+        return None

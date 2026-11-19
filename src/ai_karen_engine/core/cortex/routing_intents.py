@@ -60,6 +60,31 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "requires_live_data": True,
         "allow_llm_only": False,
     },
+    "planner.update": {
+        # Completion is a scoped planner mutation, not an automation or
+        # LLM-only acknowledgement. Runtime must verify task ID, revision,
+        # action identity, owner and committed persistence receipt.
+        "triggers": ["complete task", "complete my task", "mark task", "finish task"],
+        "patterns": [
+            # The *object* of the command must be a task or commitment.
+            # Argument-free, plural and punctuated requests must reach the
+            # fail-closed parser; prose merely mentioning tasks must not.
+            r"^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?"
+            r"(?:complete|finish|mark(?:\s+as\s+completed|\s+completed)?)\s+"
+            r"(?:all\s+)?(?:(?:my|the|a)\s+)?(?:personal\s+)?"
+            r"(?:tasks?|commitments?)(?:\s+.*?)?[?!.]*$",
+            # Named tasks are bounded object phrases, never arbitrary prose.
+            r"^(?:please\s+|(?:can|could|would)\s+you\s+(?:please\s+)?)?"
+            r"(?:complete|finish|mark(?:\s+as\s+completed|\s+completed)?)\s+"
+            r"(?:my|the)\s+"
+            r"(?:(?!(?:about|for|with|regarding|sentence|paragraph|email|essay|report)\b)"
+            r"[a-z0-9_'-]+\s+){1,4}"
+            r"(?:tasks?|commitments?)(?:\s+.*?)?[?!.]*$",
+        ],
+        "required_capability": "planner.update",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "planner.read": {
         "triggers": ["show my planner", "list my tasks", "show my tasks"],
         "patterns": [
