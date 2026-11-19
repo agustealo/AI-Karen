@@ -83,6 +83,11 @@ def parse_personal_planner_create(query: str) -> tuple[str, str] | None:
         r"thursday|friday|saturday|sunday)|every\s+(?:day|week|month|"
         r"year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|"
         r"daily|weekly|monthly|yearly|recurring|remind\s+me)\b"
+        r"|\b(?:by|before|after|until|on|at)\s+(?:"
+        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+        r"tomorrow|tonight|noon|midnight|end\s+of\s+(?:day|week|month))\b"
+        r"|\b(?:in|within)\s+\d+\s+"
+        r"(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?)\b"
         r"|\b(?:at|by|before|after|until|on)\s+\d{1,4}(?::\d{2})?"
         r"(?:[/-]\d{1,2}(?:[/-]\d{1,4})?)?\s*(?:am|pm)?\b"
         r"|\b\d{4}-\d{2}-\d{2}\b",
