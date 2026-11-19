@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import useAuth from "@/lib/useAuth";
+import { AutomationListNotice } from "@/components/automation/AutomationListNotice";
 import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -136,6 +137,7 @@ export default function TasksPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isAgentsLoading, setIsAgentsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
+  const [tasksFetchError, setTasksFetchError] = useState(false);
   const historyRequestId = useRef(0);
   const toolReceiptRequestId = useRef(0);
   const [openToolReceiptsTask, setOpenToolReceiptsTask] = useState<string | null>(null);
@@ -154,6 +156,7 @@ export default function TasksPage() {
   const fetchLiveData = useCallback(async () => {
     if (!isAuthenticated) {
       setTasks([]);
+      setTasksFetchError(false);
       setAgents([]);
       setErrorMsg("Sign in to manage tasks.");
       setIsLoading(false);
@@ -172,6 +175,7 @@ export default function TasksPage() {
     setReviewHistory([]);
     setHistoryError("");
     setErrorMsg("");
+    setTasksFetchError(false);
     try {
       const { apiClient } = await import('@/lib/api');
       const [taskResult, agentResult] = await Promise.allSettled([
@@ -182,8 +186,10 @@ export default function TasksPage() {
       ]);
 
       if (taskResult.status === "fulfilled") {
+        setTasksFetchError(false);
         setTasks(taskResult.value || []);
       } else {
+        setTasksFetchError(true);
         console.error(taskResult.reason);
         setTasks([]);
         setErrorMsg(taskResult.reason instanceof Error ? taskResult.reason.message : 'Failed to fetch tasks.');
@@ -203,6 +209,7 @@ export default function TasksPage() {
         setErrorMsg((current) => current || (agentResult.reason instanceof Error ? agentResult.reason.message : 'Failed to fetch live agents.'));
       }
     } catch (err: unknown) {
+      setTasksFetchError(true);
       console.error(err);
       setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch tasks.');
     } finally {
@@ -478,11 +485,15 @@ export default function TasksPage() {
           </div>
           
           {isAuthLoading ? (
-            <div className="text-center p-8 text-muted-foreground animate-pulse">Restoring your session...</div>
+            <AutomationListNotice kind="loading" message="Restoring your session..." />
+          ) : !isAuthenticated ? (
+            <AutomationListNotice kind="authentication" message="Sign in to view task definitions." />
           ) : isLoading ? (
-            <div className="text-center p-8 text-muted-foreground animate-pulse">Loading tasks from backend...</div>
+            <AutomationListNotice kind="loading" message="Loading tasks from backend..." />
+          ) : tasksFetchError ? (
+            <AutomationListNotice kind="unavailable" message="Task definitions could not be verified with the backend." />
           ) : tasks.length === 0 ? (
-            <div className="p-8 text-center border rounded-xl bg-muted/20 text-muted-foreground">No live task definitions yet.</div>
+            <AutomationListNotice kind="empty" message="No live task definitions yet." />
           ) : tasks.map((task: Task, index: number) => (
             <Card className="karen-automation-card" key={task.id || index}>
               <CardHeader>
