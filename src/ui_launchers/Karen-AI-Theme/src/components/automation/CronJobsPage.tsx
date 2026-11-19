@@ -11,7 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import useAuth from "@/lib/useAuth";
 import { AutomationListNotice } from "@/components/automation/AutomationListNotice";
 import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
@@ -46,8 +46,6 @@ interface Sequence {
  * @file CronJobsPage.tsx
  * @description Preview page for scheduling Tasks using cron expressions.
  */
-let cronJobsFetchPromise: Promise<CronJob[]> | null = null;
-
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -58,15 +56,9 @@ async function loadCronJobsWithRetry(): Promise<CronJob[]> {
 
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
     try {
-      if (!cronJobsFetchPromise) {
-        cronJobsFetchPromise = apiClient
-          .get<CronJob[]>("/api/automation/cron")
-          .finally(() => {
-            cronJobsFetchPromise = null;
-          });
-      }
-
-      return await cronJobsFetchPromise;
+      // Do not share an in-flight authenticated response across components,
+      // principals, or sessions.
+      return await apiClient.get<CronJob[]>("/api/automation/cron");
     } catch (error) {
       lastError = error;
 
@@ -89,7 +81,18 @@ export default function CronJobsPage() {
   const [sequences, setSequences] = useState<Sequence[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
+  const principal = isAuthenticated && user?.tenant_id && user.user_id
+    ? JSON.stringify([user.tenant_id, user.user_id])
+    : "";
+  // Synchronous render-time principal check prevents an old account response
+  // committing between identity change and the next effect cleanup.
+  const currentPrincipal = useRef(principal);
+  currentPrincipal.current = principal;
+  const jobsRevision = useRef(0);
+  const dependenciesRevision = useRef(0);
+  const [jobsOwner, setJobsOwner] = useState<string | null>(null);
+  const [dependenciesOwner, setDependenciesOwner] = useState<string | null>(null);
   
   // Form State
   const [taskName, setTaskName] = useState("");
@@ -99,55 +102,94 @@ export default function CronJobsPage() {
   const [enabled, setEnabled] = useState(true);
 
   const fetchDependencies = useCallback(async () => {
-    if (!isAuthenticated) return;
+    const requestPrincipal = principal;
+    const revision = ++dependenciesRevision.current;
+    if (!requestPrincipal) {
+      setTasks([]);
+      setSequences([]);
+      setDependenciesOwner(null);
+      return;
+    }
+
+    setDependenciesOwner(null);
     try {
       const [tasksRes, seqsRes] = await Promise.all([
         apiClient.get<Task[]>("/api/tasks"),
-        apiClient.get<Sequence[]>("/api/automation/jobs")
+        apiClient.get<Sequence[]>("/api/automation/jobs"),
       ]);
+      if (currentPrincipal.current !== requestPrincipal ||
+          dependenciesRevision.current !== revision) return;
       setTasks(tasksRes || []);
       setSequences(seqsRes || []);
-    } catch (e) {
-      console.error("Failed to fetch dependencies", e);
+      setDependenciesOwner(requestPrincipal);
+    } catch (error) {
+      if (currentPrincipal.current !== requestPrincipal ||
+          dependenciesRevision.current !== revision) return;
+      setTasks([]);
+      setSequences([]);
+      setDependenciesOwner(null);
+      console.error("Failed to fetch schedule dependencies", error);
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   const fetchJobs = useCallback(async () => {
-    if (!isAuthenticated) {
+    const requestPrincipal = principal;
+    const revision = ++jobsRevision.current;
+    if (!requestPrincipal) {
       setFetchError(false);
       setJobs([]);
+      setJobsOwner(null);
       setLoading(false);
       return;
     }
 
+    setLoading(true);
+    setFetchError(false);
+    setJobsOwner(null);
     try {
-      setLoading(true);
       const res = await loadCronJobsWithRetry();
-      setFetchError(false);
+      if (currentPrincipal.current !== requestPrincipal ||
+          jobsRevision.current !== revision) return;
       setJobs(res);
+      setJobsOwner(requestPrincipal);
     } catch (error) {
+      if (currentPrincipal.current !== requestPrincipal ||
+          jobsRevision.current !== revision) return;
+      setJobs([]);
       setFetchError(true);
-      if (error instanceof ApiError && (error.status === 401 || error.status === 404 || error.status === 429)) {
-        setJobs([]);
-      } else {
+      setJobsOwner(requestPrincipal);
+      if (!(error instanceof ApiError &&
+            (error.status === 401 || error.status === 404 || error.status === 429))) {
         console.error("Failed to fetch cron jobs", error);
       }
     } finally {
-      setLoading(false);
+      if (currentPrincipal.current === requestPrincipal &&
+          jobsRevision.current === revision) {
+        setLoading(false);
+      }
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   useEffect(() => {
-    if (isAuthLoading) {
-      return;
-    }
+    if (isAuthLoading) return;
 
-    fetchJobs();
-    fetchDependencies();
+    void fetchJobs();
+    void fetchDependencies();
+    return () => {
+      // Invalidate any requests still pending when the principal changes
+      // or the workspace unmounts.
+      jobsRevision.current += 1;
+      dependenciesRevision.current += 1;
+    };
   }, [fetchJobs, fetchDependencies, isAuthLoading]);
 
+  const verifiedJobs = jobsOwner === principal && !!principal;
+  const verifiedDependencies = dependenciesOwner === principal && !!principal;
+  const visibleTasks = verifiedDependencies ? tasks : [];
+  const visibleSequences = verifiedDependencies ? sequences : [];
+
   const handleCreateJob = async () => {
-    if (!isAuthenticated) return;
+    if (!principal || !verifiedDependencies) return;
     if (!taskName || !schedule || !targetId) return;
 
     try {
@@ -169,7 +211,7 @@ export default function CronJobsPage() {
   };
 
   const handleToggle = async (id: string, currentEnabled: boolean) => {
-    if (!isAuthenticated) return;
+    if (!principal || !verifiedJobs) return;
     try {
       await apiClient.put(`/api/automation/cron/${id}/toggle`, { enabled: !currentEnabled });
       fetchJobs();
@@ -179,7 +221,7 @@ export default function CronJobsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!isAuthenticated) return;
+    if (!principal || !verifiedJobs) return;
     try {
       await apiClient.delete(`/api/automation/cron/${id}`);
       fetchJobs();
@@ -223,14 +265,14 @@ export default function CronJobsPage() {
             <AutomationListNotice kind="loading" message="Restoring your session..." />
           ) : !isAuthenticated ? (
             <AutomationListNotice kind="authentication" message="Sign in to view scheduled jobs." />
-          ) : loading ? (
+          ) : loading || !verifiedJobs ? (
             <AutomationListNotice kind="loading" message="Loading scheduled jobs from backend..." />
           ) : fetchError ? (
             <AutomationListNotice kind="unavailable" message="Schedules unavailable: the backend could not verify saved schedules." />
           ) : jobs.length === 0 ? (
             <AutomationListNotice kind="empty" message="No cron jobs configured yet." />
           ) : null}
-          {!isAuthLoading && isAuthenticated && !loading && !fetchError && jobs.map((job, index) => (
+          {!isAuthLoading && isAuthenticated && !loading && !fetchError && verifiedJobs && jobs.map((job, index) => (
             <Card className="karen-automation-card" key={job.id || index}>
               <CardHeader>
                  <div className="flex flex-wrap items-start justify-between gap-3">
@@ -271,8 +313,8 @@ export default function CronJobsPage() {
                <div className="space-y-1.5">
                   <Label htmlFor="cron-task">Task or Sequence to Schedule</Label>
                    <Select value={targetId} onValueChange={(val) => {
-                     const selectedSeq = sequences.find(t => t.id === val);
-                     const selectedTask = tasks.find(t => t.id === val);
+                     const selectedSeq = visibleSequences.find(t => t.id === val);
+                     const selectedTask = visibleTasks.find(t => t.id === val);
                      if (selectedSeq) {
                        setTargetId(val);
                        setTaskName(selectedSeq.name || selectedSeq.id);
@@ -289,14 +331,14 @@ export default function CronJobsPage() {
                     <SelectContent>
                       <SelectGroup>
                         <SelectLabel>Sequences</SelectLabel>
-                        {sequences.map(t => (
+                        {visibleSequences.map(t => (
                            <SelectItem key={t.id} value={t.id}>{t.name || t.id}</SelectItem>
                         ))}
                       </SelectGroup>
                       <SelectSeparator />
                       <SelectGroup>
                         <SelectLabel>Tasks</SelectLabel>
-                        {tasks.map(t => (
+                        {visibleTasks.map(t => (
                            <SelectItem key={t.id} value={t.id}>{t.name || t.id}</SelectItem>
                         ))}
                       </SelectGroup>
