@@ -61,6 +61,7 @@ export default function SequencesPage() {
   const jobsRevision = React.useRef(0);
   const tasksRevision = React.useRef(0);
   const [jobsOwner, setJobsOwner] = React.useState<string | null>(null);
+  const [formOwner, setFormOwner] = React.useState(principal);
   const [tasksOwner, setTasksOwner] = React.useState<string | null>(null);
   const [jobs, setJobs] = React.useState<Job[]>([]);
   const [availableTasks, setAvailableTasks] = React.useState<Task[]>([]);
@@ -132,6 +133,7 @@ export default function SequencesPage() {
   }, [isAuthLoading, fetchJobs, fetchTasks]);
 
   React.useEffect(() => {
+    setFormOwner(principal);
     setNewJobTasks([]); setJobName(""); setJobDescription(""); setJobTrigger("Manual Run");
     setEditingConfig(null); setTempInstructions("");
   }, [principal]);
@@ -142,13 +144,14 @@ export default function SequencesPage() {
 
   // State for the task list
   const [newJobTasks, setNewJobTasks] = React.useState<SequenceTask[]>([]);
+  const visibleJobTasks = formOwner === principal ? newJobTasks : [];
 
   // State for the instruction editing dialog
   const [editingConfig, setEditingConfig] = React.useState<{ taskName: string; instructions: string; onSave: (newInstructions: string) => void; } | null>(null);
   const [tempInstructions, setTempInstructions] = React.useState("");
 
   const handleAddTaskToJob = (task: Task) => {
-    if (!verifiedTasks) return;
+    if (!verifiedTasks || formOwner !== principal) return;
     setNewJobTasks([...newJobTasks, { name: task.name, instructions: task.instructions || '', id: task.id }]);
   };
 
@@ -207,7 +210,7 @@ export default function SequencesPage() {
   };
 
   const handleCreateJob = async () => {
-    if (!principal || !verifiedTasks) {
+    if (!principal || !verifiedTasks || formOwner !== principal) {
       setErrorMsg("Sign in to manage jobs.");
       return;
     }
@@ -215,7 +218,7 @@ export default function SequencesPage() {
       alert("Please provide a name for the job.");
       return;
     }
-    if (newJobTasks.length === 0) {
+    if (visibleJobTasks.length === 0) {
       alert("Please add at least one task to the job.");
       return;
     }
@@ -227,7 +230,7 @@ export default function SequencesPage() {
       await apiClient.post('/api/automation/jobs/', {
         name: jobName,
         description: jobDescription,
-        tasks: newJobTasks.map(t => ({ name: t.name, agent: "Configured Agent", instructions: t.instructions })),
+        tasks: visibleJobTasks.map(t => ({ name: t.name, agent: "Configured Agent", instructions: t.instructions })),
         trigger: jobTrigger
       });
       if (principalRef.current !== actionPrincipal) return;
@@ -345,7 +348,7 @@ export default function SequencesPage() {
                     <Input 
                       id="job-name" 
                       placeholder="e.g., Daily Content Pipeline" 
-                      value={jobName}
+                      value={formOwner === principal ? jobName : ""}
                       onChange={(e) => setJobName(e.target.value)}
                     />
                 </div>
@@ -355,7 +358,7 @@ export default function SequencesPage() {
                       id="job-desc" 
                       placeholder="Describe the goal of this job." 
                       rows={2} 
-                      value={jobDescription}
+                      value={formOwner === principal ? jobDescription : ""}
                       onChange={(e) => setJobDescription(e.target.value)}
                     />
                 </div>
@@ -364,17 +367,17 @@ export default function SequencesPage() {
                     <Input 
                       id="job-trigger" 
                       placeholder="Manual Run, Cron, Event..." 
-                      value={jobTrigger}
+                      value={formOwner === principal ? jobTrigger : "Manual Run"}
                       onChange={(e) => setJobTrigger(e.target.value)}
                     />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Workflow Chain (Steps)</Label>
                   <div className="p-3 border rounded-md h-64 overflow-y-auto space-y-2 bg-muted/30">
-                      {newJobTasks.length === 0 ? (
+                      {visibleJobTasks.length === 0 ? (
                           <p className="text-xs text-center text-muted-foreground py-2">No tasks in job. Click &quot;Add Task Step&quot; to begin.</p>
                       ) : (
-                          newJobTasks.map((task, index) => (
+                          visibleJobTasks.map((task, index) => (
                           <div key={`${task.name}-${index}`} className="flex items-center space-x-2 p-2 rounded-md bg-background border">
                               <GripVertical className="h-4 w-4 text-muted-foreground" />
                               <span className="text-sm flex-1 truncate">{task.name}</span>
@@ -439,7 +442,7 @@ export default function SequencesPage() {
                 </div>
               </CardContent>
               <CardFooter>
-                <Button className="w-full" onClick={handleCreateJob} disabled={!principal || !verifiedTasks || newJobTasks.length === 0}>
+                <Button className="w-full" onClick={handleCreateJob} disabled={!principal || !verifiedTasks || formOwner !== principal || visibleJobTasks.length === 0}>
                   <PlusCircle className="mr-2 h-4 w-4" />
                   Save Job Definition
                 </Button>
@@ -458,7 +461,7 @@ export default function SequencesPage() {
       </div>
 
       {/* Instruction Editor Dialog */}
-      <Dialog open={!!editingConfig} onOpenChange={(isOpen) => !isOpen && setEditingConfig(null)}>
+      <Dialog open={formOwner === principal && !!editingConfig} onOpenChange={(isOpen) => !isOpen && setEditingConfig(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Configure Step: <span className="text-primary">{editingConfig?.taskName}</span></DialogTitle>
