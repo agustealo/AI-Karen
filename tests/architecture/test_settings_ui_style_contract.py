@@ -109,3 +109,21 @@ def test_settings_protected_preview_bootstraps_existing_origin_locked_cookie() -
     assert "cookie.name === '_vercel_jwt'" in fixture
     protected_step = flow.split("      - name: Verify authenticated Settings full-page and sheet at five viewports", 1)[1].split("      - name: Reattest deployed provenance", 1)[0]
     assert "VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}" in protected_step
+
+
+def test_settings_browser_privacy_is_enforced_by_playwright_configuration() -> None:
+    config = (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/playwright.config.ts"
+    ).read_text(encoding="utf-8")
+    suite = (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/settings-visual-acceptance.spec.ts"
+    ).read_text(encoding="utf-8")
+    assert "const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'true'" in config
+    assert "  settingsAcceptance;" in config
+    assert "retries: localBenchmark || settingsAcceptance ? 0" in config
+    assert "reporter: settingsAcceptance" in config
+    assert "? [['list']]" in config
+    assert "screenshot: privateBrowserRun ? 'off'" in config
+    assert "trace: privateBrowserRun" in config
+    assert "video: privateBrowserRun" in config
+    assert 'test.use({ trace: "off", screenshot: "off", video: "off"' in suite
