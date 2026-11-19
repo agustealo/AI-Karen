@@ -159,3 +159,47 @@ inspect and sanitize it before any public publication. The Playwright assertion
 receipt explicitly does not prove NeuroVault long-term memory projection.
 Do not mark release acceptance complete merely because the workflow dispatch
 was accepted, skipped, or queued.
+
+
+## KARI OS Automations authenticated five-viewport acceptance
+
+The opt-in `automation-visual-acceptance.spec.ts` is the source-owned live
+browser contract for Tasks, Jobs and Cron. It reuses
+`fixtures/approved-karen-login.ts`, navigates the actual Dashboard controls,
+and requires a real authenticated HTTP 200 JSON list from each of
+`/api/tasks/`, `/api/automation/jobs/`, and `/api/automation/cron`.
+No route interception or synthetic list fixtures are allowed.
+
+Use a dedicated sanitized account with access to the three endpoints and an
+approved, healthy deployment. Example local invocation:
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme/e2e
+KAREN_AUTOMATION_VISUAL_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+npx playwright test automation-visual-acceptance.spec.ts --project=chromium --retries=0
+```
+
+For an approved HTTPS target, omit `KAREN_LOCAL_CHAT_ACCEPTANCE`. The
+existing login fixture rejects credential-bearing URL components and
+unapproved origins. Configure credentials in your trusted local environment,
+never in source control.
+
+Five viewport widths (390, 768, 1024, 1440 and 1920px) are checked in
+dark and light browser color schemes, including viewport/document geometry,
+visible panels, and actual keyboard focus. The test observes real backend
+list responses and allows a verified empty list only after HTTP 200. It does
+not mutate scheduled work, create tasks, or certify backend execution.
+
+Traces, videos and automatic screenshots are disabled because the browser
+enters credentials. Optional screenshots require
+`KAREN_AUTOMATION_SANITIZED_CAPTURE=true` **and** an independently approved
+sanitized identity. Inspect every artifact before distribution. CI source
+checks and a skipped opt-in suite are **not** evidence of a completed real
+browser run. This contract does not yet prove principal-switch stale response
+fencing, backend-disconnect fault injection, visual pixel parity, or
+production deployment revision identity. Those remain separate acceptance
+gates and must be recorded independently.
