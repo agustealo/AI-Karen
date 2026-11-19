@@ -487,7 +487,9 @@ class ChatRuntime:
                 text = await self._execute_memory_write_receipt(request, decision, plan, memory_recall_meta)
                 provider_meta = {"response_source": "memory_persistence", "actual_provider": None, "actual_model": None}
             direct_executor = get_direct_capability_executor()
-            if grounded is None and not self._is_explicit_save_turn(request) and direct_executor.can_handle(decision):
+            if grounded is None and not self._is_explicit_save_turn(request) and (
+                direct_executor.can_handle(decision) or decision.intent == "planner.create"
+            ):
                 resolved_location = RuntimeEvidenceResolver.authorized_semantic_value(
                     decision.cognitive_context,
                     tenant_id=ctx.tenant_id,
@@ -504,7 +506,7 @@ class ChatRuntime:
                     if decision.intent == "time.current" else None
                 )
                 direct_result = (
-                    await self._execute_personal_planner_create(request, plan, meter)
+                    await self._execute_personal_planner_create(request, decision, plan, meter)
                     if decision.intent == "planner.create"
                     else await direct_executor.execute(
                         request=request,
@@ -1195,7 +1197,7 @@ class ChatRuntime:
                     meter,
                     _meta=provider_meta,
                 )
-                if direct_executor.can_handle(decision)
+                if direct_executor.can_handle(decision) or decision.intent == "planner.create"
                 else (
                     self._run_reasoning_stream(
                         request,
@@ -3503,6 +3505,7 @@ class ChatRuntime:
     @staticmethod
     async def _execute_personal_planner_create(
         request: ChatExecutionRequest,
+        decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
     ):
@@ -3554,6 +3557,14 @@ class ChatRuntime:
             return unavailable(
                 "planner_create_disabled",
                 "Personal task creation is disabled by application settings. No task was saved.",
+            )
+        if (
+            decision.is_graph_required
+            or not bool((decision.policy_constraints or {}).get("direct_capability"))
+        ):
+            return unavailable(
+                "planner_create_requires_direct_authority",
+                "The task cannot run through the authorized direct action path. No task was saved.",
             )
         context = request.context
         if (
@@ -3714,7 +3725,7 @@ class ChatRuntime:
             else None
         )
         result = (
-            await self._execute_personal_planner_create(request, plan, meter)
+            await self._execute_personal_planner_create(request, decision, plan, meter)
             if decision.intent == "planner.create"
             else await get_direct_capability_executor().execute(
                 request=request,
