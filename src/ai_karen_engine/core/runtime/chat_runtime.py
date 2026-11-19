@@ -3653,7 +3653,7 @@ class ChatRuntime:
             status=None if is_create else CommitmentStatus.COMPLETED,
             idempotency_key=uuid.uuid5(
                 uuid.NAMESPACE_URL,
-                f"personal-planner-{capability}:{owner.tenant_id}:{owner.owner_id}:"
+                f"personal-planner-{'create' if is_create else 'update'}:{owner.tenant_id}:{owner.owner_id}:"
                 f"{conversation_id}:{supplied_idempotency}",
             ),
             correlation_id=context.correlation_id,
