@@ -491,7 +491,6 @@ class MedusaRunManager:
                 if durable_accepted:
                     raise
 
-
         durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
         if durable is not None:
             raise RunNotCancellableError(
