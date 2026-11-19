@@ -9,7 +9,6 @@ until action execution is moved behind the runtime action authority.
 from __future__ import annotations
 
 import inspect
-import json
 import logging
 import time
 import uuid
@@ -24,6 +23,7 @@ from ai_karen_engine.api_routes.chat.execution_identity import (
     can_execute_copilot_action,
     require_execution_identity,
 )
+from ai_karen_engine.api_routes.chat.runtime import _sse
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
@@ -518,27 +518,9 @@ async def copilot_assist_stream(
     )
 
     async def generate_stream():
-        try:
-            async for chunk in get_chat_runtime().execute_stream(chat_request):
-                yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
-        except Exception as exc:
-            logger.exception(
-                "Copilot assist stream failed",
-                extra={
-                    "correlation_id": correlation_id,
-                    "error_type": type(exc).__name__,
-                },
-            )
-            yield "data: " + json.dumps(
-                {
-                    "type": "error",
-                    "content": "Unable to complete the response.",
-                    "correlation_id": correlation_id,
-                    "metadata": {"error_code": "COPILOT_STREAM_FAILED"},
-                }
-            ) + "\n\n"
-        finally:
-            yield "data: [DONE]\n\n"
+        # Reuse exactly the same terminal and redaction semantics as /api/chat/stream.
+        async for frame in _sse(chat_request):
+            yield frame
 
     return StreamingResponse(
         generate_stream(),
