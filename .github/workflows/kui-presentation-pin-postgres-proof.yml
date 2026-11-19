@@ -110,6 +110,7 @@ jobs:
             src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py
           pytest tests/core/runtime/test_presentation_pin_admission.py \
             tests/core/runtime/test_presentation_pin_repository.py \
+            tests/core/runtime/test_presentation_pin_atomic_receipts.py \
             tests/core/runtime/test_presentation_pin_readback.py -q -rs
           pytest tests/integration/test_presentation_pins_postgres.py -q -rs
 
