@@ -48,6 +48,18 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "requires_live_data": True,
         "allow_llm_only": False,
     },
+    "planner.create": {
+        # A simple personal commitment is not an executable agent task or
+        # recurring automation. Runtime must separately authorize the write,
+        # validate timezone and timing, and obtain a durable receipt.
+        "triggers": ["create a personal task", "add a task to", "create a task to"],
+        "patterns": [
+            r"^(?:please\\s+)?(?:create|add|make)\\s+(?:me\\s+)?(?:a\\s+)?(?:personal\\s+)?(?:task|commitment)\\s+(?:to|for)\\s+.+$",
+        ],
+        "required_capability": "planner.create",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "planner.read": {
         "triggers": ["show my planner", "list my tasks", "show my tasks"],
         "patterns": [
