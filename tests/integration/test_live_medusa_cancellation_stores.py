@@ -291,6 +291,11 @@ async def _cross_process_acceptance(
 
             if scenario == "lost-signal":
                 audit_ref = f"ci-process-audit-{marker}"
+                # Observe the unsignalled Redis state before committing the
+                # durable request: the owning heartbeat may recover immediately
+                # after commit, and that correct recovery must not race this test.
+                shared = await remote_store.get(run_id=run_id, tenant_id=tenant_id)
+                assert shared["status"] == "running"
                 await ledger.mark_cancelling(
                     run_id=run_id,
                     tenant_id=tenant_id,
@@ -298,9 +303,7 @@ async def _cross_process_acceptance(
                     audit_event_ref=audit_ref,
                     source="admin_cancel",
                 )
-                # Redis was never notified by the requester.
-                shared = await remote_store.get(run_id=run_id, tenant_id=tenant_id)
-                assert shared["status"] == "running"
+                # The requester never invokes Redis request_cancel.
                 await _read_worker_event(process, "cancelled", timeout=12)
                 assert await asyncio.wait_for(process.wait(), timeout=8) == 0
                 final = await ledger.get(run_id=run_id, tenant_id=tenant_id)
