@@ -67,7 +67,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest pytest-asyncio "sqlalchemy[asyncio]" \
-            asyncpg psycopg2-binary redis pydantic pydantic-settings \
+            asyncpg "psycopg[binary]" redis pydantic pydantic-settings \
             python-dotenv PyYAML structlog prometheus-client
       - name: Prove durable owner recovery with actual PostgreSQL and Redis
         run: |
