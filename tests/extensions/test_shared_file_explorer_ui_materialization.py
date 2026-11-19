@@ -75,7 +75,10 @@ async def test_file_explorer_materializes_from_validated_canonical_manifest(tmp_
     assert (output / "FileExplorerPage.tsx").read_bytes() == (
         PLUGIN / "ui/FileExplorerPage.tsx"
     ).read_bytes()
-    assert json.loads((output / "manifest.json").read_text())["name"] == "file-explorer"
+    published = json.loads((output / "manifest.json").read_text())
+    assert published["name"] == "file-explorer"
+    assert published["entry"]["entry_file"] == "FileExplorerPage.tsx"
+    assert (output / published["entry"]["entry_file"]).is_file()
     assert result["plugin_id"] == "file-explorer"
 
 
@@ -96,3 +99,27 @@ async def test_file_explorer_ui_not_exposed_when_registry_metadata_invalid(tmp_p
     pipeline.registry = _AuthorizedRegistry(metadata)
     assert await pipeline.discover_ui_plugins() == []
     assert not (tmp_path / "plugin-repo/file-explorer").exists()
+
+
+def test_materialized_file_explorer_is_discovered_by_real_ui_installer(tmp_path):
+    """The published manifest must load through the canonical installer, not just copy."""
+    from ai_karen_engine.extensions.platform.core.registry.ui_installer import (
+        UIInstallerService,
+    )
+
+    target = tmp_path / "plugin-repo" / "file-explorer"
+    target.mkdir(parents=True)
+    manifest = json.loads((PLUGIN / "plugin_manifest.json").read_text(encoding="utf-8"))
+    (target / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (target / manifest["entry"]["entry_file"]).write_bytes(
+        (PLUGIN / "ui" / manifest["entry"]["entry_file"]).read_bytes()
+    )
+    installer = UIInstallerService.__new__(UIInstallerService)
+    installer.plugins_repo_root = tmp_path / "plugin-repo"
+    installer.backup_dir = tmp_path / "backups"
+    installer.installations = {}
+    installer._load_installations()
+    assert "file-explorer" in installer.installations
+    assert installer.installations["file-explorer"].entry_file == (
+        target / "FileExplorerPage.tsx"
+    )

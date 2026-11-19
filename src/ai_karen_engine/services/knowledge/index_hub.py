@@ -58,20 +58,34 @@ class KnowledgeResult:
     conceptual_relationships: List[str] = field(default_factory=list)
 
 
+class KnowledgeBackendUnavailableError(RuntimeError):
+    """The legacy index hub has no configured, authorized retrieval backend."""
+
+
 class IndexHub:
+    """Retired compatibility surface, not a usable document search authority.
+
+    The canonical runtime must supply authorized document evidence through its
+    owned retrieval contracts. Never silently report zero matches or healthy
+    indexing when this compatibility hub has no backing implementation.
+    """
+
     async def search(self, query: KnowledgeQuery) -> List[KnowledgeResult]:
-        return []
+        raise KnowledgeBackendUnavailableError(
+            "Legacy knowledge index unavailable; search was not performed"
+        )
 
     async def get_department_statistics(self) -> Dict[str, Any]:
-        return {
-            "total_indices": 0,
-            "total_sources": 0,
-            "departments": {dept.value: 0 for dept in Department},
-            "teams": {team.value: 0 for team in Team},
-        }
+        raise KnowledgeBackendUnavailableError(
+            "Legacy knowledge index unavailable; statistics were not read"
+        )
 
     async def health_check(self) -> Dict[str, Any]:
-        return {"status": "healthy", "indexed_sources": 0}
+        return {
+            "status": "unavailable",
+            "indexed_sources": None,
+            "reason": "legacy_index_not_configured",
+        }
 
 
 __all__ = [
@@ -81,4 +95,5 @@ __all__ = [
     "KnowledgeQuery",
     "Citation",
     "KnowledgeResult",
+    "KnowledgeBackendUnavailableError",
 ]

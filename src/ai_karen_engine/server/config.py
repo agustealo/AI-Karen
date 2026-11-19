@@ -78,7 +78,6 @@ def _default_extension_require_https() -> bool:
 # - In development/test: provide sensible defaults if missing
 # - In production: do NOT inject insecure defaults; require explicit configuration
 required_env_vars = {
-    "KARI_DUCKDB_PASSWORD": "dev-duckdb-pass",
     "KARI_JOB_ENC_KEY": "MaL42789OGRr0--UUf_RV_kanWzb2tSCd6hU6R-sOZo=",
     "KARI_JOB_SIGNING_KEY": "dev-job-key-456",
     "KARI_MODEL_SIGNING_KEY": "dev-signing-key-1234567890abcdef",

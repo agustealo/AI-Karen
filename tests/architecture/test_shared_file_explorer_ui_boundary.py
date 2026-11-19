@@ -34,5 +34,13 @@ def test_canonical_manifest_registers_materializable_shared_ui():
     assert manifest["capabilities"]["provides_ui"] is True
     assert manifest["ui"]["source_path"] == "ui"
     assert manifest["ui"]["entry_file"] == "FileExplorerPage.tsx"
+    assert manifest["entry"]["entry_file"] == manifest["ui"]["entry_file"]
     assert (PLUGIN / "ui" / manifest["ui"]["entry_file"]).is_file()
     assert manifest["ui"]["menu"][0]["zone"] == "sidebar.plugins"
+
+
+def test_authorized_inventory_failure_preserves_error_and_retry():
+    ui = (PLUGIN / "ui/FileExplorerPage.tsx").read_text(encoding="utf-8")
+    assert "authorized && error &&" in ui
+    assert "authorized && onRefresh &&" in ui
+    assert 'onClick={onRefresh}>Refresh</button>' in ui

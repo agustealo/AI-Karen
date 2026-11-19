@@ -439,8 +439,6 @@ services:
       DB_USER: "${DB_USER:?Set DB_USER to the canonical PostgreSQL user}"
       DB_PASSWORD: "${DATABASE_PASSWORD:?Set DATABASE_PASSWORD in .env for the canonical PostgreSQL identity}"
       DB_NAME: "${DB_NAME:?Set DB_NAME to the canonical PostgreSQL database}"
-      # Enable/disable database services (set to false for faster development)
-      KARI_ENABLE_DUCKDB: "true"  # DuckDB for local analytics
       
       # --- Authentication hardening & monitoring ---
       AUTH_RATE_LIMIT_STORAGE: "redis"

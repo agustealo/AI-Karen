@@ -131,8 +131,10 @@ export function SharedFileExplorer({
   }
 
   if (!authorized || (!loading && inventory === null)) {
-    return <section role="alert" className="rounded-lg border p-6 text-sm text-muted-foreground">
-      File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.
+    return <section role="alert" className="flex flex-col items-start gap-3 rounded-lg border p-6 text-sm text-muted-foreground">
+      <p>File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.</p>
+      {authorized && error && <p className="text-destructive">{error}</p>}
+      {authorized && onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onRefresh}>Refresh</button>}
     </section>;
   }
 

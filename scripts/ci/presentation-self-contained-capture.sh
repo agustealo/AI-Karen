@@ -151,7 +151,6 @@ api_env=(
   -e EXTENSION_SECRET_KEY="${EXTENSION_SECRET}"
   -e EXTENSION_API_KEY="${EXTENSION_SECRET}"
   -e EXTENSION_DEV_BYPASS_ENABLED=false
-  -e KARI_DUCKDB_PASSWORD="$(random_token)"
   -e KARI_JOB_ENC_KEY="YmV0YS1zbW9rZS1qb2ItZW5jLWtleS0zMi1ieXRlISE="
   -e KARI_JOB_SIGNING_KEY="$(random_token)$(random_token)"
   -e KARI_MODEL_SIGNING_KEY="$(random_token)$(random_token)"
