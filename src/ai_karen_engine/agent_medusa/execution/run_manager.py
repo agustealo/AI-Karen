@@ -408,6 +408,26 @@ class MedusaRunManager:
 
         if local_task is not None and local_run is not None:
             requested_at = datetime.now(timezone.utc)
+            if local_run.durable_registered:
+                try:
+                    await self._durable_ledger.mark_cancelling(
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        requested_at=requested_at,
+                        audit_event_ref=audit_event_ref,
+                        source="admin_cancel" if audit_event_ref else "runtime",
+                    )
+                except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
+                    logger.exception(
+                        "Medusa durable cancellation transition failed",
+                        extra={"run_id": run_id, "tenant_id": tenant_id},
+                    )
+                    if self._settings.durable_run_ledger_required:
+                        async with self._lock:
+                            current = self._runs.get(run_id)
+                            if current is local_run:
+                                current.status = ExecutionRunStatus.RUNNING
+                        raise
             if local_run.shared_registered:
                 try:
                     await self._distributed_store.request_cancel(
@@ -421,26 +441,6 @@ class MedusaRunManager:
                     )
                 except DistributedRunNotCancellable:
                     pass
-            if local_run.durable_registered:
-                try:
-                    await self._durable_ledger.mark_cancelling(
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                        requested_at=requested_at,
-                        audit_event_ref=audit_event_ref,
-                        source="admin_cancel" if audit_event_ref else "runtime",
-                    )
-                except DurableRunLedgerUnavailable:
-                    logger.exception(
-                        "Medusa durable cancellation transition failed",
-                        extra={"run_id": run_id, "tenant_id": tenant_id},
-                    )
-                    if self._settings.durable_run_ledger_required:
-                        async with self._lock:
-                            current = self._runs.get(run_id)
-                            if current is local_run:
-                                current.status = ExecutionRunStatus.RUNNING
-                        raise
             local_task.cancel()
             return await self.get(run_id=run_id, tenant_id=tenant_id)
 
@@ -632,11 +632,21 @@ class MedusaRunManager:
                                 requested_at=now,
                                 source="runtime",
                             )
-                        except DurableRunLedgerUnavailable:
+                        except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
                             logger.exception(
                                 "Medusa remote cancellation could not reach durable ledger",
                                 extra={"run_id": run.run_id},
                             )
+                            if self._settings.durable_run_ledger_required:
+                                async with self._lock:
+                                    current = self._runs.get(run.run_id)
+                                    if (
+                                        current is run
+                                        and current.status
+                                        is ExecutionRunStatus.CANCELLING
+                                    ):
+                                        current.status = ExecutionRunStatus.RUNNING
+                                continue
                     task.cancel()
                     return
         except asyncio.CancelledError:
