@@ -81,6 +81,10 @@
       "revision": "a7056f505a4a8ca72d8b5fb1440071d6f1a35739",
       "license": "CC-BY-4.0",
       "license_url": "https://huggingface.co/kyutai/pocket-tts-without-voice-cloning",
+      "download_methods": [
+        "hf_hub",
+        "direct_https"
+      ],
       "include_patterns": [
         "languages/english_18m_refl_2026-10/model.safetensors",
         "languages/english_18m_refl_2026-10/tokenizer.model",

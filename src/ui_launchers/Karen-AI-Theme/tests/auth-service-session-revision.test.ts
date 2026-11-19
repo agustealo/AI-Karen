@@ -83,6 +83,65 @@ describe("canonical auth service session generation", () => {
     expect(localStorage.getItem("access_token")).toBe("new-token");
   });
 
+  it("persists both rotated credentials for successive refresh requests", async () => {
+    setPriorCredentials();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        access_token: "first-access",
+        refresh_token: "first-rotated-refresh",
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        access_token: "second-access",
+        refresh_token: "second-rotated-refresh",
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authService.refreshToken()).resolves.toBe("first-access");
+    await expect(authService.refreshToken()).resolves.toBe("second-access");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).refresh_token)
+      .toBe("previous-refresh");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).refresh_token)
+      .toBe("first-rotated-refresh");
+    expect(localStorage.getItem("access_token")).toBe("second-access");
+    expect(localStorage.getItem("refresh_token")).toBe("second-rotated-refresh");
+  });
+
+  it("rejects incomplete token rotations without preserving stale credentials", async () => {
+    setPriorCredentials();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      access_token: "new-access",
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(authService.refreshToken()).rejects.toThrow(
+      "Invalid refresh response: missing or unrotated token pair",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("access_token")).toBeNull();
+    expect(localStorage.getItem("refresh_token")).toBeNull();
+  });
+
+  it("does not erase a newer token pair after a competing refresh completes", async () => {
+    setPriorCredentials();
+    const refresh = pendingResponse();
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(refresh.promise));
+
+    const staleRefresh = authService.refreshToken();
+    await Promise.resolve();
+    localStorage.setItem("access_token", "more-recent-access");
+    localStorage.setItem("refresh_token", "more-recent-refresh");
+    refresh.resolve(new Response(JSON.stringify({
+      access_token: "outdated-access",
+      refresh_token: "outdated-rotated-refresh",
+    }), { status: 200 }));
+
+    await expect(staleRefresh).resolves.toBe("");
+    expect(localStorage.getItem("access_token")).toBe("more-recent-access");
+    expect(localStorage.getItem("refresh_token")).toBe("more-recent-refresh");
+  });
+
   it("does not clear a new login when an earlier logout finally completes", async () => {
     setPriorCredentials();
     const logout = pendingResponse();

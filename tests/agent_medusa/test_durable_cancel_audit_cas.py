@@ -110,7 +110,7 @@ async def test_cancellation_requires_exactly_one_scoped_update(
     sql, params = postgres.session.updates[0]
     assert "tenant_id = CAST(:tenant_id AS uuid)" in sql
     assert "audit_event_ref IS NULL" in sql
-    assert "audit_event_ref = :audit_event_ref" in sql
+    assert "audit_event_ref = CAST(:audit_event_ref AS text)" in sql
     assert params["tenant_id"] == "11111111-1111-1111-1111-111111111111"
     assert params["audit_event_ref"] == "audit-1"
     assert transitions == []
@@ -142,6 +142,6 @@ async def test_same_reference_or_no_new_reference_preserves_idempotency(
     if postgres.session.updates:
         sql, params = postgres.session.updates[0]
         assert "tenant_id = CAST(:tenant_id AS uuid)" in sql
-        assert "COALESCE(audit_event_ref, :audit_event_ref)" in sql
+        assert "COALESCE(audit_event_ref, CAST(:audit_event_ref AS text))" in sql
         assert params["audit_event_ref"] == incoming_ref
     assert len(transitions) == (1 if status == "running" else 0)

@@ -38,7 +38,14 @@ from ai_karen_engine.api_routes.chat.execution_identity import (
 from ai_karen_engine.auth.auth_service import get_auth_service, user_account_to_dict
 from ai_karen_engine.auth.cookie_manager import get_cookie_manager
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.api_routes.chat.runtime import (
+    _sse,
+    _terminalized_chat_json_events,
+)
+from ai_karen_engine.core.runtime.chat_runtime_contract import (
+    ChatExecutionRequest,
+    ChatStreamEventType,
+)
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     DegradedResponse,
     EmergencyFallbackResponse,
@@ -226,15 +233,19 @@ def _build_stream_request(
 
 
 async def _sse_chunks(runtime_request: ChatExecutionRequest):
-    async for chunk in get_chat_runtime().execute_stream(runtime_request):
-        yield f"data: {json.dumps(chunk.to_sse_payload())}\n\n"
-    yield "data: [DONE]\n\n"
+    """Legacy SSE is only a wire alias of the canonical terminalized transport."""
+    async for frame in _sse(runtime_request):
+        yield frame
 
 
 async def _ndjson_chunks(runtime_request: ChatExecutionRequest):
-    async for chunk in get_chat_runtime().execute_stream(runtime_request):
-        yield json.dumps(chunk.to_sse_payload()) + "\n"
-    yield json.dumps({"type": "done"}) + "\n"
+    """NDJSON never claims a successful done after a runtime ERROR."""
+    last_event_type = None
+    async for event_type, packet in _terminalized_chat_json_events(runtime_request):
+        last_event_type = event_type
+        yield packet + "\n"
+    if last_event_type == ChatStreamEventType.COMPLETE:
+        yield json.dumps({"type": "done"}) + "\n"
 
 
 def _retired_stream_control(session_id: Optional[str] = None) -> JSONResponse:
@@ -348,8 +359,10 @@ async def websocket_chat_endpoint(
                     metadata={"transport": "websocket"},
                 )
 
-                async for chunk in get_chat_runtime().execute_stream(runtime_request):
-                    await websocket.send_text(json.dumps(chunk.to_sse_payload()))
+                async for _event_type, packet in _terminalized_chat_json_events(
+                    runtime_request
+                ):
+                    await websocket.send_text(packet)
 
             except WebSocketDisconnect:
                 raise

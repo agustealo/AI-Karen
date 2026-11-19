@@ -200,10 +200,13 @@ def _discover(
                     raise DirectHttpsDownloadError("Model artifact size is missing or exceeds limit")
                 lfs = item.get("lfs")
                 oid = lfs.get("oid") if isinstance(lfs, dict) else None
-                if oid is not None and (
-                    not isinstance(oid, str) or re.fullmatch(r"[0-9a-f]{64}", oid) is None
-                ):
-                    raise DirectHttpsDownloadError("Model artifact digest is invalid")
+                if oid is not None:
+                    if isinstance(oid, str) and (oid == "*" * len(oid) or set(oid) == {"*"}):
+                        raise DirectHttpsDownloadError(
+                            "Upstream model access denied; check account and license terms"
+                        )
+                    if not isinstance(oid, str) or re.fullmatch(r"[0-9a-f]{64}", oid) is None:
+                        raise DirectHttpsDownloadError("Model artifact digest is invalid")
                 artifact = {"path": path, "size": size, "sha256": oid}
                 if path in candidates and candidates[path] != artifact:
                     raise DirectHttpsDownloadError("Conflicting pinned model file metadata")

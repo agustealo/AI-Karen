@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "supabase/migrations/*kui_presentation_pin_references.sql"
+      - "supabase/migrations/*kui_pin_mutation_receipts.sql"
       - "src/ai_karen_engine/core/runtime/presentation_pin_*.py"
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"
@@ -16,6 +17,7 @@ on:
       - main
     paths:
       - "supabase/migrations/*kui_presentation_pin_references.sql"
+      - "supabase/migrations/*kui_pin_mutation_receipts.sql"
       - "src/ai_karen_engine/core/runtime/presentation_pin_*.py"
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"

@@ -334,3 +334,100 @@ This test **does not** establish a real-host pass until explicitly executed
 against that host. It also does not prove controlled old-session response
 delivery after a new login, cross-tab logout races, or deployment revision
 provenance. Those remain separate release acceptance gates.
+
+
+## Plugins & Tools: authenticated five-viewport acceptance
+
+The opt-in `plugins-visual-acceptance.spec.ts` verifies the **merged** Kari OS
+Plugins & Tools overview against the *real* authenticated extension registry.
+The browser records `GET /api/extensions/list` during login, validates its
+contract and compares displayed registry counts and card totals with that exact
+response. It does not infer active execution, fake connection readiness, or
+mutate any plugin. Lifecycle mutations require separate authorized acceptance.
+
+From `src/ui_launchers/Karen-AI-Theme/e2e`, with an approved running local
+backend/frontend and a dedicated sanitized account:
+
+```bash
+KAREN_PLUGINS_VISUAL_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+npx playwright test plugins-visual-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+On an approved HTTPS host, omit the local-acceptance flag.
+The sign-in fixture rejects non-loopback HTTP and credential-bearing URLs.
+The test checks 390, 768, 1024, 1440 and 1920px geometry, shared Kari OS
+tokens, visible plugin counts and keyboard-reachable installation navigation.
+It does **not** click plugin lifecycle buttons or claim backend permission
+verification from button appearance alone.
+
+Video, traces and automatic screenshots are disabled. Optional evidence
+requires `KAREN_PLUGINS_SANITIZED_CAPTURE=true` and a dedicated sanitized
+account whose UI contains no personal data or secrets. Review screenshots
+manually against the approved design reference. A CI run that skips this
+opt-in suite is not browser or release acceptance.
+
+
+### Protected Settings acceptance on reviewed main
+
+The existing **KAREN Browser Acceptance** GitHub Actions workflow also offers
+the operator-triggered `settings` scenario. Dispatch it on `main`, with
+`target_sha` set to that same reviewed, current 40-character main commit and
+`deployment_target` set to `preview` or `production`. Supply the approved,
+**immutable HTTPS Vercel deployment URL** in the protected environment variable
+`KAREN_SETTINGS_ACCEPTANCE_URL`. The environment
+`karen-sanitized-browser-acceptance` must provide authorized
+`KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` secrets and the canonical
+Vercel provenance credentials/IDs used by other protected acceptance jobs.
+
+The job fails closed before browser setup if the Git ref, checked-out SHA,
+independent Vercel Git provenance, live deployment revision, or environment
+configuration does not match. It attests both platform and live deployment
+identity again after the browser run. The acceptance suite is opted in only
+for that job; no screenshots, traces, video, report uploads, fake backend
+data, or browser test retries are permitted. An absent deployment, unconfigured
+secret, Vercel quota block or stale main SHA **fails or blocks acceptance**;
+it never counts as a browser pass. Protect environment approvals and never
+copy real account values into workflow inputs or logs.
+
+## Exact-head local UI acceptance runner
+
+The repository-owned `scripts/ci/kui-local-acceptance.sh` consolidates the
+existing backend, frontend and Plugins & Tools browser contracts. Unlike a
+passing GitHub source workflow, it can run the **real** authenticated plugin
+catalog test on the approved KAREN host. It does not deploy services, install
+plugins, change RBAC permissions, or synthesize plugin state.
+
+From a **clean checkout of the intended 40-character commit** at repository
+root, with KAREN running and a dedicated sanitized account already provisioned:
+
+```bash
+RUN_BROWSER=1 \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+bash scripts/ci/kui-local-acceptance.sh "$(git rev-parse HEAD)"
+```
+
+Omit `RUN_BROWSER=1` for source-only checks. That mode explicitly records
+`NOT_RUN plugins_live_browser`, never a real-browser pass. Authenticated
+Playwright results require one **non-skipped passing** Plugins & Tools test;
+other outcomes fail closed.
+
+The runner writes owner-private logs and Playwright JSON outside the checkout
+under `${XDG_STATE_HOME:-$HOME/.local/state}/ai-karen/kui-acceptance/<sha>/`,
+or the explicit `KAREN_KUI_ACCEPTANCE_OUTPUT_DIR`. Treat reports as
+sensitive because they may contain sanitized account metadata. Screenshot
+attachments remain opt-in via `KAREN_PLUGINS_SANITIZED_CAPTURE=true` and
+`KAREN_SANITIZED_ACCOUNT=true` on an independently approved sanitized host.
+Never publish local Playwright artifacts without privacy review.
+
+A runner pass verifies backend/frontend source checks and live plugin layout
+contracts at five viewports. It does **not** prove screenshot pixel parity,
+real plugin enable/disable operations, production deployment revision, or a
+consumer-ready release. Those require their own witnessed evidence.

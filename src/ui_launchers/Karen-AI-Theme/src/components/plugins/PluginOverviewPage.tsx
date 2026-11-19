@@ -23,6 +23,7 @@ import {
   EyeOff,
   Github,
   HelpCircle,
+  Info,
   Loader2,
   MessageSquare,
   PlugZap,
@@ -96,8 +97,18 @@ type PluginOperation =
   | 'remove-ui'
   | 'restore-ui'
   | 'retry-registration'
+  | 'request-enable-approval'
+  | 'request-disable-approval'
   | 'enable-plugin'
   | 'disable-plugin';
+
+type LifecycleAction = 'enable' | 'disable';
+
+type PendingLifecycleApproval = {
+  action: LifecycleAction;
+  approvalId: string;
+  expiresAt: string;
+};
 
 type PluginOperationResult = {
   success: boolean;
@@ -546,6 +557,8 @@ function PluginHealthCard({
   const [showModelSetup, setShowModelSetup] = useState(false);
   const [operationOverride, setOperationOverride] =
     useState<OperationOverrideState>({});
+  const [pendingLifecycleApproval, setPendingLifecycleApproval] =
+    useState<PendingLifecycleApproval | null>(null);
 
   const normalizedPluginId = useMemo(
     () => normalizePluginId(pluginId),
@@ -615,6 +628,10 @@ function PluginHealthCard({
   const isRemoving = operationInProgress === 'remove-ui';
   const isRestoring = operationInProgress === 'restore-ui';
   const isRegistering = operationInProgress === 'retry-registration';
+  const isRequestingEnableApproval =
+    operationInProgress === 'request-enable-approval';
+  const isRequestingDisableApproval =
+    operationInProgress === 'request-disable-approval';
   const isEnabling = operationInProgress === 'enable-plugin';
   const isDisabling = operationInProgress === 'disable-plugin';
 
@@ -757,41 +774,84 @@ function PluginHealthCard({
     });
   }, [refreshPluginSurfaces, runOperation]);
 
-  const handleEnablePlugin = useCallback(async () => {
-    await runOperation('enable-plugin', async () => {
-      await postPluginOperation(
-        `/api/extensions/${pluginId}/load`,
-        undefined,
-        `Failed to enable plugin ${pluginId}.`,
-      );
+  /*
+   * Lifecycle mutations follow the backend's governed three-step contract:
+   * request a fresh actor-bound approval receipt, record the human decision,
+   * then execute that receipt exactly once. The legacy /load and /unload
+   * ingress refuses every unapproved call, so this page never calls it.
+   */
+  const requestLifecycleApproval = useCallback(
+    async (action: LifecycleAction) => {
+      await runOperation(`request-${action}-approval`, async () => {
+        const response = await apiClient.post(
+          `/api/plugins/${pluginId}/lifecycle/${action}/approval`,
+        );
+        const record =
+          response && typeof response === 'object'
+            ? (response as Record<string, unknown>)
+            : null;
+        const approvalId = cleanString(record?.approval_id);
+        if (!approvalId || record?.status !== 'pending') {
+          throw new Error(
+            `Lifecycle ${action} consent did not return a pending approval receipt.`,
+          );
+        }
+        setPendingLifecycleApproval({
+          action,
+          approvalId,
+          expiresAt: cleanString(record?.expires_at),
+        });
+      });
+    },
+    [pluginId, runOperation],
+  );
 
-      const registeredAfterRefresh = await refreshPluginSurfaces();
+  const confirmLifecycleApproval = useCallback(async () => {
+    if (!pendingLifecycleApproval) {
+      return;
+    }
+    const { action, approvalId } = pendingLifecycleApproval;
+    await runOperation(
+      action === 'enable' ? 'enable-plugin' : 'disable-plugin',
+      async () => {
+        await apiClient.post(`/api/approvals/${approvalId}/decision`, {
+          decision: 'approved',
+        });
 
-      return {
-        backendStatusDetail: 'enabled',
-        uiInstallStatus: 'installed',
-        uiRegistrationStatus: registeredAfterRefresh ? 'registered' : 'not_registered',
-      };
-    });
-  }, [pluginId, postPluginOperation, refreshPluginSurfaces, runOperation]);
+        const receipt = await apiClient.post(
+          `/api/plugins/${pluginId}/lifecycle/${action}/execute`,
+          { approval_id: approvalId },
+        );
+        const receiptRecord =
+          receipt && typeof receipt === 'object'
+            ? (receipt as Record<string, unknown>)
+            : null;
+        if (receiptRecord?.status !== 'verified_committed') {
+          throw new Error(
+            `Plugin ${action} did not commit a verified execution receipt.`,
+          );
+        }
 
-  const handleDisablePlugin = useCallback(async () => {
-    await runOperation('disable-plugin', async () => {
-      await postPluginOperation(
-        `/api/extensions/${pluginId}/unload`,
-        undefined,
-        `Failed to disable plugin ${pluginId}.`,
-      );
+        setPendingLifecycleApproval(null);
+        const registeredAfterRefresh = await refreshPluginSurfaces();
 
-      const registeredAfterRefresh = await refreshPluginSurfaces();
+        return {
+          backendStatusDetail: action === 'enable' ? 'enabled' : 'disabled',
+          uiInstallStatus: 'installed',
+          uiRegistrationStatus: registeredAfterRefresh
+            ? 'registered'
+            : 'not_registered',
+        };
+      },
+    );
+  }, [pendingLifecycleApproval, pluginId, refreshPluginSurfaces, runOperation]);
 
-      return {
-        backendStatusDetail: 'disabled',
-        uiInstallStatus: 'installed',
-        uiRegistrationStatus: registeredAfterRefresh ? 'registered' : 'not_registered',
-      };
-    });
-  }, [pluginId, postPluginOperation, refreshPluginSurfaces, runOperation]);
+  const cancelLifecycleApproval = useCallback(() => {
+    if (isOperationInProgress) {
+      return;
+    }
+    setPendingLifecycleApproval(null);
+  }, [isOperationInProgress]);
 
   return (
     <article className="kari-card flex h-full min-w-0 flex-col gap-4 p-4 sm:p-5" data-testid="plugin-integration-card">
@@ -902,6 +962,44 @@ function PluginHealthCard({
         </Alert>
       )}
 
+      {pendingLifecycleApproval && (
+        <section
+          aria-label={`Confirm plugin ${pendingLifecycleApproval.action}`}
+          className="rounded-lg border border-primary/50 bg-muted/40 p-3 space-y-2"
+        >
+          <p className="text-xs font-semibold">
+            Confirm {pendingLifecycleApproval.action} for {displayName}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            This records your decision and executes the approved lifecycle
+            action exactly once in this session.
+            {pendingLifecycleApproval.expiresAt &&
+              ` Approval expires ${pendingLifecycleApproval.expiresAt}.`}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              disabled={isOperationInProgress}
+              onClick={() => void confirmLifecycleApproval()}
+            >
+              {isEnabling || isDisabling
+                ? `${pendingLifecycleApproval.action === 'enable' ? 'Enabling' : 'Disabling'}...`
+                : `Confirm ${pendingLifecycleApproval.action}`}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={isOperationInProgress}
+              onClick={cancelLifecycleApproval}
+            >
+              Cancel
+            </Button>
+          </div>
+        </section>
+      )}
+
       <div className="mt-auto flex flex-wrap gap-2 border-t border-border/60 pt-4">
         {supportsVoiceOutput && (
           <Button type="button" size="sm" variant="outline"
@@ -969,32 +1067,47 @@ function PluginHealthCard({
           </Button>
         )}
 
-        {!isCommunicationChannel && health.backendState !== 'error' && (
-          <>
-            {isBackendActiveState && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void handleDisablePlugin()}
-                disabled={isOperationInProgress}
-              >
-                {isDisabling ? 'Disabling...' : 'Disable'}
-              </Button>
-            )}
+        {!isCommunicationChannel &&
+          !supportsVoiceOutput &&
+          health.backendState !== 'error' && (
+            <>
+              {isBackendActiveState && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void requestLifecycleApproval('disable')}
+                  disabled={isOperationInProgress}
+                >
+                  {isRequestingDisableApproval || isDisabling
+                    ? 'Disabling...'
+                    : 'Disable'}
+                </Button>
+              )}
 
-            {!isBackendActiveState && health.backendState !== 'error' && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void handleEnablePlugin()}
-                disabled={isOperationInProgress}
-              >
-                {isEnabling ? 'Enabling...' : 'Enable'}
-              </Button>
-            )}
-          </>
+              {!isBackendActiveState && health.backendState !== 'error' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void requestLifecycleApproval('enable')}
+                  disabled={isOperationInProgress}
+                >
+                  {isRequestingEnableApproval || isEnabling
+                    ? 'Enabling...'
+                    : 'Enable'}
+                </Button>
+              )}
+            </>
+          )}
+
+        {supportsVoiceOutput && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Info className="h-3 w-3" aria-hidden={true} />
+            {isBackendActiveState
+              ? 'Enabled by install opt-in; no enable action is required here.'
+              : 'Voice plugin lifecycle requires the dedicated voice authority; it cannot be enabled from this page.'}
+          </div>
         )}
 
         {hasUiCapabilities && health.backendState !== 'uninstalled' && uiInstallStatus === 'installed' && (
