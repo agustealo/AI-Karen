@@ -60,6 +60,19 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "requires_live_data": True,
         "allow_llm_only": False,
     },
+    "planner.update": {
+        # Completion is a scoped planner mutation, not an automation or
+        # LLM-only acknowledgement. Runtime must verify task ID, revision,
+        # action identity, owner and committed persistence receipt.
+        "triggers": ["complete task", "complete my task", "mark task", "finish task"],
+        "patterns": [
+            r"^(?:please\s+)?(?:complete|finish|mark(?:\s+as\s+completed|\s+completed)?)"
+            r"\s+(?:my\s+)?(?:personal\s+)?(?:task|commitment)\s+.+$",
+        ],
+        "required_capability": "planner.update",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "planner.read": {
         "triggers": ["show my planner", "list my tasks", "show my tasks"],
         "patterns": [
