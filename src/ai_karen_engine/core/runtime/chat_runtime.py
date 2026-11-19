@@ -3548,6 +3548,13 @@ class ChatRuntime:
                 latency_ms=(time.perf_counter() - started) * 1000.0,
             )
 
+        from ai_karen_engine.server.config import settings
+
+        if not settings.enable_personal_planner_write_api:
+            return unavailable(
+                "planner_create_disabled",
+                "Personal task creation is disabled by application settings. No task was saved.",
+            )
         context = request.context
         if (
             "planner.create" not in set(plan.allowed_capabilities)
