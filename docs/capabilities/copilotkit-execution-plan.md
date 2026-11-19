@@ -845,3 +845,9 @@ completion, content-size or presentation validation to silence the UI.
 ## KCON-471: Independent OS worker and stale lease recovery proof (2026-11-19, SOURCE_ONLY)
 
 - Extends the existing real PostgreSQL/Redis integration test, without adding a runtime service or duplicating manager ownership. The requester and owning Medusa runtime run in separate Python PIDs, exercising a durable-only cancellation, owner heartbeat retry, real task `CancelledError`, and verified SQL transition/audit readback. A second child is killed and its lease allowed to expire; Redis cancellation is refused without a live valid owner, and replacing the lease claim with a mismatching worker value also fails closed. Actual worker restarts and target-host RBAC/RLS acceptance remain NOT_RUN. CI evidence is required before merging; do not claim a recovered killed task.
+
+## KCON-471: Real PostgreSQL lock-stall lease renewal (2026-11-19, SOURCE_CANDIDATE)
+
+- Extends the single canonical Medusa real-store acceptance suite using only the existing run manager, durable PostgreSQL ledger, Redis live claims and disposable migrated CI services.
+- A PostgreSQL `ACCESS EXCLUSIVE` lock blocks the owner's durable recovery lookup for more than one configured Redis lease TTL. The test checks real lease TTL remains positive throughout, prevents timeout-manufactured task cancellation, and checks original tenant-scoped cancellation/audit history after releasing the lock.
+- SQL lock contention is not a proof of all PostgreSQL outages or pool exhaustion; a killed task is not restored by process restart. This slice remains SOURCE_CANDIDATE until its new exact-head real-store and quality checks pass; target-host RBAC/RLS and signed-in audit readback remain NOT_RUN.
