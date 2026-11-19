@@ -53,7 +53,16 @@ type SequenceTask = {
  * @description Page for creating and managing multi-step Jobs (formerly Sequences) via /api/automation/jobs.
  */
 export default function SequencesPage() {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
+  const principal = isAuthenticated && user?.tenant_id && user.user_id
+    ? JSON.stringify([user.tenant_id, user.user_id]) : "";
+  const principalRef = React.useRef(principal);
+  principalRef.current = principal;
+  const jobsRevision = React.useRef(0);
+  const tasksRevision = React.useRef(0);
+  const [jobsOwner, setJobsOwner] = React.useState<string | null>(null);
+  const [formOwner, setFormOwner] = React.useState(principal);
+  const [tasksOwner, setTasksOwner] = React.useState<string | null>(null);
   const [jobs, setJobs] = React.useState<Job[]>([]);
   const [availableTasks, setAvailableTasks] = React.useState<Task[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -67,66 +76,82 @@ export default function SequencesPage() {
   const [jobTrigger, setJobTrigger] = React.useState("Manual Run");
 
   const fetchJobs = useCallback(async () => {
-    if (!isAuthenticated) {
-      setJobsFetchError(false);
-      setJobs([]);
-      setErrorMsg("Sign in to manage jobs.");
-      setIsLoading(false);
+    const owner = principal;
+    if (principalRef.current !== owner) return;
+    const revision = ++jobsRevision.current;
+    if (!owner) {
+      setJobs([]); setJobsOwner(null); setJobsFetchError(false);
+      setErrorMsg("Sign in to manage jobs."); setIsLoading(false);
       return;
     }
-
-    setIsLoading(true);
-    setJobsFetchError(false);
-    setErrorMsg("");
+    setIsLoading(true); setJobsOwner(null); setJobsFetchError(false); setErrorMsg("");
     try {
-      const { apiClient } = await import('@/lib/api');
-      const data: Job[] = await apiClient.get<Job[]>('/api/automation/jobs/');
-      setJobsFetchError(false);
-      setJobs(data || []);
-    } catch (err) {
-      setJobsFetchError(true);
-      console.error(err);
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch jobs.');
+      const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== owner || jobsRevision.current !== revision) return;
+      const data = await apiClient.get<Job[]>("/api/automation/jobs/");
+      if (principalRef.current !== owner || jobsRevision.current !== revision) return;
+      if (!Array.isArray(data)) throw new Error("Invalid job list from backend.");
+      setJobs(data); setJobsOwner(owner);
+    } catch (error) {
+      if (principalRef.current !== owner || jobsRevision.current !== revision) return;
+      setJobs([]); setJobsOwner(owner); setJobsFetchError(true);
+      setErrorMsg(error instanceof Error ? error.message : "Failed to fetch jobs.");
     } finally {
-      setIsLoading(false);
+      if (principalRef.current === owner && jobsRevision.current === revision) setIsLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   const fetchTasks = useCallback(async () => {
-    if (!isAuthenticated) {
-      setAvailableTasks([]);
-      setIsTasksLoading(false);
+    const owner = principal;
+    if (principalRef.current !== owner) return;
+    const revision = ++tasksRevision.current;
+    if (!owner) {
+      setAvailableTasks([]); setTasksOwner(null); setIsTasksLoading(false);
       return;
     }
-
-    setIsTasksLoading(true);
+    setIsTasksLoading(true); setTasksOwner(null);
     try {
-      const { apiClient } = await import('@/lib/api');
-      const data: Task[] = await apiClient.get<Task[]>('/api/tasks/');
-      setAvailableTasks(data || []);
-    } catch (err) {
-      console.error("Failed to fetch tasks for sequences:", err);
+      const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== owner || tasksRevision.current !== revision) return;
+      const data = await apiClient.get<Task[]>("/api/tasks/");
+      if (principalRef.current !== owner || tasksRevision.current !== revision) return;
+      if (!Array.isArray(data)) throw new Error("Invalid task list from backend.");
+      setAvailableTasks(data); setTasksOwner(owner);
+    } catch (error) {
+      if (principalRef.current !== owner || tasksRevision.current !== revision) return;
+      setAvailableTasks([]); setTasksOwner(null);
+      console.error("Failed to fetch tasks for sequences", error);
     } finally {
-      setIsTasksLoading(false);
+      if (principalRef.current === owner && tasksRevision.current === revision) setIsTasksLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   React.useEffect(() => {
-    if (isAuthLoading) {
-      return;
-    }
-    fetchJobs();
-    fetchTasks();
-  }, [isAuthenticated, isAuthLoading, fetchJobs, fetchTasks]);
+    if (isAuthLoading) return;
+    void fetchJobs(); void fetchTasks();
+    return () => { jobsRevision.current += 1; tasksRevision.current += 1; };
+  }, [isAuthLoading, fetchJobs, fetchTasks]);
+
+  React.useEffect(() => {
+    setFormOwner(principal);
+    setNewJobTasks([]); setJobName(""); setJobDescription(""); setJobTrigger("Manual Run");
+    setEditingConfig(null); setTempInstructions("");
+  }, [principal]);
+
+  const verifiedJobs = !!principal && jobsOwner === principal;
+  const verifiedTasks = !!principal && tasksOwner === principal;
+  const visibleTasks = verifiedTasks ? availableTasks : [];
 
   // State for the task list
   const [newJobTasks, setNewJobTasks] = React.useState<SequenceTask[]>([]);
+  const visibleJobTasks = formOwner === principal ? newJobTasks : [];
 
   // State for the instruction editing dialog
   const [editingConfig, setEditingConfig] = React.useState<{ taskName: string; instructions: string; onSave: (newInstructions: string) => void; } | null>(null);
   const [tempInstructions, setTempInstructions] = React.useState("");
 
   const handleAddTaskToJob = (task: Task) => {
+    if (!verifiedTasks || formOwner !== principal) return;
     setNewJobTasks([...newJobTasks, { name: task.name, instructions: task.instructions || '', id: task.id }]);
   };
 
@@ -149,37 +174,45 @@ export default function SequencesPage() {
   };
 
   const handleDeleteJob = async (id: string) => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedJobs) {
       setErrorMsg("Sign in to manage jobs.");
       return;
     }
     if (!confirm("Are you sure you want to delete this job?")) return;
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.delete(`/api/automation/jobs/${id}`);
-      fetchJobs();
+      if (principalRef.current !== actionPrincipal) return;
+      void fetchJobs();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to delete job: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
   const handleExecuteJob = async (id: string) => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedJobs) {
       setErrorMsg("Sign in to manage jobs.");
       return;
     }
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.post(`/api/automation/jobs/${id}/execute`, {});
+      if (principalRef.current !== actionPrincipal) return;
       alert("Job execution started.");
       fetchJobs();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to execute job: " + (err as Error).message);
     }
   };
 
   const handleCreateJob = async () => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedTasks || formOwner !== principal) {
       setErrorMsg("Sign in to manage jobs.");
       return;
     }
@@ -187,19 +220,22 @@ export default function SequencesPage() {
       alert("Please provide a name for the job.");
       return;
     }
-    if (newJobTasks.length === 0) {
+    if (visibleJobTasks.length === 0) {
       alert("Please add at least one task to the job.");
       return;
     }
 
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.post('/api/automation/jobs/', {
         name: jobName,
         description: jobDescription,
-        tasks: newJobTasks.map(t => ({ name: t.name, agent: "Configured Agent", instructions: t.instructions })),
+        tasks: visibleJobTasks.map(t => ({ name: t.name, agent: "Configured Agent", instructions: t.instructions })),
         trigger: jobTrigger
       });
+      if (principalRef.current !== actionPrincipal) return;
       
       // Reset form
       setJobName("");
@@ -208,6 +244,7 @@ export default function SequencesPage() {
       
       fetchJobs();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to create job: " + (err instanceof Error ? err.message : String(err)));
     }
   };
@@ -242,13 +279,13 @@ export default function SequencesPage() {
               <AutomationListNotice kind="loading" message="Restoring your session..." />
             ) : !isAuthenticated ? (
               <AutomationListNotice kind="authentication" message="Sign in to view job definitions." />
-            ) : isLoading ? (
+            ) : isLoading || !verifiedJobs ? (
               <AutomationListNotice kind="loading" message="Loading jobs from backend..." />
             ) : jobsFetchError ? (
               <AutomationListNotice kind="unavailable" message="Job definitions could not be verified with the backend." />
             ) : jobs.length === 0 ? (
               <AutomationListNotice kind="empty" message="No jobs defined yet." />
-            ) : jobs.map((job: Job, index: number) => (
+            ) : verifiedJobs && jobs.map((job: Job, index: number) => (
               <Card className="karen-automation-card" key={job.id || index}>
                 <CardHeader>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -313,7 +350,7 @@ export default function SequencesPage() {
                     <Input 
                       id="job-name" 
                       placeholder="e.g., Daily Content Pipeline" 
-                      value={jobName}
+                      value={formOwner === principal ? jobName : ""}
                       onChange={(e) => setJobName(e.target.value)}
                     />
                 </div>
@@ -323,7 +360,7 @@ export default function SequencesPage() {
                       id="job-desc" 
                       placeholder="Describe the goal of this job." 
                       rows={2} 
-                      value={jobDescription}
+                      value={formOwner === principal ? jobDescription : ""}
                       onChange={(e) => setJobDescription(e.target.value)}
                     />
                 </div>
@@ -332,17 +369,17 @@ export default function SequencesPage() {
                     <Input 
                       id="job-trigger" 
                       placeholder="Manual Run, Cron, Event..." 
-                      value={jobTrigger}
+                      value={formOwner === principal ? jobTrigger : "Manual Run"}
                       onChange={(e) => setJobTrigger(e.target.value)}
                     />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Workflow Chain (Steps)</Label>
                   <div className="p-3 border rounded-md h-64 overflow-y-auto space-y-2 bg-muted/30">
-                      {newJobTasks.length === 0 ? (
+                      {visibleJobTasks.length === 0 ? (
                           <p className="text-xs text-center text-muted-foreground py-2">No tasks in job. Click &quot;Add Task Step&quot; to begin.</p>
                       ) : (
-                          newJobTasks.map((task, index) => (
+                          visibleJobTasks.map((task, index) => (
                           <div key={`${task.name}-${index}`} className="flex items-center space-x-2 p-2 rounded-md bg-background border">
                               <GripVertical className="h-4 w-4 text-muted-foreground" />
                               <span className="text-sm flex-1 truncate">{task.name}</span>
@@ -362,7 +399,7 @@ export default function SequencesPage() {
                   </div>
                   <Dialog>
                     <DialogTrigger asChild>
-                        <Button variant="outline" className="w-full mt-2" disabled={isTasksLoading || availableTasks.length === 0}>
+                        <Button variant="outline" className="w-full mt-2" disabled={isTasksLoading || !verifiedTasks || visibleTasks.length === 0}>
                             <PlusCircle className="mr-2 h-4 w-4" />
                             {isTasksLoading ? "Loading Tasks..." : "Add Task Step"}
                         </Button>
@@ -376,7 +413,7 @@ export default function SequencesPage() {
                         </DialogHeader>
                         <div className="py-2 max-h-[50vh] overflow-y-auto">
                             <div className="flex flex-col space-y-2">
-                                {availableTasks.map(task => (
+                                {visibleTasks.map(task => (
                                 <div key={task.id} className="flex items-center justify-between p-3 rounded-md border bg-muted/40">
                                     <div className="flex-1 pr-4">
                                         <div className="flex items-center space-x-3">
@@ -407,7 +444,7 @@ export default function SequencesPage() {
                 </div>
               </CardContent>
               <CardFooter>
-                <Button className="w-full" onClick={handleCreateJob} disabled={newJobTasks.length === 0}>
+                <Button className="w-full" onClick={handleCreateJob} disabled={!principal || !verifiedTasks || formOwner !== principal || visibleJobTasks.length === 0}>
                   <PlusCircle className="mr-2 h-4 w-4" />
                   Save Job Definition
                 </Button>
@@ -426,7 +463,7 @@ export default function SequencesPage() {
       </div>
 
       {/* Instruction Editor Dialog */}
-      <Dialog open={!!editingConfig} onOpenChange={(isOpen) => !isOpen && setEditingConfig(null)}>
+      <Dialog open={formOwner === principal && !!editingConfig} onOpenChange={(isOpen) => !isOpen && setEditingConfig(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Configure Step: <span className="text-primary">{editingConfig?.taskName}</span></DialogTitle>
