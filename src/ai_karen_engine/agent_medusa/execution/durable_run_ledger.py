@@ -722,6 +722,7 @@ class PostgresDurableRunLedger:
                     "to_status": to_status,
                     "event_at": event_at,
                     "error_type": error_type,
+                    "outcome_status": outcome_status,
                 }
                 if transition_kind == "start":
                     await session.execute(
