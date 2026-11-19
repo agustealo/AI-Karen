@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
@@ -978,6 +978,26 @@ class PresentationPinMutationRequest(BaseModel):
     pin_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
     expected_revision: Optional[int] = Field(default=None, ge=1, le=9223372036854775805)
     position: Optional[int] = Field(default=None, ge=0, lt=100)
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> "PresentationPinMutationRequest":
+        """Reject mismatched logical identities before any receipt replay."""
+        if self.operation == "pin":
+            if self.source is None or self.pin_id is not None or self.expected_revision is not None:
+                raise ValueError("PIN requires source and cannot specify pin ID or revision")
+        elif self.operation == "unpin":
+            if (
+                self.source is not None or self.pin_id is None
+                or self.expected_revision is not None or self.position is not None
+            ):
+                raise ValueError("UNPIN requires only a pin ID")
+        else:
+            if (
+                self.source is not None or self.pin_id is None
+                or self.expected_revision is None or self.position is None
+            ):
+                raise ValueError("REORDER requires pin ID, revision and position")
+        return self
 
 
 @router.post("/chat/ag-ui/pins/mutations")
