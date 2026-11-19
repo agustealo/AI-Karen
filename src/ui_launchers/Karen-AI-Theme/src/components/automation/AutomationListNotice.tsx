@@ -26,7 +26,7 @@ export function AutomationListNotice({ kind, message }: AutomationListNoticeProp
     <div
       role={isError ? "alert" : "status"}
       aria-live={isError ? "assertive" : "polite"}
-      className={`karen-automation-card flex min-w-0 items-start gap-3 rounded-xl border p-5 text-sm sm:p-6 ${
+      className={`karen-surface flex min-w-0 items-start gap-3 rounded-xl border p-5 text-sm sm:p-6 ${
         isError ? "border-destructive/40 bg-destructive/5 text-foreground" : "border-border/70 bg-muted/20 text-muted-foreground"
       }`}
     >
