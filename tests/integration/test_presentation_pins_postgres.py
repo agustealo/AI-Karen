@@ -396,5 +396,9 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion() -> No
                     "auth_users", "tenants",
                 ):
                     await raw.execute(f'DROP TABLE IF EXISTS public.{table} CASCADE')
+                # PostgreSQL does not drop standalone trigger functions with tables.
+                await raw.execute(
+                    'DROP FUNCTION IF EXISTS public.prevent_presentation_pin_receipt_mutation()'
+                )
         finally:
             await raw.close()
