@@ -647,3 +647,151 @@ async def test_unverified_direct_profile_email_change_fails_closed_before_mutati
     assert db.flushed is False
     assert db.committed is False
     svc._emit_audit_event.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "session_state,expected_status",
+    [
+        ("active", 200),
+        ("revoked", 401),
+        ("tenant_mismatch", 401),
+        ("expired", 401),
+        ("database_unavailable", 401),
+    ],
+)
+async def test_pin_mutation_http_requires_valid_durable_session(
+    monkeypatch, session_state, expected_status
+):
+    """Exercise the actual signed JWT -> canonical session -> pin HTTP path.
+
+    Only the final mutation executor is stubbed. The authentication dependency,
+    middleware JWT validation, and AuthService durable session query execute
+    normally against controlled session rows, without dependency overrides.
+    This remains a local HTTP contract test, not live production acceptance.
+    """
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from ai_karen_engine.api_routes.chat import runtime as pin_ingress
+    from ai_karen_engine.auth import auth_middleware
+    from ai_karen_engine.core.runtime.presentation_pin_mutation import (
+        PresentationPinMutation,
+    )
+    from ai_karen_engine.core.security.auth_config import auth_config
+
+    signed = token()
+    if session_state == "expired":
+        signed = jwt.encode(
+            {
+                "sub": USER_ID,
+                "tenant_id": TENANT_ID,
+                "iss": "ai-karen",
+                "aud": "ai-karen-users",
+                "iat": int((datetime.utcnow() - timedelta(hours=2)).timestamp()),
+                "exp": int((datetime.utcnow() - timedelta(hours=1)).timestamp()),
+            },
+            JWT_SECRET,
+            algorithm="HS256",
+        )
+
+    active_row = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        access_token=signed,
+        is_active=True,
+        device_fingerprint=None,
+        expires_in=3600,
+        created_at=datetime.utcnow(),
+        last_accessed=None,
+    )
+    user_row = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID),
+        tenant_id=uuid.UUID(
+            OTHER_TENANT_ID if session_state == "tenant_mismatch" else TENANT_ID
+        ),
+        is_active=True,
+        is_verified=True,
+    )
+
+    if session_state == "database_unavailable":
+        class UnavailableDatabase:
+            async def execute(self, statement):
+                raise OSError("private database detail")
+
+        database = UnavailableDatabase()
+    elif session_state == "revoked":
+        database = FakeDbSession(None)
+    else:
+        database = FakeDbSession(active_row, user_row)
+
+    authoritative = session_service(database)
+
+    async def get_authoritative_service():
+        return authoritative
+
+    monkeypatch.setattr(auth_facade, "get_auth_service", get_authoritative_service)
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+
+    middleware_instance = object.__new__(SecureAuthMiddleware)
+    middleware_instance.jwt_secret = JWT_SECRET
+    middleware_instance.jwt_algorithm = "HS256"
+    middleware_instance._is_token_revoked = lambda token_id: False
+    monkeypatch.setattr(
+        auth_middleware, "get_auth_middleware", lambda: middleware_instance
+    )
+
+    monkeypatch.setattr(
+        pin_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(
+            features=SimpleNamespace(
+                enable_ag_ui_bridge=True,
+                enable_ag_ui_durable_runs=True,
+                enable_presentation_pin_mutations=True,
+            )
+        ),
+    )
+    receipt = SimpleNamespace(
+        receipt_id="99999999-9999-4999-8999-999999999999",
+        idempotency_key="55555555-5555-4555-8555-555555555555",
+        request_id="committed-request",
+        correlation_id="committed-correlation",
+        operation="unpin",
+        outcome="unpinned",
+        pin_id="88888888-8888-4888-8888-888888888888",
+        expected_revision=None,
+        committed_revision=None,
+    )
+    execute = AsyncMock(return_value=receipt)
+    monkeypatch.setattr(PresentationPinMutation, "execute", execute)
+
+    app = FastAPI()
+    app.include_router(pin_ingress.router)
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/chat/ag-ui/pins/mutations",
+            headers={"Authorization": f"Bearer {signed}"},
+            json={
+                "operation": "unpin",
+                "idempotency_key": receipt.idempotency_key,
+                "pin_id": receipt.pin_id,
+            },
+        )
+
+    assert response.status_code == expected_status, response.text
+    if session_state == "active":
+        assert response.json()["committed"] is True
+        assert response.headers["cache-control"] == "private, no-store"
+        execute.assert_awaited_once()
+        context = execute.await_args.kwargs["context"]
+        assert context.user_id == USER_ID
+        assert context.tenant_id == TENANT_ID
+        assert context.roles == ["user"]
+        assert context.permissions == []
+        assert database.flushed
+    else:
+        assert "committed" not in response.text
+        assert "private database detail" not in response.text
+        execute.assert_not_awaited()
