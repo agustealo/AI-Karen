@@ -322,14 +322,28 @@ class PostgresDurableRunLedger:
                 if row is None:
                     raise DurableRunLedgerConflict(f"Unknown Medusa run: {run_id}")
                 current = str(row["status"])
+                existing_audit_ref = row.get("audit_event_ref")
+                if (
+                    audit_event_ref
+                    and existing_audit_ref
+                    and existing_audit_ref != audit_event_ref
+                ):
+                    raise DurableRunLedgerConflict(
+                        f"Conflicting Medusa cancellation audit reference for run {run_id}"
+                    )
                 if current == "cancellation_requested":
                     if audit_event_ref:
-                        await session.execute(
+                        result = await session.execute(
                             text("""
                                 UPDATE agent_medusa_runs
                                 SET audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref)
                                 WHERE run_id = :run_id
                                   AND tenant_id = CAST(:tenant_id AS uuid)
+                                  AND status = 'cancellation_requested'
+                                  AND (
+                                      audit_event_ref IS NULL
+                                      OR audit_event_ref = :audit_event_ref
+                                  )
                             """),
                             {
                                 "run_id": run_id,
@@ -337,21 +351,30 @@ class PostgresDurableRunLedger:
                                 "audit_event_ref": audit_event_ref,
                             },
                         )
+                        _require_transition(
+                            result, run_id=run_id, transition="cancellation_audit_link"
+                        )
                     return
                 if current != "running":
                     raise DurableRunLedgerConflict(
                         f"Run {run_id} is {current}, not cancellable"
                     )
-                await session.execute(
+                result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
                         SET status = 'cancellation_requested',
                             cancel_requested_at = COALESCE(cancel_requested_at, :event_at),
                             updated_at = :event_at,
-                            audit_event_ref = COALESCE(:audit_event_ref, audit_event_ref),
+                            audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref),
                             last_worker_transition_at = :event_at
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
+                          AND status = 'running'
+                          AND (
+                              :audit_event_ref IS NULL
+                              OR audit_event_ref IS NULL
+                              OR audit_event_ref = :audit_event_ref
+                          )
                     """),
                     {
                         "run_id": run_id,
@@ -359,6 +382,9 @@ class PostgresDurableRunLedger:
                         "event_at": requested_at,
                         "audit_event_ref": audit_event_ref,
                     },
+                )
+                _require_transition(
+                    result, run_id=run_id, transition="cancellation_requested"
                 )
                 await self._append_transition(
                     session,
