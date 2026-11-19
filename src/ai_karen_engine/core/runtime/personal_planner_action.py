@@ -6,6 +6,9 @@ This adapter is not an intent classifier, tool registry or route.
 
 from __future__ import annotations
 
+import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.core.planner.action_contract import AuthorizedPlannerAction, PlannerAction
 from ai_karen_engine.core.planner.contracts import CommitmentMutation, PersonalCommitment, PersistedCommitmentReceipt
@@ -45,3 +48,42 @@ async def execute_authorized_planner_action(
         ),
         correlation_id=action.correlation_id,
     )
+
+
+def parse_personal_planner_create(query: str) -> tuple[str, str] | None:
+    """Parse one explicit unscheduled personal task, never infer a due date.
+
+    This parser only extracts task arguments for ChatRuntime. It does not
+    authorize the intent, resolve a profile, or perform any persistence.
+    Time-bound requests require a separate, due-date-aware contract.
+    """
+    if not isinstance(query, str) or len(query) > 1024:
+        return None
+    normalized = " ".join(query.strip().split())
+    match = re.fullmatch(
+        r"(?:please\\s+)?(?:create|add|make)\\s+(?:me\\s+)?(?:a\\s+)?"
+        r"(?:personal\\s+)?(?:task|commitment)\\s+(?:to|for)\\s+"
+        r"(?P<title>.+?)\\s+(?:in\\s+|timezone\\s+)"
+        r"(?P<timezone>[A-Za-z_]+/[A-Za-z_+\\-]+)[.!]?",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    title = match.group("title").strip()
+    timezone = match.group("timezone")
+    if not (1 <= len(title) <= 240 and 1 <= len(timezone) <= 128):
+        return None
+    if re.search(
+        r"\\b(?:today|tomorrow|tonight|next\\s+(?:week|month|"
+        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday))\\b"
+        r"|\\b(?:at|by)\\s+\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?\\b",
+        title,
+        re.IGNORECASE,
+    ):
+        return None
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return None
+    return title, timezone
