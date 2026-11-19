@@ -27,3 +27,32 @@ def test_settings_shell_remains_navigation_only() -> None:
     assert "apiClient.put" not in source
     assert "localStorage.setItem" not in source
     assert "Backend-owned settings" in source
+
+
+def test_settings_opts_into_kari_graphite_without_duplicating_setting_authority() -> None:
+    source = SHELL.read_text(encoding="utf-8")
+    kari = (ROOT / "src/ui_launchers/Karen-AI-Theme/src/app/kari-os.css").read_text(encoding="utf-8")
+    assert 'data-kari-root data-testid="karen-settings-workspace"' in source
+    assert "lg:grid-cols-[240px_minmax(0,1fr)]" in source
+    assert 'aria-label={`${activeCategory.label} settings sections`}' in source
+    assert "aria-current={isActive ? 'page' : undefined}" in source
+    assert 'karen-settings-panel-heading' in source
+    assert '[data-testid="karen-settings-workspace"]' in kari
+    assert "--kari-canvas: #070708;" in kari
+    assert "--kari-font-display: Manrope" in kari
+    assert 'render: () => <ModelSettings />' in source
+    assert 'render: () => <VoiceSettings />' in source
+    assert "apiClient.post" not in source
+    assert "localStorage.setItem" not in source
+
+
+def test_settings_sheet_never_uses_desktop_multicolumn_grid() -> None:
+    source = SHELL.read_text(encoding="utf-8")
+    # The dashboard sheet remains narrow even when the viewport is wide.
+    # Keep category navigation, section rail, and section buttons stacked.
+    assert "inSheet ? 'grid-cols-1'" in source
+    assert "inSheet ? 'grid-cols-1' : 'lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start'" in source
+    assert "inSheet ? '' : 'lg:sticky lg:top-4'" in source
+    assert "inSheet ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1'" in source
+    # The full-page settings experience still has its designed desktop rail.
+    assert "lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start" in source

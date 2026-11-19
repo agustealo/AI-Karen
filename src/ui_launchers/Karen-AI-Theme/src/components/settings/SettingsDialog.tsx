@@ -333,11 +333,11 @@ export default function SettingsDialog({
   };
 
   return (
-    <div className={inSheet ? 'karen-settings p-4' : 'karen-settings space-y-6'}>
+    <div data-kari-root data-testid="karen-settings-workspace" className={inSheet ? 'karen-settings min-w-0 space-y-5 p-4 sm:p-5' : 'karen-settings min-w-0 space-y-6 pb-8'}>
       {!inSheet && (
-        <header className="karen-settings-hero karen-surface relative overflow-hidden rounded-xl p-5 sm:p-7">
+        <header className="karen-settings-hero karen-surface relative isolate overflow-hidden rounded-2xl p-5 sm:p-8">
           <div className="relative z-10 flex flex-wrap items-start justify-between gap-4">
-            <div className="max-w-2xl space-y-3">
+            <div className="min-w-0 max-w-2xl space-y-3">
               <p className="karen-metric uppercase tracking-[0.16em] text-primary">
                 KARI OS / WORKSPACE CONFIGURATION
               </p>
@@ -346,7 +346,7 @@ export default function SettingsDialog({
                   <Cog className="h-5 w-5" />
                 </span>
                 <div>
-                  <h2 className="karen-page-title">Application Settings</h2>
+                  <h2 className="karen-page-title kari-display text-balance">Application Settings</h2>
                   <p className="karen-page-description mt-2">
                     Fine-tune Karen&apos;s intelligence, manage your personal data, and
                     configure system runtime parameters.
@@ -354,7 +354,7 @@ export default function SettingsDialog({
                 </div>
               </div>
             </div>
-            <div className="rounded-lg border border-border/70 bg-card/65 px-3 py-2">
+            <div className="karen-settings-authority rounded-xl border border-border/70 bg-card/65 px-4 py-3">
               <p className="karen-metric uppercase text-muted-foreground">Configuration authority</p>
               <p className="mt-1 flex items-center gap-2 text-xs font-medium text-foreground">
                 <Shield className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
@@ -365,7 +365,7 @@ export default function SettingsDialog({
         </header>
       )}
 
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-5">
         <Tabs
           value={activeCategory?.id || DEFAULT_CATEGORY_ID}
           onValueChange={handleCategoryChange}
@@ -373,17 +373,19 @@ export default function SettingsDialog({
         >
           <TabsList
             className={[
-              'karen-settings-categories grid h-auto w-full grid-cols-1 gap-2 rounded-xl border border-border/70 bg-card/80 p-1 text-foreground',
-              adminMode
-                ? 'sm:grid-cols-2 lg:w-[760px] lg:grid-cols-4'
-                : 'sm:grid-cols-3 lg:w-[600px]',
+              'karen-settings-categories grid h-auto w-full grid-cols-1 gap-1 rounded-xl border border-border/70 bg-card/80 p-1.5 text-foreground',
+              inSheet
+                ? 'grid-cols-1'
+                : adminMode
+                  ? 'sm:grid-cols-2 lg:max-w-[780px] lg:grid-cols-4'
+                  : 'sm:grid-cols-3 lg:max-w-[660px]',
             ].join(' ')}
           >
             {categories.map((category) => (
               <TabsTrigger
                 key={category.id}
                 value={category.id}
-                className="rounded-xl border border-transparent px-4 py-2 text-sm font-semibold transition-all data-[state=active]:border-border/60 data-[state=active]:bg-background data-[state=active]:text-primary data-[state=active]:shadow-sm"
+                className="min-h-11 rounded-lg border border-transparent px-4 py-2.5 text-sm font-semibold transition-colors data-[state=active]:border-primary/30 data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
               >
                 {category.label}
               </TabsTrigger>
@@ -392,8 +394,14 @@ export default function SettingsDialog({
         </Tabs>
 
         {activeCategory && (
-          <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <div className="karen-settings-section-nav karen-surface flex flex-col gap-3 rounded-xl p-4 sm:p-5">
+          <div className={[
+            'grid min-w-0 gap-5',
+            inSheet ? 'grid-cols-1' : 'lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start',
+          ].join(' ')}>
+            <div className={[
+              'karen-settings-section-nav karen-surface flex min-w-0 flex-col gap-4 rounded-xl p-4',
+              inSheet ? '' : 'lg:sticky lg:top-4',
+            ].join(' ')}>
               <div className="flex items-center gap-2 px-1">
                 <div className="h-1 w-1 rounded-full bg-primary" />
                 <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80">
@@ -410,7 +418,10 @@ export default function SettingsDialog({
                       ? 'Customize how Karen behaves, speaks, and presents itself.'
                       : 'Manage authorized administration controls.'}
               </p>
-              <nav aria-label={`${activeCategory.label} settings sections`} className="flex flex-wrap gap-2">
+              <nav
+                aria-label={`${activeCategory.label} settings sections`}
+                className={inSheet ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1'}
+              >
                 {activeCategory.sections.map((section) => {
                   const Icon = section.icon;
                   const isActive = section.id === activeSectionId;
@@ -424,26 +435,26 @@ export default function SettingsDialog({
                       aria-controls="settings-active-panel"
                       title={section.description || section.label}
                       className={[
-                        'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-medium transition-all',
+                        'inline-flex min-h-11 min-w-0 items-center gap-3 rounded-lg border px-3 py-2 text-left text-sm font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
                         isActive
-                          ? 'border-primary/40 bg-primary/10 text-primary shadow-sm'
-                          : 'border-border/40 bg-muted/20 text-muted-foreground hover:border-border/80 hover:bg-muted/40 hover:text-foreground',
+                          ? 'border-primary/40 bg-primary/10 text-primary'
+                          : 'border-transparent bg-transparent text-muted-foreground hover:border-border/70 hover:bg-muted/30 hover:text-foreground',
                       ].join(' ')}
                     >
                       <Icon className="h-4 w-4" aria-hidden={true} />
-                      <span>{section.label}</span>
+                      <span className="min-w-0 truncate">{section.label}</span>
                     </button>
                   );
                 })}
               </nav>
             </div>
 
-            <section id="settings-active-panel" aria-label={activeSection?.label || 'Settings'} className="karen-settings-active min-w-0 space-y-6">
+            <section id="settings-active-panel" aria-label={activeSection?.label || 'Settings'} className="karen-settings-active min-w-0 space-y-5">
               {activeSection && (
-                <div className="animate-in fade-in duration-500">
-                  <div className="mb-4 flex items-center justify-between">
+                <div className="min-w-0">
+                  <div className="karen-settings-panel-heading mb-5 flex min-w-0 items-start justify-between gap-4 rounded-xl border border-border/70 bg-card/80 p-5 sm:p-6">
                     <div>
-                      <h3 className="text-xl font-bold tracking-tight text-foreground">
+                      <h3 className="kari-display text-xl font-bold tracking-tight text-foreground sm:text-2xl">
                         {activeSection.label}
                       </h3>
 
@@ -458,7 +469,7 @@ export default function SettingsDialog({
                     </div>
                   </div>
 
-                  <Separator className="mb-6 bg-border/40" />
+                  <Separator className="mb-5 bg-border/40" />
 
                   <div className="rounded-xl">{activeSection.render()}</div>
                 </div>
