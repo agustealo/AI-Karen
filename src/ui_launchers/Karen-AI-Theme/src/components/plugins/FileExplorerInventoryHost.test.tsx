@@ -65,6 +65,26 @@ function Consumer() {
           <button type="button" onClick={() => props.onSelect([{
             source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file',
           }])}>Select A</button>
+          <button type="button" onClick={() => props.onSelect([{
+            source_id: FILE_A, revision: 'b'.repeat(64), sha256: SHA, kind: 'file',
+          }])}>Stale revision</button>
+          <button type="button" onClick={() => props.onSelect([{
+            source_id: FILE_A, revision: SHA, sha256: 'b'.repeat(64), kind: 'file',
+          }])}>Forged hash</button>
+          <button type="button" onClick={() => props.onSelect([{
+            source_id: FILE_B, revision: SHA, sha256: SHA, kind: 'file',
+          }])}>Foreign ID</button>
+          <button type="button" onClick={() => props.onSelect([{
+            source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'folder',
+          }])}>Forged kind</button>
+          <button type="button" onClick={() => props.onSelect([
+            { source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file' },
+            { source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file' },
+          ])}>Duplicate ID</button>
+          <button type="button" onClick={() => props.onSelect([
+            { source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file' },
+            { source_id: FILE_B, revision: SHA, sha256: SHA, kind: 'file' },
+          ])}>Mixed forged list</button>
         </section>
       )}
     </FileExplorerInventoryHost>
@@ -103,6 +123,21 @@ describe('File Explorer authenticated UI host', () => {
     );
     expect(screen.getByTestId('selection').textContent).toBe('');
     expect(screen.getByTestId('key').textContent).not.toBe(firstKey);
+  });
+
+  it('rejects stale and forged selection receipts without partially accepting IDs', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    for (const label of [
+      'Stale revision', 'Forged hash', 'Foreign ID', 'Forged kind',
+      'Duplicate ID', 'Mixed forged list',
+    ]) {
+      fireEvent.click(screen.getByText('Select A'));
+      expect(screen.getByTestId('selection').textContent).toBe(FILE_A);
+      fireEvent.click(screen.getByText(label));
+      expect(screen.getByTestId('selection').textContent).toBe('');
+    }
   });
 
   it('clears selection on refresh and requests an authorized first page', async () => {
