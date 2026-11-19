@@ -170,6 +170,12 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   await verifyDisplayedInventory(page, firstPage);
 
   const explorer = page.getByRole("region", { name: "Shared File Explorer" });
+  const firstFileCheckbox = explorer.getByRole("list", { name: "Files and folders" })
+    .getByRole("listitem").first().getByRole("checkbox");
+  await expect(firstFileCheckbox).not.toBeChecked();
+  await firstFileCheckbox.check();
+  await expect(firstFileCheckbox).toBeChecked();
+  await expect(explorer.getByText(/\\b1 selected\\b/)).toBeVisible();
   for (const viewport of widths) {
     await page.setViewportSize(viewport);
     await expect(explorer).toBeVisible();
@@ -187,6 +193,9 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     expect(geometry.left).toBeGreaterThanOrEqual(-1);
     expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
     await verifyDisplayedInventory(page, firstPage);
+    await expect(explorer.getByRole("list", { name: "Files and folders" })
+      .getByRole("listitem").first().getByRole("checkbox")).toBeChecked();
+    await expect(explorer.getByText(/\\b1 selected\\b/)).toBeVisible();
   }
 
   await page.setViewportSize(widths[0]);
@@ -207,20 +216,35 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     await explorer.getByRole("button", { name: "Next page" }).click();
     const secondResponse = await next;
     expect(secondResponse.status()).toBe(200);
+    const cursorSent = new URL(secondResponse.request().url()).searchParams.get("cursor");
+    expect(cursorSent, "The UI must forward the precise backend-owned cursor").toBe(firstPage.next_cursor);
     const secondPage = inventoryResponse(await secondResponse.json());
     expect(secondPage.items.length).toBeGreaterThan(0);
     expect(secondPage.items.every((item) =>
       !firstPage.items.some((older) => older.source_id === item.source_id),
     ), "Keyset pages must not repeat owner file IDs").toBe(true);
     await verifyDisplayedInventory(page, secondPage);
+    await expect(explorer.getByText(/\\b0 selected\\b/)).toBeVisible();
+    const secondFileCheckbox = explorer.getByRole("list", { name: "Files and folders" })
+      .getByRole("listitem").first().getByRole("checkbox");
+    await secondFileCheckbox.check();
+    await expect(secondFileCheckbox).toBeChecked();
+    await expect(explorer.getByText(/\\b1 selected\\b/)).toBeVisible();
   }
 
   const refresh = nextRealPage(page, origin);
   await explorer.getByRole("button", { name: "Refresh" }).click();
   const refreshedResponse = await refresh;
   expect(refreshedResponse.status()).toBe(200);
+  expect(new URL(refreshedResponse.request().url()).searchParams.has("cursor"),
+    "Refresh must request a fresh first owner page, not retain the old cursor").toBe(false);
   const refreshed = inventoryResponse(await refreshedResponse.json());
   await verifyDisplayedInventory(page, refreshed);
+  await expect(explorer.getByText(/\\b0 selected\\b/)).toBeVisible();
+  if (refreshed.items.length > 0) {
+    await expect(explorer.getByRole("list", { name: "Files and folders" })
+      .getByRole("listitem").first().getByRole("checkbox")).not.toBeChecked();
+  }
 
   // A read-only acceptance run never uploads, changes ACLs or disables plugins.
   expect(info.project.name).toBe("chromium");
