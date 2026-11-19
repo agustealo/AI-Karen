@@ -253,7 +253,11 @@ class PluginService:
             policy_decision_id=decision.decision_id,
             allowed_capabilities=list(plan.allowed_capabilities),
             resource_scope={},
-            audit_context={"origin": "authenticated_file_explorer_inventory"},
+            audit_context={
+                "origin": "authenticated_file_explorer_inventory",
+                "user_roles": list(roles),
+                "permissions": list(permissions),
+            },
         )
         return await FileExplorerInventoryHost(
             kernel=kernel, source=source
