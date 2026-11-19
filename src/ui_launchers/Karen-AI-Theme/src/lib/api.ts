@@ -88,6 +88,7 @@ class ApiClient {
   private readonly SESSION_MARKER_KEY = 'kari_session_expected';
   private readonly SESSION_WARNING_SHOWN_KEY = 'session_warning_shown';
   private readonly TOKEN_REFRESH_ATTEMPTED_KEY = 'token_refresh_attempted';
+  private refreshInFlight: Promise<void> | null = null;
 
   private invalidateAuthSession(
     reason: 'terminal_401' | 'refresh_failed' | 'session_invalid',
@@ -530,6 +531,19 @@ class ApiClient {
   }
 
   private async refreshAccessToken(): Promise<void> {
+    // Share a single credential-rotating request across concurrent API calls.
+    if (this.refreshInFlight) return this.refreshInFlight;
+
+    const refresh = this.executeRefreshAccessToken();
+    this.refreshInFlight = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.refreshInFlight === refresh) this.refreshInFlight = null;
+    }
+  }
+
+  private async executeRefreshAccessToken(): Promise<void> {
     try {
       const refreshToken = typeof window !== 'undefined' ? localStorage.getItem('refresh_token') : null;
       if (!refreshToken) throw new Error('No refresh token available');
@@ -542,16 +556,9 @@ class ApiClient {
           body: JSON.stringify({ refresh_token: refreshToken }),
         });
 
-      const preferredBaseUrl = this.getPreferredBaseUrl();
-      const fallbackBaseUrl = this.getFallbackBaseUrl(preferredBaseUrl);
-
-      let response: Response;
-      try {
-        response = await sendRefresh(preferredBaseUrl);
-      } catch (error) {
-        if (!this.shouldRetryWithSameOrigin(error) || !fallbackBaseUrl) throw error;
-        response = await sendRefresh(fallbackBaseUrl);
-      }
+      // Refresh is a credential-rotating POST. A lost response may follow
+      // successful token rotation, so never replay it at a fallback origin.
+      const response = await sendRefresh(this.getPreferredBaseUrl());
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Token refresh failed');
@@ -563,6 +570,10 @@ class ApiClient {
         throw new Error('Invalid refresh response: missing access_token');
       }
 
+      // A late refresh response must never restore a logged-out or changed session.
+      if (localStorage.getItem('refresh_token') !== refreshToken) {
+        throw new Error('Refresh session changed during request');
+      }
       localStorage.setItem('access_token', data.access_token);
       // Clear any refresh attempt flags on success
       localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
@@ -615,6 +626,9 @@ class ApiClient {
       }
     };
 
+    // Only idempotent reads may be retried or sent to a fallback origin.
+    // A mutation might have committed before a proxy/network reply failed.
+    const safeRead = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase());
     const preferredBaseUrl = this.getPreferredBaseUrl();
     const fallbackBaseUrl: string | null = this.getFallbackBaseUrl(preferredBaseUrl) || null;
 
@@ -622,19 +636,22 @@ class ApiClient {
     try {
       response = await send(preferredBaseUrl);
     } catch (error) {
-      if (!this.shouldRetryWithSameOrigin(error) || !this.hasFallbackBaseUrl(fallbackBaseUrl)) throw error;
+      if (!safeRead || !this.shouldRetryWithSameOrigin(error) || !this.hasFallbackBaseUrl(fallbackBaseUrl)) throw error;
       response = await send(fallbackBaseUrl);
     }
 
     // Logic for retries (500s or 404s on API routes)
-    if (this.shouldRetryWithDirectBackend(response, fallbackBaseUrl) ||
-        this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl)) {
+    if (safeRead && (this.shouldRetryWithDirectBackend(response, fallbackBaseUrl) ||
+        this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl))) {
       response = await send(fallbackBaseUrl);
     }
 
     // 401 Handling - Only attempt refresh if request was authenticated and refresh token is present
     if (response.status === 401) {
-      if (skipAuth) {
+      if (!safeRead) {
+        // Never refresh and replay an already-sent mutation. Surface the
+        // unauthorized response to the caller as a terminal error below.
+      } else if (skipAuth) {
         console.warn('[ApiClient] Unauthenticated request received 401:', endpoint);
       } else {
         const hasRefreshToken = typeof window !== 'undefined' && Boolean(localStorage.getItem('refresh_token'));
@@ -685,7 +702,7 @@ class ApiClient {
     }
 
     // 500 Retry for Copilot Assist
-    if (!response.ok && this.shouldRetryAssistServerError(endpoint, response)) {
+    if (!response.ok && safeRead && this.shouldRetryAssistServerError(endpoint, response)) {
       await this.sleep(250);
       response = await send(preferredBaseUrl);
     }
@@ -693,7 +710,6 @@ class ApiClient {
     // Only reads can be replayed after an ambiguous 502. A draft CAS PUT,
     // task POST, or any other mutation may have committed before its receipt
     // was lost. Replaying it can create false 409 conflicts or duplicate work.
-    const safeRead = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase());
     if (response.status === 502 && safeRead) {
       console.log('[ApiClient] 502 Bad Gateway detected, retrying with backoff for startup timing');
       await this.sleep(2000); // Wait 2s before retry
@@ -727,12 +743,14 @@ class ApiClient {
 
       // Handle 401 errors by redirecting to login
       if (response.status === 401 && typeof window !== 'undefined') {
-        if (!isDegradedMode) {
+        if (!isDegradedMode && safeRead) {
           console.warn('[ApiClient] Authentication failed; invalidating shared auth state');
           this.invalidateAuthSession('terminal_401');
           return undefined as T;
         } else {
-          // If it's a 401 but in degraded mode, we just throw the ApiError instead of redirecting
+          // Mutations are never replayed after a 401. An explicit human
+          // action is required to reissue a request after reauthentication.
+          if (!isDegradedMode) this.invalidateAuthSession('terminal_401');
           throw new ApiError(
             response.status,
             this.formatApiErrorMessage(errorData, fallbackMessage),

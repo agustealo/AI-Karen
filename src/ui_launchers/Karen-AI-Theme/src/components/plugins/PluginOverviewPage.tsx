@@ -23,7 +23,6 @@ import {
   EyeOff,
   Github,
   HelpCircle,
-  Info,
   Loader2,
   MessageSquare,
   PlugZap,
@@ -43,14 +42,6 @@ import {
 } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { PluginRecommendedModels } from './PluginRecommendedModels';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-
 import { apiClient } from '@/lib/api';
 import {
   usePluginHealth,
@@ -803,15 +794,15 @@ function PluginHealthCard({
   }, [pluginId, postPluginOperation, refreshPluginSurfaces, runOperation]);
 
   return (
-    <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+    <article className="kari-card flex h-full min-w-0 flex-col gap-4 p-4 sm:p-5" data-testid="plugin-integration-card">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h4 className="text-sm font-semibold">
+          <h3 className="kari-card-title min-w-0 break-words text-base font-semibold text-foreground">
             {displayName}
             <span className="ml-2 text-xs font-normal opacity-50">v{version}</span>
-          </h4>
+          </h3>
 
-          <p className="text-xs text-muted-foreground">
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {description || 'No description provided.'}
           </p>
         </div>
@@ -823,9 +814,9 @@ function PluginHealthCard({
         )}
       </div>
 
-      <div className="grid gap-3 text-xs">
+      <div className="grid min-w-0 gap-3 rounded-xl border border-border/60 bg-muted/20 p-3 text-xs sm:grid-cols-2">
         <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">Backend:</span>
+          <span className="font-medium text-muted-foreground">Backend</span>
           <BackendStateBadge
             state={effectiveBackendState}
             detail={backendStatusDetail}
@@ -833,7 +824,7 @@ function PluginHealthCard({
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-muted-foreground">Frontend:</span>
+          <span className="font-medium text-muted-foreground">Frontend</span>
           {hasUiCapabilities ? (
             <FrontendStateBadge state={frontendDisplayState} />
           ) : (
@@ -848,12 +839,12 @@ function PluginHealthCard({
         {hasUiCapabilities && (
           <>
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">UI Install:</span>
+              <span className="font-medium text-muted-foreground">UI installation</span>
               <UIInstallStatusBadge status={uiInstallStatus} />
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">UI Reg:</span>
+              <span className="font-medium text-muted-foreground">UI registration</span>
               <UIRegistrationStatusBadge status={uiRegistrationStatus} />
             </div>
           </>
@@ -911,7 +902,7 @@ function PluginHealthCard({
         </Alert>
       )}
 
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-auto flex flex-wrap gap-2 border-t border-border/60 pt-4">
         {supportsVoiceOutput && (
           <Button type="button" size="sm" variant="outline"
             aria-expanded={showModelSetup}
@@ -1030,7 +1021,7 @@ function PluginHealthCard({
           </Button>
         )}
       </div>
-    </div>
+    </article>
   );
 }
 
@@ -1040,83 +1031,108 @@ export default function PluginOverviewPage({
 }: { onOpenVoiceStudio?: () => void; onOpenPocketTts?: () => void } = {}) {
   const { plugins, loading, error } = usePluginRegistry();
 
+  // Catalog totals are derived strictly from the same registry snapshot as
+  // the cards. They are intentionally not claims of runtime readiness.
+  const declaredUiCount = plugins.filter((plugin) => plugin.has_gui).length;
+  const communicationCount = plugins.filter(
+    (plugin) => plugin.isCommunicationChannel === true,
+  ).length;
+
   return (
-    <div className="space-y-8">
-      <div className="flex items-center space-x-3">
-        <PlugZap className="h-8 w-8 text-primary" aria-hidden={true} />
-
-        <div>
-          <h2 className="karen-page-title">
-            Plugins & Tools Overview
-          </h2>
-
-          <p className="karen-page-description mt-1">
-            Inspect KAREN&apos;s governed plugin capabilities and live integration state.
-          </p>
-          <Button asChild variant="outline" className="mt-3">
-            <Link href="/plugins">Upload and install a plugin</Link>
+    <main
+      data-kari-root
+      data-testid="plugins-overview"
+      className="min-w-0 space-y-6 pb-8"
+      aria-labelledby="plugins-overview-title"
+    >
+      <header className="karen-surface relative isolate overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-br from-card via-card to-primary/10 p-5 shadow-lg md:p-8">
+        <div aria-hidden="true" className="karen-workspace-grid pointer-events-none absolute inset-0 opacity-30" />
+        <div className="relative flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+          <div className="min-w-0 max-w-2xl">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1.5 text-xs font-semibold tracking-wide text-primary">
+              <PlugZap aria-hidden="true" className="h-4 w-4" />
+              Extension workspace
+            </div>
+            <h1 id="plugins-overview-title" className="kari-display karen-page-title text-balance md:text-[2.25rem]">
+              Plugins &amp; Tools
+            </h1>
+            <p className="karen-page-description mt-3 max-w-xl">
+              Inspect governed capabilities, backend lifecycle state and frontend registration.
+              Plugin execution and permissions remain with KAREN&apos;s runtime.
+            </p>
+          </div>
+          <Button asChild className="min-h-11 shrink-0 gap-2 self-start lg:self-end">
+            <Link href="/plugins">
+              <Puzzle aria-hidden="true" className="h-4 w-4" />
+              Upload and install a plugin
+            </Link>
           </Button>
         </div>
-      </div>
+      </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Current Plugin & Tool Integration</CardTitle>
-          <CardDescription>
-            KAREN uses a &quot;prompt-first&quot; framework. The runtime is
-            instructed on how to use available tools and capabilities based on
-            your conversational requests.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="space-y-4">
-          <p className="text-sm">
-            When you interact with KAREN, the canonical decision flow determines
-            whether a specialized tool is needed. If so, the governed runtime
-            invokes the tool and crafts a response from the tool output.
+      <section aria-label="Plugin registry snapshot" className="grid gap-3 sm:grid-cols-3">
+        <div className="kari-card p-4 sm:p-5">
+          <p className="karen-panel-label">Discovered plugins</p>
+          <p className="kari-display mt-2 text-3xl font-semibold tabular-nums" data-testid="plugin-count">
+            {loading || error ? '—' : plugins.length}
           </p>
+          <p className="mt-2 text-xs text-muted-foreground">Registry entries, not verified active executions</p>
+        </div>
+        <div className="kari-card p-4 sm:p-5">
+          <p className="karen-panel-label">UI-declaring plugins</p>
+          <p className="kari-display mt-2 text-3xl font-semibold tabular-nums" data-testid="plugin-ui-count">
+            {loading || error ? '—' : declaredUiCount}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">Manifest-declared frontend capability</p>
+        </div>
+        <div className="kari-card p-4 sm:p-5">
+          <p className="karen-panel-label">Communication channels</p>
+          <p className="kari-display mt-2 text-3xl font-semibold tabular-nums" data-testid="plugin-channel-count">
+            {loading || error ? '—' : communicationCount}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">Transport integrations, not connection readiness</p>
+        </div>
+      </section>
 
-          <Alert>
-            <MessageSquare className="h-4 w-4" aria-hidden={true} />
-            <AlertTitle>Interaction Method</AlertTitle>
-            <AlertDescription>
-              Most tools are used by KAREN when you ask relevant questions or
-              make requests directly in the chat interface.
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Registered Plugin Components</CardTitle>
-          <CardDescription>
-            Each card shows combined backend runtime state and frontend mount
-            registration health for the plugin.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent>
+      <section aria-labelledby="plugin-catalog-heading" className="kari-card overflow-hidden">
+        <div className="flex flex-col gap-2 border-b border-border/70 bg-muted/20 p-5 sm:flex-row sm:items-end sm:justify-between md:px-6">
+          <div className="min-w-0">
+            <h2 id="plugin-catalog-heading" className="kari-card-title text-lg font-semibold">
+              Registered plugin components
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Backend status and UI registration are separate signals. Actions are governed by the existing plugin APIs.
+            </p>
+          </div>
+          {!loading && !error && (
+            <span className="kari-metric shrink-0 text-muted-foreground" aria-label={plugins.length + ' registry entries'}>
+              {plugins.length} ENTRIES
+            </span>
+          )}
+        </div>
+        <div className="p-4 md:p-6">
           {loading ? (
-            <div className="flex justify-center p-8" role="status" aria-live="polite">
-              <Loader2
-                className="h-6 w-6 animate-spin text-primary"
-                aria-hidden={true}
-              />
+            <div className="flex items-center justify-center gap-3 rounded-xl border border-border/60 bg-muted/20 p-10" role="status" aria-live="polite">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" aria-hidden="true" />
+              <span className="text-sm text-muted-foreground">Loading the live plugin registry…</span>
             </div>
           ) : error ? (
             <Alert variant="destructive">
-              <XCircle className="h-4 w-4" aria-hidden={true} />
-              <AlertTitle>Failed to load plugin catalog</AlertTitle>
+              <XCircle aria-hidden="true" className="h-4 w-4" />
+              <AlertTitle>Plugin catalog unavailable</AlertTitle>
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : plugins.length === 0 ? (
-            <div className="text-sm text-muted-foreground">
-              No dynamic extensions registered yet. Ensure the Python manager
-              discovered them.
+            <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-5 py-10 text-center">
+              <Puzzle aria-hidden="true" className="mx-auto mb-3 h-6 w-6 text-muted-foreground" />
+              <h3 className="kari-card-title text-base font-semibold">No plugins discovered</h3>
+              <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+                The backend registry has not returned any extensions for this session.
+                Discovery and installation are managed by the plugin runtime.
+              </p>
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid min-w-0 gap-4 lg:grid-cols-2" data-testid="plugin-registry-grid">
               {plugins.map((plugin) => (
                 <PluginHealthCard
                   key={plugin.id}
@@ -1134,58 +1150,36 @@ export default function PluginOverviewPage({
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center text-lg">
-            <Settings2 className="mr-2 h-5 w-5 text-primary/80" aria-hidden={true} />
-            Vision for Advanced Plugin Architecture
-          </CardTitle>
-          <CardDescription>
-            The long-term goal for KAREN is to support a more dynamic plugin
-            system.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            KAREN&apos;s plugin layer should remain prompt-first, schema-driven,
-            permission-aware, observable, and governed by the backend runtime.
-            New capabilities should register their contracts without requiring
-            frontend routing hacks.
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section aria-labelledby="plugin-invocation-heading" className="kari-card p-5 md:p-6">
+          <div className="flex items-center gap-2">
+            <MessageSquare aria-hidden="true" className="h-5 w-5 text-primary" />
+            <h2 id="plugin-invocation-heading" className="kari-card-title text-base font-semibold">
+              Prompt-first interaction
+            </h2>
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Ask KAREN for a task in chat. The runtime determines eligible tools from
+            registered capabilities, prompt contracts and permissions. The UI does not
+            select executors or imply that a plugin ran.
           </p>
-
-          <ul className="list-inside list-disc space-y-1 pl-5 text-xs text-muted-foreground">
-            <li>Standardized plugin schemas describing inputs, outputs, and purpose.</li>
-            <li>Manifest-declared frontend surfaces with scoped permissions.</li>
-            <li>Backend-owned lifecycle state, RBAC checks, and audit logging.</li>
-            <li>Prompt contracts that let KAREN understand when and how a plugin applies.</li>
-          </ul>
-
-          <Alert variant="default" className="bg-background">
-            <Info className="h-4 w-4" aria-hidden={true} />
-            <AlertTitle className="text-sm font-semibold">Developer Note</AlertTitle>
-            <AlertDescription className="text-xs">
-              True drag-and-drop plugin integration requires governed manifests,
-              prompt contracts, schemas, permissions, sandboxing, telemetry, and
-              lifecycle controls. The UI should display this state, not become
-              the plugin authority.
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
-
-      <Alert className="mt-6">
-        <Puzzle className="h-4 w-4" aria-hidden={true} />
-        <AlertTitle>Connecting to the Agents & Workflows</AlertTitle>
-        <AlertDescription>
-          The tools provided by these plugins are building blocks for agent
-          skills in the Agents & Workflows section. Assign them to agents to support complex,
-          governed automated tasks.
-        </AlertDescription>
-      </Alert>
-    </div>
+        </section>
+        <section aria-labelledby="plugin-governance-heading" className="kari-card p-5 md:p-6">
+          <div className="flex items-center gap-2">
+            <Settings2 aria-hidden="true" className="h-5 w-5 text-primary" />
+            <h2 id="plugin-governance-heading" className="kari-card-title text-base font-semibold">
+              Governed extensions
+            </h2>
+          </div>
+          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Manifests, input/output schemas, RBAC, audit evidence and lifecycle controls
+            remain backend-owned. Plugin capabilities may support authorized agents and workflows.
+          </p>
+        </section>
+      </div>
+    </main>
   );
 }

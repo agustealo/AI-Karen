@@ -12,6 +12,7 @@ import {
 
 import useAuth from "@/lib/useAuth";
 import { apiClient } from "@/lib/api";
+import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,30 +23,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-
-interface AgentCatalogRecord {
-  agent_id: string;
-  name: string;
-  description: string;
-  version: string;
-  lifecycle_state: string;
-  status: string;
-  capabilities: string[];
-  implementation_id?: string | null;
-  prompt_contract_id?: string | null;
-  prompt_version?: string | null;
-  healthy: boolean;
-  missing_dependencies: string[];
-  eligibility: "runtime_decided_per_request";
-}
-
-interface AgentCatalogResponse {
-  agents: AgentCatalogRecord[];
-  total: number;
-  selection_authority: string;
-  execution_authority: string;
-  orchestrator: string;
-}
 
 interface AgentRunRecord {
   run_id: string;
@@ -177,9 +154,12 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     setIsLoadingCatalog(true);
     setCatalogError("");
     try {
-      const response = await apiClient.get<AgentCatalogResponse>(
+      const response = await apiClient.get<unknown>(
         "/api/agent-runtime/catalog",
       );
+      if (!isAgentCatalogResponse(response)) {
+        throw new Error("Agent catalog response does not match the discovery contract.");
+      }
       setCatalog(response);
     } catch (error) {
       setCatalog(null);
@@ -554,6 +534,12 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
               Loading Agent Medusa catalog…
             </CardContent>
           </Card>
+        ) : catalogError ? (
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              Registered specialists are unavailable until the catalog contract is verified.
+            </CardContent>
+          </Card>
         ) : catalog?.agents.length ? (
           <div className="grid gap-4 xl:grid-cols-2">
             {catalog.agents.map((agent) => (
@@ -568,48 +554,24 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                       <Badge variant="outline">{agent.lifecycle_state}</Badge>
                     </div>
                   </div>
-                  <CardDescription>{agent.description}</CardDescription>
+                  <CardDescription>
+                    Registered specialist. Execution eligibility is decided for each request by CORTEX and RuntimePolicy.
+                  </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex flex-wrap gap-2">
-                    {agent.capabilities.map((capability) => (
-                      <Badge key={capability} variant="secondary">
-                        {capability}
-                      </Badge>
-                    ))}
-                  </div>
-
+                <CardContent className="space-y-3">
                   <dl className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                     <div>
                       <dt className="font-medium text-foreground">Agent ID</dt>
                       <dd className="break-all">{agent.agent_id}</dd>
                     </div>
                     <div>
-                      <dt className="font-medium text-foreground">Version</dt>
-                      <dd>{agent.version}</dd>
-                    </div>
-                    <div>
-                      <dt className="font-medium text-foreground">Implementation</dt>
-                      <dd className="break-all">{agent.implementation_id || "Not exposed"}</dd>
-                    </div>
-                    <div>
-                      <dt className="font-medium text-foreground">Prompt contract</dt>
-                      <dd className="break-all">
-                        {agent.prompt_contract_id
-                          ? `${agent.prompt_contract_id}@${agent.prompt_version || "unversioned"}`
-                          : "Not exposed"}
-                      </dd>
+                      <dt className="font-medium text-foreground">Execution eligibility</dt>
+                      <dd>Determined per request</dd>
                     </div>
                   </dl>
-
-                  {!agent.healthy && agent.missing_dependencies.length > 0 && (
-                    <Alert variant="destructive">
-                      <AlertTitle>Missing dependencies</AlertTitle>
-                      <AlertDescription>
-                        {agent.missing_dependencies.join(", ")}
-                      </AlertDescription>
-                    </Alert>
-                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Capabilities, implementation, prompt contract, and version are not exposed by this discovery endpoint.
+                  </p>
                 </CardContent>
               </Card>
             ))}

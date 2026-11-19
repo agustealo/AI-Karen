@@ -39,8 +39,11 @@ def test_pocket_recommendation_is_pinned_to_the_plugin_runtime_spec() -> None:
     assert all(char in "0123456789abcdef" for char in curated["revision"])
     assert curated.get("recommended") is False
     assert curated["tier"] == "optional"
-    # Default live-source proof must never treat this gated optional model
-    # as an ungated recommendation; it has its own consented proof path.
+    # The official non-cloning Pocket repository is public, but the runtime
+    # must still verify the immutable source and license metadata.
+    assert curated["model_id"] == "kyutai/pocket-tts-without-voice-cloning"
+    assert curated["revision"] == "a7056f505a4a8ca72d8b5fb1440071d6f1a35739"
+    assert curated.get("gated") is False
     default_ids = {
         row["id"] for row in recommendations if row.get("recommended") is True
     }

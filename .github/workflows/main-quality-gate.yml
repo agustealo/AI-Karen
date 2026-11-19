@@ -137,8 +137,8 @@ jobs:
       - name: Prove admin user route imports and canonical authorization enums
         run: pytest tests/unit/api_routes/test_admin_user_route_imports.py -q
 
-      - name: Consumer My Account ownership and security contracts
-        run: pytest tests/api_routes/test_consumer_my_account_contract.py -q
+      - name: Consumer ownership and Communications scope security contracts
+        run: pytest tests/api_routes/test_consumer_my_account_contract.py tests/api_routes/test_communications_center_scope.py -q
 
       - name: Enforce durable account session revocation
         run: pytest tests/auth/test_live_session_enforcement.py tests/architecture/test_auth_session_validation_contract.py tests/architecture/test_account_beta_recovery_contract.py -q
@@ -317,11 +317,11 @@ jobs:
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q
-          pytest tests/core/runtime/test_chat_transport_terminal_parity.py -q
 
       - name: Ollama live inventory and provider settings contracts
         run: |
           pytest tests/core/model_runtime/test_provider_registry_endpoints.py -q
+          pytest tests/core/runtime/test_chat_transport_terminal_parity.py -q
           pytest tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_structured_tool_provider_execution.py tests/core/model_runtime/test_personal_model_transport_grant.py -q
           pytest tests/core/expression/test_gateway_selected_provider_precedence.py -q
           pytest tests/core/model_runtime/test_ollama_native_inventory.py -q

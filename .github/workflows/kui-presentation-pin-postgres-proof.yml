@@ -1,0 +1,120 @@
+name: KUI Presentation Pin PostgreSQL Proof
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/*kui_presentation_pin_references.sql"
+      - "src/ai_karen_engine/core/runtime/presentation_pin_*.py"
+      - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
+      - "tests/core/runtime/test_presentation_pin_*.py"
+      - "tests/integration/test_presentation_pins_postgres.py"
+      - ".github/workflows/kui-presentation-pin-postgres-proof.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "supabase/migrations/*kui_presentation_pin_references.sql"
+      - "src/ai_karen_engine/core/runtime/presentation_pin_*.py"
+      - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
+      - "tests/core/runtime/test_presentation_pin_*.py"
+      - "tests/integration/test_presentation_pins_postgres.py"
+      - ".github/workflows/kui-presentation-pin-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kui-pin-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  presentation-pin-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      KAREN_TEST_PIN_POSTGRES: "1"
+      KAREN_TEST_DISPOSABLE_DATABASE: "1"
+      KAREN_TEST_PIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_presentation_pin_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert exact checked-out commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Start canonical disposable PostgreSQL container
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install existing runtime and PostgreSQL proof dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements/ci/chat.txt
+
+      - name: Create isolated pin test database and Supabase client roles
+        shell: bash
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def prepare():
+              root = await asyncpg.connect(
+                  "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
+              )
+              try:
+                  exists = await root.fetchval(
+                      "SELECT 1 FROM pg_database "
+                      "WHERE datname = 'karen_presentation_pin_test'"
+                  )
+                  if exists:
+                      raise RuntimeError("Refuse existing pin test database")
+                  # Roles only in the isolated CI PostgreSQL container.
+                  # Production smoke separately covers a host WITHOUT roles.
+                  for role in ("anon", "authenticated"):
+                      found = await root.fetchval(
+                          "SELECT 1 FROM pg_roles WHERE rolname = $1", role
+                      )
+                      if not found:
+                          await root.execute(f'CREATE ROLE "{role}" NOLOGIN')
+                  await root.execute("CREATE DATABASE karen_presentation_pin_test")
+              finally:
+                  await root.close()
+
+          asyncio.run(prepare())
+          PY
+
+      - name: Prove live source FK, tenant/user RLS, idempotency, CAS and rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            src/ai_karen_engine/core/runtime/presentation_pin_admission.py \
+            src/ai_karen_engine/core/runtime/presentation_pin_readback.py \
+            src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py
+          pytest tests/core/runtime/test_presentation_pin_admission.py \
+            tests/core/runtime/test_presentation_pin_repository.py \
+            tests/core/runtime/test_presentation_pin_readback.py -q -rs
+          pytest tests/integration/test_presentation_pins_postgres.py -q -rs
+
+      - name: Record database acceptance boundary
+        if: always()
+        shell: bash
+        run: |
+          echo "This workflow verifies the actual pin migration against an isolated PostgreSQL container and disposable karen_presentation_pin_test database." >> "$GITHUB_STEP_SUMMARY"
+          echo "The production first-boot smoke separately verifies deployment without Supabase client roles." >> "$GITHUB_STEP_SUMMARY"
+          echo "HTTP mutation auditing and authenticated browser pinning are NOT certified by this job." >> "$GITHUB_STEP_SUMMARY"

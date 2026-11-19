@@ -25,10 +25,10 @@ vi.mock('@/lib/useAuth', () => ({
   }),
 }));
 
-const PINNED = 'db04f0e653473e5c7333c69686ac92b7460b0c1d';
+const PINNED = 'a7056f505a4a8ca72d8b5fb1440071d6f1a35739';
 const recommendation = {
   id: 'pocket-tts-english-18m-refl',
-  model_id: 'kyutai/pocket-tts',
+  model_id: 'kyutai/pocket-tts-without-voice-cloning',
   label: 'Pocket TTS English 18.2M (REFL)',
   purpose: 'CPU speech synthesis',
   channel_id: 'plugin_audio',
@@ -37,8 +37,8 @@ const recommendation = {
   metadata_verified: true,
   verification_state: 'verified',
   license: 'CC-BY-4.0',
-  license_url: 'https://huggingface.co/kyutai/pocket-tts/tree/' + PINNED,
-  gated: true,
+  license_url: 'https://huggingface.co/kyutai/pocket-tts-without-voice-cloning/tree/' + PINNED,
+  gated: false,
   include_patterns: [
     'languages/english_18m_refl_2026-10/model.safetensors',
     'languages/english_18m_refl_2026-10/tokenizer.model',
@@ -108,20 +108,20 @@ describe('Governed plugin model setup', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
-  it('requires explicit license acceptance and validates immutable revision before queueing', async () => {
+  it('installs the official public model in one click with pinned verification', async () => {
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
     const section = await screen.findByTestId('plugin-recommended-models');
     await screen.findByText('Pocket TTS English 18.2M (REFL)');
     const download = within(section).getByRole('button', { name: 'Download recommended model' });
-    expect(download.hasAttribute('disabled')).toBe(true);
-
-    fireEvent.click(within(section).getByRole('checkbox'));
+    expect(within(section).queryByRole('checkbox')).toBeNull();
+    expect(within(section).getByTestId('public-model-one-click').textContent)
+      .toContain('no Hugging Face account or token needed');
     expect(download.hasAttribute('disabled')).toBe(false);
     fireEvent.click(download);
 
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
     expect(mocks.post).toHaveBeenNthCalledWith(1, '/api/models/download/validate', {
-      model_id: 'kyutai/pocket-tts',
+      model_id: 'kyutai/pocket-tts-without-voice-cloning',
       revision: PINNED,
       channel_id: 'plugin_audio',
       include_patterns: recommendation.include_patterns,
@@ -130,7 +130,7 @@ describe('Governed plugin model setup', () => {
       accept_license: true,
     });
     expect(mocks.post).toHaveBeenNthCalledWith(2, '/api/models/download', {
-      model_id: 'kyutai/pocket-tts',
+      model_id: 'kyutai/pocket-tts-without-voice-cloning',
       revision: null,
       validated_revision: PINNED,
       channel_id: 'plugin_audio',
@@ -144,9 +144,33 @@ describe('Governed plugin model setup', () => {
     expect(await screen.findByText(/download job is queued/)).toBeTruthy();
   });
 
+  it('continues to require fresh explicit license approval for gated sources', async () => {
+    getImpl(catalog({ gated: true }));
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    const button = screen.getByRole('button', { name: 'Download recommended model' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(button.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
+  });
+
+  it('fails closed when source gating metadata is unknown', async () => {
+    getImpl(catalog({ gated: undefined }));
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    const button = screen.getByRole('button', { name: 'Download recommended model' });
+    expect(button.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(button.hasAttribute('disabled')).toBe(false);
+  });
+
   it('chooses direct HTTPS without changing license, revision, validation or worker endpoint', async () => {
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
     await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    expect(screen.getByText('Advanced download options')).toBeTruthy();
+    fireEvent.click(screen.getByText('Advanced download options'));
     expect(screen.getByLabelText('Download method')).toBeTruthy();
     expect(screen.getByText('Direct HTTPS (no Hub SDK for transfer)')).toBeTruthy();
     expect(mocks.post).not.toHaveBeenCalled();
@@ -155,8 +179,7 @@ describe('Governed plugin model setup', () => {
       target: { value: 'direct_https' },
     });
     expect(screen.getByRole('button', { name: 'Download recommended model' })
-      .hasAttribute('disabled')).toBe(true);
-    fireEvent.click(screen.getByRole('checkbox'));
+      .hasAttribute('disabled')).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
 
@@ -194,6 +217,7 @@ describe('Governed plugin model setup', () => {
   });
 
   it('rejects inconsistent backend validation without queueing any model', async () => {
+    getImpl(catalog({ gated: true }));
     mocks.post.mockResolvedValueOnce({
       allowed: true,
       model_id: 'another/model',
@@ -206,6 +230,68 @@ describe('Governed plugin model setup', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
     await screen.findByText(/could not verify or queue the selected model/i);
     expect(mocks.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains verified source-access denial without leaking backend text or queueing', async () => {
+    getImpl(catalog({ gated: true }));
+    mocks.post.mockResolvedValueOnce({
+      allowed: false,
+      model_id: recommendation.model_id,
+      channel_id: recommendation.channel_id,
+      metadata: { resolved_revision: PINNED },
+      blocking_reasons: [
+        'Model access metadata could not be verified; retry when license/gating metadata is available',
+        'DO_NOT_EXPOSE_PRIVATE_BACKEND_DETAIL',
+      ],
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    const alert = await screen.findByText(/could not verify the model license or source access/i);
+    expect(alert.textContent).toContain('No job was queued');
+    expect(screen.queryByText(/DO_NOT_EXPOSE_PRIVATE_BACKEND_DETAIL/)).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole('checkbox') as HTMLButtonElement).getAttribute('data-state')).toBe('unchecked');
+    expect(screen.getByRole('button', { name: 'Download recommended model' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('classifies a tenant or administrator permission denial without leaking worker details', async () => {
+    getImpl(catalog({ gated: true }));
+    mocks.post.mockResolvedValueOnce({
+      allowed: true,
+      model_id: recommendation.model_id,
+      channel_id: recommendation.channel_id,
+      metadata: { resolved_revision: PINNED },
+      blocking_reasons: [],
+    }).mockRejectedValueOnce({
+      status: 403,
+      details: { error: 'secret=PRIVATE_TOKEN_VALUE' },
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    await screen.findByText(/Karen denied permission for this model download/i);
+    expect(screen.queryByText(/PRIVATE_TOKEN_VALUE/)).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Download recommended model' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('classifies backend availability failures without displaying exception arguments', async () => {
+    getImpl(catalog({ gated: true }));
+    mocks.post.mockRejectedValueOnce({
+      status: 503,
+      message: 'backend unavailable: /private/path?token=SECRET_VALUE',
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Download recommended model' }));
+    await screen.findByText(/backend model-download service is unavailable/i);
+    expect(screen.queryByText(/SECRET_VALUE/)).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Download recommended model' }).hasAttribute('disabled')).toBe(true);
   });
 
   it('fails closed when source verification is unavailable or pinned revision is mutable', async () => {
@@ -228,12 +314,12 @@ describe('Governed plugin model setup', () => {
       throw new Error('Unexpected URL');
     });
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
-    expect(await screen.findByText(/could not verify recommended models/)).toBeTruthy();
+    expect(await screen.findByText(/Your model download history returned an invalid response/)).toBeTruthy();
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
   it('shows actionable, redacted failure guidance from a scoped model worker receipt', async () => {
-    getImpl(catalog(), policy, [{
+    getImpl(catalog({ gated: true }), policy, [{
       model_id: recommendation.model_id,
       revision: PINNED,
       channel_id: 'plugin_audio',
@@ -247,7 +333,7 @@ describe('Governed plugin model setup', () => {
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
     await screen.findByText('Pocket TTS English 18.2M (REFL)');
     const guidance = screen.getByTestId('plugin-last-download-failure');
-    expect(guidance.textContent).toContain('Hugging Face');
+    expect(guidance.textContent).toContain('model source');
     expect(guidance.textContent).toContain('fresh explicit model-license acceptance');
     expect(guidance.textContent).not.toContain('PRIVATE');
     expect(guidance.textContent).not.toContain('/secret/');
@@ -369,6 +455,7 @@ describe('Governed plugin model setup', () => {
   it.each(['failed', 'cancelled'] as const)(
     'restores the download action after an owned queued job becomes %s',
     async (terminalStatus) => {
+      getImpl(catalog({ gated: true }));
       const jobId = 'mdl-a3478177-6f1a-4e99-ab3a-9f94dd73a335';
       const initialGet = mocks.get.getMockImplementation();
       mocks.get.mockImplementation(async (url: string) => {
@@ -436,8 +523,45 @@ describe('Governed plugin model setup', () => {
     mocks.admin = true;
     mocks.get.mockRejectedValue(new Error('secret token / private traceback'));
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
-    const alert = await screen.findByText(/could not verify recommended models/);
+    const alert = await screen.findByText(/Recommended model catalog could not be loaded/);
     expect(alert.textContent).not.toContain('secret');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+
+  it.each([
+    ['/api/models/download/recommendations', 'Recommended model catalog'],
+    ['/api/models/download/policy', 'Model download policy'],
+    ['/api/models/download/channels', 'Model download channels'],
+    ['/api/runtime/model-library/my-downloads?limit=200', 'Your model download history'],
+  ])('identifies a denied setup dependency without disclosing its response: %s', async (failedUrl, label) => {
+    const previous = mocks.get.getMockImplementation();
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === failedUrl) {
+        throw { status: 403, message: 'secret=PRIVATE_TOKEN_VALUE' };
+      }
+      return previous?.(url);
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    const warning = await screen.findByText(new RegExp(label + ' could not be loaded'));
+    expect(warning.textContent).toContain('Access denied');
+    expect(warning.textContent).not.toContain('PRIVATE_TOKEN_VALUE');
+    expect(screen.queryByRole('button', { name: 'Download recommended model' })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing backend route without claiming model availability', async () => {
+    const previous = mocks.get.getMockImplementation();
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/api/models/download/policy') {
+        throw { status: 404, message: '/private/backend/path?token=SECRET' };
+      }
+      return previous?.(url);
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    const warning = await screen.findByText(/Model download policy could not be loaded/);
+    expect(warning.textContent).toContain('API route was not found');
+    expect(warning.textContent).not.toContain('SECRET');
     expect(mocks.post).not.toHaveBeenCalled();
   });
 

@@ -322,14 +322,28 @@ class PostgresDurableRunLedger:
                 if row is None:
                     raise DurableRunLedgerConflict(f"Unknown Medusa run: {run_id}")
                 current = str(row["status"])
+                existing_audit_ref = row.get("audit_event_ref")
+                if (
+                    audit_event_ref
+                    and existing_audit_ref
+                    and existing_audit_ref != audit_event_ref
+                ):
+                    raise DurableRunLedgerConflict(
+                        f"Conflicting Medusa cancellation audit reference for run {run_id}"
+                    )
                 if current == "cancellation_requested":
                     if audit_event_ref:
-                        await session.execute(
+                        result = await session.execute(
                             text("""
                                 UPDATE agent_medusa_runs
-                                SET audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref)
+                                SET audit_event_ref = COALESCE(audit_event_ref, CAST(:audit_event_ref AS text))
                                 WHERE run_id = :run_id
                                   AND tenant_id = CAST(:tenant_id AS uuid)
+                                  AND status = 'cancellation_requested'
+                                  AND (
+                                      audit_event_ref IS NULL
+                                      OR audit_event_ref = CAST(:audit_event_ref AS text)
+                                  )
                             """),
                             {
                                 "run_id": run_id,
@@ -337,21 +351,30 @@ class PostgresDurableRunLedger:
                                 "audit_event_ref": audit_event_ref,
                             },
                         )
+                        _require_transition(
+                            result, run_id=run_id, transition="cancellation_audit_link"
+                        )
                     return
                 if current != "running":
                     raise DurableRunLedgerConflict(
                         f"Run {run_id} is {current}, not cancellable"
                     )
-                await session.execute(
+                result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
                         SET status = 'cancellation_requested',
                             cancel_requested_at = COALESCE(cancel_requested_at, :event_at),
                             updated_at = :event_at,
-                            audit_event_ref = COALESCE(:audit_event_ref, audit_event_ref),
+                            audit_event_ref = COALESCE(audit_event_ref, CAST(:audit_event_ref AS text)),
                             last_worker_transition_at = :event_at
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
+                          AND status = 'running'
+                          AND (
+                              CAST(:audit_event_ref AS text) IS NULL
+                              OR audit_event_ref IS NULL
+                              OR audit_event_ref = CAST(:audit_event_ref AS text)
+                          )
                     """),
                     {
                         "run_id": run_id,
@@ -359,6 +382,9 @@ class PostgresDurableRunLedger:
                         "event_at": requested_at,
                         "audit_event_ref": audit_event_ref,
                     },
+                )
+                _require_transition(
+                    result, run_id=run_id, transition="cancellation_requested"
                 )
                 await self._append_transition(
                     session,
@@ -633,18 +659,27 @@ class PostgresDurableRunLedger:
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
-                await session.execute(
+                result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
-                        SET audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref)
+                        SET audit_event_ref = COALESCE(audit_event_ref, CAST(:audit_event_ref AS text))
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
+                          AND (
+                              audit_event_ref IS NULL
+                              OR audit_event_ref = CAST(:audit_event_ref AS text)
+                          )
                     """),
                     {
                         "run_id": run_id,
                         "tenant_id": canonical_tenant_id,
                         "audit_event_ref": audit_event_ref,
                     },
+                )
+                _require_transition(
+                    result,
+                    run_id=run_id,
+                    transition="audit_link",
                 )
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
@@ -687,6 +722,7 @@ class PostgresDurableRunLedger:
                     "to_status": to_status,
                     "event_at": event_at,
                     "error_type": error_type,
+                    "outcome_status": outcome_status,
                 }
                 if transition_kind == "start":
                     await session.execute(
@@ -712,7 +748,7 @@ class PostgresDurableRunLedger:
                                 heartbeat_at = :event_at,
                                 error_type = :error_type,
                                 metadata = CASE
-                                    WHEN :outcome_status IS NULL THEN metadata
+                                    WHEN CAST(:outcome_status AS text) IS NULL THEN metadata
                                     ELSE jsonb_set(
                                         COALESCE(metadata, '{}'::jsonb),
                                         '{outcome_status}',

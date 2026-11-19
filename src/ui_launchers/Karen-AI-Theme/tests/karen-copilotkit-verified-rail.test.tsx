@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@copilotkit/react-core/v2", () => ({
@@ -77,6 +77,50 @@ describe("CopilotKit canonical intelligence rail", () => {
     expect(screen.queryByTestId("karen-copilot-rail-unverified")).toBeNull();
   });
 
+  it("projects only the selected response's validated presentation cards", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-old", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-new", role: "assistant" },
+    ];
+    const makeCard = (messageId: string, presentationId: string, date: string) => ({
+      type: "CUSTOM",
+      name: "karen.presentation.v1",
+      messageId,
+      value: {
+        schema_version: 1,
+        presentation_id: presentationId,
+        component_type: "date.observation",
+        evidence_ref: "verified:" + presentationId,
+        data: { formatted: date },
+      },
+    });
+    // Presentation events arrive in reverse order. Canonical transcript
+    // order, not event delivery order, controls the context selection.
+    const events = [
+      makeCard("assistant-new", "card-new", "2026-11-18"),
+      makeCard("assistant-old", "card-old", "2026-11-17"),
+    ];
+    render(
+      <KarenVerifiedHistoryProvider parts={parseKarenVerifiedHistory(events, transcript)}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByTestId("karen-date-presentation")).toHaveLength(2);
+    expect(document.querySelectorAll('[data-presentation-id="card-new"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-presentation-id="card-old"]')).toHaveLength(0);
+    fireEvent.change(screen.getAllByLabelText("Inspect saved response")[0], {
+      target: { value: "assistant-old" },
+    });
+    expect(document.querySelectorAll('[data-presentation-id="card-old"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-presentation-id="card-new"]')).toHaveLength(0);
+    expect(screen.queryByText("Secure pinning not yet available")).toBeNull();
+    expect(() => parseKarenVerifiedHistory([
+      makeCard("user-1", "forged", "2026-11-16"),
+    ], transcript)).toThrow("Unsupported verified conversation event");
+  });
+
   it("rejects duplicate or malformed canonical message identities before event replay", () => {
     const receipt = {
       type: "CUSTOM",
@@ -134,6 +178,40 @@ describe("CopilotKit canonical intelligence rail", () => {
     );
     expect(screen.getAllByText("newest-model")).toHaveLength(2);
     expect(screen.queryByText("stale-model")).toBeNull();
+  });
+
+  it("selects an older verified response without reattributing latest execution", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-old", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-new", role: "assistant" },
+    ];
+    const receipts = ["assistant-old", "assistant-new"].map((messageId, index) => ({
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId,
+      value: {
+        actual_provider: "local",
+        actual_model: index === 0 ? "older-verified-model" : "latest-verified-model",
+        response_source: "local_inference",
+      },
+    }));
+    render(
+      <KarenVerifiedHistoryProvider parts={parseKarenVerifiedHistory(receipts, transcript)}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
+    expect(screen.queryByText("older-verified-model")).toBeNull();
+    const selectors = screen.getAllByLabelText("Inspect saved response");
+    expect(selectors).toHaveLength(2);
+    fireEvent.change(selectors[0], { target: { value: "assistant-old" } });
+    expect(screen.getAllByText("older-verified-model")).toHaveLength(2);
+    expect(screen.queryByText("latest-verified-model")).toBeNull();
+    fireEvent.change(selectors[1], { target: { value: "assistant-new" } });
+    expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
+    expect(screen.queryByText("older-verified-model")).toBeNull();
   });
 
   it.each([
@@ -413,7 +491,7 @@ describe("CopilotKit canonical intelligence rail", () => {
     const disclosure = screen.getByTestId("karen-copilot-mobile-intelligence");
     expect(disclosure.tagName).toBe("DETAILS");
     expect(disclosure.hasAttribute("open")).toBe(false);
-    expect(disclosure.querySelector("summary")?.textContent).toContain("Conversation intelligence");
+    expect(disclosure.querySelector("summary")?.textContent).toContain("Response context");
     expect(disclosure.querySelector('[data-testid="canonical-conversation-rail"]')).not.toBeNull();
   });
 

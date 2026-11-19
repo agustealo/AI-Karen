@@ -11,8 +11,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectGroup, SelectLabel, SelectSeparator } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import useAuth from "@/lib/useAuth";
+import { AutomationListNotice } from "@/components/automation/AutomationListNotice";
+import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
 import { ApiError, apiClient } from "@/lib/api";
 
 interface CronJob {
@@ -44,32 +46,26 @@ interface Sequence {
  * @file CronJobsPage.tsx
  * @description Preview page for scheduling Tasks using cron expressions.
  */
-let cronJobsFetchPromise: Promise<CronJob[]> | null = null;
-
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function loadCronJobsWithRetry(): Promise<CronJob[]> {
+async function loadCronJobsWithRetry(isCurrent: () => boolean): Promise<CronJob[]> {
   const retryDelaysMs = [250, 750];
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    if (!isCurrent()) throw new Error("Schedule request superseded by a new principal or revision");
     try {
-      if (!cronJobsFetchPromise) {
-        cronJobsFetchPromise = apiClient
-          .get<CronJob[]>("/api/automation/cron")
-          .finally(() => {
-            cronJobsFetchPromise = null;
-          });
-      }
-
-      return await cronJobsFetchPromise;
+      // Do not share an in-flight authenticated response across components,
+      // principals, or sessions.
+      return await apiClient.get<CronJob[]>("/api/automation/cron");
     } catch (error) {
       lastError = error;
 
       if (error instanceof ApiError && (error.status === 404 || error.status === 429) && attempt < retryDelaysMs.length) {
         await sleep(retryDelaysMs[attempt]);
+        if (!isCurrent()) throw new Error("Schedule request superseded before retry");
         continue;
       }
 
@@ -86,7 +82,19 @@ export default function CronJobsPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sequences, setSequences] = useState<Sequence[]>([]);
   const [loading, setLoading] = useState(true);
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const [fetchError, setFetchError] = useState(false);
+  const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
+  const principal = isAuthenticated && user?.tenant_id && user.user_id
+    ? JSON.stringify([user.tenant_id, user.user_id])
+    : "";
+  // Synchronous render-time principal check prevents an old account response
+  // committing between identity change and the next effect cleanup.
+  const currentPrincipal = useRef(principal);
+  currentPrincipal.current = principal;
+  const jobsRevision = useRef(0);
+  const dependenciesRevision = useRef(0);
+  const [jobsOwner, setJobsOwner] = useState<string | null>(null);
+  const [dependenciesOwner, setDependenciesOwner] = useState<string | null>(null);
   
   // Form State
   const [taskName, setTaskName] = useState("");
@@ -96,53 +104,110 @@ export default function CronJobsPage() {
   const [enabled, setEnabled] = useState(true);
 
   const fetchDependencies = useCallback(async () => {
-    if (!isAuthenticated) return;
+    const requestPrincipal = principal;
+    if (currentPrincipal.current !== requestPrincipal) return;
+    const revision = ++dependenciesRevision.current;
+    if (!requestPrincipal) {
+      setTasks([]);
+      setSequences([]);
+      setDependenciesOwner(null);
+      return;
+    }
+
+    setDependenciesOwner(null);
     try {
       const [tasksRes, seqsRes] = await Promise.all([
         apiClient.get<Task[]>("/api/tasks"),
-        apiClient.get<Sequence[]>("/api/automation/jobs")
+        apiClient.get<Sequence[]>("/api/automation/jobs"),
       ]);
+      if (currentPrincipal.current !== requestPrincipal ||
+          dependenciesRevision.current !== revision) return;
       setTasks(tasksRes || []);
       setSequences(seqsRes || []);
-    } catch (e) {
-      console.error("Failed to fetch dependencies", e);
+      setDependenciesOwner(requestPrincipal);
+    } catch (error) {
+      if (currentPrincipal.current !== requestPrincipal ||
+          dependenciesRevision.current !== revision) return;
+      setTasks([]);
+      setSequences([]);
+      setDependenciesOwner(null);
+      console.error("Failed to fetch schedule dependencies", error);
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   const fetchJobs = useCallback(async () => {
-    if (!isAuthenticated) {
+    const requestPrincipal = principal;
+    if (currentPrincipal.current !== requestPrincipal) return;
+    const revision = ++jobsRevision.current;
+    if (!requestPrincipal) {
+      setFetchError(false);
       setJobs([]);
+      setJobsOwner(null);
       setLoading(false);
       return;
     }
 
+    setLoading(true);
+    setFetchError(false);
+    setJobsOwner(null);
     try {
-      setLoading(true);
-      const res = await loadCronJobsWithRetry();
+      const res = await loadCronJobsWithRetry(() =>
+        currentPrincipal.current === requestPrincipal &&
+        jobsRevision.current === revision,
+      );
+      if (currentPrincipal.current !== requestPrincipal ||
+          jobsRevision.current !== revision) return;
       setJobs(res);
+      setJobsOwner(requestPrincipal);
     } catch (error) {
-      if (error instanceof ApiError && (error.status === 401 || error.status === 404 || error.status === 429)) {
-        setJobs([]);
-      } else {
+      if (currentPrincipal.current !== requestPrincipal ||
+          jobsRevision.current !== revision) return;
+      setJobs([]);
+      setFetchError(true);
+      setJobsOwner(requestPrincipal);
+      if (!(error instanceof ApiError &&
+            (error.status === 401 || error.status === 404 || error.status === 429))) {
         console.error("Failed to fetch cron jobs", error);
       }
     } finally {
-      setLoading(false);
+      if (currentPrincipal.current === requestPrincipal &&
+          jobsRevision.current === revision) {
+        setLoading(false);
+      }
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   useEffect(() => {
-    if (isAuthLoading) {
-      return;
-    }
+    if (isAuthLoading) return;
 
-    fetchJobs();
-    fetchDependencies();
+    void fetchJobs();
+    void fetchDependencies();
+    return () => {
+      // Invalidate any requests still pending when the principal changes
+      // or the workspace unmounts.
+      jobsRevision.current += 1;
+      dependenciesRevision.current += 1;
+    };
   }, [fetchJobs, fetchDependencies, isAuthLoading]);
 
+  useEffect(() => {
+    // Form selections belong to the active principal and cannot be reused
+    // after switching accounts or tenants.
+    setTargetId("");
+    setTaskName("");
+    setSchedule("");
+    setType("Sequence");
+  }, [principal]);
+
+  const verifiedJobs = jobsOwner === principal && !!principal;
+  const verifiedDependencies = dependenciesOwner === principal && !!principal;
+  const visibleTasks = verifiedDependencies ? tasks : [];
+  const visibleSequences = verifiedDependencies ? sequences : [];
+
   const handleCreateJob = async () => {
-    if (!isAuthenticated) return;
+    if (!principal || !verifiedDependencies) return;
     if (!taskName || !schedule || !targetId) return;
+    const actionPrincipal = principal;
 
     try {
       await apiClient.post("/api/automation/cron", {
@@ -152,6 +217,7 @@ export default function CronJobsPage() {
         targetId,
         enabled,
       });
+      if (currentPrincipal.current !== actionPrincipal) return;
       setTaskName("");
       setSchedule("");
       setTargetId("");
@@ -163,9 +229,11 @@ export default function CronJobsPage() {
   };
 
   const handleToggle = async (id: string, currentEnabled: boolean) => {
-    if (!isAuthenticated) return;
+    if (!principal || !verifiedJobs) return;
+    const actionPrincipal = principal;
     try {
       await apiClient.put(`/api/automation/cron/${id}/toggle`, { enabled: !currentEnabled });
+      if (currentPrincipal.current !== actionPrincipal) return;
       fetchJobs();
     } catch (error) {
       console.error("Failed to toggle cron job", error);
@@ -173,9 +241,11 @@ export default function CronJobsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!isAuthenticated) return;
+    if (!principal || !verifiedJobs) return;
+    const actionPrincipal = principal;
     try {
       await apiClient.delete(`/api/automation/cron/${id}`);
+      if (currentPrincipal.current !== actionPrincipal) return;
       fetchJobs();
     } catch (error) {
       console.error("Failed to delete cron job", error);
@@ -183,22 +253,19 @@ export default function CronJobsPage() {
   };
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center space-x-3">
-        <Clock className="h-8 w-8 text-primary" />
-        <div>
-          <h2 className="karen-page-title">Cron Job Assignments</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage live scheduled automations executing on the backend.
-          </p>
-        </div>
-      </div>
+    <div className="karen-automation karen-automation-workflow space-y-6">
+      <AutomationWorkflowHeader
+          icon={Clock}
+          section="SCHEDULE CONTROL"
+          title="Cron Job Assignments"
+          description="Manage live scheduled automations executing on the backend."
+        />
       
       <Alert>
         <Clock className="h-4 w-4" />
-        <AlertTitle>Scheduler Connected</AlertTitle>
+        <AlertTitle>Scheduler Controls</AlertTitle>
         <AlertDescription>
-          Jobs created below are saved to backend memory and evaluated in real-time. Use the toggles to enable or disable live workflows.
+          Manage saved schedules through the authenticated backend. A visible schedule does not independently verify scheduler health or execution.
         </AlertDescription>
       </Alert>
 
@@ -212,17 +279,25 @@ export default function CronJobsPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-3">
         {/* Cron Job List */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="min-w-0 space-y-4 xl:col-span-2">
           <h3 className="text-lg font-semibold">Scheduled Jobs {loading && <span className="text-sm font-normal text-muted-foreground ml-2">(Syncing...)</span>}</h3>
-          {jobs.length === 0 && !loading && (
-             <p className="text-sm text-muted-foreground">No cron jobs configured yet.</p>
-          )}
-          {jobs.map((job, index) => (
-            <Card key={job.id || index}>
+          {isAuthLoading ? (
+            <AutomationListNotice kind="loading" message="Restoring your session..." />
+          ) : !isAuthenticated ? (
+            <AutomationListNotice kind="authentication" message="Sign in to view scheduled jobs." />
+          ) : loading || !verifiedJobs ? (
+            <AutomationListNotice kind="loading" message="Loading scheduled jobs from backend..." />
+          ) : fetchError ? (
+            <AutomationListNotice kind="unavailable" message="Schedules unavailable: the backend could not verify saved schedules." />
+          ) : jobs.length === 0 ? (
+            <AutomationListNotice kind="empty" message="No cron jobs configured yet." />
+          ) : null}
+          {!isAuthLoading && isAuthenticated && !loading && !fetchError && verifiedJobs && jobs.map((job, index) => (
+            <Card className="karen-automation-card" key={job.id || index}>
               <CardHeader>
-                 <div className="flex justify-between items-start">
+                 <div className="flex flex-wrap items-start justify-between gap-3">
                    <div>
                      <CardTitle className="text-base flex items-center">
                          <Badge variant="outline" className="mr-3 text-sm font-mono">{job.schedule}</Badge>
@@ -233,11 +308,11 @@ export default function CronJobsPage() {
                          Next scheduled run: {job.nextRun || 'Not scheduled'}
                      </CardDescription>
                    </div>
-                  <div className="flex items-center space-x-1">
+                  <div className="flex flex-wrap items-center gap-1">
                       <Switch 
                         checked={job.enabled} 
                         onCheckedChange={() => handleToggle(job.id, job.enabled)}
-                        className="data-[state=checked]:bg-green-600"
+                        aria-label={`Toggle ${job.taskName || job.name} schedule`}
                       />
                       <Button variant="ghost" size="icon" onClick={() => handleDelete(job.id)}>
                         <Trash2 className="h-4 w-4 text-muted-foreground hover:text-destructive" />
@@ -250,8 +325,8 @@ export default function CronJobsPage() {
         </div>
 
         {/* Create New Cron Job Form */}
-        <div className="lg:col-span-1">
-           <Card className="sticky top-20">
+        <div className="min-w-0 xl:col-span-1">
+           <Card className="karen-automation-card xl:sticky xl:top-20">
             <CardHeader>
               <CardTitle>Schedule a New Job</CardTitle>
               <CardDescription>Assign a task or sequence to a schedule.</CardDescription>
@@ -260,8 +335,8 @@ export default function CronJobsPage() {
                <div className="space-y-1.5">
                   <Label htmlFor="cron-task">Task or Sequence to Schedule</Label>
                    <Select value={targetId} onValueChange={(val) => {
-                     const selectedSeq = sequences.find(t => t.id === val);
-                     const selectedTask = tasks.find(t => t.id === val);
+                     const selectedSeq = visibleSequences.find(t => t.id === val);
+                     const selectedTask = visibleTasks.find(t => t.id === val);
                      if (selectedSeq) {
                        setTargetId(val);
                        setTaskName(selectedSeq.name || selectedSeq.id);
@@ -278,14 +353,14 @@ export default function CronJobsPage() {
                     <SelectContent>
                       <SelectGroup>
                         <SelectLabel>Sequences</SelectLabel>
-                        {sequences.map(t => (
+                        {visibleSequences.map(t => (
                            <SelectItem key={t.id} value={t.id}>{t.name || t.id}</SelectItem>
                         ))}
                       </SelectGroup>
                       <SelectSeparator />
                       <SelectGroup>
                         <SelectLabel>Tasks</SelectLabel>
-                        {tasks.map(t => (
+                        {visibleTasks.map(t => (
                            <SelectItem key={t.id} value={t.id}>{t.name || t.id}</SelectItem>
                         ))}
                       </SelectGroup>
@@ -314,7 +389,7 @@ export default function CronJobsPage() {
                </div>
             </CardContent>
             <CardFooter>
-              <Button onClick={handleCreateJob} className="w-full" disabled={!targetId || !schedule}>
+              <Button onClick={handleCreateJob} className="w-full" disabled={!principal || !verifiedDependencies || !targetId || !schedule}>
                 <PlusCircle className="mr-2 h-4 w-4" />
                 Schedule Job
               </Button>
@@ -327,7 +402,7 @@ export default function CronJobsPage() {
         <Info className="h-4 w-4" />
         <AlertTitle>Developer Insight</AlertTitle>
         <AlertDescription>
-         The backend scheduler evaluates due runs natively using `croniter`. Creating a job dynamically enqueues it to the live polling system without restarts. Future scope includes duckdb durability to survive restarts.
+         The backend scheduler evaluates due runs natively using `croniter`. Creating a job dynamically enqueues it to the live polling system without restarts. Execution and persistence guarantees must be verified through backend receipts.
         </AlertDescription>
       </Alert>
     </div>

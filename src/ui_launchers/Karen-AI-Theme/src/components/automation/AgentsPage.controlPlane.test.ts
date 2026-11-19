@@ -84,3 +84,21 @@ describe("Agent Runtime owner-verified execution detail", () => {
     expect(source).toContain("return () => { active = false; }");
   });
 });
+
+describe("Agent Runtime discovery contract", () => {
+  it("validates the canonical minimal backend catalog before rendering", () => {
+    expect(source).toContain('import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog"');
+    expect(source).toContain("if (!isAgentCatalogResponse(response))");
+    expect(source).toContain("Registered specialists are unavailable until the catalog contract is verified.");
+    expect(source).toContain("Agent catalog response does not match the discovery contract.");
+    expect(source).toContain("Determined per request");
+  });
+
+  it("does not dereference metadata the discovery endpoint deliberately omits", () => {
+    expect(source).not.toContain("agent.capabilities.map(");
+    expect(source).not.toContain("agent.missing_dependencies.length");
+    expect(source).not.toContain("{agent.description}");
+    expect(source).not.toContain("{agent.version}");
+    expect(source).toContain("not exposed by this discovery endpoint");
+  });
+});

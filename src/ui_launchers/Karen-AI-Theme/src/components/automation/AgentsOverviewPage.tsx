@@ -13,11 +13,11 @@ import {
   PlusCircle,
   Puzzle,
   RefreshCw,
-  Settings,
   Workflow,
 } from "lucide-react";
 
 import useAuth from "@/lib/useAuth";
+import { AutomationMetricCard } from "@/components/automation/AutomationMetricCard";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -99,28 +99,37 @@ export default function AutomationOverviewPage({ onManageTasks, onManageSequence
   };
 
   return (
-    <div className="space-y-8" data-showcase-state={statsState}>
-      <div className="flex justify-between items-start">
-        <div className="flex items-center space-x-3">
-          <Settings className="h-8 w-8 text-primary" />
-          <div>
-            <h2 className="karen-page-title">Automation Overview</h2>
-            <p className="karen-page-description mt-1">
-              Monitor tenant-scoped tasks, jobs, and schedules owned by KAREN&apos;s automation runtime.
+    <div className="karen-automation space-y-6" data-showcase-state={statsState}>
+      <header className="karen-automation-hero karen-surface relative overflow-hidden rounded-xl p-5 sm:p-7">
+        <div className="relative z-10 flex flex-wrap items-start justify-between gap-5">
+          <div className="max-w-2xl space-y-3">
+            <p className="karen-metric uppercase tracking-[0.16em] text-primary">
+              KARI OS / AUTOMATION WORKSPACE
             </p>
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary" aria-hidden="true">
+                <Workflow className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="karen-page-title">Automation Overview</h2>
+                <p className="karen-page-description mt-2">
+                  Monitor tenant-scoped tasks, jobs, and schedules owned by KAREN&apos;s automation runtime.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={onManageSequences}>
+              <Workflow className="mr-2 h-4 w-4" aria-hidden="true" />
+              Manage Sequences
+            </Button>
+            <Button variant="outline" onClick={onManageTasks}>
+              <PlusCircle className="mr-2 h-4 w-4" aria-hidden="true" />
+              Manage Tasks
+            </Button>
           </div>
         </div>
-        <div className="flex space-x-2">
-          <Button variant="outline" onClick={onManageSequences}>
-            <Workflow className="mr-2 h-4 w-4" />
-            Manage Sequences
-          </Button>
-          <Button variant="outline" onClick={onManageTasks}>
-            <PlusCircle className="mr-2 h-4 w-4" />
-            Manage Tasks
-          </Button>
-        </div>
-      </div>
+      </header>
 
       {statsState === "ready" && (
         <Alert data-automation-stats-state="ready">
@@ -163,75 +172,56 @@ export default function AutomationOverviewPage({ onManageTasks, onManageSequence
       )}
 
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold flex items-center">
-          <LayoutDashboard className="mr-2 h-5 w-5" />Dashboard
+        <h3 className="flex items-center gap-2 text-base font-bold tracking-tight text-foreground">
+          <LayoutDashboard className="h-5 w-5 text-primary" aria-hidden="true" /> Evidence dashboard
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Active Tasks</CardTitle>
-              <FileText className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold" data-automation-metric="active-tasks">
-                {metric(stats?.activeTasks)}
-              </div>
-              <p className="text-xs text-muted-foreground">Your tasks currently executing.</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Task Attempts Started Today</CardTitle>
-              <FileText className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold" data-automation-metric="tasks-today">
-                {metric(stats?.tasksToday)}
-              </div>
-              <p className="text-xs text-muted-foreground" data-automation-metric="tasks-today-context">
-                {stats
-                  ? `Accepted execution starts on ${stats.tasksTodayLocalDate} (${stats.tasksTodayTimezone}). Counts include failed attempts and only cover receipts recorded since tracking began.`
-                  : "Awaiting the local-day execution receipt record."}
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Defined Sequences</CardTitle>
-              <Workflow className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold" data-automation-metric="defined-sequences">
-                {metric(stats?.definedSequences)}
-              </div>
-              <p className="text-xs text-muted-foreground">Your durable saved automation jobs.</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Next Scheduled Run</CardTitle>
-              <Clock className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-lg font-bold truncate" data-automation-metric="next-job">
-                {metric(stats?.nextJob)}
-              </div>
-              <p className="text-xs text-muted-foreground" data-automation-metric="next-job-time">
-                {metric(stats?.nextJobTime)}
-              </p>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <AutomationMetricCard
+            title="Active Tasks"
+            icon={FileText}
+            metricId="active-tasks"
+            value={metric(stats?.activeTasks)}
+            description="Your tasks currently executing."
+          />
+          <AutomationMetricCard
+            title="Task Attempts Started Today"
+            icon={FileText}
+            metricId="tasks-today"
+            value={metric(stats?.tasksToday)}
+            description={
+              stats
+                ? `Accepted execution starts on ${stats.tasksTodayLocalDate} (${stats.tasksTodayTimezone}). Counts include failed attempts and only cover receipts recorded since tracking began.`
+                : "Awaiting the local-day execution receipt record."
+            }
+            descriptionMetricId="tasks-today-context"
+          />
+          <AutomationMetricCard
+            title="Defined Sequences"
+            icon={Workflow}
+            metricId="defined-sequences"
+            value={metric(stats?.definedSequences)}
+            description="Your durable saved automation jobs."
+          />
+          <AutomationMetricCard
+            title="Next Scheduled Run"
+            icon={Clock}
+            metricId="next-job"
+            value={metric(stats?.nextJob)}
+            description={metric(stats?.nextJobTime)}
+            descriptionMetricId="next-job-time"
+            compactValue
+          />
         </div>
       </div>
 
       <Separator />
 
       <div className="space-y-4">
-        <h3 className="text-lg font-semibold flex items-center">
-          <Lightbulb className="mr-2 h-5 w-5" />Live Capabilities
+        <h3 className="flex items-center gap-2 text-base font-bold tracking-tight text-foreground">
+          <Lightbulb className="h-5 w-5 text-primary" aria-hidden="true" /> Runtime capabilities
         </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <Card className="bg-muted/20 border-primary/20">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <Card className="karen-automation-card">
             <CardHeader>
               <CardTitle className="text-base">Persistent Execution</CardTitle>
               <CardDescription>Jobs continue running even if the browser is closed.</CardDescription>
@@ -242,7 +232,7 @@ export default function AutomationOverviewPage({ onManageTasks, onManageSequence
               </p>
             </CardContent>
           </Card>
-          <Card className="bg-muted/20 border-primary/20">
+          <Card className="karen-automation-card">
             <CardHeader>
               <CardTitle className="text-base">Runtime Delegation</CardTitle>
               <CardDescription>Agent collaboration remains owned by ChatRuntime and Agent Medusa.</CardDescription>
@@ -253,10 +243,10 @@ export default function AutomationOverviewPage({ onManageTasks, onManageSequence
               </p>
             </CardContent>
           </Card>
-          <Card className="bg-muted/20 border-primary/20">
+          <Card className="karen-automation-card">
             <CardHeader>
-              <CardTitle className="text-base">Event-Driven Toggles</CardTitle>
-              <CardDescription>Enable or disable live workflows instantly.</CardDescription>
+              <CardTitle className="text-base">Schedules &amp; Triggers</CardTitle>
+              <CardDescription>Configure scheduled execution through the governed workflow controls.</CardDescription>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
@@ -269,7 +259,7 @@ export default function AutomationOverviewPage({ onManageTasks, onManageSequence
 
       <Separator />
 
-      <Card className="bg-muted/30">
+      <Card className="karen-automation-card">
         <CardHeader>
           <CardTitle className="text-lg">The Operational Flow</CardTitle>
           <CardDescription>Compose governed automation without creating a second agent-execution authority.</CardDescription>

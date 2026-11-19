@@ -1398,9 +1398,9 @@ class ModelDownloadControlService:
                 item["gated"] = bool(info.gated)
             except Exception as exc:
                 logger.info(
-                    "model_download_recommendation_metadata_unavailable model_id=%s error=%s",
+                    "model_download_recommendation_metadata_unavailable model_id=%s error_type=%s",
                     model_id,
-                    exc,
+                    type(exc).__name__,
                 )
                 # A curated license label is not proof of current remote access
                 # terms. Never promote it to a verified result after an outage.

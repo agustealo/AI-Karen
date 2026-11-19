@@ -259,6 +259,42 @@ export function useKarenLatestVerifiedExecution(): Record<string, unknown> | nul
   return receipt?.type === "receipt" ? receipt.value : null;
 }
 
+/**
+ * Canonical ordered response selector. It exposes only attested saved parts
+ * keyed to assistant message IDs, never SDK-local/optimistic activity.
+ * The latest assistant turn is included even when it has no receipt so older
+ * model attribution cannot be accidentally presented as the newest run.
+ */
+export function useKarenVerifiedResponseContext(): ReadonlyArray<{
+  messageId: string;
+  receipt: Record<string, unknown> | null;
+  agentSteps: AgentStepEvent[];
+  presentations: readonly KarenPresentationEnvelope[];
+}> {
+  const verified = useContext(VerifiedHistoryContext);
+  return Array.from(verified.entries()).map(([messageId, parts]) => {
+    const receiptPart = parts.find(part => part.type === "receipt");
+    const lifecycle = new Map<string, AgentStepEvent>();
+    for (const part of parts) {
+      if (part.type !== "agent_step") continue;
+      const agentId = part.value.metadata?.agent_id;
+      if (typeof agentId !== "string") continue;
+      lifecycle.set(JSON.stringify([agentId, part.value.step_id]), part.value);
+    }
+    return {
+      messageId,
+      receipt: receiptPart?.type === "receipt" ? receiptPart.value : null,
+      agentSteps: Array.from(lifecycle.values()),
+      // Already admitted by parseKarenVerifiedHistory; preserve the exact
+      // bounded artifact envelope, its evidence_ref, and presentation_id.
+      presentations: parts.filter(
+        (part): part is Extract<VerifiedPart, { type: "presentation" }> =>
+          part.type === "presentation",
+      ).map(part => part.value),
+    };
+  });
+}
+
 /** Preserve the SDK's default assistant message (including its toolbar). */
 /** Only saved, validated steps for the latest assistant turn populate the rail. */
 export function useKarenLatestVerifiedAgentSteps(): AgentStepEvent[] {

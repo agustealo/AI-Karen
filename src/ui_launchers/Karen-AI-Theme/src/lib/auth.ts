@@ -81,6 +81,7 @@ class AuthService {
   private readonly LOGIN_VALIDATION_GRACE_MS = 30000;
   private refreshInFlight: Promise<string> | null = null;
   private sessionValidationInFlight: Promise<boolean> | null = null;
+  private authenticationRevision = 0;
   private refreshBlockedUntil = 0;
 
   private async fetchWithTimeout(
@@ -342,6 +343,9 @@ class AuthService {
    * Login user with credentials
    */
   async login(credentials: LoginCredentials): Promise<LoginResponse> {
+    const revision = ++this.authenticationRevision;
+    this.sessionValidationInFlight = null;
+    this.refreshInFlight = null;
     try {
       const sendLogin = async (): Promise<Response> =>
         this.fetchWithTimeout('/api/auth/login', {
@@ -354,12 +358,14 @@ class AuthService {
         });
 
       const response = await sendLogin();
+      if (revision !== this.authenticationRevision) throw new Error("Login superseded by newer authentication action");
 
       if (!response.ok) {
         throw new Error(await this.getErrorMessage(response, 'Login failed'));
       }
 
        const data: LoginResponse = await response.json();
+       if (revision !== this.authenticationRevision) throw new Error("Login superseded by newer authentication action");
        const resolvedUser =
          data?.user && typeof data.user === 'object' ? data.user : null;
 
@@ -408,6 +414,9 @@ class AuthService {
    * Logout user
    */
   async logout(): Promise<void> {
+    const revision = ++this.authenticationRevision;
+    this.sessionValidationInFlight = null;
+    this.refreshInFlight = null;
     try {
       const refreshToken = localStorage.getItem('refresh_token');
       const accessToken = localStorage.getItem('access_token');
@@ -427,6 +436,7 @@ class AuthService {
       console.error('Logout error:', error);
       // Continue with cleanup even if API call fails
     } finally {
+      if (revision !== this.authenticationRevision) return;
       // Clear all auth data
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
@@ -442,6 +452,7 @@ class AuthService {
    * Refresh access token
    */
   async refreshToken(): Promise<string> {
+    const revision = this.authenticationRevision;
     if (this.refreshInFlight) {
       return this.refreshInFlight;
     }
@@ -467,8 +478,10 @@ class AuthService {
           body: JSON.stringify({ refresh_token: refreshToken }),
         });
 
+      if (revision !== this.authenticationRevision) return '';
       if (!response.ok) {
         const errorMessage = await this.getErrorMessage(response, 'Token refresh failed');
+        if (revision !== this.authenticationRevision) return '';
         if (response.status === 401 || response.status === 403) {
           this.refreshBlockedUntil = Date.now() + this.REFRESH_RETRY_COOLDOWN_MS;
           console.warn('[AuthService] Refresh token rejected; clearing local auth state.');
@@ -479,12 +492,14 @@ class AuthService {
       }
 
         const data = await response.json();
+        if (revision !== this.authenticationRevision) return '';
         localStorage.setItem('access_token', data.access_token);
         this.markLoginSuccess();
         this.refreshBlockedUntil = 0;
         
         return data.access_token;
     } catch (error) {
+      if (revision !== this.authenticationRevision) return '';
       if (error instanceof Error && /invalid refresh token/i.test(error.message)) {
         console.warn('[AuthService] Invalid refresh token; clearing local auth state.');
         this.clearAuth();
@@ -502,7 +517,7 @@ class AuthService {
       
       throw error;
     } finally {
-      this.refreshInFlight = null;
+      if (revision === this.authenticationRevision) this.refreshInFlight = null;
     }
   })();
 
@@ -600,6 +615,7 @@ class AuthService {
    * Validate current session
    */
   async validateSession(): Promise<boolean> {
+    const revision = this.authenticationRevision;
     if (this.sessionValidationInFlight) {
       return this.sessionValidationInFlight;
     }
@@ -654,6 +670,7 @@ class AuthService {
           headers: requestHeaders,
           credentials: 'include',
         }, this.SESSION_VALIDATION_TIMEOUT_MS);
+        if (revision !== this.authenticationRevision) return false;
 
         console.log('[AuthService] validateSession response:', {
           status: response.status,
@@ -677,6 +694,7 @@ class AuthService {
           try {
             if (refreshToken) {
               await this.refreshToken();
+              if (revision !== this.authenticationRevision) return false;
               // Retry validation with new token
               const refreshedHeaders: Record<string, string> = {};
               const refreshedAccessToken = this.getAccessToken();
@@ -689,6 +707,7 @@ class AuthService {
                 headers: refreshedHeaders,
                 credentials: 'include',
               }, this.SESSION_VALIDATION_TIMEOUT_MS);
+              if (revision !== this.authenticationRevision) return false;
 
               console.log('[AuthService] validateSession retry response:', {
                 status: newResponse.status,
@@ -707,6 +726,7 @@ class AuthService {
               }
 
               const refreshedSession = await newResponse.json();
+              if (revision !== this.authenticationRevision) return false;
               if (refreshedSession?.user && typeof refreshedSession.user === 'object') {
                 localStorage.setItem('user_data', JSON.stringify(refreshedSession.user));
                 this.setSessionMarker();
@@ -745,6 +765,7 @@ class AuthService {
         }
 
         const session = await response.json();
+        if (revision !== this.authenticationRevision) return false;
         if (session?.user && typeof session.user === 'object') {
           localStorage.setItem('user_data', JSON.stringify(session.user));
           this.setSessionMarker();
@@ -760,6 +781,7 @@ class AuthService {
         this.clearAuth();
         return false;
       } catch (error) {
+        if (revision !== this.authenticationRevision) return false;
         const isTimeout = error instanceof Error && /Request timed out after \d+ms/i.test(error.message);
 
         if (isTimeout) {
@@ -776,7 +798,7 @@ class AuthService {
         }
         return false;
       } finally {
-        this.sessionValidationInFlight = null;
+        if (revision === this.authenticationRevision) this.sessionValidationInFlight = null;
       }
     })();
 
@@ -787,6 +809,9 @@ class AuthService {
    * Clear all auth data
    */
   clearAuth(): void {
+    this.authenticationRevision += 1;
+    this.sessionValidationInFlight = null;
+    this.refreshInFlight = null;
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     localStorage.removeItem('user_data');

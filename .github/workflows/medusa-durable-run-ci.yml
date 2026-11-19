@@ -71,7 +71,8 @@ jobs:
             src/ai_karen_engine/agent_medusa/control_plane.py \
             src/ai_karen_engine/config/agent_medusa.py \
             tests/agent_medusa/test_run_manager.py \
-            tests/agent_medusa/test_durable_run_ledger.py
+            tests/agent_medusa/test_durable_run_ledger.py \
+            tests/agent_medusa/test_remote_cancel_durable_ack.py
 
       - name: Compile Medusa durability code
         run: |
@@ -87,6 +88,7 @@ jobs:
             tests/agent_medusa/test_run_manager.py \
             tests/agent_medusa/test_distributed_run_authority.py \
             tests/agent_medusa/test_durable_run_ledger.py \
+            tests/agent_medusa/test_remote_cancel_durable_ack.py \
             -q
 
       - name: Verify migration authority and tenant isolation
