@@ -151,3 +151,16 @@ async def test_metadata_outage_fails_closed_without_leaking_error(store):
     assert exc.value.status_code == 503
     assert "private database error" not in str(exc.value.detail)
     assert "delete" not in store.actions
+
+
+
+def test_archived_route_precedes_dynamic_artifact_id_route():
+    """Starlette resolves the first matching route, not the most specific."""
+    get_paths = [
+        route.path
+        for route in routes.router.routes
+        if "GET" in getattr(route, "methods", set())
+    ]
+    assert get_paths.index("/artifacts/archived") < get_paths.index(
+        "/artifacts/{artifact_id}"
+    )
