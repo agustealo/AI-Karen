@@ -153,6 +153,117 @@ class PluginService:
             raise RuntimeError("Plugin kernel is not initialized")
         return self.kernel
 
+    async def list_file_explorer_owner_page(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        roles: List[str],
+        permissions: List[str],
+        request_id: str,
+        correlation_id: str,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Authorize a fresh read through RuntimePolicy and the canonical kernel.
+
+        This is the only application entrypoint for the File Explorer owner
+        inventory. Authentication/RBAC belongs to ingress; this boundary also
+        rejects missing data-read entitlement rather than accepting a plugin
+        identifier as a grant.
+        """
+        from importlib import import_module
+
+        from ai_karen_engine.database.factory import get_database_client
+        from ai_karen_engine.extensions.file_explorer_inventory import (
+            FileExplorerInventoryHost,
+        )
+        from ai_karen_engine.services.database.repositories.repository_factory import (
+            RepositoryFactory,
+        )
+
+        if (
+            not user_id or not tenant_id
+            or "data:read" not in permissions
+            or not request_id or not correlation_id
+        ):
+            raise PermissionError("file_explorer_read_permission_required")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("file_explorer_page_limit_invalid")
+        if cursor is not None and (
+            not isinstance(cursor, str) or not 1 <= len(cursor) <= 768
+        ):
+            raise ValueError("file_explorer_cursor_invalid")
+
+        await self._ensure_initialized()
+        kernel = self._get_kernel()
+        record = kernel.get_record("file-explorer")
+        if (
+            record is None
+            or record.get("status") != "enabled"
+            or record.get("dependencies_resolved") is not True
+        ):
+            raise PermissionError("file_explorer_disabled")
+
+        decision = await self._policy_enforcer.evaluate(
+            PolicyEvaluationRequest(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                correlation_id=correlation_id,
+                roles=list(roles),
+                permissions=list(permissions),
+                action="plugin_execution",
+                plugin_id="file-explorer",
+                requested_capabilities=["file-explorer", "data:read"],
+            )
+        )
+        if not decision.allowed:
+            raise PermissionError("file_explorer_policy_denied")
+        plan = decision.to_authorized_plan()
+        if (
+            "file-explorer" not in plan.allowed_plugins
+            or "file-explorer" not in plan.allowed_capabilities
+            or "data:read" not in plan.allowed_capabilities
+            or not plan.matches_execution_scope(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                policy_decision_id=decision.decision_id,
+            )
+        ):
+            raise PermissionError("file_explorer_policy_scope_denied")
+
+        database = get_database_client()
+        if database is None or not callable(getattr(database, "get_async_session", None)):
+            raise RuntimeError("file_explorer_database_unavailable")
+        repository = RepositoryFactory(
+            session_factory=database.get_async_session,
+        ).create_artifact_store()
+
+        # Resolve the adapter from the installed canonical plugin package.
+        # Do not create a second source implementation or filesystem reader.
+        artifact_source = import_module(
+            "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
+        )
+        source = artifact_source.ArtifactSourceAdapter(repository)
+        context = ExtensionExecutionContext(
+            request_id=request_id,
+            correlation_id=correlation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            policy_decision_id=decision.decision_id,
+            allowed_capabilities=list(plan.allowed_capabilities),
+            resource_scope={},
+            audit_context={"origin": "authenticated_file_explorer_inventory"},
+        )
+        return await FileExplorerInventoryHost(
+            kernel=kernel, source=source
+        ).list_owner_page(
+            context=context,
+            plan=plan,
+            limit=limit,
+            cursor=cursor,
+        )
+
     async def discover_plugins(
         self, force_refresh: bool = False
     ) -> Dict[str, Dict[str, Any]]:
