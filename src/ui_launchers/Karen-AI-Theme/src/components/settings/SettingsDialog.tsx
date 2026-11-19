@@ -374,9 +374,11 @@ export default function SettingsDialog({
           <TabsList
             className={[
               'karen-settings-categories grid h-auto w-full grid-cols-1 gap-1 rounded-xl border border-border/70 bg-card/80 p-1.5 text-foreground',
-              adminMode
-                ? 'sm:grid-cols-2 lg:max-w-[780px] lg:grid-cols-4'
-                : 'sm:grid-cols-3 lg:max-w-[660px]',
+              inSheet
+                ? 'grid-cols-1'
+                : adminMode
+                  ? 'sm:grid-cols-2 lg:max-w-[780px] lg:grid-cols-4'
+                  : 'sm:grid-cols-3 lg:max-w-[660px]',
             ].join(' ')}
           >
             {categories.map((category) => (
@@ -392,8 +394,14 @@ export default function SettingsDialog({
         </Tabs>
 
         {activeCategory && (
-          <div className="grid min-w-0 gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
-            <div className="karen-settings-section-nav karen-surface flex min-w-0 flex-col gap-4 rounded-xl p-4 lg:sticky lg:top-4">
+          <div className={[
+            'grid min-w-0 gap-5',
+            inSheet ? 'grid-cols-1' : 'lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start',
+          ].join(' ')}>
+            <div className={[
+              'karen-settings-section-nav karen-surface flex min-w-0 flex-col gap-4 rounded-xl p-4',
+              inSheet ? '' : 'lg:sticky lg:top-4',
+            ].join(' ')}>
               <div className="flex items-center gap-2 px-1">
                 <div className="h-1 w-1 rounded-full bg-primary" />
                 <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80">
@@ -410,7 +418,10 @@ export default function SettingsDialog({
                       ? 'Customize how Karen behaves, speaks, and presents itself.'
                       : 'Manage authorized administration controls.'}
               </p>
-              <nav aria-label={`${activeCategory.label} settings sections`} className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1">
+              <nav
+                aria-label={`${activeCategory.label} settings sections`}
+                className={inSheet ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1'}
+              >
                 {activeCategory.sections.map((section) => {
                   const Icon = section.icon;
                   const isActive = section.id === activeSectionId;
