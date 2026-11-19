@@ -41,3 +41,21 @@ npm run build
 ```
 
 Run existing opt-in authenticated `e2e/ux-user-journeys.spec.ts` and other dashboard UX journeys against an approved KAREN host. Capture and manually inspect at 390, 768, 1024, 1440 and 1920 CSS px with real backend context. Confirm mobile drawer dismissal, navigation labels, active state, keyboard/focus, collapsed tooltip/expanded section, feature reachability, no PII in screenshots, and both dark/light mode. These real-browser results have **not been observed yet**.
+
+### Five-viewport opt-in typography evidence
+
+The existing `e2e/ux-user-journeys.spec.ts` now contains UX-16. On an approved
+running KAREN deployment with a dedicated sanitized account, enable
+`KAREN_NAV_VISUAL_ACCEPTANCE=true` and `KAREN_SANITIZED_ACCOUNT=true` alongside
+the existing UX email, password, and approved base URL; execute:
+
+```bash
+npx playwright test e2e/ux-user-journeys.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium --grep="UX-16" --retries=0
+```
+
+The test checks real computed Inter navigation typography, KAREN branding,
+primary destination reachability and mobile drawer dismissal at 390/768/1024/
+1440/1920 CSS px, and attaches an individual screenshot for each viewport.
+Do not treat skipped, absent, or unreviewed browser artifacts as acceptance;
+retain them privately and inspect for personal/tenant data before sharing.
