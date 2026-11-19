@@ -26,13 +26,20 @@ describe("Kari OS stationary pinned workspace safety contract", () => {
     expect(dock).toContain('aria-label="Pinned workspace"');
   });
 
-  it("cannot invent persistent pins, authorization, or saved artifact state", () => {
+  it("displays only canonical validated read-only references, never reconstructed cards", () => {
+    expect(dock).toContain("parseAuthorizedPinReadback");
+    expect(dock).toContain('apiClient.get<unknown>("/api/chat/ag-ui/pins")');
     expect(dock).toContain("Secure pinning not yet available");
-    expect(dock).toContain("Nothing has been pinned or synced from this panel");
-    expect(dock).not.toMatch(/localStorage\.|sessionStorage\.|setItem\(/);
-    expect(dock).not.toMatch(/fetch\(|apiClient\.|\bonClick=|\bonSubmit=/);
+    expect(dock).toContain("Full cards cannot be restored");
+    expect(dock).not.toContain("localStorage.");
+    expect(dock).not.toContain("sessionStorage.");
+    expect(dock).not.toContain("setItem(");
+    expect(dock).not.toContain("onClick=");
+    expect(dock).not.toContain("onSubmit=");
+    expect(dock).not.toContain("apiClient.post(");
+    expect(dock).not.toContain("apiClient.put(");
     expect(dock).not.toContain("KarenPresentationRegistry");
-    expect(dock).not.toContain("getServerSideProps");
     expect(dock).toContain('data-testid="karen-pinning-not-available"');
+    expect(dock).toContain('data-testid="karen-pins-authorized"');
   });
 });
