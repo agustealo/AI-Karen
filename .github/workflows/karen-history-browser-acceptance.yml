@@ -793,6 +793,7 @@ jobs:
         env:
           KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
           KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
           test -n "$KAREN_UX_EMAIL" || { echo "::error::Missing sanitized test identity"; exit 1; }
