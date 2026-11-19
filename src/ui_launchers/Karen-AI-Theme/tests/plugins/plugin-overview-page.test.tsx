@@ -92,7 +92,7 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
 
   afterEach(cleanup);
 
-  it('renders an enabled backend plugin with enabled badge and Disable button, avoiding stuck Enable button', () => {
+  it('renders an enabled backend plugin with enabled badge and no lifecycle buttons for voice plugins', () => {
     render(<PluginOverviewPage />);
 
     expect(screen.getByText('Pocket TTS')).toBeTruthy();
@@ -103,12 +103,13 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
     // Headless plugin should not be marked as regular missing UI
     expect(screen.getByText('Host-owned user workspace (no separate plugin bundle)')).toBeTruthy();
 
-    // The Disable button must be present
-    const disableButton = screen.getByRole('button', { name: 'Disable' });
-    expect(disableButton).toBeTruthy();
-
-    // The Enable button must NOT be present when already enabled
+    // Voice plugins are opted in at install time; this page must not render
+    // lifecycle buttons and must never call the refused legacy ingress.
     expect(screen.queryByRole('button', { name: 'Enable' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Disable' })).toBeNull();
+    expect(
+      screen.getByText('Enabled by install opt-in; no enable action is required here.'),
+    ).toBeTruthy();
 
     // UI-only management buttons must not appear for headless plugins
     expect(screen.queryByRole('button', { name: 'Install UI' })).toBeNull();
@@ -139,35 +140,71 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
     expect(screen.queryByRole('button', { name: /Open Voice Studio/ })).toBeNull();
   });
 
-  it('invokes unload endpoint when Disable is clicked on an enabled plugin', async () => {
-    mockPost.mockResolvedValueOnce({ success: true, message: 'Extension pocket-tts unloaded' });
+  it('runs the governed disable flow: approval request, human confirm, verified execute', async () => {
+    currentPlugins = [
+      { ...mockPlugins[0], supportsVoiceOutput: false, id: 'sample-tool' },
+    ];
+    mockPost
+      .mockResolvedValueOnce({
+        status: 'pending',
+        approval_id: '11111111-1111-4111-8111-111111111111',
+        plugin_id: 'sample-tool',
+        action: 'disable',
+        expires_at: '2026-01-01T00:00:00Z',
+      })
+      .mockResolvedValueOnce({ status: 'approved' })
+      .mockResolvedValueOnce({ status: 'verified_committed' });
 
     render(<PluginOverviewPage />);
 
-    const disableButton = screen.getByRole('button', { name: 'Disable' });
-    fireEvent.click(disableButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Disable' }));
 
     await waitFor(() => {
       expect(mockPost).toHaveBeenCalledWith(
-        '/api/extensions/pocket-tts/unload',
+        '/api/plugins/sample-tool/lifecycle/disable/approval',
       );
     });
+
+    // The final click is an explicit confirmation of the pending receipt.
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm disable' }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        '/api/approvals/11111111-1111-4111-8111-111111111111/decision',
+        { decision: 'approved' },
+      );
+      expect(mockPost).toHaveBeenCalledWith(
+        '/api/plugins/sample-tool/lifecycle/disable/execute',
+        { approval_id: '11111111-1111-4111-8111-111111111111' },
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Enable' })).toBeTruthy();
+    });
+    expect(mockPost).not.toHaveBeenCalledWith('/api/extensions/sample-tool/unload');
   });
 
-  it('renders a disabled plugin with disabled badge and Enable button, and calls load endpoint on click', async () => {
+  it('runs the governed enable flow and never calls the refused legacy load route', async () => {
     currentPlugins = [
       {
         ...mockPlugins[0],
+        supportsVoiceOutput: false,
+        id: 'sample-tool',
         enabled: false,
         rawStatus: 'disabled',
       },
     ];
-
-    mockPost.mockResolvedValueOnce({
-      success: true,
-      message: 'Extension pocket-tts loaded',
-      status: 'enabled',
-    });
+    mockPost
+      .mockResolvedValueOnce({
+        status: 'pending',
+        approval_id: '22222222-2222-4222-8222-222222222222',
+        plugin_id: 'sample-tool',
+        action: 'enable',
+        expires_at: '2026-01-01T00:00:00Z',
+      })
+      .mockResolvedValueOnce({ status: 'approved' })
+      .mockResolvedValueOnce({ status: 'verified_committed' });
 
     render(<PluginOverviewPage />);
 
@@ -181,7 +218,20 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
 
     await waitFor(() => {
       expect(mockPost).toHaveBeenCalledWith(
-        '/api/extensions/pocket-tts/load',
+        '/api/plugins/sample-tool/lifecycle/enable/approval',
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm enable' }));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith(
+        '/api/approvals/22222222-2222-4222-8222-222222222222/decision',
+        { decision: 'approved' },
+      );
+      expect(mockPost).toHaveBeenCalledWith(
+        '/api/plugins/sample-tool/lifecycle/enable/execute',
+        { approval_id: '22222222-2222-4222-8222-222222222222' },
       );
     });
 
@@ -192,5 +242,8 @@ describe('PluginOverviewPage Lifecycle and Affordance Contract', () => {
       expect(screen.getByText('enabled')).toBeTruthy();
       expect(screen.queryByText('enabled (discovered)')).toBeNull();
     });
+
+    expect(mockPost).not.toHaveBeenCalledWith('/api/extensions/pocket-tts/load');
+    expect(mockPost).not.toHaveBeenCalledWith('/api/extensions/sample-tool/load');
   });
 });
