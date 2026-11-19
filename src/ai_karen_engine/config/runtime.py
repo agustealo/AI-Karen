@@ -177,6 +177,8 @@ class FeatureFlags:
     enable_ag_ui_bridge: bool = False
     # CK-07A: opt-in only after migration 43 and live multiworker proof.
     enable_ag_ui_durable_runs: bool = False
+    # KUI-002D3B2B: mutation transport remains opt-in after authenticated acceptance.
+    enable_presentation_pin_mutations: bool = False
     # CK-07E0: gated journal of actual projected events; no model reattachment.
     enable_ag_ui_event_journal: bool = False
     # KCOG-01C1B: read-only alternative-mode permission check, never exploration.
@@ -448,6 +450,10 @@ class RuntimeSettings:
         if env_ag_ui_run_ledger is not None:
             self.features.enable_ag_ui_durable_runs = as_bool(env_ag_ui_run_ledger)
 
+        env_pin_mutations = env("KARI_ENABLE_PRESENTATION_PIN_MUTATIONS")
+        if env_pin_mutations is not None:
+            self.features.enable_presentation_pin_mutations = as_bool(env_pin_mutations)
+
         env_ag_ui_event_journal = env("KARI_ENABLE_AG_UI_EVENT_JOURNAL")
         if env_ag_ui_event_journal is not None:
             self.features.enable_ag_ui_event_journal = as_bool(env_ag_ui_event_journal)
@@ -551,6 +557,14 @@ class RuntimeSettings:
 
         if not isinstance(self.features.enable_verification_strategy_policy_probe, bool):
             issues.append("Verification strategy policy probe flag must be boolean")
+
+        if not isinstance(self.features.enable_presentation_pin_mutations, bool):
+            issues.append("Presentation pin mutation flag must be boolean")
+        if self.features.enable_presentation_pin_mutations and not (
+            self.features.enable_ag_ui_bridge
+            and self.features.enable_ag_ui_durable_runs
+        ):
+            issues.append("Presentation pin mutations require AG-UI bridge and durable runs")
 
         if self.features.enable_ag_ui_event_journal and not (
             self.features.enable_ag_ui_bridge
