@@ -520,3 +520,23 @@
   line-height: 1.4;
   letter-spacing: 0.015em;
 }
+
+/* Icon-only mode keeps its accessible 32px controls inside the 48px rail. */
+[data-collapsible="icon"] [data-kari-root].kari-nav-header {
+  padding: 10px 4px;
+}
+[data-collapsible="icon"] [data-kari-root] .kari-nav-brand {
+  padding: 0;
+  justify-content: center;
+}
+[data-collapsible="icon"] [data-kari-root] .kari-nav-mark {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+}
+[data-collapsible="icon"] [data-kari-root].kari-nav-scroll {
+  padding: 8px 4px;
+}
+[data-collapsible="icon"] [data-kari-root].kari-nav-footer {
+  padding: 10px 4px;
+}
