@@ -48,6 +48,7 @@ def source():
 
 def service():
     repository = AsyncMock()
+    repository.replay_committed_pin_receipt.return_value = None
     gateway = AsyncMock()
     runs = AsyncMock()
     gateway.get_owned_snapshot.return_value = object()
@@ -154,4 +155,56 @@ async def test_attestation_outage_does_not_mutate():
             context=context(), idempotency_key=KEY, operation="pin",
             reference=source(),
         )
+    repo.mutate_with_receipt.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_committed_pin_retry_survives_deleted_source_and_attestation_outage():
+    mutation, repo, gateway, runs = service()
+    receipt = object()
+    repo.replay_committed_pin_receipt.return_value = receipt
+    gateway.get_owned_snapshot.side_effect = RuntimeError("conversation_not_found")
+    runs.completed_replay_attestations.side_effect = RuntimeError("attestation offline")
+
+    result = await mutation.execute(
+        context=context(), idempotency_key=KEY,
+        operation="pin", reference=source(), position=0,
+    )
+    assert result is receipt
+    repo.replay_committed_pin_receipt.assert_awaited_once_with(
+        authenticated_tenant_id=TENANT,
+        authenticated_user_id=USER,
+        idempotency_key=KEY,
+        reference=source(),
+        position=0,
+    )
+    gateway.get_owned_snapshot.assert_not_awaited()
+    runs.completed_replay_attestations.assert_not_awaited()
+    repo.mutate_with_receipt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_committed_receipt_requires_fresh_source_admission():
+    mutation, repo, gateway, _ = service()
+    gateway.get_owned_snapshot.side_effect = RuntimeError("conversation_not_found")
+    with pytest.raises(RuntimeError, match="conversation_not_found"):
+        await mutation.execute(
+            context=context(), idempotency_key=KEY,
+            operation="pin", reference=source(),
+        )
+    repo.replay_committed_pin_receipt.assert_awaited_once()
+    repo.mutate_with_receipt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_receipt_replay_outage_fails_closed_before_new_mutation():
+    mutation, repo, gateway, _ = service()
+    repo.replay_committed_pin_receipt.side_effect = RuntimeError("receipt db offline")
+    with pytest.raises(RuntimeError, match="receipt db offline"):
+        await mutation.execute(
+            context=context(), idempotency_key=KEY,
+            operation="pin", reference=source(),
+        )
+    gateway.get_owned_snapshot.assert_not_awaited()
     repo.mutate_with_receipt.assert_not_awaited()
