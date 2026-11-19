@@ -213,3 +213,39 @@ def test_transport_validates_canonical_shape_limits():
         ingress.PresentationPinMutationRequest(
             operation="execute_plugin", idempotency_key=KEY
         )
+
+
+def test_operation_shapes_reject_cross_operation_fields_before_replay():
+    from pydantic import ValidationError
+
+    source = ingress.PresentationPinMutationSourceRequest(
+        conversation_id=THREAD,
+        assistant_message_id=MESSAGE,
+        presentation_id="card-verified",
+        evidence_ref="evidence-verified",
+    )
+    invalid = [
+        {"operation": "pin", "source": source, "pin_id": PIN},
+        {"operation": "pin", "source": source, "expected_revision": 1},
+        {"operation": "pin", "source": None},
+        {"operation": "unpin", "pin_id": PIN, "source": source},
+        {"operation": "unpin", "pin_id": PIN, "position": 0},
+        {"operation": "unpin", "pin_id": PIN, "expected_revision": 1},
+        {"operation": "unpin", "pin_id": None},
+        {"operation": "reorder", "pin_id": PIN, "position": 0},
+        {"operation": "reorder", "pin_id": PIN, "expected_revision": 1},
+        {"operation": "reorder", "pin_id": PIN, "expected_revision": 1, "position": 0, "source": source},
+    ]
+    for payload in invalid:
+        with pytest.raises(ValidationError):
+            ingress.PresentationPinMutationRequest(idempotency_key=KEY, **payload)
+
+    valid = ingress.PresentationPinMutationRequest(
+        idempotency_key=KEY,
+        operation="reorder",
+        pin_id=PIN,
+        expected_revision=2,
+        position=0,
+    )
+    assert valid.operation == "reorder"
+    assert valid.expected_revision == 2
