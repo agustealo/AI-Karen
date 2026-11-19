@@ -294,3 +294,43 @@ Check the attachments for sensitive content before any distribution. The
 test does not prove persisted theme switching, successful settings mutation,
 or pixel-fidelity against a design reference. A skipped opt-in test or green
 GitHub source check **is not real browser acceptance evidence**.
+
+
+## Real Automation network-disconnect and same-account re-login acceptance
+
+`automation-transport-recovery.spec.ts` is a separate opt-in, authenticated
+browser test. It verifies that an existing sanitized Jobs resource is read
+from the real backend, a single deliberately aborted GET produces a visible
+**unavailable** notice rather than a false **empty** notice, and a fresh
+unmodified backend GET restores the resource. It then signs out through the
+real account UI, requires backend denial (401/403), and signs into a fresh
+session for the **same** account to verify a new real resource read.
+
+Provision a healthy, authorized, sanitized host and a dedicated account with
+a uniquely named, already existing Jobs resource. Provide credentials via
+trusted environment variables, never a committed fixture:
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme/e2e
+KAREN_AUTOMATION_TRANSPORT_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+KAREN_UX_ACCOUNT_A_JOB_MARKER="$KAREN_UX_ACCOUNT_A_JOB_MARKER" \
+npx playwright test automation-transport-recovery.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+For a reviewed HTTPS release origin, omit the local-loopback flag. The
+existing approved login helper validates the origin before accepting
+credentials. The suite disables traces, screenshots, and videos; do not
+upload credential-bearing browser artifacts. The one fault is an intentional
+`route.abort("failed")` of a browser GET, with no fabricated HTTP response,
+no fake JSON, and no mutating automation call. Every successful recovery is
+a real backend response.
+
+This test **does not** establish a real-host pass until explicitly executed
+against that host. It also does not prove controlled old-session response
+delivery after a new login, cross-tab logout races, or deployment revision
+provenance. Those remain separate release acceptance gates.
