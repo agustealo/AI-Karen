@@ -86,6 +86,16 @@
         "icon": "folder-open",
         "order": 35
       }
+    ],
+    "source_path": "ui",
+    "entry_file": "FileExplorerPage.tsx",
+    "menu": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "File Explorer",
+        "icon": "folder-open",
+        "order": 35
+      }
     ]
   }
 }
