@@ -81,17 +81,18 @@ export function SharedFileExplorer({
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
 
-  const entries = useMemo(() => {
-    if (!authorized || !Array.isArray(items) || items.length > 200) return [];
+  const inventory = useMemo(() => {
+    if (!authorized || !Array.isArray(items) || items.length > 200) return null;
     const unique = new Set<string>();
     const valid: ExplorerItem[] = [];
     for (const item of items) {
-      if (!validSource(item) || unique.has(item.source_id)) return [];
+      if (!validSource(item) || unique.has(item.source_id)) return null;
       unique.add(item.source_id);
       valid.push(item);
     }
     return valid;
   }, [authorized, items]);
+  const entries = inventory ?? [];
   const byId = useMemo(
     () => new Map(entries.map((item) => [item.source_id, item])),
     [entries],
@@ -106,7 +107,7 @@ export function SharedFileExplorer({
     .sort((a, b) => Number(a.kind === 'file') - Number(b.kind === 'file') ||
       a.name.localeCompare(b.name) || a.source_id.localeCompare(b.source_id)),
     [entries, currentParent, filter]);
-  const selected = selectedSourceIds ?? localSelection;
+  const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id));
   const selectionSet = new Set(selected);
 
   function select(item: ExplorerItem) {
@@ -129,8 +130,8 @@ export function SharedFileExplorer({
     onSelect?.(references);
   }
 
-  if (!authorized) {
-    return <section role="status" className="rounded-lg border p-6 text-sm text-muted-foreground">
+  if (!authorized || (!loading && inventory === null)) {
+    return <section role="alert" className="rounded-lg border p-6 text-sm text-muted-foreground">
       File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.
     </section>;
   }
