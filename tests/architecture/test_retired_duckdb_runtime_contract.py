@@ -7,6 +7,7 @@ modifying PostgreSQL/Redis, cryptographic key checks or migration history.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 
@@ -73,3 +74,34 @@ def test_runtime_requirements_do_not_reinstall_retired_database() -> None:
     ]
     assert not any(line.lower().split("=", 1)[0].split("[", 1)[0].strip().startswith("duckdb") for line in active)
     assert any(line.lower().split("=", 1)[0].strip() == "redis" for line in active)
+
+
+def test_no_live_duckdb_imports_or_flags_in_runtime_sources() -> None:
+    """Guard every first-party runtime source, not just the known entry points."""
+    roots = (
+        ROOT / "src/ai_karen_engine",
+        ROOT / "src/api",
+        ROOT / "scripts/ci",
+    )
+    source_suffixes = {".py", ".js", ".ts", ".tsx", ".sh", ".yaml", ".yml", ".toml"}
+    retired_code_patterns = (
+        re.compile(r"(?i)\\bimport\\s+duckdb\\b"),
+        re.compile(r"(?i)\\bfrom\\s+duckdb\\s+import\\b"),
+        re.compile(r"(?i)\\bduckdb\\s*\\.\\s*connect\\s*\\("),
+        re.compile(r"\\bKARI_DUCKDB_PASSWORD\\b"),
+        re.compile(r"\\bKARI_ENABLE_DUCKDB\\b"),
+    )
+    violations: list[str] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for candidate in root.rglob("*"):
+            if not candidate.is_file() or candidate.suffix not in source_suffixes:
+                continue
+            if any(part in {"node_modules", "__pycache__", "venv", ".venv"} for part in candidate.parts):
+                continue
+            source = candidate.read_text(encoding="utf-8", errors="replace")
+            for lineno, line in enumerate(source.splitlines(), 1):
+                if any(pattern.search(line) for pattern in retired_code_patterns):
+                    violations.append(f"{candidate.relative_to(ROOT)}:{lineno}")
+    assert not violations, "Retired database still wired in source: " + ", ".join(violations)
