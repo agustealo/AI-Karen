@@ -105,6 +105,7 @@ export default function CronJobsPage() {
 
   const fetchDependencies = useCallback(async () => {
     const requestPrincipal = principal;
+    if (currentPrincipal.current !== requestPrincipal) return;
     const revision = ++dependenciesRevision.current;
     if (!requestPrincipal) {
       setTasks([]);
@@ -136,6 +137,7 @@ export default function CronJobsPage() {
 
   const fetchJobs = useCallback(async () => {
     const requestPrincipal = principal;
+    if (currentPrincipal.current !== requestPrincipal) return;
     const revision = ++jobsRevision.current;
     if (!requestPrincipal) {
       setFetchError(false);
@@ -205,6 +207,7 @@ export default function CronJobsPage() {
   const handleCreateJob = async () => {
     if (!principal || !verifiedDependencies) return;
     if (!taskName || !schedule || !targetId) return;
+    const actionPrincipal = principal;
 
     try {
       await apiClient.post("/api/automation/cron", {
@@ -214,6 +217,7 @@ export default function CronJobsPage() {
         targetId,
         enabled,
       });
+      if (currentPrincipal.current !== actionPrincipal) return;
       setTaskName("");
       setSchedule("");
       setTargetId("");
@@ -226,8 +230,10 @@ export default function CronJobsPage() {
 
   const handleToggle = async (id: string, currentEnabled: boolean) => {
     if (!principal || !verifiedJobs) return;
+    const actionPrincipal = principal;
     try {
       await apiClient.put(`/api/automation/cron/${id}/toggle`, { enabled: !currentEnabled });
+      if (currentPrincipal.current !== actionPrincipal) return;
       fetchJobs();
     } catch (error) {
       console.error("Failed to toggle cron job", error);
@@ -236,8 +242,10 @@ export default function CronJobsPage() {
 
   const handleDelete = async (id: string) => {
     if (!principal || !verifiedJobs) return;
+    const actionPrincipal = principal;
     try {
       await apiClient.delete(`/api/automation/cron/${id}`);
+      if (currentPrincipal.current !== actionPrincipal) return;
       fetchJobs();
     } catch (error) {
       console.error("Failed to delete cron job", error);
