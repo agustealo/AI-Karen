@@ -20,6 +20,7 @@ from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
 from ai_karen_engine.agent_medusa.execution.run_manager import (
     MedusaRunManager,
     RunNotCancellableError,
+    RunNotFoundError,
     RunTenantMismatchError,
 )
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
@@ -158,7 +159,7 @@ async def test_invalid_lease_is_rejected_before_postgres(state: str) -> None:
     else:
         shared.fail_get = True
 
-    with pytest.raises((RunNotCancellableError, DistributedRunNotFound)):
+    with pytest.raises((RunNotCancellableError, RunNotFoundError)):
         await request(manager)
 
     assert events == ["redis_get"]
