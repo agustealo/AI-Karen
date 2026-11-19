@@ -80,6 +80,9 @@ class DurableAcceptance:
         if self.failure == "conflict":
             raise DurableRunLedgerConflict("injected audit conflict")
 
+    async def get(self, *, run_id: str, tenant_id: str) -> None:
+        return None
+
 
 def build_manager(
     events: list[str],
