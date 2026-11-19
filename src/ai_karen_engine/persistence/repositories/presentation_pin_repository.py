@@ -129,6 +129,37 @@ def _check_revision(revision: int) -> int:
     return revision
 
 
+
+def _mutation_digest(
+    *,
+    operation: str,
+    tenant: str,
+    user: str,
+    pin_id: str | None,
+    expected_revision: int | None,
+    position: int | None,
+    source: PresentationPinReference | None,
+) -> str:
+    """Canonical v1 logical request identity shared by execution and replay."""
+    payload = {
+        "schema_version": 1, "operation": operation,
+        "tenant_id": tenant, "user_id": user, "pin_id": pin_id,
+        "expected_revision": expected_revision, "position": position,
+        "reference": None if source is None else {
+            "conversation_id": _uuid(source.conversation_id),
+            "assistant_message_id": _uuid(source.assistant_message_id),
+            "presentation_id": source.presentation_id,
+            "evidence_ref": source.evidence_ref,
+        },
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+
 _SELECT_COLUMNS = """
     pin_id, tenant_id, user_id, conversation_id, assistant_message_id,
     presentation_id, evidence_ref, position, revision
@@ -229,6 +260,72 @@ class PresentationPinRepository:
             raise PresentationPinUnavailable("Pin storage unavailable") from exc
 
 
+
+    async def replay_committed_pin_receipt(
+        self,
+        *,
+        authenticated_tenant_id: str,
+        authenticated_user_id: str,
+        idempotency_key: str,
+        reference: PresentationPinReference,
+        position: int = 0,
+    ) -> CommittedPinMutationReceipt | None:
+        """Recover only a previously committed PIN receipt, without source reads.
+
+        The authenticated runtime must call this before fetching a snapshot so
+        a lost response can be replayed after deletion or backend outage.
+        A missing receipt grants nothing and always requires fresh admission
+        through the normal mutation path. This never authorizes presentation
+        readback or a new write.
+        """
+        tenant, user, key = (
+            _uuid(authenticated_tenant_id),
+            _uuid(authenticated_user_id),
+            _uuid(idempotency_key),
+        )
+        pos = _check_position(position)
+        if not isinstance(reference, PresentationPinReference):
+            raise ValueError("PIN reference required")
+        if (
+            not isinstance(reference.presentation_id, str)
+            or not 1 <= len(reference.presentation_id.strip()) <= 160
+            or not isinstance(reference.evidence_ref, str)
+            or not 1 <= len(reference.evidence_ref.strip()) <= 160
+        ):
+            raise ValueError("Valid saved presentation reference required")
+        digest = _mutation_digest(
+            operation="pin", tenant=tenant, user=user, pin_id=None,
+            expected_revision=None, position=pos, source=reference,
+        )
+        try:
+            async with async_transaction_scope(tenant, user_id=user) as session:
+                row = (await session.execute(text("""
+                    SELECT receipt_id, tenant_id, user_id, idempotency_key,
+                           request_id, correlation_id, request_digest, operation,
+                           outcome, pin_id, expected_revision, committed_revision
+                    FROM public.conversation_presentation_pin_mutation_receipts
+                    WHERE tenant_id = :tenant AND user_id = :user
+                      AND idempotency_key = :key
+                """), {
+                    "tenant": tenant, "user": user, "key": key,
+                })).mappings().first()
+                if row is None:
+                    return None
+                if row["operation"] != "pin" or row["request_digest"] != digest:
+                    raise PresentationPinConflict("Idempotency key already used")
+                return _receipt(row)
+        except PresentationPinConflict:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Presentation pin receipt replay unavailable",
+                extra={
+                    "event": "presentation_pin_receipt_replay_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise PresentationPinUnavailable("Pin receipt unavailable") from exc
+
     async def mutate_with_receipt(
         self,
         *,
@@ -301,20 +398,11 @@ class PresentationPinRepository:
 
         # Keep the digest independent of transport retry identifiers, while
         # including every logical input that can affect the mutation.
-        payload = {
-            "schema_version": 1, "operation": operation,
-            "tenant_id": tenant, "user_id": user, "pin_id": requested_pin,
-            "expected_revision": revision, "position": pos,
-            "reference": None if source is None else {
-                "conversation_id": conversation,
-                "assistant_message_id": message,
-                "presentation_id": source.presentation_id,
-                "evidence_ref": source.evidence_ref,
-            },
-        }
-        digest = hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-        ).hexdigest()
+        digest = _mutation_digest(
+            operation=operation, tenant=tenant, user=user,
+            pin_id=requested_pin, expected_revision=revision,
+            position=pos, source=source,
+        )
         params: dict[str, Any] = {
             "tenant": tenant, "user": user, "key": key,
             "request_id": request_id, "correlation_id": correlation_id,
