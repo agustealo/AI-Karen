@@ -24,7 +24,7 @@ Remaining gates: separate worker OS processes; crashed-owner and replaced-lease
 fencing; PostgreSQL latency/failure while Redis renewal continues; production
 role-backed RLS; and an authenticated target installation's audit-readback.
 
-## KCON-473: Distinct OS owner process and crash-fencing acceptance (candidate)
+## KCON-471: Distinct OS owner process and crash-fencing acceptance (candidate)
 
 The same disposable real-store CI now launches a separate Python OS process
 running the original Medusa manager with independent Redis/PostgreSQL clients.
