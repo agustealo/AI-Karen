@@ -445,12 +445,21 @@ class MedusaRunManager:
             return await self.get(run_id=run_id, tenant_id=tenant_id)
 
         if await self._distributed_available():
+            durable_accepted = False
             try:
-                snapshot = await self._distributed_store.request_cancel(
+                # Redis owns the live lease. Validate the tenant, owner lease,
+                # and running status before changing durable history. This
+                # read is advisory; request_cancel repeats the Redis checks
+                # atomically after PostgreSQL has accepted the transition.
+                live = await self._distributed_store.get(
                     run_id=run_id,
                     tenant_id=tenant_id,
                 )
-                if self._settings.durable_run_ledger_enabled:
+                if not live.get("cancellable", False):
+                    raise RunNotCancellableError(
+                        f"Run {run_id} is {live['status']}, not cancellable"
+                    )
+                if self._settings.durable_run_ledger_required:
                     await self._durable_ledger.mark_cancelling(
                         run_id=run_id,
                         tenant_id=tenant_id,
@@ -458,15 +467,29 @@ class MedusaRunManager:
                         audit_event_ref=audit_event_ref,
                         source="admin_cancel" if audit_event_ref else "runtime",
                     )
+                    durable_accepted = True
+
+                # A confirmed durable request is not a completed task. If
+                # Redis fails after the commit, surface the failure rather
+                # than acknowledge a signal that the owner never received.
+                snapshot = await self._distributed_store.request_cancel(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                )
+                snapshot["cancellation_acknowledgement"] = (
+                    "durably_accepted" if durable_accepted else "shared_signal_only"
+                )
                 return snapshot
             except DistributedRunNotFound:
-                pass
+                if durable_accepted:
+                    raise
             except DistributedRunTenantMismatch as exc:
                 raise RunTenantMismatchError(run_id) from exc
             except DistributedRunNotCancellable as exc:
                 raise RunNotCancellableError(str(exc)) from exc
             except DistributedRunStoreUnavailable:
-                pass
+                if durable_accepted:
+                    raise
 
         durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
         if durable is not None:
