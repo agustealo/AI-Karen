@@ -271,6 +271,13 @@ jobs:
           pytest src/ai_karen_engine/api_routes/chat/tests/test_execution_identity_principal.py -q
           pytest tests/core/runtime/test_authorized_semantic_context_handoff.py -q
           pytest tests/core/runtime/test_direct_live_capabilities.py -q
+          # Personal planner chat mutations must be executed as actual
+          # tests, not merely committed as source files. Preserve the
+          # existing CORTEX, RuntimePolicy and service-level authorities.
+          pytest tests/core/runtime/test_planner_direct_capability_route.py -q
+          pytest tests/core/runtime/test_planner_direct_executor_authorization.py -q
+          pytest tests/core/runtime/test_planner_policy_authorization.py -q
+          pytest tests/core/runtime/test_chat_personal_planner_create.py -q
           pytest tests/core/runtime/test_conversational_plugin_inspection.py -q
           pytest tests/core/cortex/test_plugin_capability_precedence.py -q
           pytest tests/core/runtime/test_conversational_plugin_action.py -q
