@@ -163,7 +163,8 @@
  * scoped: unrelated routes, parent dashboard and auth remain unchanged.
  */
 :is([data-kari-root][data-testid="karen-copilot-consumer-chat"],
-    [data-kari-root][data-testid="comms-center"]) {
+    [data-kari-root][data-testid="comms-center"],
+    [data-kari-root][data-testid="plugins-overview"]) {
   --background: 240 7% 4%;
   --foreground: 300 4% 89%;
   --card: 220 8% 8%;

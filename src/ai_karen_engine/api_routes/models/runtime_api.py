@@ -376,6 +376,14 @@ async def get_my_model_downloads(
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="Model library unavailable") from exc
+    except Exception as exc:
+        logger.error(
+            "model_library_owned_history_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Model download history temporarily unavailable"
+        ) from exc
     return {"jobs": jobs, "total": len(jobs), "scope": "authenticated_user"}
 
 
@@ -406,6 +414,14 @@ async def get_my_model_download(
         )
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Model job unavailable") from exc
+    except Exception as exc:
+        logger.error(
+            "model_library_owned_job_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Model download history temporarily unavailable"
+        ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="Model job unavailable")
     return job
@@ -439,6 +455,14 @@ async def control_my_model_download(
         )
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Model job unavailable") from exc
+    except Exception as exc:
+        logger.error(
+            "model_library_owned_control_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Model download service temporarily unavailable"
+        ) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="Model job unavailable or action unavailable")
     return job

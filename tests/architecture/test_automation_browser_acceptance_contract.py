@@ -7,6 +7,7 @@ SPEC = ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/automation-visual-acceptance.
 DASHBOARD = ROOT / "src/ui_launchers/Karen-AI-Theme/src/app/dashboard/page.tsx"
 NAVIGATION = ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/fixtures/automation-workspace-navigation.ts"
 TWO_ACCOUNT = ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/automation-two-account-acceptance.spec.ts"
+TRANSPORT = ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/automation-transport-recovery.spec.ts"
 
 
 def test_real_automation_browser_acceptance_never_uses_mocked_backend() -> None:
@@ -78,3 +79,26 @@ def test_two_account_replay_requires_real_origin_login_and_backend_denial() -> N
     assert 'getByTestId("advanced-tools-toggle")' in navigation
     assert 'getByRole("button", { name: label, exact: true })' in navigation
     assert "page.route(" not in navigation
+
+
+def test_transport_recovery_exercises_real_responses_with_only_a_network_fault() -> None:
+    source = TRANSPORT.read_text(encoding="utf-8")
+    assert "KAREN_AUTOMATION_TRANSPORT_ACCEPTANCE" in source
+    assert "signInApprovedKaren(page, email, password" in source
+    assert 'openAutomationWorkspace(page, "Jobs", true)' in source
+    assert 'route.abort("failed")' in source
+    assert "await page.unroute(" in source
+    assert "requestfailed" in source
+    assert "response.status()" in source
+    assert "Array.isArray(rows)" in source
+    assert "Array.isArray(body)" in source
+    assert 'name: "Sign out", exact: true' in source
+    assert "expect([401, 403]" in source
+    assert 'trace: "off"' in source
+    assert 'screenshot: "off"' in source
+    assert 'video: "off"' in source
+    assert "route.fulfill(" not in source
+    assert "route.fetch(" not in source
+    assert "storageState:" not in source
+    assert "No jobs defined yet." in source
+    assert "Job definitions could not be verified with the backend." in source
