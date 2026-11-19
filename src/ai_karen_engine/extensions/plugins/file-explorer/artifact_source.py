@@ -16,11 +16,13 @@ MAX_OWNER_ARTIFACTS = 200
 
 
 class ArtifactRepository(Protocol):
-    async def list_artifacts(
+    async def list_owner_artifacts_page(
         self,
         tenant_id: str,
-        conversation_id: str | None = None,
-        message_id: str | None = None,
+        user_id: str,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
     ) -> Any: ...
 
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> Any: ...
@@ -76,38 +78,76 @@ class ArtifactSourceAdapter:
     """Owner-only source adapter; a host must inject a trusted repository."""
 
     def __init__(self, repository: ArtifactRepository) -> None:
-        if not callable(getattr(repository, "list_artifacts", None)) or not callable(
+        if not callable(getattr(repository, "list_owner_artifacts_page", None)) or not callable(
             getattr(repository, "get_metadata", None)
         ):
             raise TypeError("file_explorer_artifact_repository_required")
         self._repository = repository
 
-    async def list_owner_sources(
-        self, *, tenant_id: str, user_id: str
-    ) -> list[dict[str, Any]]:
+    async def list_owner_sources_page(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Return an owner-authorized metadata page, never an implicit grant."""
         tenant_id = _uuid(tenant_id, "tenant_id")
         user_id = _uuid(user_id, "user_id")
-        response = await self._repository.list_artifacts(tenant_id)
+        if type(limit) is not int or not 1 <= limit <= MAX_OWNER_ARTIFACTS:
+            raise ValueError("file_explorer_page_limit_invalid")
+        response = await self._repository.list_owner_artifacts_page(
+            tenant_id, user_id, limit=limit, cursor=cursor
+        )
         if not getattr(response, "success", False):
             raise RuntimeError("file_explorer_artifact_list_unavailable")
         artifacts = getattr(response, "data", None)
-        if not isinstance(artifacts, (list, tuple)):
-            raise RuntimeError("file_explorer_artifact_list_unavailable")
+        metadata = getattr(response, "metadata", None)
+        if not isinstance(artifacts, (list, tuple)) or not isinstance(metadata, dict):
+            raise RuntimeError("file_explorer_artifact_page_invalid")
+        if len(artifacts) > limit:
+            raise RuntimeError("file_explorer_artifact_page_invalid")
+        has_more = metadata.get("has_more")
+        next_cursor = metadata.get("next_cursor")
+        if (
+            type(has_more) is not bool
+            or (has_more and (not isinstance(next_cursor, str) or not next_cursor))
+            or (not has_more and next_cursor is not None)
+            or (has_more and not artifacts)
+        ):
+            raise RuntimeError("file_explorer_artifact_page_invalid")
         records: list[dict[str, Any]] = []
         seen: set[str] = set()
         for artifact in artifacts:
             record = _artifact_entry(artifact, tenant_id, user_id)
             if record is None:
-                continue
+                # The repository promised strict owner scope. Never silently
+                # hide a cross-principal result and call the page authorized.
+                raise PermissionError("file_explorer_owner_scope_mismatch")
             if record["source_id"] in seen:
                 raise RuntimeError("file_explorer_duplicate_artifact")
             seen.add(record["source_id"])
             records.append(record)
-            if len(records) > MAX_OWNER_ARTIFACTS:
-                # ArtifactStore currently has no scoped cursor contract.
-                # Do not claim an incomplete snapshot is a complete folder.
-                raise RuntimeError("file_explorer_pagination_required")
-        return records
+        return {
+            "items": records,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+            "inventory_semantics": "owner_metadata_page_not_live_acl",
+        }
+
+    async def list_owner_sources(
+        self, *, tenant_id: str, user_id: str
+    ) -> list[dict[str, Any]]:
+        """Legacy bounded-snapshot contract, fail closed if more pages exist."""
+        page = await self.list_owner_sources_page(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            limit=MAX_OWNER_ARTIFACTS,
+        )
+        if page["has_more"]:
+            raise RuntimeError("file_explorer_pagination_required")
+        return page["items"]
 
     async def revalidate_owner_reference(
         self,

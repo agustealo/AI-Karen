@@ -42,12 +42,31 @@ class Repository:
     def __init__(self, records: list[SourceRecord] | None = None, *, fails: bool = False):
         self.records = [SourceRecord()] if records is None else records
         self.fails = fails
-        self.list_calls: list[str] = []
+        self.list_calls: list[tuple[str, str, int, str | None]] = []
         self.metadata_calls: list[tuple[str, str]] = []
 
-    async def list_artifacts(self, tenant_id, conversation_id=None, message_id=None):
-        self.list_calls.append(tenant_id)
-        return SimpleNamespace(success=not self.fails, data=self.records)
+    async def list_owner_artifacts_page(
+        self, tenant_id, user_id, *, limit=100, cursor=None
+    ):
+        self.list_calls.append((tenant_id, user_id, limit, cursor))
+        if self.fails:
+            return SimpleNamespace(success=False, data=None, metadata={})
+        matching = [
+            x for x in self.records
+            if x.tenant_id == tenant_id and x.user_id == user_id
+            and x.deleted_at is None
+        ]
+        offset = 0 if cursor is None else int(cursor.split(":")[1])
+        items = matching[offset:offset + limit]
+        next_offset = offset + len(items)
+        has_more = next_offset < len(matching)
+        return SimpleNamespace(
+            success=True, data=items,
+            metadata={
+                "has_more": has_more,
+                "next_cursor": f"offset:{next_offset}" if has_more else None,
+            },
+        )
 
     async def get_metadata(self, artifact_id, tenant_id):
         self.metadata_calls.append((artifact_id, tenant_id))
@@ -72,7 +91,7 @@ def test_owner_list_excludes_other_users_and_tenants():
     assert found[0]["source_id"] == ARTIFACT_ID
     assert found[0]["revision"] == SHA
     assert "storage_key" not in found[0]
-    assert repo.list_calls == [TENANT]
+    assert repo.list_calls == [(TENANT, OWNER, 200, None)]
 
 
 def test_revalidation_checks_latest_canonical_metadata():
@@ -169,4 +188,66 @@ def test_invalid_metadata_and_duplicate_records_denied():
     with pytest.raises(RuntimeError, match="duplicate_artifact"):
         run(SOURCE.ArtifactSourceAdapter(repo).list_owner_sources(
             tenant_id=TENANT, user_id=OWNER
+        ))
+
+
+def test_owner_pagination_yields_bounded_pages_without_cross_tenant_records():
+    records = [SourceRecord(id=str(uuid.uuid4())) for _ in range(203)]
+    records.append(SourceRecord(id=str(uuid.uuid4()), user_id=OTHER_OWNER))
+    repo = Repository(records)
+    adapter = SOURCE.ArtifactSourceAdapter(repo)
+    first = run(adapter.list_owner_sources_page(
+        tenant_id=TENANT, user_id=OWNER, limit=200,
+    ))
+    assert len(first["items"]) == 200
+    assert first["has_more"] is True
+    assert first["next_cursor"] == "offset:200"
+    assert first["inventory_semantics"] == "owner_metadata_page_not_live_acl"
+    second = run(adapter.list_owner_sources_page(
+        tenant_id=TENANT, user_id=OWNER, limit=200,
+        cursor=first["next_cursor"],
+    ))
+    assert len(second["items"]) == 3
+    assert second["has_more"] is False
+    assert second["next_cursor"] is None
+    assert set(x["source_id"] for x in first["items"]).isdisjoint(
+        x["source_id"] for x in second["items"]
+    )
+    assert repo.list_calls == [
+        (TENANT, OWNER, 200, None),
+        (TENANT, OWNER, 200, "offset:200"),
+    ]
+
+
+def test_repository_owner_scope_violation_denied_even_if_success_claimed():
+    repo = Repository()
+    async def wrong_owner(tenant_id, user_id, *, limit=100, cursor=None):
+        return SimpleNamespace(
+            success=True,
+            data=[SourceRecord(user_id=OTHER_OWNER)],
+            metadata={"has_more": False, "next_cursor": None},
+        )
+    repo.list_owner_artifacts_page = wrong_owner
+    with pytest.raises(PermissionError, match="owner_scope_mismatch"):
+        run(SOURCE.ArtifactSourceAdapter(repo).list_owner_sources_page(
+            tenant_id=TENANT, user_id=OWNER,
+        ))
+
+
+@pytest.mark.parametrize("metadata", [
+    {},
+    {"has_more": True, "next_cursor": None},
+    {"has_more": False, "next_cursor": "stale"},
+    {"has_more": "yes", "next_cursor": "next"},
+])
+def test_malformed_repository_paging_evidence_fails_closed(metadata):
+    repo = Repository()
+    async def broken(tenant_id, user_id, *, limit=100, cursor=None):
+        return SimpleNamespace(
+            success=True, data=[SourceRecord()], metadata=metadata,
+        )
+    repo.list_owner_artifacts_page = broken
+    with pytest.raises(RuntimeError, match="artifact_page_invalid"):
+        run(SOURCE.ArtifactSourceAdapter(repo).list_owner_sources_page(
+            tenant_id=TENANT, user_id=OWNER,
         ))
