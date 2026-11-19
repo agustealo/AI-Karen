@@ -760,6 +760,7 @@ async def test_completion_foreign_owner_receipt_is_rejected(monkeypatch):
     "Complete my task",
     "Finish my personal task",
     "Complete all my tasks",
+    "Complete the deployment task",
     "Mark my task",
     "Mark all my tasks as completed",
 ])
