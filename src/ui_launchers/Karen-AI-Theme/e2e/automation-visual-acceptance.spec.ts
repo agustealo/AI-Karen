@@ -117,8 +117,16 @@ test("KUI-AUTOMATION: owner-authenticated lists, responsive surfaces and keyboar
       await expect(root.getByText(empty, { exact: true })).toBeVisible();
     }
 
+    // The actual ThemeProvider follows the persisted account preference.
+    // This non-mutating suite requires a sanitized account set to "System".
+    // A default or explicit Dark/Light preference must fail rather than
+    // report both color schemes as covered.
     for (const theme of ["dark", "light"] as const) {
       await page.emulateMedia({ colorScheme: theme });
+      await expect(
+        page.locator("html"),
+        'Sanitized acceptance identity must use the persisted "System" theme.',
+      ).toHaveClass(new RegExp(`(?:^|\\s)${theme}(?:\\s|$)`));
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
         await expect(root.locator(".karen-automation-hero")).toBeVisible();
@@ -155,10 +163,19 @@ test("KUI-AUTOMATION: owner-authenticated lists, responsive surfaces and keyboar
       }
     }
 
-    // Real keyboard focus is required on a live control, not a fabricated toggle.
+    // Tab through the real dashboard focus order. Programmatic .focus()
+    // would pass even for a control excluded from keyboard navigation.
     const focused = root.locator("button:not([disabled])").first();
     await expect(focused).toBeVisible();
-    await focused.focus();
+    let reachedByKeyboard = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      await page.keyboard.press("Tab");
+      if (await focused.evaluate(element => element === document.activeElement)) {
+        reachedByKeyboard = true;
+        break;
+      }
+    }
+    expect(reachedByKeyboard, "Workflow control must be reachable with Tab").toBe(true);
     await expect(focused).toBeFocused();
     await page.emulateMedia({ colorScheme: "dark" });
     await page.setViewportSize(viewports[0]);
