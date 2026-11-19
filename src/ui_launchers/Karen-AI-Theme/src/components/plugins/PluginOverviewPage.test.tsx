@@ -92,6 +92,28 @@ describe('Plugins and Tools Kari OS workspace', () => {
     expect(container.querySelectorAll('.kari-card').length).toBeGreaterThanOrEqual(5);
   });
 
+  it('renders voice plugin lifecycle guidance without a missing icon crash', () => {
+    mocked.usePluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          ...installed[0],
+          id: 'voice-output',
+          displayName: 'Voice output',
+          supportsVoiceOutput: true,
+          rawStatus: 'active',
+        },
+      ],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+
+    render(<PluginOverviewPage />);
+    expect(screen.getByText(
+      'Enabled by install opt-in; no enable action is required here.',
+    )).toBeTruthy();
+  });
+
   it('discloses loading and backend errors without fabricated counts', () => {
     mocked.usePluginRegistry.mockReturnValue({
       plugins: [],
