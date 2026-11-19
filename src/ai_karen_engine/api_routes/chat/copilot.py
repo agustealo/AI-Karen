@@ -99,6 +99,8 @@ class AssistRequest(BaseModel):
     preferred_provider: Optional[str] = None
     preferred_model: Optional[str] = None
     session_id: Optional[str] = None
+    # The caller must reuse this UUID after an uncertain planner write.
+    planner_idempotency_key: Optional[uuid.UUID] = None
     response_mode: Optional[str] = Field(
         default=None,
         description=(
@@ -241,6 +243,8 @@ def _build_chat_execution_request_from_assist_request(
             "response_mode": request.response_mode,
             "compatibility_user_id_present": bool(request.user_id),
             "compatibility_org_id_present": bool(request.org_id),
+            **({"planner_mutation_idempotency_key": str(request.planner_idempotency_key)}
+               if request.planner_idempotency_key else {}),
         },
     )
 
