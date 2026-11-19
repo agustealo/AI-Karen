@@ -13,7 +13,13 @@ except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel, ConfigDict
 import logging
 
-from ai_karen_engine.services.knowledge.index_hub import IndexHub, Department, Team, KnowledgeQuery
+from ai_karen_engine.services.knowledge.index_hub import (
+    IndexHub,
+    Department,
+    Team,
+    KnowledgeQuery,
+    KnowledgeBackendUnavailableError,
+)
 from ai_karen_engine.services.knowledge.organizational_hierarchy import OrganizationalHierarchy
 from ai_karen_engine.auth.session import get_current_user
 
@@ -169,9 +175,14 @@ async def search_knowledge(
             }
         )
     
-    except Exception as e:
-        logger.error(f"Error in knowledge search: {e}")
-        raise HTTPException(status_code=500, detail=f"Knowledge search failed: {str(e)}")
+    except HTTPException:
+        raise
+    except KnowledgeBackendUnavailableError:
+        logger.warning("knowledge_search_backend_unavailable")
+        raise HTTPException(status_code=503, detail="Knowledge search unavailable") from None
+    except Exception:
+        logger.exception("knowledge_search_failed")
+        raise HTTPException(status_code=503, detail="Knowledge search unavailable") from None
 
 
 @router.get("/departments", response_model=List[str])
@@ -208,9 +219,12 @@ async def get_knowledge_stats(user = Depends(get_current_user)):
         stats = await get_index_hub().get_department_statistics()
         return DepartmentStatsResponse(**stats)
     
-    except Exception as e:
-        logger.error(f"Error getting knowledge stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+    except KnowledgeBackendUnavailableError:
+        logger.warning("knowledge_stats_backend_unavailable")
+        raise HTTPException(status_code=503, detail="Knowledge statistics unavailable") from None
+    except Exception:
+        logger.exception("knowledge_stats_failed")
+        raise HTTPException(status_code=503, detail="Knowledge statistics unavailable") from None
 
 
 @router.get("/health")
@@ -220,7 +234,7 @@ async def knowledge_health_check(user = Depends(get_current_user)):
         health = await get_index_hub().health_check()
         org_hierarchy = get_org_hierarchy()
         return {
-            "status": "healthy",
+            "status": "healthy" if health.get("status") == "healthy" else "unavailable",
             "index_hub": health,
             "organizational_hierarchy": {
                 "status": "healthy",
@@ -229,11 +243,11 @@ async def knowledge_health_check(user = Depends(get_current_user)):
             }
         }
     
-    except Exception as e:
-        logger.error(f"Knowledge health check failed: {e}")
+    except Exception:
+        logger.exception("knowledge_health_check_failed")
         return {
-            "status": "unhealthy",
-            "error": str(e)
+            "status": "unavailable",
+            "index_hub": {"status": "unavailable"},
         }
 
 
