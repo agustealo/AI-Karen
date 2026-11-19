@@ -538,7 +538,7 @@ class ApiClient {
     const refresh = runCoordinatedRefresh(async () => {
       await this.executeRefreshAccessToken();
       return localStorage.getItem('access_token') || '';
-    });
+    }).then(() => undefined);
     this.refreshInFlight = refresh;
     try {
       await refresh;
