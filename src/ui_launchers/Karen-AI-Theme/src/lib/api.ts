@@ -566,14 +566,19 @@ class ApiClient {
       }
 
       const data = await response.json();
-      if (!data.access_token) {
-        throw new Error('Invalid refresh response: missing access_token');
+      if (typeof data.access_token !== 'string' || !data.access_token.trim() ||
+          typeof data.refresh_token !== 'string' || !data.refresh_token.trim() ||
+          data.refresh_token === refreshToken) {
+        throw new Error('Invalid refresh response: missing or unrotated token pair');
       }
 
       // A late refresh response must never restore a logged-out or changed session.
       if (localStorage.getItem('refresh_token') !== refreshToken) {
         throw new Error('Refresh session changed during request');
       }
+      // Persist the rotated pair synchronously. Keeping the consumed refresh
+      // credential would trigger the backend's replay detector on next refresh.
+      localStorage.setItem('refresh_token', data.refresh_token);
       localStorage.setItem('access_token', data.access_token);
       // Clear any refresh attempt flags on success
       localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
