@@ -1,5 +1,6 @@
 """Research article references cannot override runtime-authenticated identity."""
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -13,8 +14,14 @@ class ScopedArticles(SearchArticleService):
         self._artifacts = SimpleNamespace(get_metadata=self._get_metadata)
 
     async def _get_metadata(self, article_id, tenant_id):
+        content = "tenant scoped content".encode("utf-8")
         return SimpleNamespace(success=True, data=SimpleNamespace(
-            kind="search_article", user_id="owner", deleted_at=None,
+            tenant_id="tenant-A",
+            kind="search_article",
+            user_id="owner",
+            deleted_at=None,
+            size_bytes=len(content),
+            sha256=hashlib.sha256(content).hexdigest(),
             metadata={"source_url": "https://example.org/article"},
         ))
 
