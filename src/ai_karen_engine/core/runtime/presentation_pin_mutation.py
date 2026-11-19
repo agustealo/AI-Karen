@@ -70,6 +70,15 @@ class PresentationPinMutation:
         if operation == "pin":
             if not isinstance(reference, PresentationPinReference):
                 raise ValueError("PIN requires a presentation reference")
+            committed = await self._repository.replay_committed_pin_receipt(
+                authenticated_tenant_id=context.tenant_id,
+                authenticated_user_id=context.user_id,
+                idempotency_key=idempotency_key,
+                reference=reference,
+                position=position if position is not None else 0,
+            )
+            if committed is not None:
+                return committed
             owned = replace(
                 context,
                 conversation_id=reference.conversation_id,
