@@ -271,6 +271,10 @@ export function KariWorkspaceNavigation({
             </SidebarMenuItem>
           )}
         </SidebarMenu>
+        <div className="kari-nav-footer-brand group-data-[collapsible=icon]:hidden">
+          <Image src="/brand/karen-mark.svg" alt="" width={16} height={16} />
+          <span>KAREN · Local-first runtime</span>
+        </div>
       </SidebarFooter>
     </>
   );
