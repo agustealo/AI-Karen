@@ -17,7 +17,7 @@ export const test = base.extend<{ approvedDeploymentAccess: void }>({
       if (process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== 'true' &&
           process.env.KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED !== 'true' &&
           process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED !== 'true' &&
-          process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE !== 'true') {
+          process.env.KAREN_SETTINGS_VERIFIED_DEPLOYMENT !== 'true') {
         await use();
         return;
       }

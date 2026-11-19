@@ -734,6 +734,7 @@ jobs:
       KAREN_BASE_URL: ${{ vars.KAREN_SETTINGS_ACCEPTANCE_URL }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
       KAREN_SETTINGS_VISUAL_ACCEPTANCE: "true"
+      KAREN_SETTINGS_VERIFIED_DEPLOYMENT: "true"
       KAREN_SETTINGS_SANITIZED_CAPTURE: "false"
       CI: "true"
     defaults:
