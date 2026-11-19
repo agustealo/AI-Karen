@@ -98,7 +98,6 @@ def test_format_sensitive_keys_require_explicit_secure_configuration() -> None:
         "AUTH_SECRET_KEY",
         "EXTENSION_SECRET_KEY",
         "EXTENSION_API_KEY",
-        "KARI_DUCKDB_PASSWORD",
         "KARI_JOB_SIGNING_KEY",
         "KARI_MODEL_SIGNING_KEY",
     ):
@@ -111,3 +110,10 @@ def test_format_sensitive_keys_require_explicit_secure_configuration() -> None:
         "EXTENSION_DEV_BYPASS_ENABLED",
     ):
         assert re.search(r"^        value: \"false\"$", blocks[key], flags=re.MULTILINE), key
+
+
+def test_retired_duckdb_not_provisioned_by_render_blueprint() -> None:
+    """The Render declaration follows the canonical retired database policy."""
+    assert "KARI_DUCKDB_PASSWORD" not in _required_runtime_names()
+    assert "KARI_DUCKDB_PASSWORD" not in _env_blocks()
+    assert "KARI_ENABLE_DUCKDB" not in BLUEPRINT.read_text(encoding="utf-8")

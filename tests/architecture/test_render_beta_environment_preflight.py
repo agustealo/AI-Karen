@@ -139,6 +139,30 @@ def test_reads_canonical_config_contract_without_production_import(m):
     assert m.Manifest.read(m.BLUEPRINT).health_check_path == "/health/live"
 
 
+
+def test_retired_duckdb_not_provisioned_or_required_by_live_render_contract(m):
+    """Canonical startup and the protected Render preflight must agree."""
+    legacy_key = "KARI_DUCKDB_PASSWORD"
+    defaults = m.required_environment_defaults(m.SERVER_CONFIG)
+    blueprint = m.BLUEPRINT.read_text(encoding="utf-8")
+    assert legacy_key not in defaults
+    assert legacy_key not in m.PROTECTED_SECRETS
+    assert f"- key: {legacy_key}" not in blueprint
+
+    configured = safe_env(m)
+    assert legacy_key not in configured
+    report = inspect(m, FakeClient(configured))
+    assert report.ready
+    assert f"missing:{legacy_key}" not in report.failures
+
+    # An old service may retain an unused secret. The preflight must not
+    # promote this retired setting back into the required runtime contract.
+    configured[legacy_key] = "obsolete-configuration-not-runtime-authority"
+    report = inspect(m, FakeClient(configured))
+    assert report.ready
+    assert f"insecure:{legacy_key}" not in report.failures
+
+
 def test_valid_existing_resources_and_env_are_read_only_and_secret_free(m):
     client = FakeClient(safe_env(m))
     result = inspect(m, client)

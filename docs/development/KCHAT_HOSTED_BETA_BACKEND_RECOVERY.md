@@ -38,11 +38,19 @@ The missing variables listed by the running application were:
 `POSTGRES_URL`, `AUTH_DATABASE_URL`, `REDIS_URL`,
 `EXTENSION_SECRET_KEY`, and `EXTENSION_API_KEY`.
 
-This list comes from the real import failure. Its single canonical source
-is `required_env_vars` in
-`src/ai_karen_engine/server/config.py`. Update **that** owner when the
-production runtime contract changes. Do not create an independent second
-production secrets registry.
+This list records the historical November 15 failure, not the current
+required environment inventory. **DuckDB has since been retired:**
+`KARI_DUCKDB_PASSWORD` was removed from the authoritative startup
+`required_env_vars` in PR #1091. The Render Blueprint, protected environment
+inspector, and their tests were reconciled afterward to stop provisioning or
+requiring the obsolete key. The archived failure evidence above is preserved
+so earlier logs remain interpretable.
+
+The single canonical source for *current* startup requirements is
+`required_env_vars` in `src/ai_karen_engine/server/config.py`.
+Render's protected preflight reads that source rather than maintaining a
+second production secrets registry. PostgreSQL, Redis, authentication and
+signing requirements remain mandatory.
 
 ## Ownership and recovery order
 
