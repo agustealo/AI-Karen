@@ -13,15 +13,15 @@ from ai_karen_engine.extensions.runtime.file_explorer_inventory import (
     FileExplorerInventoryHost,
 )
 
-TENANT = str(uuid.UUID(int=1))
-OWNER = str(uuid.UUID(int=2))
-OTHER = str(uuid.UUID(int=3))
+TENANT = "11111111-1111-4111-8111-111111111111"
+OWNER = "22222222-2222-4222-8222-222222222222"
+OTHER = "33333333-3333-4333-8333-333333333333"
 SHA = "a" * 64
 
 
 def _item(number: int) -> dict:
     return {
-        "source_id": str(uuid.UUID(int=number + 10)),
+        "source_id": f"44444444-4444-4444-8444-{number:012d}",
         "parent_id": None,
         "kind": "file",
         "name": f"artifact-{number}.txt",
