@@ -98,12 +98,12 @@ describe("task-first Kari workspace navigation", () => {
   it("routes the five primary destinations through the parent without fake execution", () => {
     const { onNavigate } = mount();
     for (const key of ["Activity", "Automations", "My Tasks", "Tools & plugins"]) {
-      fireEvent.click(screen.getByRole("button", { name: key, exact: true }));
+      fireEvent.click(screen.getByRole("button", { name: key }));
     }
     expect(onNavigate.mock.calls.map(([view]) => view)).toEqual([
       "commsCenter", "agentsOverview", "tasks", "pluginOverview",
     ]);
-    expect(screen.getByRole("button", { name: "Chat", exact: true }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByRole("button", { name: "Weather Workspace" })).toBeNull();
   });
 
