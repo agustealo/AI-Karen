@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { KarenCopilotVoiceDock } from "./KarenCopilotVoiceDock";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
+import { getCopilotRunFailureMessage } from "../const/getDegradedResponseMessage";
 
 import { useKarenScopedAgent } from "./KarenCopilotHistoryGate";
 import {
@@ -137,7 +138,7 @@ export function KarenCopilotControlledChat({
         setError(null);
       },
       onRunFinalized: () => { activeRunId.current = null; },
-      onRunFailed: () => {
+      onRunFailed: (failure: unknown) => {
         const failedRunId = activeRunId.current;
         const failedBeforeStart = failedRunId === null && sdkInvocationPending.current;
         activeRunId.current = null;
@@ -150,7 +151,7 @@ export function KarenCopilotControlledChat({
            lastStopRunId.current === failedRunId);
         if (mounted.current && !unconfirmedStop &&
             (failedRunId !== null || failedBeforeStart)) {
-          setError("Karen could not complete the request. Check the conversation history.");
+          setError(getCopilotRunFailureMessage(failure));
         }
       },
     });
@@ -215,7 +216,7 @@ export function KarenCopilotControlledChat({
         sdkInvocationPending.current = true;
         try {
           await copilotkit.runAgent({ agent });
-        } catch {
+        } catch (failure: unknown) {
           if (mounted.current) {
             // addMessage already accepted this user turn. The SDK may have
             // transmitted or persisted it before the run failed, so putting
@@ -223,7 +224,7 @@ export function KarenCopilotControlledChat({
             // duplicate submission. Only pre-queue failures restore drafts.
             // Newer edits remain untouched; the user must inspect canonical
             // history before choosing whether to send again.
-            setError("Karen could not complete the request. Check the conversation history before retrying.");
+            setError(getCopilotRunFailureMessage(failure));
           }
         } finally {
           sdkInvocationPending.current = false;
