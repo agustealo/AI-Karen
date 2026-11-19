@@ -31,8 +31,13 @@ describe("Kari OS stationary pinned workspace safety contract", () => {
     expect(dock).toContain('apiClient.get<unknown>("/api/chat/ag-ui/pins")');
     expect(dock).toContain("Secure pinning not yet available");
     expect(dock).toContain("Full cards cannot be restored");
-    expect(dock).not.toMatch(/localStorage\\.|sessionStorage\\.|setItem\\(/);
-    expect(dock).not.toMatch(/\\bonClick=|\\bonSubmit=|apiClient\\.post\\(|apiClient\\.put\\(/);
+    expect(dock).not.toContain("localStorage.");
+    expect(dock).not.toContain("sessionStorage.");
+    expect(dock).not.toContain("setItem(");
+    expect(dock).not.toContain("onClick=");
+    expect(dock).not.toContain("onSubmit=");
+    expect(dock).not.toContain("apiClient.post(");
+    expect(dock).not.toContain("apiClient.put(");
     expect(dock).not.toContain("KarenPresentationRegistry");
     expect(dock).toContain('data-testid="karen-pinning-not-available"');
     expect(dock).toContain('data-testid="karen-pins-authorized"');
