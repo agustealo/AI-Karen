@@ -87,7 +87,7 @@ function inventoryResponse(raw: unknown): Inventory {
         typeof file.name !== "string" || !file.name || file.name.length > 256 ||
         typeof file.revision !== "string" || !/^[a-f0-9]{64}$/.test(file.revision) ||
         file.revision !== file.sha256 ||
-        !Number.isSafeInteger(file.size_bytes) || (file.size_bytes as number) < 0) {
+        typeof file.size_bytes !== "number" || !Number.isSafeInteger(file.size_bytes) || file.size_bytes < 0) {
       throw new Error("Real file inventory item violates the source contract");
     }
     seen.add(file.source_id);
