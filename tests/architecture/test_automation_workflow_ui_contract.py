@@ -51,7 +51,7 @@ def test_cron_no_false_health_or_empty_state_on_fetch_failure() -> None:
     assert "handleDelete(job.id)" in source
     assert "setFetchError(true)" in source
     assert "jobs.length === 0 ?" in source
-    assert "!isAuthLoading && isAuthenticated && !loading && !fetchError && jobs.map" in source
+    assert "!isAuthLoading && isAuthenticated && !loading && !fetchError && verifiedJobs && jobs.map" in source
     assert 'kind="unavailable"' in source
     assert 'kind="empty"' in source
     assert "Schedules unavailable" in source
@@ -128,6 +128,8 @@ def test_cron_fences_delayed_responses_by_tenant_user_and_revision() -> None:
     assert "if (!principal || !verifiedDependencies) return;" in source
     assert "if (!principal || !verifiedJobs) return;" in source
     assert "cronJobsFetchPromise" not in source
+    assert "if (currentPrincipal.current !== requestPrincipal) return;" in source
+    assert "if (currentPrincipal.current !== actionPrincipal) return;" in source
     assert 'loadCronJobsWithRetry(() =>' in source
     assert "setTargetId(\"\")" in source
     assert "setSchedule(\"\")" in source
