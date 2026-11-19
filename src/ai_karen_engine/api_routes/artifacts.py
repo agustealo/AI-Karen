@@ -56,6 +56,34 @@ def _get_artifact_store():
     return store
 
 
+def _artifact_principal(current_user):
+    """Resolve trusted artifact scope from authenticated session context."""
+    tenant = getattr(current_user, "tenant_id", None)
+    user = getattr(current_user, "user_id", None)
+    if not tenant or not user:
+        raise HTTPException(status_code=403, detail="Artifact access denied")
+    tenant_id = str(coerce_tenant_id(tenant))
+    user_id = str(coerce_user_id(user))
+    if not tenant_id or tenant_id == "default" or not user_id:
+        raise HTTPException(status_code=403, detail="Artifact access denied")
+    return tenant_id, user_id
+
+
+async def _require_owned_artifact(store, artifact_id: str, tenant_id: str, user_id: str):
+    """Owner-only lifecycle gate until shared-resource grants are implemented."""
+    result = await store.get_metadata(artifact_id, tenant_id)
+    if not result.success:
+        raise HTTPException(status_code=503, detail="Artifact metadata unavailable")
+    artifact = result.data
+    if (
+        artifact is None
+        or artifact.tenant_id != tenant_id
+        or artifact.user_id != user_id
+    ):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return artifact
+
+
 @router.post("/upload", response_model=ArtifactUploadResponse)
 async def upload_artifact(
     file: UploadFile = File(...),
@@ -66,8 +94,7 @@ async def upload_artifact(
 ):
     """Upload an artifact."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
-    user_id = coerce_user_id(getattr(current_user, "user_id", current_user.user_id))
+    tenant_id, user_id = _artifact_principal(current_user)
 
     data = await file.read()
     from ai_karen_engine.services.database.repositories.artifact_store import ArtifactUploadRequest
@@ -104,12 +131,10 @@ async def get_artifact_metadata(
 ):
     """Retrieve artifact metadata."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
-    result = await store.get_metadata(artifact_id, str(tenant_id))
-    if not result.success or not result.data:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-
-    artifact = result.data
+    tenant_id, user_id = _artifact_principal(current_user)
+    artifact = await _require_owned_artifact(
+        store, artifact_id, tenant_id, user_id
+    )
     return ArtifactMetadataResponse(
         id=artifact.id,
         tenant_id=artifact.tenant_id,
@@ -134,13 +159,15 @@ async def list_artifacts(
 ):
     """List active artifacts."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
+    tenant_id, user_id = _artifact_principal(current_user)
     result = await store.list_artifacts(str(tenant_id), conversation_id, message_id)
     if not result.success:
         raise HTTPException(status_code=500, detail=result.error or "List failed")
 
     items = []
     for artifact in result.data or []:
+        if artifact.tenant_id != tenant_id or artifact.user_id != user_id:
+            continue
         items.append(ArtifactMetadataResponse(
             id=artifact.id,
             tenant_id=artifact.tenant_id,
@@ -165,7 +192,8 @@ async def delete_artifact(
 ):
     """Permanently delete an artifact."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
+    tenant_id, user_id = _artifact_principal(current_user)
+    await _require_owned_artifact(store, artifact_id, tenant_id, user_id)
     result = await store.delete(artifact_id, str(tenant_id))
     if not result.success:
         raise HTTPException(status_code=500, detail=result.error or "Delete failed")
@@ -179,7 +207,8 @@ async def archive_artifact(
 ):
     """Soft-delete (archive) an artifact."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
+    tenant_id, user_id = _artifact_principal(current_user)
+    await _require_owned_artifact(store, artifact_id, tenant_id, user_id)
     result = await store.archive(artifact_id, str(tenant_id))
     if not result.success:
         raise HTTPException(status_code=500, detail=result.error or "Archive failed")
@@ -193,7 +222,8 @@ async def restore_artifact(
 ):
     """Restore an archived artifact."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
+    tenant_id, user_id = _artifact_principal(current_user)
+    await _require_owned_artifact(store, artifact_id, tenant_id, user_id)
     result = await store.restore(artifact_id, str(tenant_id))
     if not result.success:
         raise HTTPException(status_code=500, detail=result.error or "Restore failed")
@@ -208,13 +238,15 @@ async def list_archived_artifacts(
 ):
     """List archived artifacts."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
+    tenant_id, user_id = _artifact_principal(current_user)
     result = await store.list_archived(str(tenant_id), conversation_id, message_id)
     if not result.success:
         raise HTTPException(status_code=500, detail=result.error or "List archived failed")
 
     items = []
     for artifact in result.data or []:
+        if artifact.tenant_id != tenant_id or artifact.user_id != user_id:
+            continue
         items.append(ArtifactMetadataResponse(
             id=artifact.id,
             tenant_id=artifact.tenant_id,
@@ -239,7 +271,8 @@ async def purge_artifact(
 ):
     """Permanently purge an archived artifact."""
     store = _get_artifact_store()
-    tenant_id = coerce_tenant_id(getattr(current_user, "tenant_id", current_user.user_id))
+    tenant_id, user_id = _artifact_principal(current_user)
+    await _require_owned_artifact(store, artifact_id, tenant_id, user_id)
     result = await store.purge(artifact_id, str(tenant_id))
     if not result.success:
         raise HTTPException(status_code=500, detail=result.error or "Purge failed")
