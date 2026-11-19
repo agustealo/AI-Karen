@@ -9,26 +9,13 @@ import {
   useState,
 } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 import {
-  Bell,
-  Binary,
-  AudioLines,
-  ChevronDown,
-  Bot as BotIcon,
-  LayoutGrid,
   Loader2,
   MessageSquare,
   PlugZap,
   RefreshCw,
-  ScrollText,
-  ShieldCheck,
-  SettingsIcon as SettingsIconLucide,
   SlidersHorizontal,
-  UserCircle,
-  Trophy,
-  Drama,
 } from "lucide-react";
 
 import { AuthWrapper } from "@/components/AuthWrapper";
@@ -59,20 +46,11 @@ import {
 } from "@/components/ui/sheet";
 import {
   Sidebar,
-  SidebarContent as AppSidebarContent,
-  SidebarFooter as AppSidebarFooter,
-  SidebarGroup,
-  SidebarGroupLabel,
-  SidebarHeader as AppSidebarHeader,
   SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger as AppSidebarTrigger,
-  useSidebar,
 } from "@/components/ui/sidebar";
-import { Separator } from "@/components/ui/separator";
+import { KariWorkspaceNavigation } from "@/components/navigation/KariWorkspaceNavigation";
 
 import { usePluginRegistry } from "@/plugin_host/registry";
 import { usePluginRoutes } from "@/plugin_host/route-injector";
@@ -121,19 +99,6 @@ type ActiveView =
 
 type BackendStatus = "checking" | "ready" | "failed";
 
-type NavItem = {
-  key: ActiveView;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  className?: string;
-};
-
-type NavSubgroup = {
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  items: NavItem[];
-};
-
 function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
   const { loadSession, setWorkspaceRunId } = useSession();
   const [handoffError, setHandoffError] = useState("");
@@ -161,82 +126,13 @@ function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
   );
 }
 
-function DashboardNavigationContent({ children }: { children: React.ReactNode }) {
-  const { isMobile, setOpenMobile } = useSidebar();
-
-  const handleNavigationClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!isMobile) return;
-    const target = event.target;
-    if (target instanceof Element && target.closest('[data-sidebar="menu-button"]')) {
-      setOpenMobile(false);
-    }
-  };
-
-  return (
-    <AppSidebarContent onClick={handleNavigationClick} className="space-y-4 p-2">
-      {children}
-    </AppSidebarContent>
-  );
-}
-
 const MAX_BACKEND_RETRIES = 10;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
 
-const PRIMARY_NAV: Array<{
-  section: string;
-  items: NavItem[];
-}> = [
-  {
-    section: "Start here",
-    items: [
-      { key: "chat", label: "Chat", icon: MessageSquare },
-      { key: "commsCenter", label: "Activity & notifications", icon: Bell },
-    ],
-  },
-  {
-    section: "Explore",
-    items: [
-      { key: "agentsOverview", label: "Automations", icon: BotIcon },
-      { key: "tasks", label: "My tasks", icon: ScrollText },
-    ],
-  },
-  {
-    section: "Plugins",
-    items: [
-      { key: "pluginOverview", label: "Tools & plugins", icon: PlugZap },
-      { key: "pocketTts", label: "Pocket TTS", icon: AudioLines },
-    ],
-  },
-  {
-    section: "Personal",
-    items: [
-      { key: "account", label: "My Account", icon: UserCircle },
-      { key: "personaStudio", label: "Persona Studio", icon: Drama },
-      { key: "growth", label: "Growth", icon: Trophy },
-      {
-        key: "settings",
-        label: "Application Settings",
-        icon: SettingsIconLucide,
-      },
-    ],
-  },
-];
-
-const RUNTIME_SUBGROUPS: NavSubgroup[] = [
-  {
-    label: "Agents & Workflows",
-    icon: Binary,
-    items: [
-      { key: "agents", label: "Agents", icon: BotIcon },
-      { key: "jobs", label: "Jobs", icon: LayoutGrid },
-      { key: "cronJobs", label: "Cron Jobs", icon: Binary },
-    ],
-  },
-];
-
-export default function DashboardPage() {
+function DashboardWorkspace() {
   const { isAdmin } = useAuth();
+  const { createNewSession } = useSession();
   const [activeMainView, setActiveMainView] = useState<ActiveView>("chat");
   const [settingsInitialSection, setSettingsInitialSection] = useState<'behavior' | 'model' | 'voice'>('behavior');
   // A fixed, host-owned deep link from the Plugin Store opens the same
@@ -267,7 +163,6 @@ export default function DashboardPage() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [karenPanelOpen, activeMainView]);
-  const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false);
   const [imgErrors, setImgErrors] = useState<Record<string, boolean>>({});
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
   const [backendCheckRetries, setBackendCheckRetries] = useState(0);
@@ -526,8 +421,6 @@ export default function DashboardPage() {
     );
 
   return (
-    <AuthWrapper>
-      <PrincipalScopedSessionProvider>
       <SidebarProvider>
         <div className="karen-app-shell flex h-dvh min-h-0 w-full flex-col overflow-hidden bg-background text-foreground">
           <header className="z-30 flex h-14 shrink-0 items-center justify-between border-b border-border/70 bg-background/80 px-3 backdrop-blur-xl md:px-4">
@@ -592,179 +485,22 @@ export default function DashboardPage() {
               collapsible="icon"
               className="z-20 border-r border-sidebar-border/80 bg-sidebar/90 backdrop-blur-xl"
             >
-              <AppSidebarHeader className="px-3 py-3">
-                <div className="px-1">
-                  <p className="karen-panel-label">Workspace</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground group-data-[collapsible=icon]:hidden">
-                    KAREN operating surfaces
-                  </p>
-                </div>
-              </AppSidebarHeader>
-
-              <Separator className="my-1" />
-
-              <DashboardNavigationContent>
-                {PRIMARY_NAV.map((group, groupIndex) => (
-                  <div key={group.section}>
-                    <SidebarGroup>
-                      <SidebarGroupLabel className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground/75">
-                        {group.section}
-                      </SidebarGroupLabel>
-                      <SidebarMenu>
-                        {group.items.map((item) => {
-                          const Icon = item.icon;
-
-                          return (
-                            <SidebarMenuItem key={item.key}>
-                              <SidebarMenuButton
-                                onClick={() => {
-                                  if (item.key === "settings") setSettingsInitialSection('behavior');
-                                  setActiveMainView(item.key);
-                                }}
-                                isActive={activeMainView === item.key}
-                                className={`w-full ${item.className ?? ""}`}
-                              >
-                                <Icon className="h-4 w-4" />
-                                <span>{item.label}</span>
-                              </SidebarMenuButton>
-                            </SidebarMenuItem>
-                          );
-                        })}
-                      </SidebarMenu>
-                    </SidebarGroup>
-
-                    {groupIndex < PRIMARY_NAV.length - 1 && (
-                      <Separator className="mx-2 bg-border/50" />
-                    )}
-                  </div>
-                ))}
-
-                {isAdmin() && (
-                  <SidebarGroup>
-                    <SidebarGroupLabel className="mb-2 px-2 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-muted-foreground/75">
-                      Administration
-                    </SidebarGroupLabel>
-                    <SidebarMenu>
-                      <SidebarMenuItem>
-                        <SidebarMenuButton asChild>
-                          <Link href="/admin">
-                            <ShieldCheck className="h-4 w-4" />
-                            <span>Admin settings</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    </SidebarMenu>
-                  </SidebarGroup>
-                )}
-
-                <Separator className="mx-2 bg-border/50" />
-
-                <SidebarGroup>
-                  <button
-                    type="button"
-                    aria-expanded={advancedToolsOpen}
-                    aria-controls="karen-advanced-navigation"
-                    onClick={() => setAdvancedToolsOpen((open) => !open)}
-                    className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs font-semibold text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    data-testid="advanced-tools-toggle"
-                  >
-                    <span>Advanced tools</span>
-                    <ChevronDown
-                      aria-hidden="true"
-                      className={`h-4 w-4 transition-transform ${advancedToolsOpen ? "rotate-180" : ""}`}
-                    />
-                  </button>
-
-                  <div
-                    id="karen-advanced-navigation"
-                    data-testid="advanced-tools-content"
-                    hidden={!advancedToolsOpen}
-                    className={advancedToolsOpen ? "mt-3 space-y-4 px-2" : "hidden"}
-                  >
-                    {RUNTIME_SUBGROUPS.map((subgroup) => {
-                      const SubgroupIcon = subgroup.icon;
-
-                      return (
-                        <div key={subgroup.label}>
-                          <p className="mb-2 flex items-center text-[10px] font-semibold uppercase text-muted-foreground/60">
-                            <SubgroupIcon className="mr-1.5 h-3 w-3" />
-                            {subgroup.label}
-                          </p>
-
-                          <SidebarMenu>
-                            {subgroup.items.map((item) => {
-                              const Icon = item.icon;
-
-                              return (
-                                <SidebarMenuItem key={item.key}>
-                                  <SidebarMenuButton
-                                    onClick={() => setActiveMainView(item.key)}
-                                    isActive={activeMainView === item.key}
-                                    className="h-8 w-full text-xs"
-                                  >
-                                    <Icon className="h-3.5 w-3.5" />
-                                    {item.label}
-                                  </SidebarMenuButton>
-                                </SidebarMenuItem>
-                              );
-                            })}
-                          </SidebarMenu>
-                        </div>
-                      );
-                    })}
-
-                    <div>
-                      <p className="mb-2 flex items-center text-[10px] font-semibold uppercase text-muted-foreground/60">
-                        <PlugZap className="mr-1.5 h-3 w-3" />
-                        Plugin pages
-                      </p>
-
-                      <SidebarMenu>
-                        {!pluginsLoading &&
-                          sidebarEntries.map((entry) => (
-                            <SidebarMenuItem key={entry.viewKey}>
-                              <SidebarMenuButton
-                                onClick={() => setActiveMainView(entry.viewKey)}
-                                isActive={activeMainView === entry.viewKey}
-                                className="h-8 w-full text-xs"
-                              >
-                                {renderPluginMenuIcon(
-                                  entry.pluginId,
-                                  entry.iconPath,
-                                )}
-                                {entry.label}
-                              </SidebarMenuButton>
-                            </SidebarMenuItem>
-                          ))}
-
-                        {pluginsLoading && (
-                          <SidebarMenuItem>
-                            <div className="flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground">
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              Loading plugins...
-                            </div>
-                          </SidebarMenuItem>
-                        )}
-                      </SidebarMenu>
-                    </div>
-                  </div>
-                </SidebarGroup>
-              </DashboardNavigationContent>
-
-              <AppSidebarFooter className="relative overflow-visible border-t border-sidebar-border/70 bg-sidebar/70 p-3">
-                <div className="flex flex-col items-center gap-1.5 text-center">
-                  <Image
-                    src="/brand/karen-mark.svg"
-                    alt=""
-                    width={18}
-                    height={18}
-                    className="h-[18px] w-[18px] opacity-70"
-                  />
-                  <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/60">
-                    KAREN · Local-first runtime
-                  </p>
-                </div>
-              </AppSidebarFooter>
+              <KariWorkspaceNavigation
+                activeView={activeMainView}
+                onNavigate={(view) => {
+                  if (view === "settings") setSettingsInitialSection("behavior");
+                  setActiveMainView(view);
+                }}
+                onNewConversation={async () => {
+                  await createNewSession();
+                  setKarenPanelOpen(false);
+                  setActiveMainView("chat");
+                }}
+                isAdmin={isAdmin()}
+                pluginEntries={sidebarEntries}
+                pluginsLoading={pluginsLoading}
+                renderPluginIcon={renderPluginMenuIcon}
+              />
             </Sidebar>
 
             <SidebarInset className="karen-workspace-grid flex min-h-0 flex-1 flex-col bg-transparent">
@@ -816,6 +552,14 @@ export default function DashboardPage() {
           </div>
         </div>
       </SidebarProvider>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <AuthWrapper>
+      <PrincipalScopedSessionProvider>
+        <DashboardWorkspace />
       </PrincipalScopedSessionProvider>
     </AuthWrapper>
   );

@@ -333,3 +333,210 @@
     padding: 16px;
   }
 }
+
+
+/*
+ * KUI-NAV: dashboard navigation uses the existing Kari OS type and color
+ * authority. All selectors are scoped to the canonical sidebar's regions.
+ * Radix Sidebar still owns widths, collapsed tooltips and the mobile sheet.
+ */
+[data-kari-root].kari-nav-region {
+  font-family: var(--kari-font-body);
+  background: var(--kari-panel);
+  color: var(--kari-text);
+}
+[data-kari-root].kari-nav-header {
+  flex: 0 0 auto;
+  gap: 0;
+  padding: 16px 12px 12px;
+  border-bottom: 1px solid var(--kari-line);
+}
+[data-kari-root] .kari-nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 4px;
+}
+[data-kari-root] .kari-nav-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--kari-line-strong);
+  border-radius: var(--kari-radius-card);
+  background: var(--kari-raised);
+}
+[data-kari-root] .kari-nav-wordmark {
+  font-family: var(--kari-font-display);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
+}
+[data-kari-root] .kari-nav-caption {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--kari-text-muted);
+}
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-new {
+  min-height: 42px;
+  justify-content: flex-start;
+  padding: 0 12px;
+  gap: 10px;
+  border: 1px solid var(--kari-brand);
+  border-radius: var(--kari-radius-control);
+  background: var(--kari-brand);
+  color: #fff;
+  font-family: var(--kari-font-body);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: none;
+}
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-new:hover {
+  background: var(--kari-primary);
+  border-color: var(--kari-primary);
+  color: var(--kari-canvas);
+}
+[data-kari-root] .kari-nav-error {
+  margin: 8px 4px 0;
+  color: var(--kari-danger);
+  font-size: 12px;
+  line-height: 1.5;
+}
+[data-kari-root].kari-nav-scroll {
+  gap: 0;
+  padding: 12px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--kari-line-strong) transparent;
+}
+[data-kari-root] .kari-nav-group {
+  padding: 0 2px;
+}
+[data-kari-root] .kari-nav-label {
+  min-height: 28px;
+  height: 28px;
+  padding-inline: 10px;
+  color: var(--kari-text-muted);
+  font-family: var(--kari-font-body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-item {
+  min-height: 42px;
+  height: auto;
+  gap: 12px;
+  padding: 9px 11px;
+  border-radius: var(--kari-radius-control);
+  color: var(--kari-text-subtle);
+  font-family: var(--kari-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 20px;
+  box-shadow: none;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-item:hover {
+  background: var(--kari-raised);
+  color: var(--kari-text);
+}
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-item[data-active="true"] {
+  background: color-mix(in srgb, var(--kari-brand) 17%, var(--kari-panel));
+  color: var(--kari-primary);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--kari-brand);
+}
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-item:focus-visible,
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-new:focus-visible {
+  outline: 2px solid var(--kari-primary);
+  outline-offset: 2px;
+}
+[data-kari-root] .kari-nav-secondary {
+  margin-top: 14px;
+  border-top: 1px solid var(--kari-line);
+  padding-top: 12px;
+}
+[data-kari-root] .kari-nav-nested {
+  padding: 4px 4px 8px 10px;
+}
+[data-kari-root] .kari-nav-nested-heading {
+  margin-top: 10px;
+}
+[data-kari-root] [data-sidebar="menu-button"].kari-nav-subitem {
+  min-height: 38px;
+  padding-left: 14px;
+  font-size: 13px;
+  font-weight: 400;
+}
+[data-kari-root] .kari-nav-chevron {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  flex: 0 0 14px;
+  color: var(--kari-text-muted);
+  transition: transform 140ms ease;
+}
+[data-kari-root] .kari-nav-loading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--kari-text-muted);
+}
+[data-kari-root].kari-nav-footer {
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 10px 10px 14px;
+  border-top: 1px solid var(--kari-line);
+}
+[data-kari-root] [hidden] {
+  display: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-kari-root] [data-sidebar="menu-button"].kari-nav-item,
+  [data-kari-root] .kari-nav-chevron {
+    transition: none;
+  }
+}
+
+[data-kari-root] .kari-nav-footer-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 0 1px;
+  border-top: 1px solid var(--kari-line);
+  color: var(--kari-text-muted);
+  font-family: var(--kari-font-body);
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.015em;
+}
+
+/* Icon-only mode keeps its accessible 32px controls inside the 48px rail. */
+[data-collapsible="icon"] [data-kari-root].kari-nav-header {
+  padding: 10px 4px;
+}
+[data-collapsible="icon"] [data-kari-root] .kari-nav-brand {
+  padding: 0;
+  justify-content: center;
+}
+[data-collapsible="icon"] [data-kari-root] .kari-nav-mark {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+}
+[data-collapsible="icon"] [data-kari-root].kari-nav-scroll {
+  padding: 8px 4px;
+}
+[data-collapsible="icon"] [data-kari-root].kari-nav-footer {
+  padding: 10px 4px;
+}
