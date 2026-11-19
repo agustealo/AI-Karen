@@ -112,3 +112,22 @@ def test_empty_states_require_verified_authenticated_list_reads() -> None:
     for source in (tasks, jobs, cron):
         assert "isAuthLoading ? (" in source
         assert "!isAuthenticated ? (" in source
+
+
+def test_cron_fences_delayed_responses_by_tenant_user_and_revision() -> None:
+    source = _view("CronJobsPage.tsx")
+    assert 'JSON.stringify([user.tenant_id, user.user_id])' in source
+    assert "currentPrincipal.current = principal" in source
+    assert "jobsRevision.current !== revision" in source
+    assert "dependenciesRevision.current !== revision" in source
+    assert "jobsOwner === principal" in source
+    assert "dependenciesOwner === principal" in source
+    assert "verifiedJobs && jobs.map" in source
+    assert "visibleTasks.map" in source
+    assert "visibleSequences.map" in source
+    assert "if (!principal || !verifiedDependencies) return;" in source
+    assert "if (!principal || !verifiedJobs) return;" in source
+    assert "cronJobsFetchPromise" not in source
+    assert 'loadCronJobsWithRetry(() =>' in source
+    assert "setTargetId(\"\")" in source
+    assert "setSchedule(\"\")" in source
