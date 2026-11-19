@@ -157,7 +157,14 @@ async def rate_limit_middleware(request: Request, call_next):
         logger.debug("Rate limit middleware: Starting")
 
         request_path = str(request.url.path)
-        if request_path in ["/health", "/metrics", "/docs", "/openapi.json", "/redoc"]:
+        # Only canonical exact health/probe paths bypass Redis-backed limits.
+        # Liveness must remain observable even during a Redis DNS outage;
+        # readiness still checks required dependencies and returns real 503.
+        # Do not exempt prefixes: /ready/admin and private APIs stay protected.
+        if request_path in {
+            "/health", "/health/live", "/ready",
+            "/metrics", "/docs", "/openapi.json", "/redoc",
+        }:
             logger.debug(
                 "Rate limit middleware: Skipping rate limiting for system endpoint: %s",
                 request_path,

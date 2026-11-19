@@ -151,8 +151,21 @@ async def test_lifespan_closes_redis_and_database_when_runtime_attachment_fails(
 
 
 def test_redis_policy_matches_readiness_and_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One Redis authority governs both runtime initialization and /ready.
+    # Disabling memory alone must not disable Redis while a security limiter
+    # still depends on it.
     monkeypatch.setenv("KARI_ENABLE_MEMORY_SERVICE", "false")
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "false")
+    monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "false")
     assert OperationalHealthService.redis_required() is False
+
+    monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "true")
+    assert OperationalHealthService.redis_required() is True
+    monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "false")
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "true")
+    assert OperationalHealthService.redis_required() is True
+
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "false")
     monkeypatch.setenv("KARI_ENABLE_MEMORY_SERVICE", "true")
     assert OperationalHealthService.redis_required() is True
     monkeypatch.delenv("KARI_ENABLE_MEMORY_SERVICE", raising=False)

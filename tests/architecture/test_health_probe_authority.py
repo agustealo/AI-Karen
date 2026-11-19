@@ -26,7 +26,9 @@ def test_canonical_probes_define_connectivity_liveness_and_readiness() -> None:
     assert '@router.get("/health/live")' in source
     assert '@router.get("/ready")' in source
     assert "status_code=503" in source
-    assert "database_available" in source
+    assert "get_operational_health_service().readiness(" in source
+    assert "result.as_dict()" in source
+    assert "database_available" not in source
 
 
 def test_readiness_does_not_gate_on_optional_ai_providers() -> None:

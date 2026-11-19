@@ -16,6 +16,8 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ai_karen_engine.core.runtime.operational_health import get_operational_health_service
+
 router = APIRouter(tags=["system"])
 
 
@@ -56,34 +58,26 @@ async def liveness_probe() -> Dict[str, Any]:
 
 @router.get("/ready")
 async def readiness_probe(request: Request) -> Dict[str, Any]:
-    """Return readiness for production traffic.
+    """Delegate readiness to the single runtime dependency authority.
 
-    PostgreSQL is a required production dependency for authenticated state,
-    persistence, tenant-scoped data, and durable memory. Optional model
-    providers and extension capabilities are deliberately excluded from the
-    readiness gate so their failure can be represented through KAREN's normal
-    degraded-mode metadata rather than causing an application restart loop.
+    The public probe must never infer readiness from the existence of settings
+    and PostgreSQL alone: Redis-backed memory and rate limiting can be required.
+    This route only translates the runtime's result to HTTP status.
     """
-
-    settings_loaded = getattr(request.app.state, "settings", None) is not None
-    database_available = bool(
-        getattr(request.app.state, "database_available", False)
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ready": False,
+                "status": "not_ready",
+                "components": {"configuration": "not_ready", "database": "not_ready"},
+            },
+        )
+    result = await get_operational_health_service().readiness(
+        environment=str(getattr(settings, "environment", "production")),
     )
-
-    components = {
-        "configuration": "ready" if settings_loaded else "unavailable",
-        "database": "ready" if database_available else "unavailable",
-    }
-    ready = settings_loaded and database_available
-
-    payload: Dict[str, Any] = {
-        "ready": ready,
-        "status": "ready" if ready else "not_ready",
-        "components": components,
-        "timestamp": _timestamp(),
-    }
-
-    if not ready:
+    payload = result.as_dict()
+    if not result.ready:
         raise HTTPException(status_code=503, detail=payload)
-
     return payload
