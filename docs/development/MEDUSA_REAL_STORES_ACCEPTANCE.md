@@ -44,3 +44,21 @@ not proof that a restarted worker can resume a killed asyncio task.
 Remaining: production-role tenant RLS, authenticated target-host audit readback,
 recovering workers after infrastructure restart, and real network partition
 or PostgreSQL pool-starvation timing. No test may declare those passed.
+
+## KCON-471: PostgreSQL read stall versus live Redis lease (candidate)
+
+The existing real-store suite now holds a genuine PostgreSQL
+`ACCESS EXCLUSIVE` table lock on the disposable Medusa run table for
+longer than the configured Redis lease TTL. It polls the actual lease
+TTL and checks the owner task remains active while the canonical
+`MedusaRunManager` times out its durable recovery reads and renews
+Redis ownership. Once the lock is released, the test commits a
+durable-only cancellation request, observes an independently occurring
+`CancelledError` with a shielded test timeout, and verifies that
+terminal `cancelled` is recorded only after task interruption.
+
+This proves bounded recovery-read behavior under **SQL lock contention**
+on disposable CI infrastructure, not full PostgreSQL unavailability,
+connection-pool exhaustion, Redis network partition, post-crash task
+resurrection or production-host execution. Exact-head source CI and
+real-service execution are required before claiming that proof passed.
