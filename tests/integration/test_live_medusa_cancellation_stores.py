@@ -204,7 +204,7 @@ async def _run_acceptance() -> None:
             except asyncio.CancelledError:
                 pass
         await redis.close()
-        postgres.close()
+        await postgres.cleanup()
 
 
 def test_real_postgres_redis_lost_signal_owner_recovery() -> None:
