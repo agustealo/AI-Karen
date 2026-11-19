@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import {
   KarenCopilotPinnedDock,
   parseAuthorizedPinReadback,
@@ -44,7 +44,8 @@ describe("governed pinned workspace reference consumer", () => {
     const rendered = render(<KarenCopilotPinnedDock />);
     expect(await screen.findByTestId("karen-pins-empty")).toBeTruthy();
     rendered.unmount();
-    api.get.mockRejectedValue(new Error("upstream unavailable"));
+    // Only one request should fail; never leak the rejection into other effects.
+    api.get.mockRejectedValueOnce(new Error("upstream unavailable"));
     render(<KarenCopilotPinnedDock />);
     expect(await screen.findByTestId("karen-pinning-not-available")).toBeTruthy();
     expect(screen.queryByTestId("karen-pins-empty")).toBeNull();
@@ -73,9 +74,9 @@ describe("governed pinned workspace reference consumer", () => {
     let resolve!: (value: unknown) => void;
     api.get.mockImplementation(() => new Promise((r) => { resolve = r; }));
     const rendered = render(<KarenCopilotPinnedDock />);
+    expect(api.get).toHaveBeenCalledTimes(1);
     rendered.unmount();
     resolve(snapshot);
-    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("karen-pins-authorized")).toBeNull();
   });
 });
