@@ -488,7 +488,7 @@ class ChatRuntime:
                 provider_meta = {"response_source": "memory_persistence", "actual_provider": None, "actual_model": None}
             direct_executor = get_direct_capability_executor()
             if grounded is None and not self._is_explicit_save_turn(request) and (
-                direct_executor.can_handle(decision) or decision.intent == "planner.create"
+                direct_executor.can_handle(decision) or decision.intent in {"planner.create", "planner.update"}
             ):
                 resolved_location = RuntimeEvidenceResolver.authorized_semantic_value(
                     decision.cognitive_context,
@@ -506,8 +506,8 @@ class ChatRuntime:
                     if decision.intent == "time.current" else None
                 )
                 direct_result = (
-                    await self._execute_personal_planner_create(request, decision, plan, meter)
-                    if decision.intent == "planner.create"
+                    await self._execute_personal_planner_mutation(request, decision, plan, meter)
+                    if decision.intent in {"planner.create", "planner.update"}
                     else await direct_executor.execute(
                         request=request,
                         decision=decision,
@@ -1197,7 +1197,7 @@ class ChatRuntime:
                     meter,
                     _meta=provider_meta,
                 )
-                if direct_executor.can_handle(decision) or decision.intent == "planner.create"
+                if direct_executor.can_handle(decision) or decision.intent in {"planner.create", "planner.update"}
                 else (
                     self._run_reasoning_stream(
                         request,
@@ -3503,7 +3503,7 @@ class ChatRuntime:
         return presentation
 
     @staticmethod
-    async def _execute_personal_planner_create(
+    async def _execute_personal_planner_mutation(
         request: ChatExecutionRequest,
         decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan,
@@ -3523,7 +3523,7 @@ class ChatRuntime:
         )
         from ai_karen_engine.core.runtime.personal_planner_action import (
             execute_authorized_planner_action,
-            parse_personal_planner_create,
+            parse_personal_planner_create, parse_personal_planner_completion,
         )
         from ai_karen_engine.core.runtime.planner_approval import (
             PlannerRuntimeApproval, action_fingerprint,
@@ -3532,20 +3532,25 @@ class ChatRuntime:
             PlannerPrincipal,
         )
 
+        from ai_karen_engine.core.planner.contracts import CommitmentStatus
+
         started = time.perf_counter()
+        capability = decision.intent
+        is_create = capability == "planner.create"
+        effect_key = "planner_created" if is_create else "planner_completed"
 
         def unavailable(reason: str, message: str) -> DirectCapabilityResult:
             return DirectCapabilityResult(
                 handled=True, text=message, success=False, degraded=True,
-                source="capability_unavailable", source_id="planner.create",
+                source="capability_unavailable", source_id=capability,
                 error=reason,
                 payload={
                     "status": "unavailable",
-                    "required_capability": "planner.create",
-                    "planner_created": False,
+                    "required_capability": capability,
+                    effect_key: False,
                 },
                 attempts=[{
-                    "type": "capability", "id": "planner.create",
+                    "type": "capability", "id": capability,
                     "status": "unavailable", "error": reason,
                 }],
                 latency_ms=(time.perf_counter() - started) * 1000.0,
@@ -3553,27 +3558,33 @@ class ChatRuntime:
 
         from ai_karen_engine.server.config import settings
 
+        if capability not in {"planner.create", "planner.update"}:
+            return unavailable(
+                "planner_mutation_unrecognized",
+                "Unsupported planner mutation. No task was changed.",
+            )
+
         if not settings.enable_personal_planner_write_api:
             return unavailable(
-                "planner_create_disabled",
-                "Personal task creation is disabled by application settings. No task was saved.",
+                "planner_mutation_disabled",
+                "Personal task changes are disabled by application settings. No task was changed.",
             )
         if (
             decision.is_graph_required
             or not bool((decision.policy_constraints or {}).get("direct_capability"))
         ):
             return unavailable(
-                "planner_create_requires_direct_authority",
-                "The task cannot run through the authorized direct action path. No task was saved.",
+                "planner_mutation_requires_direct_authority",
+                "The task cannot run through the authorized direct action path. No task was changed.",
             )
         context = request.context
         if (
-            "planner.create" not in set(plan.allowed_capabilities)
+            capability not in set(plan.allowed_capabilities)
             or context.original_runtime_model_plan(meter) is not plan
         ):
             return unavailable(
-                "planner_create_not_authorized",
-                "This conversation is not authorized to create a personal task. No task was saved.",
+                "planner_mutation_not_authorized",
+                "This conversation is not authorized to change a personal task. No task was changed.",
             )
         try:
             user = context.require_authenticated_user()
@@ -3589,34 +3600,37 @@ class ChatRuntime:
                 raise ValueError("Missing runtime correlation identity")
         except (PermissionError, ValueError) as exc:
             return unavailable(
-                "planner_create_principal_unverified",
-                "The task's account or conversation could not be verified. No task was saved.",
+                "planner_mutation_principal_unverified",
+                "The task's account or conversation could not be verified. No task was changed.",
             )
 
-        parsed = parse_personal_planner_create(
-            DirectCapabilityExecutor._latest_user_text(request)
+        parsed = (
+            parse_personal_planner_create(DirectCapabilityExecutor._latest_user_text(request))
+            if is_create else
+            parse_personal_planner_completion(DirectCapabilityExecutor._latest_user_text(request))
         )
         if parsed is None:
             return DirectCapabilityResult(
                 handled=True, success=False,
-                source="missing_context", source_id="planner.create",
+                source="missing_context", source_id=capability,
                 text=(
-                    "To create a personal task, provide a title and an explicit "
-                    "IANA timezone, for example: Create a personal task to "
-                    "review my project in America/Detroit. "
-                    "Tasks with due dates or times are not supported by this "
-                    "chat action yet. No task was saved."
+                    "Provide a task title and IANA timezone without a deadline. No task was saved."
+                    if is_create else
+                    "To complete a task, specify its UUID and expected revision, "
+                    "for example: Complete task <UUID> revision 1. No task was changed."
                 ),
                 payload={
                     "status": "needs_input",
-                    "required_capability": "planner.create",
-                    "planner_created": False,
-                    "missing_fields": ["title_or_timezone_or_supported_schedule"],
+                    "required_capability": capability,
+                    effect_key: False,
+                    "missing_fields": (
+                        ["title_or_timezone_or_supported_schedule"] if is_create
+                        else ["commitment_id", "expected_revision"]
+                    ),
                 },
                 latency_ms=(time.perf_counter() - started) * 1000.0,
             )
 
-        title, timezone = parsed
         try:
             if not isinstance(mutation_key, str):
                 raise ValueError("Missing mutation idempotency key")
@@ -3625,16 +3639,21 @@ class ChatRuntime:
                 raise ValueError("Nil mutation idempotency key")
         except (ValueError, TypeError, AttributeError):
             return unavailable(
-                "planner_create_idempotency_required",
-                "Task creation requires a retry-stable action ID. No task was saved.",
+                "planner_mutation_idempotency_required",
+                "Task changes require a retry-stable action ID. No task was changed.",
             )
+        task_id, revision = (None, None) if is_create else parsed
+        title, timezone = parsed if is_create else (None, None)
         action = AuthorizedPlannerAction(
-            action=PlannerAction.CREATE,
+            action=PlannerAction.CREATE if is_create else PlannerAction.UPDATE,
             title=title,
             timezone=timezone,
+            commitment_id=task_id,
+            expected_revision=revision,
+            status=None if is_create else CommitmentStatus.COMPLETED,
             idempotency_key=uuid.uuid5(
                 uuid.NAMESPACE_URL,
-                f"personal-planner-create:{owner.tenant_id}:{owner.owner_id}:"
+                f"personal-planner-{'create' if is_create else 'update'}:{owner.tenant_id}:{owner.owner_id}:"
                 f"{conversation_id}:{supplied_idempotency}",
             ),
             correlation_id=context.correlation_id,
@@ -3649,8 +3668,8 @@ class ChatRuntime:
 
         if not await meter.consume_tool_call():
             return unavailable(
-                "planner_create_budget_exhausted",
-                "The task execution budget is exhausted. No task was saved.",
+                "planner_mutation_budget_exhausted",
+                "The task execution budget is exhausted. No task was changed.",
             )
         try:
             commitment, receipt = await execute_authorized_planner_action(
@@ -3665,38 +3684,49 @@ class ChatRuntime:
                 or receipt.revision != commitment.revision
                 or commitment.owner_id != owner.owner_id
                 or commitment.tenant_id != owner.tenant_id
-                or commitment.title != title
-                or commitment.timezone != timezone
+                or (
+                    (commitment.title != title or commitment.timezone != timezone)
+                    if is_create else (
+                        commitment.id != task_id
+                        or commitment.status is not CommitmentStatus.COMPLETED
+                        or commitment.revision != revision + 1
+                    )
+                )
             ):
                 return unavailable(
-                    "planner_create_receipt_invalid",
+                    "planner_mutation_receipt_invalid",
                     "The task write could not be verified. Check your task list before retrying.",
                 )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning(
-                "personal_planner_chat_create_failed",
+                "personal_planner_chat_mutation_failed",
                 extra={
                     "correlation_id": context.correlation_id,
                     "error_type": type(exc).__name__,
-                    "intent": "planner.create",
+                    "intent": capability,
                 },
             )
             return unavailable(
-                "planner_create_unavailable",
-                "The task could not be confirmed as saved. Check your task list before retrying.",
+                "planner_mutation_unavailable",
+                "The task change could not be confirmed. Check your task list before retrying.",
             )
 
         return DirectCapabilityResult(
             handled=True, success=True, degraded=False,
             source="personal_planner_postgresql",
-            source_id="planner.create",
-            text=f'Verified personal task: "{commitment.title}" (ID: {commitment.id}).',
+            source_id=capability,
+            text=(
+                f'Verified personal task: "{commitment.title}" (ID: {commitment.id}).'
+                if is_create else
+                f'Verified completed task: "{commitment.title}" (ID: {commitment.id}, '
+                f'revision {commitment.revision}).'
+            ),
             payload={
-                "status": "saved",
-                "required_capability": "planner.create",
-                "planner_created": True,
+                "status": "saved" if is_create else "completed",
+                "required_capability": capability,
+                effect_key: True,
                 "planner_receipt": {
                     "commitment_id": str(receipt.commitment_id),
                     "revision": receipt.revision,
@@ -3706,7 +3736,7 @@ class ChatRuntime:
                 },
             },
             attempts=[{
-                "type": "capability", "id": "planner.create",
+                "type": "capability", "id": capability,
                 "status": "success", "source": "personal_planner_postgresql",
             }],
             latency_ms=(time.perf_counter() - started) * 1000.0,
@@ -3741,8 +3771,8 @@ class ChatRuntime:
             else None
         )
         result = (
-            await self._execute_personal_planner_create(request, decision, plan, meter)
-            if decision.intent == "planner.create"
+            await self._execute_personal_planner_mutation(request, decision, plan, meter)
+            if decision.intent in {"planner.create", "planner.update"}
             else await get_direct_capability_executor().execute(
                 request=request,
                 decision=decision,
