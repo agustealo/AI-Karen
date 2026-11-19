@@ -503,21 +503,25 @@ class ChatRuntime:
                     )
                     if decision.intent == "time.current" else None
                 )
-                direct_result = await direct_executor.execute(
-                    request=request,
-                    decision=decision,
-                    plan=plan,
-                    meter=meter,
-                    resolved_context=(
-                        {
-                            "weather_location": resolved_location,
-                            "location_source": "user_profile",
-                        }
-                        if resolved_location else (
-                            {"timezone": resolved_timezone}
-                            if resolved_timezone else None
-                        )
-                    ),
+                direct_result = (
+                    await self._execute_personal_planner_create(request, plan, meter)
+                    if decision.intent == "planner.create"
+                    else await direct_executor.execute(
+                        request=request,
+                        decision=decision,
+                        plan=plan,
+                        meter=meter,
+                        resolved_context=(
+                            {
+                                "weather_location": resolved_location,
+                                "location_source": "user_profile",
+                            }
+                            if resolved_location else (
+                                {"timezone": resolved_timezone}
+                                if resolved_timezone else None
+                            )
+                        ),
+                    )
                 )
                 text = direct_result.text
                 provider_meta = direct_result.normalized_metadata()
@@ -3496,6 +3500,184 @@ class ChatRuntime:
 
         return presentation
 
+    @staticmethod
+    async def _execute_personal_planner_create(
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ):
+        """Execute one bounded chat task with a runtime-issued, scoped approval.
+
+        CORTEX only supplies intent. The exact original authorized plan and
+        authenticated principal are checked before constructing any approval.
+        No model/provider fallback may transform a failed write into success.
+        """
+        from ai_karen_engine.core.planner.action_contract import (
+            AuthorizedPlannerAction, PlannerAction,
+        )
+        from ai_karen_engine.core.runtime.direct_capability_executor import (
+            DirectCapabilityExecutor, DirectCapabilityResult,
+        )
+        from ai_karen_engine.core.runtime.personal_planner_action import (
+            execute_authorized_planner_action,
+            parse_personal_planner_create,
+        )
+        from ai_karen_engine.core.runtime.planner_approval import (
+            PlannerRuntimeApproval, action_fingerprint,
+        )
+        from ai_karen_engine.services.personal_planner import (
+            PlannerPrincipal,
+        )
+
+        started = time.perf_counter()
+
+        def unavailable(reason: str, message: str) -> DirectCapabilityResult:
+            return DirectCapabilityResult(
+                handled=True, text=message, success=False, degraded=True,
+                source="capability_unavailable", source_id="planner.create",
+                error=reason,
+                payload={
+                    "status": "unavailable",
+                    "required_capability": "planner.create",
+                    "planner_created": False,
+                },
+                attempts=[{
+                    "type": "capability", "id": "planner.create",
+                    "status": "unavailable", "error": reason,
+                }],
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+            )
+
+        context = request.context
+        if (
+            "planner.create" not in set(plan.allowed_capabilities)
+            or context.original_runtime_model_plan(meter) is not plan
+        ):
+            return unavailable(
+                "planner_create_not_authorized",
+                "This conversation is not authorized to create a personal task. No task was saved.",
+            )
+        try:
+            user = context.require_authenticated_user()
+            owner = PlannerPrincipal.from_authenticated_user(user)
+            conversation_id = context.require_conversation_id()
+            request_id = str(context.request_id or "").strip()
+            if not request_id or not context.correlation_id:
+                raise ValueError("Missing runtime request identity")
+        except (PermissionError, ValueError) as exc:
+            return unavailable(
+                "planner_create_principal_unverified",
+                "The task's account or conversation could not be verified. No task was saved.",
+            )
+
+        parsed = parse_personal_planner_create(
+            DirectCapabilityExecutor._latest_user_text(request)
+        )
+        if parsed is None:
+            return DirectCapabilityResult(
+                handled=True, success=False,
+                source="missing_context", source_id="planner.create",
+                text=(
+                    "To create a personal task, provide a title and an explicit "
+                    "IANA timezone, for example: Create a personal task to "
+                    "review my project in America/Detroit. "
+                    "Tasks with due dates or times are not supported by this "
+                    "chat action yet. No task was saved."
+                ),
+                payload={
+                    "status": "needs_input",
+                    "required_capability": "planner.create",
+                    "planner_created": False,
+                    "missing_fields": ["title_or_timezone_or_supported_schedule"],
+                },
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+            )
+
+        title, timezone = parsed
+        action = AuthorizedPlannerAction(
+            action=PlannerAction.CREATE,
+            title=title,
+            timezone=timezone,
+            idempotency_key=uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"personal-planner-create:{owner.tenant_id}:{owner.owner_id}:"
+                f"{conversation_id}:{request_id}",
+            ),
+            correlation_id=context.correlation_id,
+            explicit_user_authorization=True,
+        )
+        approval = PlannerRuntimeApproval(
+            tenant_id=owner.tenant_id,
+            owner_id=owner.owner_id,
+            action_fingerprint=action_fingerprint(action),
+            correlation_id=context.correlation_id,
+        )
+
+        if not await meter.consume_tool_call():
+            return unavailable(
+                "planner_create_budget_exhausted",
+                "The task execution budget is exhausted. No task was saved.",
+            )
+        try:
+            commitment, receipt = await execute_authorized_planner_action(
+                action,
+                authenticated_user=user,
+                runtime_approval=approval,
+            )
+            if (
+                receipt.commitment_id != commitment.id
+                or receipt.tenant_id != owner.tenant_id
+                or receipt.idempotency_key != action.idempotency_key
+                or receipt.revision != commitment.revision
+                or commitment.owner_id != owner.owner_id
+                or commitment.tenant_id != owner.tenant_id
+                or commitment.title != title
+                or commitment.timezone != timezone
+            ):
+                return unavailable(
+                    "planner_create_receipt_invalid",
+                    "The task write could not be verified. Check your task list before retrying.",
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "personal_planner_chat_create_failed",
+                extra={
+                    "correlation_id": context.correlation_id,
+                    "error_type": type(exc).__name__,
+                    "intent": "planner.create",
+                },
+            )
+            return unavailable(
+                "planner_create_unavailable",
+                "The task could not be confirmed as saved. Check your task list before retrying.",
+            )
+
+        return DirectCapabilityResult(
+            handled=True, success=True, degraded=False,
+            source="personal_planner_postgresql",
+            source_id="planner.create",
+            text=f'Verified personal task: "{commitment.title}" (ID: {commitment.id}).',
+            payload={
+                "status": "saved",
+                "required_capability": "planner.create",
+                "planner_created": True,
+                "planner_receipt": {
+                    "commitment_id": str(receipt.commitment_id),
+                    "revision": receipt.revision,
+                    "idempotency_key": str(receipt.idempotency_key),
+                    "persisted_at": receipt.persisted_at.isoformat(),
+                    "correlation_id": receipt.correlation_id,
+                },
+            },
+            attempts=[{
+                "type": "capability", "id": "planner.create",
+                "status": "success", "source": "personal_planner_postgresql",
+            }],
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
     async def _run_direct_capability_stream(
         self,
         request: ChatExecutionRequest,
@@ -3524,17 +3706,21 @@ class ChatRuntime:
             if decision.intent == "time.current"
             else None
         )
-        result = await get_direct_capability_executor().execute(
-            request=request,
-            decision=decision,
-            plan=plan,
-            meter=meter,
-            resolved_context=(
-                {"weather_location": resolved_location, "location_source": "user_profile"}
-                if resolved_location else (
-                    {"timezone": resolved_timezone} if resolved_timezone else None
-                )
-            ),
+        result = (
+            await self._execute_personal_planner_create(request, plan, meter)
+            if decision.intent == "planner.create"
+            else await get_direct_capability_executor().execute(
+                request=request,
+                decision=decision,
+                plan=plan,
+                meter=meter,
+                resolved_context=(
+                    {"weather_location": resolved_location, "location_source": "user_profile"}
+                    if resolved_location else (
+                        {"timezone": resolved_timezone} if resolved_timezone else None
+                    )
+                ),
+            )
         )
         normalized = result.normalized_metadata()
         pending = self._pending_clarification_from_result(request, result)
