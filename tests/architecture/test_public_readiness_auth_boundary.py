@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from ai_karen_engine.api_routes.monitoring.probes import router as probe_router
 from ai_karen_engine.auth.auth_middleware import SecureAuthMiddleware
+from ai_karen_engine.core.runtime.operational_health import OperationalHealthService
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,7 +77,7 @@ def test_exact_readiness_is_public_but_adjacent_paths_are_private() -> None:
     assert auth.is_public_endpoint("/health/live") is True
 
 
-def test_auth_boundary_allows_anonymous_readiness_not_private_routes() -> None:
+def test_auth_boundary_allows_anonymous_readiness_not_private_routes(monkeypatch) -> None:
     class RejectingAuth:
         def is_public_endpoint(self, path: str) -> bool:
             return SecureAuthMiddleware.is_public_endpoint(self, path)
@@ -84,9 +85,23 @@ def test_auth_boundary_allows_anonymous_readiness_not_private_routes() -> None:
         async def authenticate_request(self, request: Request):
             raise HTTPException(status_code=401, detail="Authentication required")
 
+    # Exercise the real readiness owner with only external dependency checks
+    # mocked; no external PostgreSQL or Redis connection is needed.
+    database_healthy = {"ready": True, "status": "healthy"}
+    redis_healthy = {"ready": True, "status": "healthy"}
+
+    async def check_database():
+        return database_healthy
+
+    async def check_redis(*, required):
+        assert required is True
+        return redis_healthy
+
+    monkeypatch.setattr(OperationalHealthService, "_database_check", staticmethod(check_database))
+    monkeypatch.setattr(OperationalHealthService, "_redis_check", staticmethod(check_redis))
+    monkeypatch.setattr(OperationalHealthService, "redis_required", classmethod(lambda cls: True))
     app = FastAPI()
-    app.state.settings = object()
-    app.state.database_available = True
+    app.state.settings = SimpleNamespace(environment="development")
     _canonical_auth_configuration(RejectingAuth())(app)
     app.include_router(probe_router)
 
@@ -105,13 +120,22 @@ def test_auth_boundary_allows_anonymous_readiness_not_private_routes() -> None:
         assert ready.json()["components"] == {
             "configuration": "ready",
             "database": "ready",
+            "redis": "ready",
         }
         assert client.get("/health/live").status_code == 200
         assert client.get("/private").status_code == 401
         assert client.get("/ready/admin").status_code == 401
 
-        # Being public never manufactures readiness when PostgreSQL is down.
-        app.state.database_available = False
-        unavailable = client.get("/ready")
-        assert unavailable.status_code == 503
-        assert unavailable.json()["detail"]["components"]["database"] == "unavailable"
+        # Redis unavailability must be visible even if database/config are ready.
+        redis_healthy = {"ready": False, "status": "unavailable"}
+        redis_unavailable = client.get("/ready")
+        assert redis_unavailable.status_code == 503
+        assert redis_unavailable.json()["detail"]["components"]["redis"] == "not_ready"
+        assert client.get("/health/live").status_code == 200
+
+        # PostgreSQL unavailability must independently fail readiness.
+        redis_healthy = {"ready": True, "status": "healthy"}
+        database_healthy = {"ready": False, "status": "unavailable"}
+        db_unavailable = client.get("/ready")
+        assert db_unavailable.status_code == 503
+        assert db_unavailable.json()["detail"]["components"]["database"] == "not_ready"
