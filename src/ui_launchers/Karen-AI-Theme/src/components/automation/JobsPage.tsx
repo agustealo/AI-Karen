@@ -274,13 +274,13 @@ export default function SequencesPage() {
               <AutomationListNotice kind="loading" message="Restoring your session..." />
             ) : !isAuthenticated ? (
               <AutomationListNotice kind="authentication" message="Sign in to view job definitions." />
-            ) : isLoading ? (
+            ) : isLoading || !verifiedJobs ? (
               <AutomationListNotice kind="loading" message="Loading jobs from backend..." />
             ) : jobsFetchError ? (
               <AutomationListNotice kind="unavailable" message="Job definitions could not be verified with the backend." />
             ) : jobs.length === 0 ? (
               <AutomationListNotice kind="empty" message="No jobs defined yet." />
-            ) : jobs.map((job: Job, index: number) => (
+            ) : verifiedJobs && jobs.map((job: Job, index: number) => (
               <Card className="karen-automation-card" key={job.id || index}>
                 <CardHeader>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -394,7 +394,7 @@ export default function SequencesPage() {
                   </div>
                   <Dialog>
                     <DialogTrigger asChild>
-                        <Button variant="outline" className="w-full mt-2" disabled={isTasksLoading || availableTasks.length === 0}>
+                        <Button variant="outline" className="w-full mt-2" disabled={isTasksLoading || !verifiedTasks || visibleTasks.length === 0}>
                             <PlusCircle className="mr-2 h-4 w-4" />
                             {isTasksLoading ? "Loading Tasks..." : "Add Task Step"}
                         </Button>
@@ -408,7 +408,7 @@ export default function SequencesPage() {
                         </DialogHeader>
                         <div className="py-2 max-h-[50vh] overflow-y-auto">
                             <div className="flex flex-col space-y-2">
-                                {availableTasks.map(task => (
+                                {visibleTasks.map(task => (
                                 <div key={task.id} className="flex items-center justify-between p-3 rounded-md border bg-muted/40">
                                     <div className="flex-1 pr-4">
                                         <div className="flex items-center space-x-3">
@@ -439,7 +439,7 @@ export default function SequencesPage() {
                 </div>
               </CardContent>
               <CardFooter>
-                <Button className="w-full" onClick={handleCreateJob} disabled={newJobTasks.length === 0}>
+                <Button className="w-full" onClick={handleCreateJob} disabled={!principal || !verifiedTasks || newJobTasks.length === 0}>
                   <PlusCircle className="mr-2 h-4 w-4" />
                   Save Job Definition
                 </Button>
