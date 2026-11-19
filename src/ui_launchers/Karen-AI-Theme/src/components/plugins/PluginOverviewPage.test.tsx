@@ -59,7 +59,7 @@ beforeEach(() => {
   mocked.getRegisteredPluginIds.mockReset();
   mocked.getRegisteredPluginIds.mockReturnValue(['extension-alpha']);
   mocked.usePluginHealth.mockImplementation((id: string) => ({
-    backendState: id === 'extension-alpha' ? 'active' : 'disabled',
+    backendState: id === 'extension-alpha' || id === 'voice-output' ? 'active' : 'disabled',
     frontendMountState: id === 'extension-alpha' ? 'mounted' : 'idle',
     permissionVisible: true,
     errorMessage: '',
