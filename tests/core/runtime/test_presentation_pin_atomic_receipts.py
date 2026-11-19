@@ -292,3 +292,83 @@ async def test_evidence_drift_does_not_write_a_receipt(monkeypatch):
         ))
     assert len(fake.queries) == 3
     assert state["rolled_back"]
+
+
+
+@pytest.mark.asyncio
+async def test_pre_admission_replay_reads_committed_pin_receipt(monkeypatch):
+    from ai_karen_engine.core.runtime.presentation_pin_admission import PresentationPinReference
+
+    reference = PresentationPinReference(
+        conversation_id="44444444-4444-4444-8444-444444444444",
+        assistant_message_id="22222222-2222-5222-8222-222222222222",
+        presentation_id="verified-clock",
+        evidence_ref="verified-evidence",
+    )
+    expected = module._mutation_digest(
+        operation="pin", tenant=TENANT, user=USER, pin_id=None,
+        expected_revision=None, position=2, source=reference,
+    )
+    committed = {
+        **receipt_row(digest=expected),
+        "operation": "pin", "outcome": "pinned",
+        "expected_revision": None, "committed_revision": 1,
+    }
+    fake, state, scopes = wire(monkeypatch, [Result(committed)])
+    replay = await PresentationPinRepository().replay_committed_pin_receipt(
+        authenticated_tenant_id=TENANT,
+        authenticated_user_id=USER,
+        idempotency_key=KEY,
+        reference=reference,
+        position=2,
+    )
+    assert replay is not None and replay.receipt_id == RECEIPT
+    assert replay.outcome == "pinned"
+    assert len(fake.queries) == 1
+    assert "conversation_presentation_pin_mutation_receipts" in fake.queries[0]
+    assert fake.params[0]["key"] == KEY
+    assert scopes == [(TENANT, USER)]
+    assert state["committed"]
+
+
+@pytest.mark.asyncio
+async def test_pre_admission_replay_mismatch_fails_closed(monkeypatch):
+    from ai_karen_engine.core.runtime.presentation_pin_admission import PresentationPinReference
+
+    reference = PresentationPinReference(
+        conversation_id="44444444-4444-4444-8444-444444444444",
+        assistant_message_id="22222222-2222-5222-8222-222222222222",
+        presentation_id="verified-clock",
+        evidence_ref="verified-evidence",
+    )
+    fake, state, _ = wire(monkeypatch, [Result(receipt_row())])
+    with pytest.raises(PresentationPinConflict, match="Idempotency"):
+        await PresentationPinRepository().replay_committed_pin_receipt(
+            authenticated_tenant_id=TENANT,
+            authenticated_user_id=USER,
+            idempotency_key=KEY,
+            reference=reference,
+            position=2,
+        )
+    assert len(fake.queries) == 1
+    assert state["rolled_back"]
+
+
+@pytest.mark.asyncio
+async def test_pre_admission_replay_missing_receipt_is_not_write_authority(monkeypatch):
+    from ai_karen_engine.core.runtime.presentation_pin_admission import PresentationPinReference
+
+    reference = PresentationPinReference(
+        conversation_id="44444444-4444-4444-8444-444444444444",
+        assistant_message_id="22222222-2222-5222-8222-222222222222",
+        presentation_id="verified-clock",
+        evidence_ref="verified-evidence",
+    )
+    fake, _, _ = wire(monkeypatch, [Result()])
+    assert await PresentationPinRepository().replay_committed_pin_receipt(
+        authenticated_tenant_id=TENANT,
+        authenticated_user_id=USER,
+        idempotency_key=KEY,
+        reference=reference,
+    ) is None
+    assert len(fake.queries) == 1
