@@ -10,6 +10,7 @@ import hashlib
 import json
 from contextlib import asynccontextmanager
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 import pytest
 
@@ -219,3 +220,75 @@ async def test_invalid_mutation_contract_never_enters_transaction(monkeypatch, m
     with pytest.raises(ValueError):
         await PresentationPinRepository().mutate_with_receipt(**request(**mutations))
     scope.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pin_requires_source_admission_and_receipts_existing_pin(monkeypatch):
+    from ai_karen_engine.core.runtime.presentation_pin_admission import PresentationPinReference
+
+    reference = PresentationPinReference(
+        conversation_id="44444444-4444-4444-8444-444444444444",
+        assistant_message_id="22222222-2222-5222-8222-222222222222",
+        presentation_id="verified-clock",
+        evidence_ref="verified-evidence",
+    )
+    admission = Mock(return_value=SimpleNamespace(reference=reference))
+    monkeypatch.setattr(module, "admit_presentation_pin_reference", admission)
+    pin_row = {
+        "pin_id": PIN, "tenant_id": TENANT, "user_id": USER,
+        "conversation_id": reference.conversation_id,
+        "assistant_message_id": reference.assistant_message_id,
+        "presentation_id": reference.presentation_id,
+        "evidence_ref": reference.evidence_ref,
+        "position": 2, "revision": 3,
+    }
+    result_row = {
+        **receipt_row(outcome="unpinned"),
+        "operation": "pin", "outcome": "pinned",
+        "expected_revision": None, "committed_revision": 3,
+    }
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(), Result(pin_row), Result(result_row),
+    ])
+    receipt = await PresentationPinRepository().mutate_with_receipt(
+        **request(
+            operation="pin", pin_id=None, position=2,
+            reference=reference,
+            owned_snapshot=Mock(),
+            completed_run_attestations={},
+        )
+    )
+    admission.assert_called_once()
+    assert receipt.outcome == "pinned"
+    assert state["committed"]
+    assert len(fake.queries) == 4
+    assert "SELECT" in fake.queries[2]
+    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[3]
+
+
+@pytest.mark.asyncio
+async def test_evidence_drift_does_not_write_a_receipt(monkeypatch):
+    from ai_karen_engine.core.runtime.presentation_pin_admission import PresentationPinReference
+
+    reference = PresentationPinReference(
+        conversation_id="44444444-4444-4444-8444-444444444444",
+        assistant_message_id="22222222-2222-5222-8222-222222222222",
+        presentation_id="verified-clock",
+        evidence_ref="new-evidence",
+    )
+    monkeypatch.setattr(
+        module, "admit_presentation_pin_reference",
+        Mock(return_value=SimpleNamespace(reference=reference)),
+    )
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(), Result({
+            "pin_id": PIN, "evidence_ref": "old-evidence",
+        }),
+    ])
+    with pytest.raises(PresentationPinConflict, match="source has changed"):
+        await PresentationPinRepository().mutate_with_receipt(**request(
+            operation="pin", pin_id=None, reference=reference,
+            owned_snapshot=Mock(), completed_run_attestations={},
+        ))
+    assert len(fake.queries) == 3
+    assert state["rolled_back"]
