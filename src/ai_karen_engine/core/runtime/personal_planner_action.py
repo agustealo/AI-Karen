@@ -64,7 +64,7 @@ def parse_personal_planner_create(query: str) -> tuple[str, str] | None:
         r"(?:please\s+)?(?:create|add|make)\s+(?:me\s+)?(?:a\s+)?"
         r"(?:personal\s+)?(?:task|commitment)\s+(?:to|for)\s+"
         r"(?P<title>.+?)\s+(?:in\s+|timezone\s+)"
-        r"(?P<timezone>[A-Za-z_]+/[A-Za-z_+\-]+)[.!]?",
+        r"(?P<timezone>UTC|[A-Za-z_][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)+)[.!]?",
         normalized,
         flags=re.IGNORECASE,
     )
