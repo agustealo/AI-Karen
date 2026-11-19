@@ -15,6 +15,7 @@ on every future read, even after a pin-record service is added.
 from __future__ import annotations
 
 import hmac
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -22,6 +23,7 @@ from typing import Any
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     ConversationSnapshot,
 )
+from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
 from ai_karen_engine.core.runtime.owned_history_projection import (
     UnreplayableHistory,
     project_owned_history,
@@ -51,14 +53,14 @@ def _valid_id(value: object, *, length: int = 200) -> bool:
     return isinstance(value, str) and bool(value.strip()) and len(value) <= length
 
 
-def admit_presentation_pin_reference(
+def _admit_presentation_with_envelope(
     *,
     snapshot: ConversationSnapshot,
     authenticated_tenant_id: str,
     authenticated_user_id: str,
     reference: PresentationPinReference,
     attestations: Mapping[str, tuple[str, str]],
-) -> AdmittedPresentationPin:
+) -> tuple[AdmittedPresentationPin, dict[str, Any]]:
     """Prove an exact saved assistant presentation is eligible for pinning.
 
     Authorization contract: snapshot MUST have been returned by an authorized
@@ -130,10 +132,44 @@ def admit_presentation_pin_reference(
             raise denied
         if verified.get("schema_version") != 1:
             raise denied
+        envelope = validate_presentation(verified)
+        if envelope is None or envelope != verified:
+            raise denied
+        encoded = json.dumps(envelope, allow_nan=False, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if len(encoded) > 32768:
+            raise denied
         return AdmittedPresentationPin(
             reference=reference,
             component_type=component_type,
             schema_version=1,
-        )
-    except (UnreplayableHistory, AttributeError, KeyError, TypeError, ValueError) as exc:
+        ), envelope
+    except (UnreplayableHistory, AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
         raise PinSourceUnavailable("Saved presentation unavailable") from exc
+
+
+def admit_presentation_pin_reference(
+    *, snapshot: ConversationSnapshot, authenticated_tenant_id: str,
+    authenticated_user_id: str, reference: PresentationPinReference,
+    attestations: Mapping[str, tuple[str, str]],
+) -> AdmittedPresentationPin:
+    """Preserve metadata-only admission for persistence and mutation paths."""
+    admitted, _ = _admit_presentation_with_envelope(
+        snapshot=snapshot, authenticated_tenant_id=authenticated_tenant_id,
+        authenticated_user_id=authenticated_user_id, reference=reference,
+        attestations=attestations,
+    )
+    return admitted
+
+
+def restore_attested_presentation_envelope(
+    *, snapshot: ConversationSnapshot, authenticated_tenant_id: str,
+    authenticated_user_id: str, reference: PresentationPinReference,
+    attestations: Mapping[str, tuple[str, str]],
+) -> dict[str, Any]:
+    """Read-only canonical restoration, never an authorization grant from a pointer."""
+    _, envelope = _admit_presentation_with_envelope(
+        snapshot=snapshot, authenticated_tenant_id=authenticated_tenant_id,
+        authenticated_user_id=authenticated_user_id, reference=reference,
+        attestations=attestations,
+    )
+    return envelope

@@ -13,6 +13,7 @@ from ai_karen_engine.core.runtime.presentation_pin_admission import (
     PinSourceUnavailable,
     PresentationPinReference,
     admit_presentation_pin_reference,
+    restore_attested_presentation_envelope,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Conversation,
@@ -232,3 +233,54 @@ def test_multiple_distinct_presentations_require_exact_evidence_binding():
         verify(snapshot=snapshot, ref=pointer(
             presentation_id="date-verified", evidence_ref="clock:verified"
         ), attestations=proof)
+
+def restore(snapshot=None, ref=None, attestations=None, tenant=TENANT, user=USER):
+    snapshot = saved() if snapshot is None else snapshot
+    return restore_attested_presentation_envelope(
+        snapshot=snapshot, authenticated_tenant_id=tenant,
+        authenticated_user_id=user, reference=pointer() if ref is None else ref,
+        attestations=ledger_attestation(snapshot) if attestations is None else attestations,
+    )
+
+
+def test_restores_exact_completed_attested_presentation_without_pin_mutation():
+    assert restore() == presentation()
+    assert not hasattr(verify(), "data")
+
+
+@pytest.mark.parametrize("changes", [
+    {"tenant": OTHER_TENANT},
+    {"user": OTHER_USER},
+    {"attestations": {}},
+    {"ref": pointer(evidence_ref="forged")},
+])
+def test_full_card_restoration_denies_foreign_or_unattested_source(changes):
+    with pytest.raises(PinSourceUnavailable):
+        restore(**changes)
+
+
+def test_full_card_restoration_denies_post_commit_digest_drift():
+    snapshot = saved()
+    proof = ledger_attestation(snapshot)
+    modified = saved(metadata={
+        **snapshot.messages[1].metadata,
+        "verified_presentations_v1": [
+            {**presentation(), "data": {"formatted": "forged"}},
+        ],
+    })
+    with pytest.raises(PinSourceUnavailable):
+        restore(snapshot=modified, attestations=proof)
+
+
+@pytest.mark.parametrize("bad", [
+    {**presentation(), "component_type": "arbitrary.html"},
+    {**presentation(), "data": {"formatted": "x" * 40000}},
+])
+def test_full_card_restoration_denies_unsupported_and_oversized_data(bad):
+    original = saved()
+    modified = saved(metadata={
+        **original.messages[1].metadata,
+        "verified_presentations_v1": [bad],
+    })
+    with pytest.raises(PinSourceUnavailable):
+        restore(snapshot=modified)
