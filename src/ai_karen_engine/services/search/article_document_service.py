@@ -110,11 +110,18 @@ class SearchArticleService:
         if not source.success or source.data is None:
             return None
         artifact = source.data
+        # Revalidate against the *latest* metadata after reading bytes. A
+        # concurrent replacement or revocation must not permit content from an
+        # earlier revision to be returned under the latest source identity.
+        content_bytes = content.encode("utf-8")
         if (
-            artifact.kind != "search_article"
+            artifact.tenant_id != tenant_id
+            or artifact.kind != "search_article"
             or artifact.user_id != user_id
             or artifact.deleted_at is not None
             or artifact.metadata.get("source_url") != source_url
+            or artifact.size_bytes != len(content_bytes)
+            or artifact.sha256 != hashlib.sha256(content_bytes).hexdigest()
         ):
             return None
         return content
