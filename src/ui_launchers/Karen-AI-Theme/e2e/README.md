@@ -431,3 +431,89 @@ A runner pass verifies backend/frontend source checks and live plugin layout
 contracts at five viewports. It does **not** prove screenshot pixel parity,
 real plugin enable/disable operations, production deployment revision, or a
 consumer-ready release. Those require their own witnessed evidence.
+
+## Shared File Explorer live owner-inventory browser acceptance
+
+The opt-in `file-explorer-real-acceptance.spec.ts` is a **no-mock** consumer
+acceptance contract for the canonical dashboard File Explorer after the
+authenticated API and dynamic `PluginHost` integration. It uses
+`fixtures/approved-karen-login.ts`, the existing Playwright runner,
+`/api/extensions/list` as the canonical plugin catalog and the real
+`GET /api/plugins/file-explorer/inventory` request through the frontend
+`apiClient`. It never manufactures entries, changes plugin lifecycle,
+uploads artifacts, or treats display references as permission to read bytes.
+
+Prerequisites: a real healthy KAREN API and web frontend backed by migrated
+PostgreSQL; File Explorer installed and **enabled** for the dedicated sanitized
+account; authentic tenant/user identity with `data:read` permission;
+at least one owned, non-deleted ArtifactStore file; and a browser-accessible
+approved origin. To prove server keyset pagination, first create more than
+100 **genuinely owned** artifacts in that test account and set
+`KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE=true`. No static fixtures or
+route stubs substitute for this evidence.
+
+Run the existing Chromium harness:
+
+```bash
+cd src/ui_launchers/Karen-AI-Theme/e2e
+KAREN_FILE_EXPLORER_ACCEPTANCE=true \
+KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+npx playwright test file-explorer-real-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+For an approved HTTPS release origin, omit
+`KAREN_LOCAL_CHAT_ACCEPTANCE`; the login fixture rejects
+credential-bearing URLs and unapproved origins. Opt-in disabled means
+**skipped, not passed**. The suite requires a real authenticated HTTP 200,
+verifies the source-envelope and exact displayed file count, validates real
+cursor progression when a page is available, verifies refresh, keyboard focus,
+and checks layout at 390, 768, 1024 and 1440px. Any failed authorization,
+missing enabled plugin, unavailable backend, fabricated empty result, or
+responsive overflow is a failure. It does not silently downgrade to a
+mock-based UI contract.
+
+This credential-bearing run disables traces, videos and automatic screenshots;
+avoid uploading raw browser profiles or account inventory to CI artifacts.
+Keep exact deployed revision and operator authorization evidence separately.
+Passing this suite proves the observed read-only display path on the tested
+installation. It does **not** prove owner-reference TOCTOU resistance for
+future download consumers, session switching between two real accounts,
+artifact deletion concurrency, arbitrary folder hierarchies, or performance
+under load; those remain separate acceptance requirements.
+
+### Protected live acceptance dispatch
+
+The existing `KAREN Browser Acceptance` GitHub Actions workflow now exposes
+`scenario=file-explorer`. It reuses the single protected
+`karen-sanitized-browser-acceptance` environment, source revision,
+Vercel deployment attestation, credential injection, and post-run provenance
+verification used by the existing Settings and Navigation scenarios.
+
+Before dispatch, prepare the **same immutable reviewed `main` revision**
+on an approved HTTPS Vercel target that has a healthy PostgreSQL-backed
+ArtifactStore, an enabled File Explorer extension and an authorized sanitized
+account owning **more than 100** active files. Configure protected environment
+variable `KAREN_FILE_EXPLORER_ACCEPTANCE_URL` to that target origin, and
+existing `KAREN_UX_EMAIL` / `KAREN_UX_PASSWORD` secrets to the account.
+The existing Vercel project/organization and verification secrets must be
+configured for that deployment. Never write credentials, artifact data or
+storage state into repository source.
+
+From **Actions → KAREN Browser Acceptance → Run workflow**, choose `main`,
+set scenario to `file-explorer`, provide the exact reviewed 40-character
+`target_sha`, and select the correct `deployment_target`. The job will
+reject stale source/deployment revisions and will fail if credentials, the
+plugin, real owner files or a second page are missing. It executes
+`file-explorer-real-acceptance.spec.ts` using the existing Chromium runner,
+no retries, with trace/video/screenshot capture and report artifact output
+disabled. No new broad test permissions are granted.
+
+A dispatched or skipped workflow is **not** a passed browser observation.
+Read the scenario job's actual conclusion before calling File Explorer
+consumer-ready. This read-only proof still does not establish safe download,
+two-account concurrency, concurrent deletion or throughput under load.
