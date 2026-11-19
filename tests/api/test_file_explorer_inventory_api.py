@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request
 from ai_karen_engine.api_routes.plugins import plugins as ingress
 from ai_karen_engine.core.runtime.policy.runtime_policy import PolicyDecision
 from ai_karen_engine.services.plugin_service import PluginService
+from ai_karen_engine.extensions.executor import ExtensionExecutionService
 
 TENANT = "11111111-1111-4111-8111-111111111111"
 OWNER = "22222222-2222-4222-8222-222222222222"
@@ -116,6 +117,20 @@ async def test_owner_inventory_evaluates_runtime_policy_and_uses_one_kernel(monk
     assert page["inventory_semantics"] == "owner_metadata_page_not_live_acl"
     assert page["request_id"] == "request-1"
     assert kernel.calls[0].authorized_plan.policy_decision_id == "policy-verified"
+    assert kernel.calls[0].context.audit_context["user_roles"] == ["user"]
+    assert kernel.calls[0].context.audit_context["permissions"] == ["data:read"]
+    assert ExtensionExecutionService._check_rbac(
+        None,
+        SimpleNamespace(required_roles=["user"]),
+        kernel.calls[0].context,
+        SimpleNamespace(required_roles=["user"]),
+    ) is True
+    assert ExtensionExecutionService._check_rbac(
+        None,
+        SimpleNamespace(required_roles=["admin"]),
+        kernel.calls[0].context,
+        SimpleNamespace(required_roles=["admin"]),
+    ) is False
     evaluation = policy.evaluate.call_args.args[0]
     assert evaluation.plugin_id == "file-explorer"
     assert evaluation.user_id == OWNER
