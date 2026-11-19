@@ -33,7 +33,6 @@ SERVER_CONFIG = ROOT / "src/ai_karen_engine/server/config.py"
 BLUEPRINT = ROOT / "deploy/render/render.yaml"
 
 PROTECTED_SECRETS = frozenset({
-    "KARI_DUCKDB_PASSWORD",
     "KARI_JOB_ENC_KEY",
     "KARI_JOB_SIGNING_KEY",
     "KARI_MODEL_SIGNING_KEY",
