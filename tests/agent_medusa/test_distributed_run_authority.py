@@ -357,3 +357,228 @@ def test_remote_cancel_waits_for_required_durable_transition(failure: str) -> No
                     await task
 
     asyncio.run(scenario())
+
+
+class _RecoveryLedger:
+    """Deterministic durable state observed only by the live owner heartbeat."""
+
+    def __init__(
+        self,
+        *,
+        status: str = "cancellation_requested",
+        owner_worker_id: str = "worker-a",
+        tenant_id: str = "tenant-a",
+        fail_read: bool = False,
+    ) -> None:
+        self.status = status
+        self.owner_worker_id = owner_worker_id
+        self.tenant_id = tenant_id
+        self.fail_read = fail_read
+        self.reads = 0
+        self.acceptance_attempts = 0
+
+    async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
+        from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+            DurableRunLedgerUnavailable,
+        )
+
+        self.reads += 1
+        if self.fail_read:
+            raise DurableRunLedgerUnavailable("injected PostgreSQL outage")
+        return {
+            "run_id": run_id,
+            "tenant_id": self.tenant_id,
+            "status": self.status,
+            "owner_worker_id": self.owner_worker_id,
+            "audit_event_ref": "original-remote-audit",
+        }
+
+    async def mark_cancelling(self, **kwargs: Any) -> None:
+        self.acceptance_attempts += 1
+        assert kwargs["source"] == "runtime"
+        assert kwargs.get("audit_event_ref") is None
+
+
+@pytest.mark.asyncio
+async def test_owner_recovers_postgres_accepted_cancel_after_lost_redis_signal() -> None:
+    """The owner may retry the Redis signal only after its lease renews."""
+
+    from dataclasses import replace
+
+    store = SharedFakeRunStore()
+    owner = MedusaRunManager(
+        settings=_settings("worker-a"),
+        distributed_store=store,
+    )
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def workload() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    task = asyncio.create_task(workload())
+    ledger = _RecoveryLedger()
+    try:
+        await started.wait()
+        run = await owner.register(
+            run_id="durable-only-request",
+            correlation_id="corr-durable-recovery",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            task=task,
+        )
+        assert store.records[run.run_id]["status"] == "running"
+        assert store.records[run.run_id]["cancel_requested"] is False
+
+        run.durable_registered = True
+        owner._durable_ledger = ledger
+        owner._settings = replace(
+            owner._settings,
+            durable_run_ledger_enabled=True,
+            durable_run_ledger_required=True,
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3.5)
+
+        assert cancelled.is_set()
+        assert store.records[run.run_id]["status"] == "cancelling"
+        assert store.records[run.run_id]["cancel_requested"] is True
+        assert ledger.reads >= 1
+        assert ledger.acceptance_attempts == 1
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "worker_id", "tenant_id", "outage"),
+    [
+        ("running", "worker-a", "tenant-a", False),
+        ("cancelled", "worker-a", "tenant-a", False),
+        ("cancellation_requested", "other-worker", "tenant-a", False),
+        ("cancellation_requested", "worker-a", "other-tenant", False),
+        ("cancellation_requested", "worker-a", "tenant-a", True),
+    ],
+)
+async def test_owner_never_recovers_unproven_durable_cancel(
+    status: str,
+    worker_id: str,
+    tenant_id: str,
+    outage: bool,
+) -> None:
+    """Wrong ownership, tenant, status, or unavailable DB cannot cancel a task."""
+
+    from dataclasses import replace
+
+    store = SharedFakeRunStore()
+    owner = MedusaRunManager(
+        settings=_settings("worker-a"),
+        distributed_store=store,
+    )
+    ledger = _RecoveryLedger(
+        status=status,
+        owner_worker_id=worker_id,
+        tenant_id=tenant_id,
+        fail_read=outage,
+    )
+    task = asyncio.create_task(asyncio.sleep(60))
+    run = None
+    try:
+        run = await owner.register(
+            run_id="not-proven-durable-cancel",
+            correlation_id="corr-not-proven",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            task=task,
+        )
+        run.durable_registered = True
+        owner._durable_ledger = ledger
+        owner._settings = replace(
+            owner._settings,
+            durable_run_ledger_enabled=True,
+            durable_run_ledger_required=True,
+        )
+        async def observed() -> None:
+            while ledger.reads == 0:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(observed(), timeout=2.5)
+        assert not task.cancelling()
+        assert not task.done()
+        assert store.records[run.run_id]["status"] == "running"
+        assert store.records[run.run_id]["cancel_requested"] is False
+        assert ledger.acceptance_attempts == 0
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run.heartbeat_task
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+async def test_durable_recovery_requires_redis_atomic_live_acceptance() -> None:
+    """An expired lease after the durable read must not terminate the owner task."""
+
+    from dataclasses import replace
+
+    store = SharedFakeRunStore()
+    owner = MedusaRunManager(
+        settings=_settings("worker-a"),
+        distributed_store=store,
+    )
+    ledger = _RecoveryLedger()
+    original_request_cancel = store.request_cancel
+
+    async def lose_ownership(*, run_id: str, tenant_id: str) -> dict[str, Any]:
+        store.records[run_id]["lease_expires_at"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
+        return await original_request_cancel(run_id=run_id, tenant_id=tenant_id)
+
+    store.request_cancel = lose_ownership
+    task = asyncio.create_task(asyncio.sleep(60))
+    run = None
+    try:
+        run = await owner.register(
+            run_id="lease-lost-before-recovery",
+            correlation_id="corr-lease-lost",
+            tenant_id="tenant-a",
+            user_id="user-a",
+            task=task,
+        )
+        run.durable_registered = True
+        owner._durable_ledger = ledger
+        owner._settings = replace(
+            owner._settings,
+            durable_run_ledger_enabled=True,
+            durable_run_ledger_required=True,
+        )
+
+        async def observed() -> None:
+            while ledger.reads == 0:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(observed(), timeout=2.5)
+        assert not task.cancelling()
+        assert not task.done()
+        assert store.records[run.run_id]["cancel_requested"] is False
+        assert ledger.acceptance_attempts == 0
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run.heartbeat_task
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
