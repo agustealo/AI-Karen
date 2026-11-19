@@ -101,13 +101,17 @@ describe('single-attempt authenticated mutations', () => {
     const second = clientInternals.refreshAccessToken();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    resolveFetch(new Response(JSON.stringify({ access_token: 'fresh-access-token' }), {
+    resolveFetch(new Response(JSON.stringify({
+      access_token: 'fresh-access-token',
+      refresh_token: 'rotated-session-refresh-token',
+    }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }));
     await Promise.all([first, second]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem('access_token')).toBe('fresh-access-token');
+    expect(localStorage.getItem('refresh_token')).toBe('rotated-session-refresh-token');
   });
 
   it('rejects a late refresh response after the session changed', async () => {
@@ -121,7 +125,10 @@ describe('single-attempt authenticated mutations', () => {
     const refresh = clientInternals.refreshAccessToken();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     localStorage.setItem('refresh_token', 'different-session-refresh-token');
-    resolveFetch(new Response(JSON.stringify({ access_token: 'stale-refresh-result' }), {
+    resolveFetch(new Response(JSON.stringify({
+      access_token: 'stale-refresh-result',
+      refresh_token: 'rotated-but-not-authorized',
+    }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }));
@@ -129,6 +136,51 @@ describe('single-attempt authenticated mutations', () => {
     await expect(refresh).rejects.toThrow('Refresh session changed during request');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem('access_token')).toBe('previous-access-token');
+    expect(localStorage.getItem('refresh_token')).toBe('different-session-refresh-token');
+  });
+
+  it('uses the newly rotated refresh token on the next request', async () => {
+    localStorage.setItem('refresh_token', 'original-refresh');
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        access_token: 'first-access',
+        refresh_token: 'second-refresh',
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        access_token: 'second-access',
+        refresh_token: 'third-refresh',
+      }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await clientInternals.refreshAccessToken();
+    await clientInternals.refreshAccessToken();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).refresh_token)
+      .toBe('original-refresh');
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body)).refresh_token)
+      .toBe('second-refresh');
+    expect(localStorage.getItem('refresh_token')).toBe('third-refresh');
+    expect(localStorage.getItem('access_token')).toBe('second-access');
+  });
+
+  it.each([
+    { access_token: 'new-access' },
+    { access_token: 'new-access', refresh_token: 'original-refresh' },
+  ])('rejects invalid refresh pairs without overwriting credentials', async (payload) => {
+    localStorage.setItem('refresh_token', 'original-refresh');
+    localStorage.setItem('access_token', 'original-access');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(clientInternals.refreshAccessToken()).rejects.toThrow(
+      'Invalid refresh response: missing or unrotated token pair',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('access_token')).toBe('original-access');
+    expect(localStorage.getItem('refresh_token')).toBe('original-refresh');
   });
 
   it('never retries a credential-rotating refresh after a lost response', async () => {
