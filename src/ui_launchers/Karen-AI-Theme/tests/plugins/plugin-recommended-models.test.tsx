@@ -314,7 +314,7 @@ describe('Governed plugin model setup', () => {
       throw new Error('Unexpected URL');
     });
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
-    expect(await screen.findByText(/could not verify recommended models/)).toBeTruthy();
+    expect(await screen.findByText(/Your model download history returned an invalid response/)).toBeTruthy();
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
@@ -523,8 +523,45 @@ describe('Governed plugin model setup', () => {
     mocks.admin = true;
     mocks.get.mockRejectedValue(new Error('secret token / private traceback'));
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
-    const alert = await screen.findByText(/could not verify recommended models/);
+    const alert = await screen.findByText(/Recommended model catalog could not be loaded/);
     expect(alert.textContent).not.toContain('secret');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+
+  it.each([
+    ['/api/models/download/recommendations', 'Recommended model catalog'],
+    ['/api/models/download/policy', 'Model download policy'],
+    ['/api/models/download/channels', 'Model download channels'],
+    ['/api/runtime/model-library/my-downloads?limit=200', 'Your model download history'],
+  ])('identifies a denied setup dependency without disclosing its response: %s', async (failedUrl, label) => {
+    const previous = mocks.get.getMockImplementation();
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === failedUrl) {
+        throw { status: 403, message: 'secret=PRIVATE_TOKEN_VALUE' };
+      }
+      return previous?.(url);
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    const warning = await screen.findByText(new RegExp(label + ' could not be loaded'));
+    expect(warning.textContent).toContain('Access denied');
+    expect(warning.textContent).not.toContain('PRIVATE_TOKEN_VALUE');
+    expect(screen.queryByRole('button', { name: 'Download recommended model' })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing backend route without claiming model availability', async () => {
+    const previous = mocks.get.getMockImplementation();
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/api/models/download/policy') {
+        throw { status: 404, message: '/private/backend/path?token=SECRET' };
+      }
+      return previous?.(url);
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    const warning = await screen.findByText(/Model download policy could not be loaded/);
+    expect(warning.textContent).toContain('API route was not found');
+    expect(warning.textContent).not.toContain('SECRET');
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
