@@ -139,7 +139,13 @@ def verify_brand_contract() -> None:
         )
     if "/brand/karen-mark.svg" not in manifest:
         raise PresentationContractError("install manifest must use canonical KAREN mark")
-    if dashboard.count('/brand/karen-mark.svg') < 2:
+    nav_component = UI_ROOT / "src" / "components" / "navigation" / "KariWorkspaceNavigation.tsx"
+    if nav_component.exists() and "KariWorkspaceNavigation" in dashboard:
+        navigation = read_text(nav_component)
+        branded_shell = dashboard.count('/brand/karen-mark.svg') >= 1 and navigation.count('/brand/karen-mark.svg') >= 2
+    else:
+        branded_shell = dashboard.count('/brand/karen-mark.svg') >= 2
+    if not branded_shell:
         raise PresentationContractError(
             "authenticated shell must use the canonical KAREN mark in header and footer"
         )
