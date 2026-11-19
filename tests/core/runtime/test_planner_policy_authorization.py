@@ -72,3 +72,61 @@ async def test_readonly_role_cannot_acquire_planner_data():
     )
     assert not result.allowed
     assert "planner.read" in result.denied_capabilities
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capability", ["planner.create", "planner.update"])
+async def test_planner_mutation_denied_without_explicit_write_permission(capability):
+    result = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(
+            user_id="user", tenant_id="tenant", action=capability,
+            requested_capabilities=[capability], roles=["readonly"],
+            permissions=["planner:read"],
+        )
+    )
+    assert not result.allowed
+    assert capability in result.denied_capabilities
+    assert PolicyReasonCode.INSUFFICIENT_PERMISSION in result.reason_codes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capability", ["planner.create", "planner.update"])
+async def test_planner_mutation_accepts_canonical_write_entitlement(capability):
+    result = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(
+            user_id="user", tenant_id="tenant", action=capability,
+            requested_capabilities=[capability],
+            permissions=["planner:write"],
+        )
+    )
+    assert PolicyReasonCode.INSUFFICIENT_PERMISSION not in result.reason_codes
+    if result.allowed:
+        assert capability in result.allowed_capabilities
+
+
+@pytest.mark.asyncio
+async def test_planner_read_permission_does_not_authorize_combined_mutation():
+    result = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(
+            user_id="user", tenant_id="tenant", action="planner.update",
+            requested_capabilities=["planner.read", "planner.update"],
+            permissions=["planner:read"],
+        )
+    )
+    assert not result.allowed
+    assert "planner.update" in result.denied_capabilities
+    assert PolicyReasonCode.INSUFFICIENT_PERMISSION in result.reason_codes
+
+
+@pytest.mark.asyncio
+async def test_planner_mutations_use_canonical_user_role_entitlement():
+    result = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(
+            user_id="user", tenant_id="tenant", action="planner.create",
+            requested_capabilities=["planner.create"],
+            roles=["user"], permissions=[],
+        )
+    )
+    assert PolicyReasonCode.INSUFFICIENT_PERMISSION not in result.reason_codes
+    if result.allowed:
+        assert "planner.create" in result.allowed_capabilities
