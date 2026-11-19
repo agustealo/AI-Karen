@@ -265,3 +265,95 @@ def test_expired_shared_lease_becomes_orphaned_and_not_cancellable() -> None:
             await remote.cancel(run_id="orphan-1", tenant_id="tenant-a")
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "conflict"])
+def test_remote_cancel_waits_for_required_durable_transition(failure: str) -> None:
+    """Redis request alone must not cancel the owner's task when PostgreSQL fails."""
+
+    from dataclasses import replace
+
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        DurableRunLedgerConflict,
+        DurableRunLedgerUnavailable,
+    )
+    from ai_karen_engine.agent_medusa.execution.run_manager import ExecutionRunStatus
+
+    class FlakyCancellationLedger:
+        def __init__(self) -> None:
+            self.available = False
+            self.attempts = 0
+
+        async def mark_cancelling(self, **kwargs: Any) -> None:
+            self.attempts += 1
+            if not self.available:
+                if failure == "unavailable":
+                    raise DurableRunLedgerUnavailable("injected postgres outage")
+                raise DurableRunLedgerConflict("injected durable conflict")
+
+    async def scenario() -> None:
+        shared = SharedFakeRunStore()
+        owner = MedusaRunManager(
+            settings=_settings("worker-a"),
+            distributed_store=shared,
+        )
+        remote = MedusaRunManager(
+            settings=_settings("worker-b"),
+            distributed_store=shared,
+        )
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def workload() -> None:
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        task = asyncio.create_task(workload())
+        await started.wait()
+        run = await owner.register(
+            run_id="required-remote-cancel",
+            correlation_id="corr-required",
+            tenant_id="tenant-a",
+            user_id="owner-a",
+            task=task,
+        )
+        ledger = FlakyCancellationLedger()
+        run.durable_registered = True
+        owner._durable_ledger = ledger
+        owner._settings = replace(
+            owner._settings,
+            durable_run_ledger_enabled=True,
+            durable_run_ledger_required=True,
+        )
+        try:
+            response = await remote.cancel(
+                run_id="required-remote-cancel",
+                tenant_id="tenant-a",
+            )
+            assert response["status"] == "cancelling"
+
+            async def wait_for_attempt() -> None:
+                while ledger.attempts == 0:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_attempt(), timeout=2.5)
+            assert run.status is ExecutionRunStatus.RUNNING
+            assert not task.cancelling()
+            assert not cancelled.is_set()
+
+            ledger.available = True
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2.5)
+            assert cancelled.is_set()
+            assert ledger.attempts >= 2
+        finally:
+            if not task.done():
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+    asyncio.run(scenario())
