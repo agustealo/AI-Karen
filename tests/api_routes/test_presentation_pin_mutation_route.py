@@ -181,6 +181,7 @@ async def test_pin_forwards_untrusted_reference_to_runtime_admission(monkeypatch
         (PresentationPinUnavailable("database failed"), 503),
         (PermissionError("revoked"), 403),
         (ValueError("bad input"), 422),
+        (RuntimeError("conversation_not_found"), 404),
         (RuntimeError("unexpected"), 503),
     ],
 )

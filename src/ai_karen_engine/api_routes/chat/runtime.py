@@ -1069,6 +1069,17 @@ async def mutate_ag_ui_authorized_pin(
         raise HTTPException(status_code=409, detail="Pin mutation conflict") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="Pin mutation denied") from exc
+    except RuntimeError as exc:
+        if str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Pin source unavailable") from exc
+        logger.error(
+            "pin_mutation_failed",
+            extra={"event": "presentation_pin_mutation_failed", "correlation_id": correlation_id, "error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503, detail="Pin mutation temporarily unavailable",
+            headers={"X-Correlation-Id": correlation_id},
+        ) from exc
     except PresentationPinUnavailable as exc:
         logger.warning(
             "pin_mutation_storage_unavailable",
