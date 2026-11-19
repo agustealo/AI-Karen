@@ -167,7 +167,7 @@ async def test_authorized_task_creates_only_after_matching_committed_receipt(mon
     monkeypatch.setattr(
         personal_planner_action, "execute_authorized_planner_action", write,
     )
-    result = await ChatRuntime._execute_personal_planner_create(
+    result = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
 
@@ -190,18 +190,18 @@ async def test_denied_capability_or_unissued_plan_never_writes(monkeypatch):
     )
     request, plan, meter, _ = _request()
     plan.allowed_capabilities = []
-    denied = await ChatRuntime._execute_personal_planner_create(
+    denied = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
     assert not denied.success
-    assert denied.error == "planner_create_not_authorized"
+    assert denied.error == "planner_mutation_not_authorized"
     plan.allowed_capabilities = ["planner.create"]
     request.context.original_runtime_model_plan = lambda _: None
-    forged = await ChatRuntime._execute_personal_planner_create(
+    forged = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
     assert not forged.success
-    assert forged.error == "planner_create_not_authorized"
+    assert forged.error == "planner_mutation_not_authorized"
     write.assert_not_awaited()
     meter.consume_tool_call.assert_not_awaited()
 
@@ -217,7 +217,7 @@ async def test_missing_timezone_never_calls_persistence(monkeypatch):
     request, plan, meter, _ = _request(
         "Create a personal task to review deployment",
     )
-    result = await ChatRuntime._execute_personal_planner_create(
+    result = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
     assert not result.success
@@ -236,7 +236,7 @@ async def test_storage_error_does_not_produce_fake_success(monkeypatch):
         personal_planner_action, "execute_authorized_planner_action", write,
     )
     request, plan, meter, _ = _request()
-    result = await ChatRuntime._execute_personal_planner_create(
+    result = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
     assert not result.success and result.degraded
@@ -259,7 +259,7 @@ async def test_retry_uses_stable_idempotency_key(monkeypatch):
         personal_planner_action, "execute_authorized_planner_action", write,
     )
     request, plan, meter, _ = _request()
-    await ChatRuntime._execute_personal_planner_create(request, _decision(), plan, meter)
+    await ChatRuntime._execute_personal_planner_mutation(request, _decision(), plan, meter)
     # Simulate a fresh HTTP response and a fresh runtime request context.
     # The caller-held mutation UUID survives; response and correlation do not.
     again, new_plan, new_meter, _ = _request(
@@ -269,7 +269,7 @@ async def test_retry_uses_stable_idempotency_key(monkeypatch):
     again.context.require_authenticated_user = request.context.require_authenticated_user
     again.context.tenant_id = request.context.tenant_id
     again.context.user_id = request.context.user_id
-    await ChatRuntime._execute_personal_planner_create(
+    await ChatRuntime._execute_personal_planner_mutation(
         again, _decision(), new_plan, new_meter,
     )
     assert len(observed_keys) == 2
@@ -291,10 +291,10 @@ async def test_disabled_write_flag_prevents_any_mutation(monkeypatch):
         personal_planner_action, "execute_authorized_planner_action", write,
     )
     request, plan, meter, _ = _request()
-    result = await ChatRuntime._execute_personal_planner_create(
+    result = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
-    assert result.error == "planner_create_disabled"
+    assert result.error == "planner_mutation_disabled"
     assert result.payload["planner_created"] is False
     assert not result.success
     write.assert_not_awaited()
@@ -327,11 +327,11 @@ async def test_invalid_persistence_receipt_cannot_report_task_saved(monkeypatch)
         personal_planner_action, "execute_authorized_planner_action",
         mismatched_write,
     )
-    result = await ChatRuntime._execute_personal_planner_create(
+    result = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
     assert not result.success
-    assert result.error == "planner_create_receipt_invalid"
+    assert result.error == "planner_mutation_receipt_invalid"
     assert result.payload["planner_created"] is False
 
 
@@ -350,11 +350,11 @@ async def test_non_direct_or_graph_planner_intent_cannot_trigger_mutation(
         personal_planner_action, "execute_authorized_planner_action", write,
     )
     request, plan, meter, _ = _request()
-    result = await ChatRuntime._execute_personal_planner_create(
+    result = await ChatRuntime._execute_personal_planner_mutation(
         request, decision, plan, meter,
     )
     assert not result.success
-    assert result.error == "planner_create_requires_direct_authority"
+    assert result.error == "planner_mutation_requires_direct_authority"
     assert result.payload["planner_created"] is False
     write.assert_not_awaited()
     meter.consume_tool_call.assert_not_awaited()
@@ -368,10 +368,10 @@ async def test_planner_creation_requires_replayable_mutation_identity(monkeypatc
     write = AsyncMock(side_effect=AssertionError("Missing stable identity must not persist"))
     monkeypatch.setattr(personal_planner_action, "execute_authorized_planner_action", write)
     request, plan, meter, _ = _request(mutation_key=key)
-    result = await ChatRuntime._execute_personal_planner_create(
+    result = await ChatRuntime._execute_personal_planner_mutation(
         request, _decision(), plan, meter,
     )
-    assert result.error == "planner_create_idempotency_required"
+    assert result.error == "planner_mutation_idempotency_required"
     assert result.payload["planner_created"] is False
     write.assert_not_awaited()
     meter.consume_tool_call.assert_not_awaited()
