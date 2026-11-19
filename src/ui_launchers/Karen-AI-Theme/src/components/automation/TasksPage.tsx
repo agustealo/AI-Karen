@@ -131,7 +131,14 @@ type ReviewHistoryEntry = {
  * @description Page for defining and managing Tasks for AI agents via /api/tasks.
  */
 export default function TasksPage() {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
+  const principal = isAuthenticated && user?.tenant_id && user.user_id
+    ? JSON.stringify([user.tenant_id, user.user_id]) : "";
+  const principalRef = useRef(principal);
+  principalRef.current = principal;
+  const dataRevision = useRef(0);
+  const [tasksOwner, setTasksOwner] = useState<string | null>(null);
+  const [agentsOwner, setAgentsOwner] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -154,76 +161,78 @@ export default function TasksPage() {
   const [verificationSchemaJson, setVerificationSchemaJson] = useState("");
 
   const fetchLiveData = useCallback(async () => {
-    if (!isAuthenticated) {
-      setTasks([]);
+    const owner = principal;
+    if (principalRef.current !== owner) return;
+    const revision = ++dataRevision.current;
+    if (!owner) {
+      setTasks([]); setAgents([]); setTasksOwner(null); setAgentsOwner(null);
       setTasksFetchError(false);
-      setAgents([]);
       setErrorMsg("Sign in to manage tasks.");
-      setIsLoading(false);
-      setIsAgentsLoading(false);
+      setIsLoading(false); setIsAgentsLoading(false);
       return;
     }
+    setIsLoading(true); setIsAgentsLoading(true);
+    setTasksOwner(null); setAgentsOwner(null);
+    historyRequestId.current += 1; toolReceiptRequestId.current += 1;
+    setOpenToolReceiptsTask(null); setToolReceipts([]); setToolReceiptError("");
+    setOpenHistoryTask(null); setReviewHistory([]); setHistoryError("");
+    setErrorMsg(""); setTasksFetchError(false);
 
-    setIsLoading(true);
-    setIsAgentsLoading(true);
-    historyRequestId.current += 1;
-    toolReceiptRequestId.current += 1;
-    setOpenToolReceiptsTask(null);
-    setToolReceipts([]);
-    setToolReceiptError("");
-    setOpenHistoryTask(null);
-    setReviewHistory([]);
-    setHistoryError("");
-    setErrorMsg("");
-    setTasksFetchError(false);
     try {
-      const { apiClient } = await import('@/lib/api');
+      const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== owner || dataRevision.current !== revision) return;
       const [taskResult, agentResult] = await Promise.allSettled([
-        apiClient.get<Task[]>('/api/tasks/'),
-        apiClient.get<{ agents?: Array<Omit<AgentOption, 'capabilities'> & { capabilities?: string[] }> }>(
-          '/api/agent-runtime/catalog',
+        apiClient.get<Task[]>("/api/tasks/"),
+        apiClient.get<{ agents?: Array<Omit<AgentOption, "capabilities"> & { capabilities?: string[] }> }>(
+          "/api/agent-runtime/catalog",
         ),
       ]);
-
-      if (taskResult.status === "fulfilled") {
+      if (principalRef.current !== owner || dataRevision.current !== revision) return;
+      if (taskResult.status === "fulfilled" && Array.isArray(taskResult.value)) {
+        setTasks(taskResult.value);
         setTasksFetchError(false);
-        setTasks(taskResult.value || []);
       } else {
-        setTasksFetchError(true);
-        console.error(taskResult.reason);
-        setTasks([]);
-        setErrorMsg(taskResult.reason instanceof Error ? taskResult.reason.message : 'Failed to fetch tasks.');
+        setTasks([]); setTasksFetchError(true);
+        setErrorMsg(taskResult.status === "rejected" && taskResult.reason instanceof Error
+          ? taskResult.reason.message : "Failed to verify task definitions.");
       }
-
-      if (agentResult.status === "fulfilled") {
-        const catalog = agentResult.value?.agents ?? [];
-        setAgents(
-          catalog.map((agent) => ({
-            ...agent,
-            capabilities: (agent.capabilities ?? []).map((name) => ({ name })),
-          })),
-        );
+      setTasksOwner(owner);
+      if (agentResult.status === "fulfilled" &&
+          Array.isArray(agentResult.value?.agents)) {
+        setAgents(agentResult.value.agents.map(agent => ({
+          ...agent,
+          capabilities: (agent.capabilities ?? []).map(name => ({ name })),
+        })));
+        setAgentsOwner(owner);
       } else {
-        console.error(agentResult.reason);
-        setAgents([]);
-        setErrorMsg((current) => current || (agentResult.reason instanceof Error ? agentResult.reason.message : 'Failed to fetch live agents.'));
+        setAgents([]); setAgentsOwner(null);
+        setErrorMsg(current => current || "Failed to verify available agents.");
       }
-    } catch (err: unknown) {
+    } catch (error) {
+      if (principalRef.current !== owner || dataRevision.current !== revision) return;
+      setTasks([]); setAgents([]);
+      setTasksOwner(owner); setAgentsOwner(null);
       setTasksFetchError(true);
-      console.error(err);
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch tasks.');
+      setErrorMsg(error instanceof Error ? error.message : "Failed to fetch tasks.");
     } finally {
-      setIsLoading(false);
-      setIsAgentsLoading(false);
+      if (principalRef.current === owner && dataRevision.current === revision) {
+        setIsLoading(false); setIsAgentsLoading(false);
+      }
     }
-  }, [isAuthenticated]);
+  }, [principal]);
 
   useEffect(() => {
-    if (isAuthLoading) {
-      return;
-    }
-    fetchLiveData();
-  }, [isAuthenticated, isAuthLoading, fetchLiveData]);
+    if (isAuthLoading) return;
+    void fetchLiveData();
+    return () => {
+      dataRevision.current += 1;
+      historyRequestId.current += 1;
+      toolReceiptRequestId.current += 1;
+    };
+  }, [isAuthLoading, fetchLiveData]);
+
+  const verifiedTasks = !!principal && tasksOwner === principal;
+  const verifiedAgents = !!principal && agentsOwner === principal;
 
   
   const [newPrimaryAgent, setNewPrimaryAgent] = useState<string>("");
@@ -234,7 +243,7 @@ export default function TasksPage() {
   const [editingConfig, setEditingConfig] = useState<{ agentName: string; instructions: string; onSave: (newInstructions: string) => void; } | null>(null);
   const [tempInstructions, setTempInstructions] = useState("");
 
-  const liveAgents = agents || [];
+  const liveAgents = verifiedAgents ? agents : [];
   const getAgentLabel = (agentId?: string) => {
     if (!agentId) {
       return "Unknown";
@@ -268,35 +277,43 @@ export default function TasksPage() {
   };
 
   const handleDeleteTask = async (taskId: string) => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedTasks) {
       setErrorMsg("Sign in to manage tasks.");
       return;
     }
     if (!confirm("Are you sure you want to delete this task?")) return;
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
       await apiClient.delete(`/api/tasks/${taskId}`);
-      fetchLiveData();
+      if (principalRef.current !== actionPrincipal) return;
+      void fetchLiveData();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to delete task: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
   const handleExecuteTask = async (taskId: string) => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedTasks) {
       setErrorMsg("Sign in to manage tasks.");
       return;
     }
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
       await apiClient.post(`/api/tasks/${taskId}/execute`, {});
-      fetchLiveData();
+      if (principalRef.current !== actionPrincipal) return;
+      void fetchLiveData();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to execute task: " + (err instanceof Error ? err.message : String(err)));
     }
   };
 
   const handleShowToolReceipts = async (task: Task) => {
+    if (!principal || !verifiedTasks) return;
+    const actionPrincipal = principal;
     const reqId = ++toolReceiptRequestId.current;
     if (openToolReceiptsTask === task.id) {
       setOpenToolReceiptsTask(null);
@@ -315,7 +332,7 @@ export default function TasksPage() {
       const rows = await apiClient.get<GovernedToolReceipt[]>(
         `/api/tasks/${encodeURIComponent(task.id)}/tool-receipts?execution_id=${encodeURIComponent(task.executionId)}&limit=50`,
       );
-      if (reqId === toolReceiptRequestId.current) setToolReceipts(rows);
+      if (principalRef.current === actionPrincipal && reqId === toolReceiptRequestId.current) setToolReceipts(rows);
     } catch (err: unknown) {
       if (reqId === toolReceiptRequestId.current) {
         setToolReceiptError(err instanceof Error ? err.message : "Governed tool receipts unavailable.");
@@ -326,6 +343,8 @@ export default function TasksPage() {
   };
 
   const handleShowHistory = async (taskId: string) => {
+    if (!principal || !verifiedTasks) return;
+    const actionPrincipal = principal;
     // Fence stale responses from another task or a completed refresh.
     const currentRequestId = ++historyRequestId.current;
     if (openHistoryTask === taskId) {
@@ -341,7 +360,7 @@ export default function TasksPage() {
       const records = await apiClient.get<ReviewHistoryEntry[]>(
         `/api/tasks/${encodeURIComponent(taskId)}/reviews?limit=50`,
       );
-      if (currentRequestId === historyRequestId.current) {
+      if (principalRef.current === actionPrincipal && currentRequestId === historyRequestId.current) {
         setReviewHistory(records);
       }
     } catch (err: unknown) {
@@ -356,7 +375,7 @@ export default function TasksPage() {
   };
 
   const handleReviewTask = async (task: Task, decision: "approve" | "reject") => {
-    if (!isAuthenticated || task.status !== "ReviewRequired" || !task.executionId) {
+    if (!principal || !verifiedTasks || task.status !== "ReviewRequired" || !task.executionId) {
       setErrorMsg("This execution does not have a reviewable result.");
       return;
     }
@@ -384,6 +403,7 @@ export default function TasksPage() {
       ? "Confirm that you reviewed the actual result and accept this task as completed?"
       : "Reject this result as not meeting the task objective?";
     if (!window.confirm(description)) return;
+    const actionPrincipal = principal;
     try {
       const { apiClient } = await import("@/lib/api");
       await apiClient.post(`/api/tasks/${encodeURIComponent(task.id)}/review`, {
@@ -391,14 +411,16 @@ export default function TasksPage() {
         decision,
         note: "",
       });
+      if (principalRef.current !== actionPrincipal) return;
       await fetchLiveData();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       setErrorMsg(err instanceof Error ? err.message : "Unable to review task.");
     }
   };
 
   const handleCreateTask = async () => {
-    if (!isAuthenticated) {
+    if (!principal || !verifiedAgents) {
       setErrorMsg("Sign in to manage tasks.");
       return;
     }
@@ -414,6 +436,7 @@ export default function TasksPage() {
       alert("Please select a primary agent first.");
       return;
     }
+    const actionPrincipal = principal;
     try {
       let verificationContract: Record<string, unknown> = {};
       if (verificationSchemaJson.trim()) {
@@ -427,6 +450,7 @@ export default function TasksPage() {
         };
       }
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.post('/api/tasks/', {
         name: taskName.trim(),
         description: taskDescription.trim(),
@@ -437,6 +461,7 @@ export default function TasksPage() {
         taskType: taskName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""),
         subAgents: newSubAgents
       });
+      if (principalRef.current !== actionPrincipal) return;
       setTaskName("");
       setTaskDescription("");
       setAcceptanceCriteria("");
@@ -446,6 +471,7 @@ export default function TasksPage() {
       setNewSubAgents([]);
       fetchLiveData();
     } catch (err: unknown) {
+      if (principalRef.current !== actionPrincipal) return;
       alert("Failed to create task: " + (err instanceof Error ? err.message : String(err)));
     }
   };
