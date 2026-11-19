@@ -290,6 +290,46 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion() -> No
                 WHERE idempotency_key=$1
             """, tenant=tenant_a, user=owner_a, args=(receipt_key,))
 
+        # The immutable trigger rejects changes even when a privileged
+        # maintenance connection has SQL UPDATE/DELETE permission.
+        with pytest.raises(asyncpg.PostgresError, match="immutable"):
+            async with raw.transaction():
+                await raw.execute("""
+                    UPDATE public.conversation_presentation_pin_mutation_receipts
+                    SET request_id='tampered'
+                    WHERE idempotency_key=$1 AND tenant_id=$2 AND user_id=$3
+                """, receipt_key, tenant_a, owner_a)
+        with pytest.raises(asyncpg.PostgresError, match="immutable"):
+            async with raw.transaction():
+                await raw.execute("""
+                    DELETE FROM public.conversation_presentation_pin_mutation_receipts
+                    WHERE idempotency_key=$1 AND tenant_id=$2 AND user_id=$3
+                """, receipt_key, tenant_a, owner_a)
+
+        # The idempotency fence is per principal, not global; a different
+        # tenant/user may independently use the same client operation key.
+        independent = await execute_as_owner("""
+            INSERT INTO public.conversation_presentation_pin_mutation_receipts
+                (tenant_id,user_id,idempotency_key,request_id,correlation_id,
+                 request_digest,operation,outcome,pin_id)
+            VALUES ($1,$2,$3,'foreign-request','foreign-trace',$4,
+                    'unpin','already_absent',NULL)
+            RETURNING receipt_id
+        """, tenant=tenant_b, user=owner_b,
+            args=(tenant_b, owner_b, receipt_key, "c" * 64))
+        assert len(independent) == 1
+
+        # RLS forbids inserting a receipt into a different owner's scope.
+        with pytest.raises(asyncpg.PostgresError):
+            await execute_as_owner("""
+                INSERT INTO public.conversation_presentation_pin_mutation_receipts
+                    (tenant_id,user_id,idempotency_key,request_id,correlation_id,
+                     request_digest,operation,outcome,pin_id)
+                VALUES ($1,$2,$3,'injected-request','injected-trace',$4,
+                        'unpin','already_absent',NULL)
+            """, tenant=tenant_a, user=owner_a,
+                args=(tenant_b, owner_b, uuid.uuid4(), "d" * 64))
+
         # A failed duplicate receipt INSERT must roll back the corresponding
         # pin position change in that same transaction.
         with pytest.raises(asyncpg.UniqueViolationError):
