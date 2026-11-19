@@ -74,6 +74,7 @@ class DirectCapabilityResult:
                 "crawl_provider",
                 "timer_receipt",
                 "automation_receipt",
+                "planner_receipt",
                 "missing_fields",
                 "plugin_inspection",
                 "plugin_action_receipt",
