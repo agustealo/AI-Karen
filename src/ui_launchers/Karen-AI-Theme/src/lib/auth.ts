@@ -493,6 +493,17 @@ class AuthService {
 
         const data = await response.json();
         if (revision !== this.authenticationRevision) return '';
+        if (typeof data.access_token !== 'string' || !data.access_token.trim() ||
+            typeof data.refresh_token !== 'string' || !data.refresh_token.trim() ||
+            data.refresh_token === refreshToken) {
+          throw new Error('Invalid refresh response: missing or unrotated token pair');
+        }
+        // A newer login, logout, or refresh in another owner must not be
+        // overwritten by an older response.
+        if (localStorage.getItem('refresh_token') !== refreshToken) {
+          throw new Error('Refresh session changed during request');
+        }
+        localStorage.setItem('refresh_token', data.refresh_token);
         localStorage.setItem('access_token', data.access_token);
         this.markLoginSuccess();
         this.refreshBlockedUntil = 0;
