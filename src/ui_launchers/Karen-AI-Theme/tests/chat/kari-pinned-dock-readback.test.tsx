@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import {
   KarenCopilotPinnedDock,
   parseAuthorizedPinReadback,
@@ -71,12 +71,18 @@ describe("governed pinned workspace reference consumer", () => {
   });
 
   it("ignores a late response after its authenticated consumer is unmounted", async () => {
-    let resolve!: (value: unknown) => void;
-    api.get.mockImplementation(() => new Promise((r) => { resolve = r; }));
+    // A controlled deferred response proves cleanup cancels stale updates;
+    // React act flushes the settled microtask before the assertion.
+    let settle!: (value: unknown) => void;
+    const delayed = new Promise<unknown>((resolve) => { settle = resolve; });
+    api.get.mockReturnValueOnce(delayed);
     const rendered = render(<KarenCopilotPinnedDock />);
     expect(api.get).toHaveBeenCalledTimes(1);
     rendered.unmount();
-    resolve(snapshot);
+    await act(async () => {
+      settle(snapshot);
+      await delayed;
+    });
     expect(screen.queryByTestId("karen-pins-authorized")).toBeNull();
   });
 });
