@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { authService } from "@/lib/auth";
+import apiClient from "@/lib/api";
 
 function pendingResponse() {
   let resolve!: (response: Response) => void;
@@ -140,6 +141,61 @@ describe("canonical auth service session generation", () => {
     await expect(staleRefresh).resolves.toBe("");
     expect(localStorage.getItem("access_token")).toBe("more-recent-access");
     expect(localStorage.getItem("refresh_token")).toBe("more-recent-refresh");
+  });
+
+  it.each(["api-first", "auth-first"] as const)(
+    "shares one rotation when API and AuthService refresh concurrently: %s",
+    async (order) => {
+      setPriorCredentials();
+      const response = pendingResponse();
+      const fetchMock = vi.fn().mockReturnValue(response.promise);
+      vi.stubGlobal("fetch", fetchMock);
+      const api = apiClient as unknown as {
+        refreshAccessToken: () => Promise<void>;
+      };
+
+      const first = order === "api-first"
+        ? api.refreshAccessToken()
+        : authService.refreshToken();
+      const second = order === "api-first"
+        ? authService.refreshToken()
+        : api.refreshAccessToken();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      response.resolve(new Response(JSON.stringify({
+        access_token: "shared-access",
+        refresh_token: "shared-rotated-refresh",
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+      await Promise.all([first, second]);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(localStorage.getItem("access_token")).toBe("shared-access");
+      expect(localStorage.getItem("refresh_token")).toBe("shared-rotated-refresh");
+      expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).refresh_token)
+        .toBe("previous-refresh");
+    },
+  );
+
+  it("releases the shared coordinator after failure without replaying a request", async () => {
+    setPriorCredentials();
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Network interrupted"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        access_token: "next-access",
+        refresh_token: "next-refresh",
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = apiClient as unknown as {
+      refreshAccessToken: () => Promise<void>;
+    };
+
+    await expect(api.refreshAccessToken()).rejects.toThrow("Network interrupted");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // A later explicit attempt is a new user/runtime decision, not an automatic
+    // retry of the uncertain mutation.
+    await expect(api.refreshAccessToken()).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem("refresh_token")).toBe("next-refresh");
   });
 
   it("does not clear a new login when an earlier logout finally completes", async () => {
