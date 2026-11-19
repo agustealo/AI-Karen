@@ -50,8 +50,10 @@ def test_cron_no_false_health_or_empty_state_on_fetch_failure() -> None:
     assert "handleCreateJob" in source
     assert "handleDelete(job.id)" in source
     assert "setFetchError(true)" in source
-    assert "jobs.length === 0 && !loading && !fetchError" in source
-    assert "!fetchError && jobs.map" in source
+    assert "jobs.length === 0 ?" in source
+    assert "!isAuthLoading && isAuthenticated && !loading && !fetchError && jobs.map" in source
+    assert 'kind="unavailable"' in source
+    assert 'kind="empty"' in source
     assert "Schedules unavailable" in source
     assert "Scheduler Connected" not in source
     assert "aria-label={`Toggle ${job.taskName || job.name} schedule`}" in source
@@ -76,3 +78,37 @@ def test_workflow_header_single_presentation_authority() -> None:
             assert attribute in page
         assert "<header className=\"karen-automation-hero" not in page
         assert page.count("<AutomationWorkflowHeader") == 1
+
+
+def test_shared_list_notice_is_presentation_only_and_accessible() -> None:
+    source = _view("AutomationListNotice.tsx")
+    assert 'type AutomationNoticeKind = "loading" | "empty" | "unavailable" | "authentication"' in source
+    assert 'role={isError ? "alert" : "status"}' in source
+    assert 'aria-live={isError ? "assertive" : "polite"}' in source
+    assert "karen-surface" in source
+    assert "apiClient" not in source
+    assert "useAuth" not in source
+    for page in ("TasksPage.tsx", "JobsPage.tsx", "CronJobsPage.tsx"):
+        content = _view(page)
+        assert 'from "@/components/automation/AutomationListNotice"' in content
+        for kind in ("loading", "authentication", "unavailable", "empty"):
+            assert f'kind="{kind}"' in content
+
+
+def test_empty_states_require_verified_authenticated_list_reads() -> None:
+    tasks = _view("TasksPage.tsx")
+    jobs = _view("JobsPage.tsx")
+    cron = _view("CronJobsPage.tsx")
+    assert "setTasksFetchError(true)" in tasks
+    assert "setTasksFetchError(false)" in tasks
+    assert "tasksFetchError ? (" in tasks
+    assert "tasks.length === 0 ? (" in tasks
+    assert "setJobsFetchError(true)" in jobs
+    assert "setJobsFetchError(false)" in jobs
+    assert "jobsFetchError ? (" in jobs
+    assert "jobs.length === 0 ? (" in jobs
+    assert "fetchError ? (" in cron
+    assert "jobs.length === 0 ? (" in cron
+    for source in (tasks, jobs, cron):
+        assert "isAuthLoading ? (" in source
+        assert "!isAuthenticated ? (" in source
