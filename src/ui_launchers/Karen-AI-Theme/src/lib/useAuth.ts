@@ -57,6 +57,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     error: null,
   });
   const initialResolutionCompleteRef = useRef(false);
+  // Prevent old validation/refresh completions overwriting a later auth action.
+  const authOperationRevision = useRef(0);
 
   const applyCanonicalState = useCallback((isValid: boolean) => {
     const user = isValid ? authService.getCurrentUser() : null;
@@ -78,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const initializeAuth = useCallback(async () => {
+    const revision = ++authOperationRevision.current;
     const blockRendering = !initialResolutionCompleteRef.current;
 
     if (blockRendering) {
@@ -104,8 +107,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const isValid = await authService.validateSession();
+      if (revision !== authOperationRevision.current) return;
       applyCanonicalState(isValid);
     } catch (error) {
+      if (revision !== authOperationRevision.current) return;
       const currentUser = authService.getCurrentUser();
       const canPreserveResolvedSession =
         initialResolutionCompleteRef.current &&
@@ -138,6 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyCanonicalState]);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
+    const revision = ++authOperationRevision.current;
     setState((previous) => ({
       ...previous,
       isLoading: true,
@@ -146,6 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       const response = await authService.login(credentials);
+      if (revision !== authOperationRevision.current) throw new Error("Login superseded by newer authentication action");
       const user = response.user ?? authService.getCurrentUser();
 
       initialResolutionCompleteRef.current = true;
@@ -157,6 +164,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       return response;
     } catch (error) {
+      if (revision !== authOperationRevision.current) throw error;
       setState((previous) => ({
         ...previous,
         isLoading: false,
@@ -167,15 +175,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    const revision = ++authOperationRevision.current;
     try {
       await authService.logout();
     } finally {
-      initialResolutionCompleteRef.current = true;
-      setState(unauthenticatedState);
+      if (revision === authOperationRevision.current) {
+        initialResolutionCompleteRef.current = true;
+        setState(unauthenticatedState);
+      }
     }
   }, []);
 
   const refreshSession = useCallback(async () => {
+    const revision = ++authOperationRevision.current;
     // Background refresh must never replace the already-rendered application
     // with a blocking auth loader.
     setState((previous) => ({
@@ -185,8 +197,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       const isValid = await authService.validateSession();
+      if (revision !== authOperationRevision.current) return;
       applyCanonicalState(isValid);
     } catch (error) {
+      if (revision !== authOperationRevision.current) return;
       setState((previous) => ({
         ...previous,
         isLoading: false,
@@ -227,12 +241,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const handleAuthInvalidated = () => {
+      authOperationRevision.current += 1;
       authService.clearAuth();
       initialResolutionCompleteRef.current = true;
       setState(unauthenticatedState);
     };
 
     const handleUserUpdated = () => {
+      authOperationRevision.current += 1;
       const user = authService.getCurrentUser();
       if (!user) return;
       setState((previous) => ({
