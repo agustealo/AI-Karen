@@ -485,3 +485,35 @@ installation. It does **not** prove owner-reference TOCTOU resistance for
 future download consumers, session switching between two real accounts,
 artifact deletion concurrency, arbitrary folder hierarchies, or performance
 under load; those remain separate acceptance requirements.
+
+### Protected live acceptance dispatch
+
+The existing `KAREN Browser Acceptance` GitHub Actions workflow now exposes
+`scenario=file-explorer`. It reuses the single protected
+`karen-sanitized-browser-acceptance` environment, source revision,
+Vercel deployment attestation, credential injection, and post-run provenance
+verification used by the existing Settings and Navigation scenarios.
+
+Before dispatch, prepare the **same immutable reviewed `main` revision**
+on an approved HTTPS Vercel target that has a healthy PostgreSQL-backed
+ArtifactStore, an enabled File Explorer extension and an authorized sanitized
+account owning **more than 100** active files. Configure protected environment
+variable `KAREN_FILE_EXPLORER_ACCEPTANCE_URL` to that target origin, and
+existing `KAREN_UX_EMAIL` / `KAREN_UX_PASSWORD` secrets to the account.
+The existing Vercel project/organization and verification secrets must be
+configured for that deployment. Never write credentials, artifact data or
+storage state into repository source.
+
+From **Actions → KAREN Browser Acceptance → Run workflow**, choose `main`,
+set scenario to `file-explorer`, provide the exact reviewed 40-character
+`target_sha`, and select the correct `deployment_target`. The job will
+reject stale source/deployment revisions and will fail if credentials, the
+plugin, real owner files or a second page are missing. It executes
+`file-explorer-real-acceptance.spec.ts` using the existing Chromium runner,
+no retries, with trace/video/screenshot capture and report artifact output
+disabled. No new broad test permissions are granted.
+
+A dispatched or skipped workflow is **not** a passed browser observation.
+Read the scenario job's actual conclusion before calling File Explorer
+consumer-ready. This read-only proof still does not establish safe download,
+two-account concurrency, concurrent deletion or throughput under load.

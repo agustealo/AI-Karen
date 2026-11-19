@@ -170,7 +170,7 @@ def test_kcon776_benchmark_has_zero_retries_and_runs_headless_on_local_machine()
     """A local benchmark cannot turn a failing real attempt into a passing sample."""
     config = (SPEC.parent / "playwright.config.ts").read_text(encoding="utf-8")
     assert "const localBenchmark = process.env.KAREN_LOCAL_LATENCY_BENCHMARK === '1';" in config
-    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance ? 0 : process.env.CI ? 2 : 0," in config
+    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance ? 0 : process.env.CI ? 2 : 0," in config
     assert "headless: localBenchmark || !!process.env.CI," in config
     assert "workers: 1," in config
     assert "['json', { outputFile: 'test-results.json' }]" in config
@@ -191,12 +191,12 @@ def test_kcon774_local_latency_runner_disables_sensitive_recordings_by_default()
     assert "const privateBrowserRun = localBenchmark ||" in config
     assert "process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ||" in config
     assert "process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ||" in config
-    assert "  settingsAcceptance;" in config
+    assert "  settingsAcceptance ||\n  fileExplorerAcceptance;" in config
     assert "screenshot: privateBrowserRun ? 'off' : 'only-on-failure'," in config
     assert "video: privateBrowserRun\n      ? 'off'" in config
     assert "trace: privateBrowserRun\n      ? 'off'" in config
     assert "process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'" in config
-    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance ? 0 : process.env.CI ? 2 : 0," in config
+    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance ? 0 : process.env.CI ? 2 : 0," in config
     assert "headless: localBenchmark || !!process.env.CI," in config
     assert "['json', { outputFile: 'test-results.json' }]" in config
 
