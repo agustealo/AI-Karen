@@ -1,5 +1,8 @@
 """Authenticated model library must reuse the canonical scoped query."""
 from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_API = ROOT / "src/ai_karen_engine/api_routes/models/runtime_api.py"
@@ -134,9 +137,6 @@ def _model_library_actor(*, is_verified: bool = True):
         is_verified=is_verified,
     )
 
-
-import pytest
-from unittest.mock import AsyncMock
 
 
 @pytest.mark.asyncio
