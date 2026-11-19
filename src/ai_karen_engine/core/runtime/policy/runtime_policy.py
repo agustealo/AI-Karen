@@ -966,6 +966,38 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # Personal planner mutations require their own explicit write
+        # entitlement. A CORTEX capability request is not an RBAC grant.
+        # Service-level authorization and the runtime action attestation
+        # remain independent, mandatory checks at execution time.
+        requested_planner_mutations = sorted(
+            capability
+            for capability in request.requested_capabilities
+            if capability in {"planner.create", "planner.update"}
+        )
+        if requested_planner_mutations:
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            if not get_rbac_manager().has_permission(
+                principal, Permission.PLANNER_WRITE,
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=requested_planner_mutations,
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
+
         # An authenticated conversation cannot grant itself recurring-task
         # write authority merely by requesting the capability. The canonical
         # scheduler RBAC entitlement applies equally to chat and HTTP callers.
