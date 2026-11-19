@@ -175,7 +175,7 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   await expect(firstFileCheckbox).not.toBeChecked();
   await firstFileCheckbox.check();
   await expect(firstFileCheckbox).toBeChecked();
-  await expect(explorer.getByText(/\\b1 selected\\b/)).toBeVisible();
+  await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
   for (const viewport of widths) {
     await page.setViewportSize(viewport);
     await expect(explorer).toBeVisible();
@@ -195,7 +195,7 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     await verifyDisplayedInventory(page, firstPage);
     await expect(explorer.getByRole("list", { name: "Files and folders" })
       .getByRole("listitem").first().getByRole("checkbox")).toBeChecked();
-    await expect(explorer.getByText(/\\b1 selected\\b/)).toBeVisible();
+    await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
   }
 
   await page.setViewportSize(widths[0]);
@@ -224,12 +224,12 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
       !firstPage.items.some((older) => older.source_id === item.source_id),
     ), "Keyset pages must not repeat owner file IDs").toBe(true);
     await verifyDisplayedInventory(page, secondPage);
-    await expect(explorer.getByText(/\\b0 selected\\b/)).toBeVisible();
+    await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
     const secondFileCheckbox = explorer.getByRole("list", { name: "Files and folders" })
       .getByRole("listitem").first().getByRole("checkbox");
     await secondFileCheckbox.check();
     await expect(secondFileCheckbox).toBeChecked();
-    await expect(explorer.getByText(/\\b1 selected\\b/)).toBeVisible();
+    await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
   }
 
   const refresh = nextRealPage(page, origin);
@@ -240,7 +240,7 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     "Refresh must request a fresh first owner page, not retain the old cursor").toBe(false);
   const refreshed = inventoryResponse(await refreshedResponse.json());
   await verifyDisplayedInventory(page, refreshed);
-  await expect(explorer.getByText(/\\b0 selected\\b/)).toBeVisible();
+  await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
   if (refreshed.items.length > 0) {
     await expect(explorer.getByRole("list", { name: "Files and folders" })
       .getByRole("listitem").first().getByRole("checkbox")).not.toBeChecked();
