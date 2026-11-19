@@ -95,7 +95,7 @@ class FileExplorerInventoryHost:
         if (
             not isinstance(record, dict)
             or record.get("status") != "enabled"
-            or record.get("is_valid") is not True
+            or record.get("dependencies_resolved") is not True
         ):
             raise PermissionError("file_explorer_disabled")
 
@@ -146,8 +146,9 @@ class FileExplorerInventoryHost:
             or projected.get("operation") != "list"
             or not isinstance(projected.get("items"), list)
             or len(projected["items"]) != len(items)
-            or {item.get("source_id") for item in projected["items"] if isinstance(item, dict)}
-            != {item.get("source_id") for item in items if isinstance(item, dict)}
+            or any(not isinstance(item, dict) for item in projected["items"])
+            or sorted(projected["items"], key=lambda item: item["source_id"])
+            != sorted(items, key=lambda item: item["source_id"])
         ):
             raise RuntimeError("file_explorer_kernel_projection_invalid")
         logger.info(
