@@ -375,3 +375,68 @@ async def test_planner_creation_requires_replayable_mutation_identity(monkeypatc
     assert result.payload["planner_created"] is False
     write.assert_not_awaited()
     meter.consume_tool_call.assert_not_awaited()
+
+
+def test_http_chat_contract_accepts_only_typed_mutation_key():
+    from pydantic import ValidationError
+    from ai_karen_engine.api_routes.chat.runtime import ChatRequest
+
+    valid = {
+        "messages": [{"content": "Create a task to review deployment in UTC"}],
+        "planner_idempotency_key": "9e462178-00db-4fea-a282-87c57bbbd389",
+    }
+    assert str(ChatRequest.model_validate(valid).planner_idempotency_key) == valid["planner_idempotency_key"]
+    with pytest.raises(ValidationError):
+        ChatRequest.model_validate({**valid, "planner_idempotency_key": "unverified"})
+
+
+def test_http_sse_preserves_mutation_key_across_distinct_response_ids(monkeypatch):
+    from ai_karen_engine.api_routes.chat import runtime
+
+    key = UUID("9e462178-00db-4fea-a282-87c57bbbd389")
+    req = runtime.ChatStreamRequest(
+        message="Create a personal task to review deployment in UTC",
+        conversation_id="conversation-01",
+        planner_idempotency_key=key,
+    )
+    monkeypatch.setattr(
+        runtime, "_execution_context", lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    a = runtime._stream_execution_request(
+        request=req, user={"user_id": "user-01"}, session_id="session-01",
+        correlation_id="correlation-01", response_id="response-01",
+    )
+    b = runtime._stream_execution_request(
+        request=req, user={"user_id": "user-01"}, session_id="session-01",
+        correlation_id="correlation-02", response_id="response-02",
+    )
+    assert a.context.request_id != b.context.request_id
+    assert a.metadata["planner_mutation_idempotency_key"] == str(key)
+    assert b.metadata["planner_mutation_idempotency_key"] == str(key)
+
+
+def test_copilot_assist_preserves_mutation_key_independent_of_response(monkeypatch):
+    from ai_karen_engine.api_routes.chat import copilot
+
+    key = UUID("9e462178-00db-4fea-a282-87c57bbbd389")
+    req = copilot.AssistRequest(
+        message="Create a personal task to review deployment in UTC",
+        session_id="conversation-01",
+        planner_idempotency_key=key,
+    )
+    monkeypatch.setattr(copilot, "require_execution_identity", lambda user: None)
+    monkeypatch.setattr(
+        copilot, "build_chat_execution_context",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    a = copilot._build_chat_execution_request_from_assist_request(
+        request=req, user={"user_id": "user-01"}, conversation_id="conversation-01",
+        correlation_id="corr-01", response_id="response-01", stream=False,
+    )
+    b = copilot._build_chat_execution_request_from_assist_request(
+        request=req, user={"user_id": "user-01"}, conversation_id="conversation-01",
+        correlation_id="corr-02", response_id="response-02", stream=True,
+    )
+    assert a.context.request_id != b.context.request_id
+    assert a.metadata["planner_mutation_idempotency_key"] == str(key)
+    assert b.metadata["planner_mutation_idempotency_key"] == str(key)
