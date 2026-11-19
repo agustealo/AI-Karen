@@ -11,6 +11,7 @@ import { defineConfig, devices } from '@playwright/test';
 const localBenchmark = process.env.KAREN_LOCAL_LATENCY_BENCHMARK === '1';
 const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'true';
 const navigationAcceptance = process.env.KAREN_NAV_VISUAL_ACCEPTANCE === 'true';
+const fileExplorerAcceptance = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === 'true';
 // A local benchmark signs in with real credentials. Disable sensitive
 // recordings at configuration authority, even if a future spec forgets
 // its own test.use privacy override or someone opts into capture video.
@@ -18,7 +19,8 @@ const privateBrowserRun = localBenchmark ||
   process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ||
   process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ||
   navigationAcceptance ||
-  settingsAcceptance;
+  settingsAcceptance ||
+  fileExplorerAcceptance;
 
 export default defineConfig({
   testDir: './',
@@ -32,13 +34,13 @@ export default defineConfig({
 
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: localBenchmark || settingsAcceptance || navigationAcceptance ? 0 : process.env.CI ? 2 : 0,
+  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance ? 0 : process.env.CI ? 2 : 0,
   workers: 1,
 
   // Authenticated Settings acceptance must not persist response text,
   // failure stacks or browser state into local HTML/JSON result artifacts.
   // The console list reporter supplies the protected job's result.
-  reporter: settingsAcceptance || navigationAcceptance
+  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance
     ? [['list']]
     : [
         ['html', { outputFolder: 'playwright-report' }],
