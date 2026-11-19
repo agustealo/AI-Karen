@@ -367,6 +367,19 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion() -> No
         assert not await execute_as_owner("""
             SELECT pin_id FROM public.conversation_presentation_pins
         """, tenant=tenant_a, user=owner_a)
+
+        # Receipt immutability must not block the governed tenant deletion
+        # cascade. Verify the dependent receipt is actually erased by the
+        # parent's FK action, rather than relying on a migration comment.
+        assert await raw.fetchval("""
+            SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+            WHERE tenant_id=$1
+        """, tenant_a) == 1
+        await raw.execute("DELETE FROM public.tenants WHERE id=$1", tenant_a)
+        assert await raw.fetchval("""
+            SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+            WHERE tenant_id=$1
+        """, tenant_a) == 0
     finally:
         # Cleanup is restricted to the dedicated database and these test
         # objects; no production or shared schema is ever used.
