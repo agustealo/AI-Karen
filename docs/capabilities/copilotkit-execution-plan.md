@@ -840,3 +840,8 @@ completion, content-size or presentation validation to silence the UI.
 - Scope is **real datastore CI integration**, not multi-process crash/restart or target-host sign-off. Both manager instances currently share a Python interpreter. Separate worker processes, owner replacement, PostgreSQL latency/failure under real Redis heartbeats, production-role RLS and authenticated live audit readback remain NOT_RUN and cannot be claimed from this gate.
 
 - Real-store CI also uncovered a missing `outcome_status` SQL bind in `PostgresDurableRunLedger._owned_transition` when persisting the observed terminal result. The canonical transition now supplies that parameter, preserving the existing outcome metadata semantics. Exact-head SQL integration is required before this fix is accepted; the test must not be weakened or marked passing from mock results.
+
+
+## KCON-473: Independent OS worker and stale lease recovery proof (2026-11-19, SOURCE_ONLY)
+
+- Extends the existing real PostgreSQL/Redis integration test, without adding a runtime service or duplicating manager ownership. The requester and owning Medusa runtime run in separate Python PIDs, exercising a durable-only cancellation, owner heartbeat retry, real task `CancelledError`, and verified SQL transition/audit readback. A second child is killed and its lease allowed to expire; Redis cancellation is refused without a live valid owner, and replacing the lease claim with a mismatching worker value also fails closed. Actual worker restarts and target-host RBAC/RLS acceptance remain NOT_RUN. CI evidence is required before merging; do not claim a recovered killed task.
