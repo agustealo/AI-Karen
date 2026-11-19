@@ -66,6 +66,7 @@ def _request(
 
 def _decision(*, direct=True, graph=False):
     return SimpleNamespace(
+        intent="planner.create",
         is_graph_required=graph,
         policy_constraints={"direct_capability": direct},
     )
