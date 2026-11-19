@@ -60,6 +60,13 @@ def _request(
     return request, plan, meter, principal
 
 
+def _decision(*, direct=True, graph=False):
+    return SimpleNamespace(
+        is_graph_required=graph,
+        policy_constraints={"direct_capability": direct},
+    )
+
+
 @pytest.mark.parametrize("query", [
     "Create a task to review deployment",
     "Add a personal task for finishing release",
@@ -148,7 +155,7 @@ async def test_authorized_task_creates_only_after_matching_committed_receipt(mon
         personal_planner_action, "execute_authorized_planner_action", write,
     )
     result = await ChatRuntime._execute_personal_planner_create(
-        request, plan, meter,
+        request, _decision(), plan, meter,
     )
 
     assert result.handled and result.success and not result.degraded
@@ -171,14 +178,14 @@ async def test_denied_capability_or_unissued_plan_never_writes(monkeypatch):
     request, plan, meter, _ = _request()
     plan.allowed_capabilities = []
     denied = await ChatRuntime._execute_personal_planner_create(
-        request, plan, meter,
+        request, _decision(), plan, meter,
     )
     assert not denied.success
     assert denied.error == "planner_create_not_authorized"
     plan.allowed_capabilities = ["planner.create"]
     request.context.original_runtime_model_plan = lambda _: None
     forged = await ChatRuntime._execute_personal_planner_create(
-        request, plan, meter,
+        request, _decision(), plan, meter,
     )
     assert not forged.success
     assert forged.error == "planner_create_not_authorized"
@@ -198,7 +205,7 @@ async def test_missing_timezone_never_calls_persistence(monkeypatch):
         "Create a personal task to review deployment",
     )
     result = await ChatRuntime._execute_personal_planner_create(
-        request, plan, meter,
+        request, _decision(), plan, meter,
     )
     assert not result.success
     assert result.payload["status"] == "needs_input"
@@ -217,7 +224,7 @@ async def test_storage_error_does_not_produce_fake_success(monkeypatch):
     )
     request, plan, meter, _ = _request()
     result = await ChatRuntime._execute_personal_planner_create(
-        request, plan, meter,
+        request, _decision(), plan, meter,
     )
     assert not result.success and result.degraded
     assert result.payload["planner_created"] is False
@@ -239,9 +246,9 @@ async def test_retry_uses_stable_idempotency_key(monkeypatch):
         personal_planner_action, "execute_authorized_planner_action", write,
     )
     request, plan, meter, _ = _request()
-    await ChatRuntime._execute_personal_planner_create(request, plan, meter)
+    await ChatRuntime._execute_personal_planner_create(request, _decision(), plan, meter)
     request.context.correlation_id = "retry-correlation"
-    await ChatRuntime._execute_personal_planner_create(request, plan, meter)
+    await ChatRuntime._execute_personal_planner_create(request, _decision(), plan, meter)
     assert len(observed_keys) == 2
     assert observed_keys[0] == observed_keys[1]
 
@@ -262,7 +269,7 @@ async def test_disabled_write_flag_prevents_any_mutation(monkeypatch):
     )
     request, plan, meter, _ = _request()
     result = await ChatRuntime._execute_personal_planner_create(
-        request, plan, meter,
+        request, _decision(), plan, meter,
     )
     assert result.error == "planner_create_disabled"
     assert result.payload["planner_created"] is False
@@ -298,7 +305,7 @@ async def test_invalid_persistence_receipt_cannot_report_task_saved(monkeypatch)
         mismatched_write,
     )
     result = await ChatRuntime._execute_personal_planner_create(
-        request, plan, meter,
+        request, _decision(), plan, meter,
     )
     assert not result.success
     assert result.error == "planner_create_receipt_invalid"
