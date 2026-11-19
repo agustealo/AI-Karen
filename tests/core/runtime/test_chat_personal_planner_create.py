@@ -34,6 +34,7 @@ def _request(
     *,
     request_id: str = "request-01",
     correlation_id: str = "corr-01",
+    mutation_key: str | None = "9e462178-00db-4fea-a282-87c57bbbd389",
 ):
     tenant_id, user_id = uuid4(), uuid4()
     principal = SimpleNamespace(
@@ -54,7 +55,10 @@ def _request(
     )
     request = SimpleNamespace(
         context=context,
-        metadata={},
+        metadata=(
+            {"planner_mutation_idempotency_key": mutation_key}
+            if mutation_key is not None else {}
+        ),
         messages=[{"role": "user", "content": query}],
     )
     return request, plan, meter, principal
@@ -115,6 +119,9 @@ def test_other_chat_and_automation_intents_are_not_hijacked(query):
     ("Create a task to review release", None),
     ("Create a task to review release in Not_A_Timezone/Nowhere", None),
     ("Create a task to review release on Friday in America/Detroit", None),
+    ("Create a personal task to submit the report by Friday in America/Detroit", None),
+    ("Create a personal task to call Alice in 2 hours in UTC", None),
+    ("Create a task to call Alice within 15 minutes in UTC", None),
     ("Create a task to review release next month in America/Detroit", None),
     ("Create a task to review release every day in America/Detroit", None),
     ("Create a task to review release at 09:30 in America/Detroit", None),
@@ -253,8 +260,18 @@ async def test_retry_uses_stable_idempotency_key(monkeypatch):
     )
     request, plan, meter, _ = _request()
     await ChatRuntime._execute_personal_planner_create(request, _decision(), plan, meter)
-    request.context.correlation_id = "retry-correlation"
-    await ChatRuntime._execute_personal_planner_create(request, _decision(), plan, meter)
+    # Simulate a fresh HTTP response and a fresh runtime request context.
+    # The caller-held mutation UUID survives; response and correlation do not.
+    again, new_plan, new_meter, _ = _request(
+        request_id="new-transport-response",
+        correlation_id="retry-correlation",
+    )
+    again.context.require_authenticated_user = request.context.require_authenticated_user
+    again.context.tenant_id = request.context.tenant_id
+    again.context.user_id = request.context.user_id
+    await ChatRuntime._execute_personal_planner_create(
+        again, _decision(), new_plan, new_meter,
+    )
     assert len(observed_keys) == 2
     assert observed_keys[0] == observed_keys[1]
 
@@ -338,6 +355,23 @@ async def test_non_direct_or_graph_planner_intent_cannot_trigger_mutation(
     )
     assert not result.success
     assert result.error == "planner_create_requires_direct_authority"
+    assert result.payload["planner_created"] is False
+    write.assert_not_awaited()
+    meter.consume_tool_call.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", [None, "not-a-uuid", "00000000-0000-0000-0000-000000000000"])
+async def test_planner_creation_requires_replayable_mutation_identity(monkeypatch, key):
+    from ai_karen_engine.core.runtime import personal_planner_action
+
+    write = AsyncMock(side_effect=AssertionError("Missing stable identity must not persist"))
+    monkeypatch.setattr(personal_planner_action, "execute_authorized_planner_action", write)
+    request, plan, meter, _ = _request(mutation_key=key)
+    result = await ChatRuntime._execute_personal_planner_create(
+        request, _decision(), plan, meter,
+    )
+    assert result.error == "planner_create_idempotency_required"
     assert result.payload["planner_created"] is False
     write.assert_not_awaited()
     meter.consume_tool_call.assert_not_awaited()
