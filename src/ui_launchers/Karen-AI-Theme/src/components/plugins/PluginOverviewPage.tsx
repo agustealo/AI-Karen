@@ -23,6 +23,7 @@ import {
   EyeOff,
   Github,
   HelpCircle,
+  Info,
   Loader2,
   MessageSquare,
   PlugZap,

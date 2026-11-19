@@ -137,9 +137,16 @@ describe("Communications Center's canonical visual and authority contract", () =
       expect(screen.getByTestId("comms-metric-audit").textContent?.trim()).toBe("1");
     });
     expect(screen.getByTestId("comms-metric-writebacks").textContent?.trim()).toBe("—");
-    fireEvent.click(screen.getByRole("tab", { name: "Observability" }));
-    expect(screen.getByTestId("comms-observability-pending").textContent?.trim()).toBe("—");
-    expect(screen.getByTestId("comms-observability-shards").textContent?.trim()).toBe("—");
+    // Exercise the Radix keyboard activation contract in jsdom. Synthetic
+    // pointer events do not implement the full browser PointerEvent contract.
+    const observabilityTab = screen.getByRole("tab", { name: "Observability" });
+    observabilityTab.focus();
+    fireEvent.keyDown(observabilityTab, { key: "Enter", code: "Enter" });
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Observability" }).getAttribute("data-state")).toBe("active");
+      expect(screen.getByTestId("comms-observability-pending").textContent?.trim()).toBe("—");
+      expect(screen.getByTestId("comms-observability-shards").textContent?.trim()).toBe("—");
+    });
     expect(screen.getByText("Account-scoped queue metrics")).toBeTruthy();
     expect(screen.getByText("Not verified")).toBeTruthy();
   });
