@@ -335,6 +335,43 @@ against that host. It also does not prove controlled old-session response
 delivery after a new login, cross-tab logout races, or deployment revision
 provenance. Those remain separate release acceptance gates.
 
+
+## Plugins & Tools: authenticated five-viewport acceptance
+
+The opt-in `plugins-visual-acceptance.spec.ts` verifies the **merged** Kari OS
+Plugins & Tools overview against the *real* authenticated extension registry.
+The browser records `GET /api/extensions/list` during login, validates its
+contract and compares displayed registry counts and card totals with that exact
+response. It does not infer active execution, fake connection readiness, or
+mutate any plugin. Lifecycle mutations require separate authorized acceptance.
+
+From `src/ui_launchers/Karen-AI-Theme/e2e`, with an approved running local
+backend/frontend and a dedicated sanitized account:
+
+```bash
+KAREN_PLUGINS_VISUAL_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+KAREN_UX_EMAIL="$KAREN_UX_EMAIL" \
+KAREN_UX_PASSWORD="$KAREN_UX_PASSWORD" \
+npx playwright test plugins-visual-acceptance.spec.ts \
+  --config=playwright.config.ts --project=chromium --retries=0
+```
+
+On an approved HTTPS host, omit the local-acceptance flag.
+The sign-in fixture rejects non-loopback HTTP and credential-bearing URLs.
+The test checks 390, 768, 1024, 1440 and 1920px geometry, shared Kari OS
+tokens, visible plugin counts and keyboard-reachable installation navigation.
+It does **not** click plugin lifecycle buttons or claim backend permission
+verification from button appearance alone.
+
+Video, traces and automatic screenshots are disabled. Optional evidence
+requires `KAREN_PLUGINS_SANITIZED_CAPTURE=true` and a dedicated sanitized
+account whose UI contains no personal data or secrets. Review screenshots
+manually against the approved design reference. A CI run that skips this
+opt-in suite is not browser or release acceptance.
+
+
 ### Protected Settings acceptance on reviewed main
 
 The existing **KAREN Browser Acceptance** GitHub Actions workflow also offers
