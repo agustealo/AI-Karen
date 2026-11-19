@@ -52,3 +52,13 @@ Tests: `pytest tests/extensions/test_file_explorer_artifact_source.py -q`.
 ## Frontend integration
 
 See [Shared UI and selection contract](02-shared-ui.md). It is a controlled component, not a separate backend or an authorization source.
+
+## Governed runtime inventory host (new integration slice)
+
+`extensions/runtime/file_explorer_inventory.py` now provides `FileExplorerInventoryHost`, a host-only orchestration bridge for one canonical owner-scoped metadata page. It accepts an already-authorized `ExtensionExecutionContext`, typed `AuthorizedExecutionPlan`, the **existing** `PluginKernel`, and a trusted `ArtifactSourceAdapter` supplied through runtime composition. It does **not** authorize a browser request itself, create a storage service, or register an API route.
+
+Before reading metadata it rejects unbound tenant/user identities, incompatible policy decisions, missing plugin eligibility, a disabled or invalid plugin, browser-supplied inventory/grant keys, invalid limits, and malformed cursor envelopes. It then uses `ArtifactSourceAdapter.list_owner_sources_page()`, injects the page as a host-owned resource snapshot, and calls `PluginKernel.execute()` with the original typed authorization plan. The kernel retains the final action, RBAC, lifecycle, tenant, permission, audit and budget enforcement. A denied execution fails closed. Successful responses carry only authorized metadata references and continuation information, not file bytes or storage locations.
+
+**Integration still required:** The authenticated runtime/API ingress must create this class with canonical dependencies after policy evaluation, and the UI host must consume its result through controlled paging callbacks. This service alone does not make live browsing operational. Cross-user sharing, arbitrary folders and file download remain unsupported. The cursor remains non-authoritative. Every consumer must revalidate access and revision before file content is opened.
+
+Focused regression suite: `pytest tests/extensions/test_file_explorer_host_inventory.py -q`.
