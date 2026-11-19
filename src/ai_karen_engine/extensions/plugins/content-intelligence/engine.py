@@ -27,7 +27,7 @@ MAX_RESULTS = 12
 MAX_EXCERPT_CHARS = 600
 MAX_RELATED_TERMS = 10
 DOCUMENT_FIELDS = frozenset({"id", "name", "text", "folder_id"})
-OPERATIONS = frozenset({"analyze", "search", "compare", "browse"})
+OPERATIONS = frozenset({"analyze", "search", "compare"})
 
 
 def _terms(value: str) -> list[str]:
@@ -128,28 +128,6 @@ def _relationships(
     return related
 
 
-def _inventory(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[str | None, list[dict[str, Any]]] = {}
-    for document in documents:
-        grouped.setdefault(document["folder_id"], []).append({
-            "id": document["id"],
-            "name": document["name"],
-            "sha256": document["sha256"],
-            "characters": len(document["text"]),
-        })
-    return [
-        {
-            "folder_id": folder_id,
-            "documents": sorted(items, key=lambda item: item["id"]),
-            "document_count": len(items),
-            "total_characters": sum(item["characters"] for item in items),
-        }
-        for folder_id, items in sorted(
-            grouped.items(), key=lambda pair: (pair[0] is not None, pair[0] or "")
-        )
-    ]
-
-
 def execute(params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(params, dict):
         raise ValueError("content_input_invalid")
@@ -160,16 +138,6 @@ def execute(params: dict[str, Any]) -> dict[str, Any]:
     if operation not in OPERATIONS:
         raise ValueError("content_operation_invalid")
     documents = _prepare(params.get("documents"))
-    if operation == "browse":
-        if set(params) - {"operation", "documents"}:
-            raise ValueError("content_browse_parameters_invalid")
-        return {
-            "operation": "browse",
-            "folders": _inventory(documents),
-            "folder_semantics": "caller_supplied_labels_not_access_grants",
-            "persisted": False,
-        }
-
     counts = {doc["id"]: Counter(_terms(doc["text"])) for doc in documents}
     document_index = {doc["id"]: doc for doc in documents}
 
