@@ -197,6 +197,10 @@ async def _run_acceptance() -> None:
             redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
             foreign_tenant_id=tenant_b, marker=marker
         )
+        await _postgres_lock_stall_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker
+        )
     finally:
         if run is not None and run.heartbeat_task is not None:
             run.heartbeat_task.cancel()
@@ -364,3 +368,98 @@ async def _cross_process_acceptance(
             if process.returncode is None:
                 process.kill()
                 await asyncio.wait_for(process.wait(), timeout=8)
+
+
+async def _postgres_lock_stall_acceptance(
+    *, redis: RedisConnectionManager, ledger: PostgresDurableRunLedger,
+    prefix: str, tenant_id: str, marker: str
+) -> None:
+    """Prove a blocked real SQL read cannot expire an otherwise healthy Redis owner.
+
+    The existing durable recovery read is bounded by the runtime. This test
+    holds an actual PostgreSQL ACCESS EXCLUSIVE lock longer than the original
+    Redis lease TTL, while checking the real lease and local task continuously.
+    The lock is scoped to the disposable CI schema created by this test.
+    """
+    assert redis.client is not None
+    run_id = f"ci-postgres-stall-{marker}"
+    worker_id = f"ci-stalled-owner-{marker}"
+    settings = _settings(worker=worker_id, prefix=prefix)
+    manager = MedusaRunManager(
+        settings=settings,
+        distributed_store=RedisDistributedRunStore(
+            settings=settings, redis_manager=redis
+        ),
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(45))
+    run = None
+    locker = None
+    try:
+        run = await manager.register(
+            run_id=run_id,
+            correlation_id=f"ci-correlation-{run_id}",
+            request_id=f"ci-request-{run_id}",
+            tenant_id=tenant_id,
+            user_id="ci-stall-user",
+            task=task,
+        )
+        assert run.shared_registered and run.durable_registered
+        claim_key = f"{prefix}:claim:{run_id}"
+        locker = await asyncpg.connect(os.environ["DATABASE_URL"])
+        # No other session can read the durable run row during this transaction.
+        async with locker.transaction():
+            await locker.execute(
+                "LOCK TABLE agent_medusa_runs IN ACCESS EXCLUSIVE MODE"
+            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + settings.run_lease_ttl_seconds + 1.5
+            while loop.time() < deadline:
+                assert await redis.client.pttl(claim_key) > 0, (
+                    "Redis lease expired while PostgreSQL lookup was blocked"
+                )
+                assert not task.done(), (
+                    "A stalled PostgreSQL read must not cancel a live task"
+                )
+                await asyncio.sleep(0.2)
+
+        # The SQL lock is gone, and cancellation must still use the original
+        # valid Redis owner. An accepted request is not yet a terminal result.
+        assert await redis.client.pttl(claim_key) > 0
+        pending = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert pending is not None and pending["status"] == "running"
+        assert pending["completed_at"] is None
+        audit_ref = f"ci-stall-audit-{marker}"
+        await ledger.mark_cancelling(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            requested_at=datetime.now(timezone.utc),
+            audit_event_ref=audit_ref,
+            source="admin_cancel",
+        )
+        # Shield prevents the test timeout from manufacturing a CancelledError.
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(task), timeout=10)
+        before_terminal = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert before_terminal is not None
+        assert before_terminal["status"] == "cancellation_requested"
+        assert before_terminal["audit_event_ref"] == audit_ref
+        await manager.mark_cancelled(run_id)
+        final = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert final is not None and final["status"] == "cancelled"
+        assert final["audit_event_ref"] == audit_ref
+    finally:
+        if locker is not None:
+            await locker.close()
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            try:
+                await run.heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
