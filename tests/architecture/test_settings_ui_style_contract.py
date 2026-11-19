@@ -56,3 +56,26 @@ def test_settings_sheet_never_uses_desktop_multicolumn_grid() -> None:
     assert "inSheet ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-1'" in source
     # The full-page settings experience still has its designed desktop rail.
     assert "lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start" in source
+
+
+def test_settings_real_browser_acceptance_is_opt_in_and_credential_safe() -> None:
+    suite = (
+        ROOT
+        / "src/ui_launchers/Karen-AI-Theme/e2e/settings-visual-acceptance.spec.ts"
+    ).read_text(encoding="utf-8")
+    assert 'KAREN_SETTINGS_VISUAL_ACCEPTANCE === "true"' in suite
+    assert 'KAREN_SETTINGS_SANITIZED_CAPTURE === "true"' in suite
+    assert 'signInApprovedKaren(page, email, password' in suite
+    assert 'trace: "off", screenshot: "off", video: "off"' in suite
+    assert 'approvedOrigin()' in suite
+    assert 'getByTestId("karen-settings-workspace")' in suite
+    assert 'getByRole("dialog", { name: "Settings" })' in suite
+    assert "width: 390" in suite
+    assert "width: 768" in suite
+    assert "width: 1024" in suite
+    assert "width: 1440" in suite
+    assert "width: 1920" in suite
+    assert "checkGeometry(root, true)" in suite
+    assert "page.keyboard.press(\"Escape\")" in suite
+    assert "page.route(" not in suite
+    assert "page.request.post(" not in suite

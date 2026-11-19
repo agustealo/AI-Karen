@@ -176,6 +176,50 @@ function isModelRecommendation(value: unknown): value is ModelRecommendation {
        item.include_patterns.every((pattern) => typeof pattern === "string")));
 }
 
+/** Only stable, locally defined names and HTTP statuses reach the UI. */
+type SetupResource = "recommendations" | "policy" | "channels" | "owned jobs";
+class ModelSetupDiagnosticError extends Error {}
+
+function setupResourceLabel(resource: SetupResource): string {
+  switch (resource) {
+    case "recommendations": return "Recommended model catalog";
+    case "policy": return "Model download policy";
+    case "channels": return "Model download channels";
+    case "owned jobs": return "Your model download history";
+  }
+}
+
+async function verifiedSetupResource<T>(
+  resource: SetupResource,
+  request: Promise<T>,
+): Promise<T> {
+  try {
+    return await request;
+  } catch (error) {
+    // Do not expose exception messages, response payloads or backend URLs.
+    const status = error && typeof error === "object" &&
+      "status" in error ? (error as { status?: unknown }).status : null;
+    const action = status === 401
+      ? "Your session expired. Sign in again, then refresh."
+      : status === 403
+        ? "Access denied. Confirm your verified account, tenant and model-management permissions."
+        : status === 404
+          ? "The API route was not found. Verify the deployed frontend and backend versions."
+          : status === 502 || status === 503 || status === 504
+            ? "The service is unavailable. Check API and worker health."
+            : "The request failed. Check your authenticated API connectivity.";
+    throw new ModelSetupDiagnosticError(
+      `${setupResourceLabel(resource)} could not be loaded. ${action} No installation was started.`,
+    );
+  }
+}
+
+function invalidSetupResource(resource: SetupResource): never {
+  throw new ModelSetupDiagnosticError(
+    `${setupResourceLabel(resource)} returned an invalid response. Check the deployed API contract. No installation was started.`,
+  );
+}
+
 /** Mount only on explicit plugin-model management, never across the plugin catalog. */
 export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const { user, isAdmin } = useAuth();
@@ -200,19 +244,32 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
     setProblem(null);
     try {
       const [recommended, nextPolicy, channelResponse, nextJobs] = await Promise.all([
-        apiClient.get<RecommendationResponse>("/api/models/download/recommendations"),
-        apiClient.get<DownloadPolicy>("/api/models/download/policy"),
-        apiClient.get<DownloadChannelsResponse>("/api/models/download/channels"),
-        apiClient.get<OwnedJobsResponse>("/api/runtime/model-library/my-downloads?limit=200"),
+        verifiedSetupResource("recommendations",
+          apiClient.get<RecommendationResponse>("/api/models/download/recommendations")),
+        verifiedSetupResource("policy",
+          apiClient.get<DownloadPolicy>("/api/models/download/policy")),
+        verifiedSetupResource("channels",
+          apiClient.get<DownloadChannelsResponse>("/api/models/download/channels")),
+        verifiedSetupResource("owned jobs",
+          apiClient.get<OwnedJobsResponse>("/api/runtime/model-library/my-downloads?limit=200")),
       ]);
       if (generation !== epoch.current) return;
-      if (!Array.isArray(recommended.recommendations) ||
-          !recommended.recommendations.every(isModelRecommendation) ||
-          !nextPolicy || typeof nextPolicy.master_enabled !== "boolean" ||
-          typeof nextPolicy.block_new_downloads !== "boolean" ||
-          !Array.isArray(channelResponse.channels) ||
-          nextJobs?.scope !== "authenticated_user" || !Array.isArray(nextJobs.jobs)) {
-        throw new Error("model_setup_contract_invalid");
+      if (!Array.isArray(recommended?.recommendations) ||
+          !recommended.recommendations.every(isModelRecommendation)) {
+        invalidSetupResource("recommendations");
+      }
+      if (!nextPolicy || typeof nextPolicy.master_enabled !== "boolean" ||
+          typeof nextPolicy.block_new_downloads !== "boolean") {
+        invalidSetupResource("policy");
+      }
+      if (!Array.isArray(channelResponse?.channels) ||
+          !channelResponse.channels.every((channel) =>
+            typeof channel.id === "string" &&
+            typeof channel.effective_enabled === "boolean")) {
+        invalidSetupResource("channels");
+      }
+      if (nextJobs?.scope !== "authenticated_user" || !Array.isArray(nextJobs.jobs)) {
+        invalidSetupResource("owned jobs");
       }
       const eligible = recommended.recommendations.filter((item) =>
         item.app_consumers.includes(pluginId),
@@ -245,14 +302,17 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       // License acceptance must be fresh for the backend-verified revision.
       setAccepted({});
       setState("ready");
-    } catch {
+    } catch (error) {
       if (generation !== epoch.current) return;
       setItems([]);
       setPolicy(null);
       setChannels([]);
       setJobs([]);
+      setTrackedJob(null);
       setState("unavailable");
-      setProblem("Karen could not verify recommended models, download policy, or job state. No installation was started.");
+      setProblem(error instanceof ModelSetupDiagnosticError
+        ? error.message
+        : "Model setup could not be verified. No installation was started. Check Models & Runtime.");
     }
   }, [pluginId]);
 
