@@ -113,7 +113,7 @@ async function inspectCurrentAccount(
     const root = page.locator(".karen-automation-workflow");
     await expect(root.getByRole("heading", { name: workspace.title, exact: true })).toBeVisible();
     await expect(root.getByText(ownMarker, { exact: false }).first()).toBeVisible();
-    await expect(root.getByText(foreignMarker, { exact: true })).toHaveCount(0);
+    await expect(root.getByText(foreignMarker, { exact: false })).toHaveCount(0);
     await expect(root.getByText(/could not be verified|Schedules unavailable/i)).toHaveCount(0);
   }
 }
