@@ -64,6 +64,7 @@ def test_two_account_replay_requires_real_origin_login_and_backend_denial() -> N
     assert "response.status()" in source
     assert "Array.isArray(body)" in source
     assert "not.toContain(foreignMarker)" in source
+    assert 'root.getByText(foreignMarker, { exact: false })' in source
     assert "toContain(ownMarker)" in source
     assert 'trace: "off"' in source
     assert 'screenshot: "off"' in source
