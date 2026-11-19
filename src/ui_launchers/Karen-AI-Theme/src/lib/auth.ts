@@ -511,6 +511,11 @@ class AuthService {
         return data.access_token;
     } catch (error) {
       if (revision !== this.authenticationRevision) return '';
+      if (error instanceof Error && error.message === 'Refresh session changed during request') {
+        // Another authenticated path already advanced this credential. Never
+        // log out or overwrite the newer session in response to a stale caller.
+        return '';
+      }
       if (error instanceof Error && /invalid refresh token/i.test(error.message)) {
         console.warn('[AuthService] Invalid refresh token; clearing local auth state.');
         this.clearAuth();
