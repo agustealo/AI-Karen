@@ -643,7 +643,7 @@ async def test_completion_retry_uses_same_owner_scoped_key_across_transport_resp
 
     task_id = uuid4()
     query = f"Complete task {task_id} revision 2"
-    first, first_plan, first_meter, principal = _request(
+    first, first_plan, first_meter, _ = _request(
         query, request_id="response-a", correlation_id="correlation-a",
     )
     second, second_plan, second_meter, _ = _request(
@@ -685,7 +685,7 @@ async def test_completion_changed_revision_with_same_key_cannot_claim_success(mo
     from ai_karen_engine.core.runtime import personal_planner_action
 
     task_id = uuid4()
-    one, plan, meter, principal = _request(
+    one, plan, meter, _ = _request(
         f"Complete task {task_id} revision 1",
     )
     plan.allowed_capabilities = ["planner.update"]
