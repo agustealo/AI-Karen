@@ -461,6 +461,8 @@ def test_completion_parser_requires_explicit_owned_lookup_inputs(query, expected
 
 @pytest.mark.parametrize("query", [
     "Complete my task",
+    "Finish my personal task",
+    "Complete all my tasks",
     "Complete the deployment task",
     "Finish task abc revision 1",
     "Complete task 00000000-0000-0000-0000-000000000000 revision 1",
@@ -752,3 +754,19 @@ async def test_completion_foreign_owner_receipt_is_rejected(monkeypatch):
     assert not result.success
     assert result.error == "planner_mutation_receipt_invalid"
     assert result.payload["planner_completed"] is False
+
+
+@pytest.mark.parametrize("query", [
+    "Complete my task",
+    "Finish my personal task",
+    "Complete all my tasks",
+    "Mark my task",
+    "Mark all my tasks as completed",
+])
+def test_incomplete_completion_commands_must_route_to_fail_closed_planner(query):
+    route = resolve_capability_decision(query)
+    assert route.intent == "planner.update"
+    assert route.capability == "planner.update"
+    assert route.requires_tool is True
+    assert route.requires_live_data is True
+    assert route.allow_llm_only is False
