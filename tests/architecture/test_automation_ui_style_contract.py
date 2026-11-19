@@ -25,8 +25,27 @@ def test_automation_keeps_canonical_stats_and_no_mock_numbers() -> None:
     assert "automationStatsReadinessIssue(parsed)" in source
     assert 'data-showcase-state={statsState}' in source
     for metric in ("active-tasks", "tasks-today", "defined-sequences", "next-job"):
-        assert f'data-automation-metric="{metric}"' in source
+        assert f'metricId="{metric}"' in source
+    assert source.count("<AutomationMetricCard") == 4
     assert "Live automation metrics could not be verified" in source
     assert "No fallback values are being shown" in source
     assert "Event-Driven Toggles" not in source
     assert "Schedules &amp; Triggers" in source
+
+
+def test_metric_card_keeps_selectors_and_receives_authoritative_values() -> None:
+    component = (VIEW.parent / "AutomationMetricCard.tsx").read_text(encoding="utf-8")
+    source = VIEW.read_text(encoding="utf-8")
+    assert 'data-automation-metric={metricId}' in component
+    assert 'data-automation-metric={descriptionMetricId}' in component
+    assert 'karen-automation-card' in component
+    assert 'font-instrument break-words' in component
+    assert 'aria-hidden="true"' in component
+    for value in ("activeTasks", "tasksToday", "definedSequences", "nextJob", "nextJobTime"):
+        assert f"metric(stats?.{value})" in source
+    assert 'descriptionMetricId="tasks-today-context"' in source
+    assert 'descriptionMetricId="next-job-time"' in source
+    assert "tasksTodayTimezone" in source
+    assert "tasksTodayLocalDate" in source
+    assert "apiClient" not in component
+    assert "useAuth" not in component
