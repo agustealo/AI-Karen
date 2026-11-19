@@ -269,8 +269,7 @@ test('UX-13: advanced navigation is discoverable without overwhelming the first 
   const toggle = page.getByTestId('advanced-tools-toggle');
   const advanced = page.getByTestId('advanced-tools-content');
 
-  await expect(page.getByText('Start here')).toBeVisible();
-  await expect(page.getByText('Explore', { exact: true })).toBeVisible();
+  await expect(page.getByText('Workspace', { exact: true })).toBeVisible();
   await expect(page.getByText('Automations', { exact: true })).toBeVisible();
   await expect(page.getByText('Tools & plugins', { exact: true })).toBeVisible();
 
@@ -279,7 +278,7 @@ test('UX-13: advanced navigation is discoverable without overwhelming the first 
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(advanced).toBeVisible();
-  await expect(advanced.getByText('Tasks', { exact: true })).toBeVisible();
+  await expect(advanced.getByText('Agents', { exact: true })).toBeVisible();
   await expect(advanced.getByText('Cron Jobs', { exact: true })).toBeVisible();
 
   await captureEvidence(
@@ -288,7 +287,7 @@ test('UX-13: advanced navigation is discoverable without overwhelming the first 
     'UX-13',
     'Open authenticated dashboard and expand Advanced tools',
     'Core destinations visible; detailed routes discoverable but initially collapsed',
-    'Advanced tools expanded and Tasks / Cron Jobs became visible',
+    'Advanced tools expanded and Agents / Cron Jobs became visible',
   );
 });
 
@@ -303,7 +302,7 @@ test('UX-14: mobile navigation returns focus to the selected workspace', async (
   await trigger.click();
   const drawer = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
   await expect(drawer).toBeVisible();
-  await drawer.getByRole('button', { name: 'Messages & channels' }).click();
+  await drawer.getByRole('button', { name: 'Activity' }).click();
   await expect(drawer).toBeHidden({ timeout: 10_000 });
   await expect(page.getByTestId('workspace-scroll-region')).toBeVisible();
 
@@ -311,7 +310,7 @@ test('UX-14: mobile navigation returns focus to the selected workspace', async (
     page,
     testInfo,
     'UX-14',
-    'Open navigation on a 390px mobile viewport and choose Messages & channels',
+    'Open navigation on a 390px mobile viewport and choose Activity',
     'The mobile drawer closes and the workspace remains usable',
     'Mobile navigation drawer closed following a destination selection',
   );
@@ -330,8 +329,8 @@ test('UX-15: mobile sidebar reveals primary and advanced navigation', async ({
 
   const mobileNav = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
   await expect(mobileNav).toBeVisible();
-  await expect(mobileNav.getByText('Start here')).toBeVisible();
-  await expect(mobileNav.getByText('Messages & channels', { exact: true })).toBeVisible();
+  await expect(mobileNav.getByText('Workspace', { exact: true })).toBeVisible();
+  await expect(mobileNav.getByText('Activity', { exact: true })).toBeVisible();
   await expect(mobileNav.getByText('Tools & plugins', { exact: true })).toBeVisible();
 
   const advanced = mobileNav.getByTestId('advanced-tools-toggle');
