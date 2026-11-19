@@ -298,6 +298,7 @@ export default function TasksPage() {
     const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.delete(`/api/tasks/${taskId}`);
       if (principalRef.current !== actionPrincipal) return;
       void fetchLiveData();
@@ -315,6 +316,7 @@ export default function TasksPage() {
     const actionPrincipal = principal;
     try {
       const { apiClient } = await import('@/lib/api');
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.post(`/api/tasks/${taskId}/execute`, {});
       if (principalRef.current !== actionPrincipal) return;
       void fetchLiveData();
@@ -342,6 +344,7 @@ export default function TasksPage() {
     setToolReceiptsLoading(true);
     try {
       const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== actionPrincipal) return;
       const rows = await apiClient.get<GovernedToolReceipt[]>(
         `/api/tasks/${encodeURIComponent(task.id)}/tool-receipts?execution_id=${encodeURIComponent(task.executionId)}&limit=50`,
       );
@@ -370,6 +373,7 @@ export default function TasksPage() {
     setHistoryLoading(true);
     try {
       const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== actionPrincipal) return;
       const records = await apiClient.get<ReviewHistoryEntry[]>(
         `/api/tasks/${encodeURIComponent(taskId)}/reviews?limit=50`,
       );
@@ -419,6 +423,7 @@ export default function TasksPage() {
     const actionPrincipal = principal;
     try {
       const { apiClient } = await import("@/lib/api");
+      if (principalRef.current !== actionPrincipal) return;
       await apiClient.post(`/api/tasks/${encodeURIComponent(task.id)}/review`, {
         execution_id: task.executionId,
         decision,
