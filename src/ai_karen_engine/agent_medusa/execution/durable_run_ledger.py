@@ -336,13 +336,13 @@ class PostgresDurableRunLedger:
                         result = await session.execute(
                             text("""
                                 UPDATE agent_medusa_runs
-                                SET audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref)
+                                SET audit_event_ref = COALESCE(audit_event_ref, CAST(:audit_event_ref AS text))
                                 WHERE run_id = :run_id
                                   AND tenant_id = CAST(:tenant_id AS uuid)
                                   AND status = 'cancellation_requested'
                                   AND (
                                       audit_event_ref IS NULL
-                                      OR audit_event_ref = :audit_event_ref
+                                      OR audit_event_ref = CAST(:audit_event_ref AS text)
                                   )
                             """),
                             {
@@ -365,15 +365,15 @@ class PostgresDurableRunLedger:
                         SET status = 'cancellation_requested',
                             cancel_requested_at = COALESCE(cancel_requested_at, :event_at),
                             updated_at = :event_at,
-                            audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref),
+                            audit_event_ref = COALESCE(audit_event_ref, CAST(:audit_event_ref AS text)),
                             last_worker_transition_at = :event_at
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
                           AND status = 'running'
                           AND (
-                              :audit_event_ref IS NULL
+                              CAST(:audit_event_ref AS text) IS NULL
                               OR audit_event_ref IS NULL
-                              OR audit_event_ref = :audit_event_ref
+                              OR audit_event_ref = CAST(:audit_event_ref AS text)
                           )
                     """),
                     {
@@ -662,12 +662,12 @@ class PostgresDurableRunLedger:
                 result = await session.execute(
                     text("""
                         UPDATE agent_medusa_runs
-                        SET audit_event_ref = COALESCE(audit_event_ref, :audit_event_ref)
+                        SET audit_event_ref = COALESCE(audit_event_ref, CAST(:audit_event_ref AS text))
                         WHERE run_id = :run_id
                           AND tenant_id = CAST(:tenant_id AS uuid)
                           AND (
                               audit_event_ref IS NULL
-                              OR audit_event_ref = :audit_event_ref
+                              OR audit_event_ref = CAST(:audit_event_ref AS text)
                           )
                     """),
                     {
