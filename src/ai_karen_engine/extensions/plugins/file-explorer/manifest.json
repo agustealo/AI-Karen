@@ -1,0 +1,46 @@
+{
+  "id": "file-explorer",
+  "name": "file-explorer",
+  "plugin_id": "file-explorer",
+  "gui_manifest_version": "1.0",
+  "display_name": "File Explorer",
+  "version": "0.2.0",
+  "description": "Shared authorized file and folder picker; UI is unavailable until an authorized host provides a source snapshot.",
+  "category": "integration",
+  "entrypoint": "handler:MainExtension",
+  "capabilities": {
+    "provides_ui": true,
+    "provides_api": false,
+    "prompt_first": true
+  },
+  "ui": {
+    "hook_zones": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "File Explorer",
+        "icon": "folder-open",
+        "order": 35
+      }
+    ]
+  },
+  "rbac": {
+    "allowed_roles": [
+      "user",
+      "admin",
+      "developer"
+    ],
+    "default_enabled": false
+  },
+  "entry": {
+    "id": "file-explorer-main",
+    "default": true,
+    "entry_file": "FileExplorerPage.tsx"
+  },
+  "tags": [
+    "files",
+    "folders",
+    "shared-picker",
+    "read-only"
+  ],
+  "purpose": "Single reusable file and folder selection UI across authorized extensions."
+}
