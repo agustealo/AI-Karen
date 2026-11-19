@@ -77,6 +77,17 @@ async function checkGeometry(
   root: ReturnType<Page["getByTestId"]>,
   stacked: boolean,
 ): Promise<void> {
+  // Radix Sheet slides in from the right; avoid sampling its transformed
+  // bounding box before the real drawer has finished entering the viewport.
+  // Poll the actual geometry rather than sleeping or widening the tolerance.
+  await expect.poll(async () => root.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.left >= -1 &&
+      bounds.right <= document.documentElement.clientWidth + 1;
+  }), {
+    timeout: 5_000,
+    message: "Settings workspace must settle fully inside the viewport",
+  }).toBe(true);
   const geometry = await root.evaluate(element => {
     const nav = element.querySelector(".karen-settings-section-nav");
     const panel = element.querySelector(".karen-settings-active");
