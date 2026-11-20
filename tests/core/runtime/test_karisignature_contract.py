@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
