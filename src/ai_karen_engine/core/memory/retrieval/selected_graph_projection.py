@@ -43,15 +43,24 @@ def project_selected_memory_graph(
     seen_entities: set[str] = set()
     seen_events: set[str] = set()
     selected_provenance: dict[str, dict[str, Any]] = {}
+    ambiguous_receipt_ids: set[str] = set()
+    visible_memories = result.memories[:MAX_GRAPH_EVENTS]
+    selected_ids = {str(memory.id) for memory in visible_memories}
 
     for receipt in result.provenance:
         if not isinstance(receipt, Mapping):
             continue
         memory_id = receipt.get("memory_id")
-        if isinstance(memory_id, str) and memory_id:
-            selected_provenance[memory_id] = dict(receipt)
+        if not isinstance(memory_id, str) or memory_id not in selected_ids:
+            continue
+        # A conflicting or duplicate receipt must never upgrade a candidate
+        # into displayable evidence. Discard ambiguous entries fail-closed.
+        if memory_id in selected_provenance:
+            ambiguous_receipt_ids.add(memory_id)
+            continue
+        selected_provenance[memory_id] = dict(receipt)
 
-    for memory in result.memories[:MAX_GRAPH_EVENTS]:
+    for memory in visible_memories:
         metadata = memory.metadata
         if metadata is None:
             continue
@@ -59,6 +68,8 @@ def project_selected_memory_graph(
             continue
         memory_id = str(memory.id or "")
         receipt = selected_provenance.get(memory_id)
+        if memory_id in ambiguous_receipt_ids:
+            continue
         custom = metadata.custom
         if not memory_id or not receipt or not isinstance(custom, dict):
             continue
@@ -77,6 +88,8 @@ def project_selected_memory_graph(
             or provenance.get("graph_relationship") != "MENTIONS"
             or provenance.get("event_id") != memory_id
             or custom.get("graph_depth") != 1
+            or provenance.get("graph_depth") != 1
+            or custom.get("graph_relationship") not in (None, "MENTIONS")
         ):
             continue
         cue = provenance.get("matched_entity_cue")
