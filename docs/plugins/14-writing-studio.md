@@ -8,7 +8,7 @@
 
 **Writing Studio** is the first-class user/admin experience for acquiring, governing, testing, applying and evolving *communication identities* for individuals, businesses, clients, teams and authorized agents.
 
-**KariSignature** is the **proposed**, not yet brand-verified, name of the reusable underlying communication-style capability. It is not a voice-cloning system. Do not rename or replace the existing Persona, Memory, CORTEX, Agent or VoiceRuntime authorities in order to implement it. The temporary contract identifier `writing_style.v1` is intentionally brand-neutral pending naming approval.
+**KariSignature** is the product-owner-selected name for the reusable underlying communication-style capability; trademark clearance and production availability remain unverified. It is not a voice-cloning system. Do not rename or replace the existing Persona, Memory, CORTEX, Agent or VoiceRuntime authorities in order to implement it. The temporary contract identifier `writing_style.v1` is intentionally brand-neutral pending naming approval.
 
 A **communication identity** is a versioned, evidence-supported description of how an actor or organization expresses information: vocabulary, sentence structure, rhetorical patterns, register, tone, degree of formality, format, audience adaptation, accepted phrases, avoided phrases and explicit style rules. Its purpose is *expression*, not deciding what to say, what facts are true, what memory may be retrieved, what tools may run, or which provider executes.
 
