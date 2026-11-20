@@ -299,7 +299,7 @@ class NeuroRecall:
                 continue
             ledger_external_source = bool(
                 ledger_candidate
-                and graph_provenance["source_type"] not in {"chat", "conversation"}
+                and graph_provenance["source_type"] not in {"chat", "chat_user", "conversation"}
             )
             if ledger_external_source and not str(
                 graph_provenance.get("source_ref") or ""
