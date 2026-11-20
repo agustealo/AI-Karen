@@ -2039,6 +2039,8 @@ class ProviderRuntime:
                 "forbidden",
                 "403",
                 "authentication",
+                "authorization",
+                "bearer",
             )
         ):
             return "The provider rejected the credentials or API key."
