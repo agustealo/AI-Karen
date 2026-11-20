@@ -229,6 +229,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const [policy, setPolicy] = useState<DownloadPolicy | null>(null);
   const [channels, setChannels] = useState<DownloadChannel[]>([]);
   const [jobs, setJobs] = useState<DownloadJob[]>([]);
+  const [historyDegraded, setHistoryDegraded] = useState(false);
   const [accepted, setAccepted] = useState<Record<string, boolean>>({});
   const [downloadMethods, setDownloadMethods] = useState<Record<string, "hf_hub" | "direct_https">>({});
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -243,17 +244,28 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
     setState("loading");
     setProblem(null);
     try {
-      const [recommended, nextPolicy, channelResponse, nextJobs] = await Promise.all([
-        verifiedSetupResource("recommendations",
-          apiClient.get<RecommendationResponse>("/api/models/download/recommendations")),
-        verifiedSetupResource("policy",
-          apiClient.get<DownloadPolicy>("/api/models/download/policy")),
-        verifiedSetupResource("channels",
-          apiClient.get<DownloadChannelsResponse>("/api/models/download/channels")),
-        verifiedSetupResource("owned jobs",
-          apiClient.get<OwnedJobsResponse>("/api/runtime/model-library/my-downloads?limit=200")),
-      ]);
+      // Download history is duplicate/progress context, never an admission
+      // requirement. Critical setup resources fail the panel; a history
+      // outage only degrades duplicate detection and live progress tracking,
+      // because the backend itself still rejects duplicate active jobs.
+      const [recommendedResult, policyResult, channelResult, jobsResult] =
+        await Promise.allSettled([
+          verifiedSetupResource("recommendations",
+            apiClient.get<RecommendationResponse>("/api/models/download/recommendations")),
+          verifiedSetupResource("policy",
+            apiClient.get<DownloadPolicy>("/api/models/download/policy")),
+          verifiedSetupResource("channels",
+            apiClient.get<DownloadChannelsResponse>("/api/models/download/channels")),
+          verifiedSetupResource("owned jobs",
+            apiClient.get<OwnedJobsResponse>("/api/runtime/model-library/my-downloads?limit=200")),
+        ]);
       if (generation !== epoch.current) return;
+      if (recommendedResult.status === "rejected") throw recommendedResult.reason;
+      if (policyResult.status === "rejected") throw policyResult.reason;
+      if (channelResult.status === "rejected") throw channelResult.reason;
+      const recommended = recommendedResult.value;
+      const nextPolicy = policyResult.value;
+      const channelResponse = channelResult.value;
       if (!Array.isArray(recommended?.recommendations) ||
           !recommended.recommendations.every(isModelRecommendation)) {
         invalidSetupResource("recommendations");
@@ -268,8 +280,17 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
             typeof channel.effective_enabled === "boolean")) {
         invalidSetupResource("channels");
       }
-      if (nextJobs?.scope !== "authenticated_user" || !Array.isArray(nextJobs.jobs)) {
-        invalidSetupResource("owned jobs");
+      let nextJobs: DownloadJob[] = [];
+      let degradedHistory = false;
+      if (jobsResult.status === "fulfilled") {
+        const owned = jobsResult.value;
+        if (owned?.scope === "authenticated_user" && Array.isArray(owned.jobs)) {
+          nextJobs = owned.jobs;
+        } else {
+          degradedHistory = true;
+        }
+      } else {
+        degradedHistory = true;
       }
       const eligible = recommended.recommendations.filter((item) =>
         item.app_consumers.includes(pluginId),
@@ -277,10 +298,11 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       setItems(eligible);
       setPolicy(nextPolicy);
       setChannels(channelResponse.channels);
-      setJobs(nextJobs.jobs);
+      setJobs(nextJobs);
+      setHistoryDegraded(degradedHistory);
       // An owned active job must remain tracked after navigation or a reload.
       // Match only the current plugin's backend-verified immutable revision.
-      const resumed = nextJobs.jobs.find((job) =>
+      const resumed = degradedHistory ? null : nextJobs.find((job) =>
         JOB_ID.test(job.job_id) &&
         ACTIVE.has(job.status) &&
         eligible.some((item) =>
@@ -293,7 +315,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       ) ?? null;
       setTrackedJob((current) => {
         if (!current) return resumed;
-        const latest = nextJobs.jobs.find((job) => job.job_id === current.job_id);
+        const latest = degradedHistory ? null : nextJobs.find((job) => job.job_id === current.job_id);
         return latest &&
           latest.model_id === current.model_id &&
           latest.revision === current.revision &&
@@ -308,6 +330,7 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
       setPolicy(null);
       setChannels([]);
       setJobs([]);
+      setHistoryDegraded(false);
       setTrackedJob(null);
       setState("unavailable");
       setProblem(error instanceof ModelSetupDiagnosticError
@@ -365,7 +388,15 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
   const install = async (item: ModelRecommendation) => {
     const revision = item.resolved_revision;
     const channel = channels.find((entry) => entry.id === item.channel_id);
-    const downloadMethod = downloadMethods[item.id] || "hf_hub";
+    const allowedMethods: Array<"hf_hub" | "direct_https"> =
+      item.download_methods?.filter((value) =>
+        value === "hf_hub" || value === "direct_https",
+      ) ?? ["hf_hub"];
+    // Direct HTTPS is the proven, setup-free path for declared ungated
+    // pinned revisions; prefer it whenever the backend declares it, so a
+    // missing Hub configuration never blocks a verified public install.
+    const downloadMethod = downloadMethods[item.id] ||
+      (allowedMethods.includes("direct_https") ? "direct_https" : "hf_hub");
     if (!(item.download_methods || ["hf_hub"]).includes(downloadMethod)) return;
     const alreadyRunning = jobs.some((job) =>
       job.model_id === item.model_id && job.revision === revision &&
@@ -491,6 +522,14 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
         </Alert>
       )}
       {notice && <p role="status" className="text-sm">{notice}</p>}
+      {state === "ready" && historyDegraded && (
+        <p role="note" className="text-xs text-amber-700 dark:text-amber-300"
+          data-testid="download-history-degraded">
+          Your model download history could not be loaded. Installation still runs in
+          the audited worker, but duplicate-job detection and live progress are degraded
+          for this session. Use Refresh to restore tracking.
+        </p>
+      )}
       {state === "ready" && items.length === 0 && (
         <p role="status" className="text-sm text-muted-foreground">
           Karen has no curated downloadable model for this plugin. No model source has been guessed.
@@ -523,7 +562,8 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
           item.download_methods?.filter((value) =>
             value === "hf_hub" || value === "direct_https",
           ) ?? ["hf_hub"];
-        const selectedMethod = downloadMethods[item.id] || "hf_hub";
+        const selectedMethod = downloadMethods[item.id] ||
+          (availableMethods.includes("direct_https") ? "direct_https" : "hf_hub");
         const canQueue = !item.installed && !activeJob && !blocked && verified &&
           availableMethods.includes(selectedMethod) &&
           licenseAcknowledged(item, accepted) && busyId === null;
@@ -640,6 +680,13 @@ export function PluginRecommendedModels({ pluginId }: { pluginId: string }) {
                     </label>
                   </details>
                 )}
+                <p className="text-xs text-muted-foreground" data-testid="download-method-note">
+                  Method: {selectedMethod === "direct_https"
+                    ? "Direct HTTPS transfer of the pinned revision files — no Hub setup or token needed."
+                    : "Hugging Face Hub SDK transfer."}
+                  {availableMethods.length > 1 &&
+                    " Change it under Advanced download options."}
+                </p>
                 <Button type="button" size="sm" disabled={!canQueue}
                   onClick={() => void install(item)}>
                   {busyId === item.id ?

@@ -139,7 +139,7 @@ describe('Governed plugin model setup', () => {
       trust_remote_code: false,
       accept_license: true,
       pin: true,
-      download_method: 'hf_hub',
+      download_method: 'direct_https',
     });
     expect(await screen.findByText(/download job is queued/)).toBeTruthy();
   });
@@ -303,7 +303,7 @@ describe('Governed plugin model setup', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
-  it('rejects a download-history response without authenticated owner scope', async () => {
+  it('degrades without fabricating jobs when history scope is not the authenticated user', async () => {
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/api/models/download/recommendations') return catalog();
       if (url === '/api/models/download/policy') return policy;
@@ -314,7 +314,10 @@ describe('Governed plugin model setup', () => {
       throw new Error('Unexpected URL');
     });
     render(<PluginRecommendedModels pluginId="pocket-tts" />);
-    expect(await screen.findByText(/Your model download history returned an invalid response/)).toBeTruthy();
+    expect(await screen.findByTestId('download-history-degraded')).toBeTruthy();
+    // No tracked or listed jobs may be invented from a non-owner response.
+    expect(screen.queryByText(/download job is queued/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Download recommended model' })).toBeTruthy();
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
@@ -533,8 +536,7 @@ describe('Governed plugin model setup', () => {
     ['/api/models/download/recommendations', 'Recommended model catalog'],
     ['/api/models/download/policy', 'Model download policy'],
     ['/api/models/download/channels', 'Model download channels'],
-    ['/api/runtime/model-library/my-downloads?limit=200', 'Your model download history'],
-  ])('identifies a denied setup dependency without disclosing its response: %s', async (failedUrl, label) => {
+  ])('identifies a denied critical setup dependency without disclosing its response: %s', async (failedUrl, label) => {
     const previous = mocks.get.getMockImplementation();
     mocks.get.mockImplementation(async (url: string) => {
       if (url === failedUrl) {
@@ -548,6 +550,48 @@ describe('Governed plugin model setup', () => {
     expect(warning.textContent).not.toContain('PRIVATE_TOKEN_VALUE');
     expect(screen.queryByRole('button', { name: 'Download recommended model' })).toBeNull();
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('degrades to an installable panel when only the download history service is unavailable', async () => {
+    const previous = mocks.get.getMockImplementation();
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/api/runtime/model-library/my-downloads?limit=200') {
+        throw { status: 503, message: 'worker unavailable' };
+      }
+      return previous?.(url);
+    });
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+
+    // The critical catalog loaded, so the install path stays available with
+    // the proven direct-HTTPS method even while history is degraded.
+    expect(await screen.findByTestId('download-history-degraded')).toBeTruthy();
+    expect(screen.getByTestId('download-history-degraded').textContent)
+      .toContain('Installation still runs in the audited worker');
+    expect(screen.getByTestId('download-method-note').textContent)
+      .toContain('no Hub setup or token needed');
+
+    const download = screen.getByRole('button', { name: 'Download recommended model' });
+    expect(download.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(download);
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
+    expect(mocks.post).toHaveBeenNthCalledWith(2, '/api/models/download', {
+      model_id: recommendation.model_id, revision: null, validated_revision: PINNED,
+      channel_id: 'plugin_audio', include_patterns: recommendation.include_patterns,
+      exclude_patterns: [], trust_remote_code: false, accept_license: true,
+      pin: true, download_method: 'direct_https',
+    });
+    expect(await screen.findByText(/download job is queued/)).toBeTruthy();
+  });
+
+  it('keeps the Hub SDK default only when the backend does not declare direct transfer', async () => {
+    getImpl(catalog({ download_methods: ['hf_hub'] }));
+    render(<PluginRecommendedModels pluginId="pocket-tts" />);
+    await screen.findByText('Pocket TTS English 18.2M (REFL)');
+    expect(screen.queryByTestId('download-history-degraded')).toBeNull();
+    expect(screen.getByTestId('download-method-note').textContent)
+      .toContain('Hugging Face Hub SDK transfer');
+    expect(screen.getByTestId('download-method-note').textContent)
+      .not.toContain('no Hub setup or token needed');
   });
 
   it('reports a missing backend route without claiming model availability', async () => {
