@@ -108,6 +108,9 @@ export function useIntelligentSearch() {
   return {
     state,
     modeConfig: MODE_CONFIG[state.mode],
+    // The evidence workspace always reflects the completed request, never
+    // mutable draft mode controls. Retained tabs must not disappear on edits.
+    resultModeConfig: MODE_CONFIG[state.completedSearch?.mode ?? state.mode],
     setQuery,
     setMode,
     updateOptions,
