@@ -90,7 +90,9 @@ def test_runtime_is_the_explicit_platform_composition_boundary() -> None:
     assert "RedisSTMAdapter" in runtime
     assert runtime.count("RedisSTMAdapter()") == 1
     assert "self._stm =" in runtime
-    assert "self._build_neuro_recall(self._stm)" in runtime
+    assert "self._build_neuro_recall(" in runtime
+    assert "source_authorizer=source_authorizer" in runtime
+    assert "self._neuro_recall = recall_service or self._build_neuro_recall(" in runtime
     assert "self._build_formation_service(" in runtime
     assert "self._build_control_service()" in runtime
     assert "PostgresMemoryControlRepository" in runtime
