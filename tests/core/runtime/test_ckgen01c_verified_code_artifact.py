@@ -333,3 +333,99 @@ async def test_actual_agui_projection_keeps_live_card_but_journal_is_redacted():
     # The live stream is still the original inert, validated presentation.
     assert events[0]["value"]["data"]["code"] == CODE
 
+
+
+@pytest.mark.asyncio
+async def test_real_event_repository_accepts_fixed_withheld_marker(monkeypatch):
+    """Exercise repository admission, not only a mocked append method."""
+    import json
+    from unittest.mock import MagicMock
+    from ai_karen_engine.persistence.repositories import chat_run_repository as journal
+    from ai_karen_engine.persistence.repositories.chat_run_repository import (
+        ChatRunLease, SqlChatRunRepository,
+    )
+
+    lease = ChatRunLease(
+        execution_id="10000000-0000-4000-8000-000000000010",
+        lease_token="10000000-0000-4000-8000-000000000011",
+        tenant_id=TENANT,
+        user_id=USER,
+        conversation_id="10000000-0000-4000-8000-000000000012",
+        transport_run_id="run-code-display",
+        request_id="request-1",
+        correlation_id="trace-1",
+    )
+    recorded = []
+    async def execute(statement, params):
+        query = str(statement)
+        if "FROM public.runtime_chat_runs" in query and "FOR UPDATE" in query:
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                one_or_none=lambda: {
+                    "status": "running", "lease_token": lease.lease_token,
+                    "cancel_requested_at": None,
+                    "lease_expires_at": "still leased",
+                },
+            ))
+        if "SELECT 1" in query and "runtime_chat_runs" in query:
+            return SimpleNamespace(scalar_one_or_none=lambda: 1)
+        if "FROM public.runtime_chat_run_events" in query:
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                one=lambda: {
+                    "last_seq": 0, "bytes": 0,
+                    "terminal_count": 0, "recorded_count": 0,
+                },
+            ))
+        if "INSERT INTO public.runtime_chat_run_events" in query:
+            recorded.append(json.loads(params["event_payload"]))
+            return SimpleNamespace(scalar_one_or_none=lambda: 1)
+        raise AssertionError("Unexpected journal SQL")
+
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=execute)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        journal, "async_transaction_scope", lambda *args, **kwargs: session,
+    )
+    marker = {
+        "type": "CUSTOM",
+        "name": "karen.presentation.withheld.v1",
+        "value": {"reason": "revocable_code_not_replayable"},
+    }
+    sequence = await SqlChatRunRepository().append_projected_event(
+        lease, event=marker,
+    )
+    assert sequence == 1
+    assert recorded == [marker]
+    assert CODE not in repr(recorded)
+    assert ARTIFACT not in repr(recorded)
+
+
+@pytest.mark.asyncio
+async def test_event_repository_rejects_withheld_marker_payload_injection(monkeypatch):
+    from ai_karen_engine.persistence.repositories import chat_run_repository as journal
+    from ai_karen_engine.persistence.repositories.chat_run_repository import (
+        SqlChatRunRepository,
+    )
+
+    monkeypatch.setattr(
+        journal, "async_transaction_scope",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Invalid marker must not open DB")
+        ),
+    )
+    invalid = [
+        {"type": "CUSTOM", "name": "karen.presentation.withheld.v1",
+         "value": {"reason": "revocable_code_not_replayable", "code": CODE}},
+        {"type": "CUSTOM", "name": "karen.presentation.withheld.v1",
+         "value": {"reason": "revocable_code_not_replayable"},
+         "data": {"code": CODE}},
+        {"type": "CUSTOM", "name": "karen.presentation.withheld.v1",
+         "value": {"reason": "fabricated"}},
+    ]
+    for event in invalid:
+        with pytest.raises(ValueError, match="invalid_chat_projection_withheld_marker"):
+            await SqlChatRunRepository().append_projected_event(
+                SimpleNamespace(conversation_id="thread", transport_run_id="run"),
+                event=event,
+            )
