@@ -111,9 +111,11 @@ def project_selected_memory_graph(
             seen_entities.add(entity_node)
             nodes.append({
                 "id": entity_node,
-                "kind": "entity",
+                "kind": "entity_cue",
                 "label": cue,
-                "verification_state": "source_matched",
+                # Retrieval cues may be unresolved text. Never claim a
+                # canonical identity or verified source entity here.
+                "verification_state": "retrieval_cue",
             })
         edges.append({
             "id": _opaque_id("edge", request.tenant_id, request.user_id, f"{event_node}\0{entity_node}"),
