@@ -3463,7 +3463,7 @@ class ChatRuntime:
             and item.get("role") == "user"
             and isinstance(item.get("content"), str)
         ), "")
-        if not re.search(r"\\b(?:chart|bar graph|bar chart|graph)\\b", latest_prompt, re.I):
+        if not re.search(r"\b(?:chart|bar graph|bar chart|graph)\b", latest_prompt, re.I):
             return None
 
         observed = ChatRuntime._verified_weather_presentation(
