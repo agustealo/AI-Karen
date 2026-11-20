@@ -3,8 +3,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 _OWNER_CODE_ARTIFACT_COMMAND = re.compile(
-    r"^(?:please\\s+)?(?:show|view|display)\\s+"
-    r"(?:me\\s+)?my\\s+code\\s+artifact\\s+"
+    r"^(?:please\s+)?(?:show|view|display)\s+"
+    r"(?:me\s+)?my\s+code\s+artifact\s+"
     r"(?P<artifact_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
     r"[0-9a-f]{4}-[0-9a-f]{12})[?!.]*$",
     re.IGNORECASE,
