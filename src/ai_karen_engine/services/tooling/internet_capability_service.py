@@ -742,6 +742,13 @@ class InternetCapabilityService:
                     })
                     fetched_urls.add(discovered["url"])
         results = self._build_results(processed_chunks)
+        # Read-only provenance projection over this already-authorized response.
+        # Never treat the resulting graph as persisted memory or inferred claims.
+        from ai_karen_engine.services.search.evidence_graph_projection import (
+            project_search_evidence_graph,
+        )
+
+        evidence_graph = project_search_evidence_graph(sources, results)
         citations = self._generate_citations(crawl_results, processed_chunks)
         diagnostics = self._build_diagnostics(
             mode=mode,
@@ -797,6 +804,7 @@ class InternetCapabilityService:
                 warnings=list(warnings),
             ),
             "sources": sources or [],
+            "evidenceGraph": evidence_graph,
             "citations": citations or [],
             "results": results or [],
             "extractedData": aggregated_extracted_data or None,
