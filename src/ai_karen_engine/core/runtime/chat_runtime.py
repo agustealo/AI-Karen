@@ -1777,10 +1777,10 @@ class ChatRuntime:
             and isinstance(structured.get("presentation"), dict)
             and structured["presentation"].get("component_type") == "code.artifact"
         ):
-            durable["structured_content"] = {
-                key: value for key, value in structured.items()
-                if key != "presentation"
-            }
+            # Even a residual status inside structured_content would look
+            # like unauthenticated rich history to the owned-history projector.
+            # A revocable live code view must persist as plain text only.
+            durable.pop("structured_content", None)
             durable.pop("verified_presentations_v1", None)
             durable.pop("presentation_replay_incomplete", None)
         return durable
