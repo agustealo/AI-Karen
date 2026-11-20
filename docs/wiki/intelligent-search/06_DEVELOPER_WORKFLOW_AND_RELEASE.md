@@ -54,7 +54,7 @@ npx playwright test tests/e2e/intelligent-search.spec.ts tests/e2e/intelligent-s
 
 If a test file/path is absent on the checked-out revision, adjust to the actual test tree and record why. Repository CI is authoritative for configured gates; commands above establish local checks but never replace exact-head job receipts.
 
-**Current development slice tests:** Merged #1118 adds `tests/e2e/intelligent-search-research-continuity.spec.ts`; open #1119 adds `tests/e2e/intelligent-search-evidence-graph.spec.ts` and `tests/services/test_search_evidence_graph_projection.py`. The #1118 continuity test is on the current mainline. Run #1119 graph tests only on branches containing them or after its merge.
+**Current development slice tests:** Merged #1118 adds `tests/e2e/intelligent-search-research-continuity.spec.ts`; merged #1119 adds `tests/e2e/intelligent-search-evidence-graph.spec.ts` and `tests/services/test_search_evidence_graph_projection.py`. Both are now in the mainline; the real authenticated search-host acceptance gate remains separate.
 
 ## 4. Contract test matrix
 
@@ -92,7 +92,7 @@ If a test file/path is absent on the checked-out revision, adjust to the actual 
 7. Merge only when required checks are green and review gates cleared; use expected SHA to prevent racing.
 8. Verify post-merge mainline checks and, separately, authenticated deployment readiness. No “consumer ready” claim without target-host proof.
 
-**Development update (2026-11-20):** PR #1117 architecture contract and PR #1118 search continuity are merged into `main` (#1118 squash commit `be559566bdb8bab0d67c868d4a156fa0f40ac21c`). PR #1119 evidence graph remains open and its reconciliation head `0eb0e1b7dcab076d259dc113afa723e2e6216075` requires fresh exact-head CI. Review GitHub live before relying on this snapshot.
+**Development update (2026-11-20):** PR #1117 architecture contract and PR #1118 search continuity are merged into `main` (#1118 squash commit `be559566bdb8bab0d67c868d4a156fa0f40ac21c`). PR #1119 evidence graph has merged at `9b956d892a8f4773c0173a7773af74d23ad0eb33` after green exact-head CI. Review GitHub live before relying on this snapshot.
 
 ## 7. Failures and incident triage
 
