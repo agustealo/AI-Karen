@@ -371,6 +371,29 @@ describe("KGUI-02 governed chart and code host presentation", () => {
       ...unicodeCode.data, filename: "📊".repeat(81),
     } })).toBeNull();
   });
+  it("aligns Unicode whitespace and duplicate detection with backend chart normalization", () => {
+    const bomChart = { ...chart, data: {
+      title: "\\uFEFFOrders\\uFEFF", x_label: " Month ",
+      y_label: "\\uFEFFCount", points: [
+        { label: "\\uFEFFJan", value: 1 },
+        { label: "Feb", value: 2 },
+      ],
+    } };
+    expect(parseKarenPresentation(bomChart)).not.toBeNull();
+    for (const field of ["title", "x_label", "y_label"] as const) {
+      expect(parseKarenPresentation({ ...bomChart, data: {
+        ...bomChart.data, [field]: "\\uFEFF",
+      } })).toBeNull();
+    }
+    expect(parseKarenPresentation({ ...bomChart, data: {
+      ...bomChart.data, points: [{ label: "\\uFEFFJan", value: 1 }, { label: "Jan", value: 2 }],
+    } })).toBeNull();
+    for (const label of ["\\u0085", "\\u001c"]) {
+      expect(parseKarenPresentation({ ...bomChart, data: {
+        ...bomChart.data, points: [{ label, value: 1 }],
+      } })).not.toBeNull();
+    }
+  });
   it("rejects unverified chart values and action injection", () => {
     for (const value of [NaN, Infinity, -1, 1_000_000_001, true, "12"]) {
       expect(parseKarenPresentation({ ...chart, data: {
