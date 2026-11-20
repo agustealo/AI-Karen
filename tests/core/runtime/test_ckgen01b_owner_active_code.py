@@ -42,7 +42,7 @@ def _store(*, returned=SOURCE, row_changes=None):
     bucket = MagicMock()
     bucket.download.return_value = returned
     storage = SimpleNamespace(storage=SimpleNamespace(from_=lambda _name: bucket))
-    store = SupabaseArtifactStore(AsyncMock(return_value=session), storage)
+    store = SupabaseArtifactStore(MagicMock(return_value=session), storage)
     return store, session, bucket
 
 
