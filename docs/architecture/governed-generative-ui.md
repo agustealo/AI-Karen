@@ -165,3 +165,26 @@ execution. This is a **source-only renderer/schema slice**: no producer or
 plugin is entitled to create factual data by declaring a component type.
 Actual source-producer wiring, browser replay and installed renderer health
 remain separate acceptance gates.
+
+## CK-GEN-01A: Measured Fahrenheit high/low chart producer
+
+The existing `ChatRuntime._verified_weather_chart_presentation` can render a
+`chart.bar` only for an explicit user request for a chart/graph and an
+already-authorized, successful non-degraded `search.weather` tool/plugin
+receipt. It reuses the canonical verified weather observation and exactly its
+runtime-issued evidence reference, and admits only simultaneously reported
+numeric `high_f` and `low_f` values with `0 <= low <= high <= 150`.
+The `chart.bar` primitive cannot represent subzero bars; such observations
+fall back to the existing weather card rather than silently changing units,
+clamping values, or inventing a visual comparison. No generalized numeric
+search/chart source or code-artifact producer is enabled by this slice.
+
+The existing runtime stream capture, completed-run transcript persistence,
+attested owned-history projection and CopilotKit verified history renderer remain
+the only execution and replay paths. Tests are in
+`tests/core/runtime/test_verified_weather_chart_presentation.py`.
+
+**Source-only, not consumer certified:** This producer does not claim a
+successful authenticated deployed weather query, restart/relogin replay,
+accessible real-browser rendering, or production code-artifact provenance.
+Complete those acceptance gates separately before calling this consumer-ready.
