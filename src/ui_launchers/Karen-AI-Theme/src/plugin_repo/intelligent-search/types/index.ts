@@ -223,6 +223,10 @@ export interface IntelligentSearchState {
   isLoading: boolean;
   error: Error | null;
   response: IntelligentSearchResponse | null;
+  /** Last successful request, never inferred from editable form fields. */
+  completedSearch?: { query: string; mode: SearchModeId } | null;
+  /** True when visible evidence belongs to a previous request configuration. */
+  isResultsStale?: boolean;
 }
 
 // Aliases for backward compatibility if needed, but primary naming is now IntelligentSearch
