@@ -197,6 +197,50 @@ class VoiceModalityDeclaration(BaseModel):
         return value
 
 
+class GenerativePresentationDeclaration(BaseModel):
+    """Bounded host-rendered presentation vocabulary; never an execution grant.
+
+    Existing canonical presentation contracts govern schemas and evidence.
+    This declaration cannot register arbitrary frontend code, grant tool
+    execution, or mark any renderer healthy or enabled for a particular user.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: str = Field(default="1.0.0", pattern=SEMVER_PATTERN)
+    component_types: List[str] = Field(min_length=1, max_length=8)
+    surfaces: List[str] = Field(default_factory=lambda: ["chat"], min_length=1, max_length=2)
+    interaction_mode: str = "read_only"
+
+    @field_validator("component_types")
+    @classmethod
+    def validate_component_types(cls, value: List[str]) -> List[str]:
+        # Match the existing canonical presentation contract. Future
+        # renderers must be admitted there first, not via a plugin manifest.
+        supported = {
+            "weather.observation", "weather.comparison", "planner.task_list",
+            "time.observation", "date.observation", "surface.composition",
+            "search.results", "data.table",
+        }
+        if len(value) != len(set(value)) or not set(value) <= supported:
+            raise ValueError("Unsupported or duplicate host presentation type")
+        return value
+
+    @field_validator("surfaces")
+    @classmethod
+    def validate_surfaces(cls, value: List[str]) -> List[str]:
+        if len(value) != len(set(value)) or not set(value) <= {"chat", "workspace"}:
+            raise ValueError("Unsupported or duplicate presentation surface")
+        return value
+
+    @field_validator("interaction_mode")
+    @classmethod
+    def validate_interaction_mode(cls, value: str) -> str:
+        if value != "read_only":
+            raise ValueError("Presentation declaration cannot grant interactions")
+        return value
+
+
 class ExtensionCapabilities(BaseModel):
     """Extension capability declarations."""
 
@@ -206,6 +250,7 @@ class ExtensionCapabilities(BaseModel):
     provides_webhooks: bool = False
     communication_channel: Optional[CommunicationChannelDeclaration] = None
     voice_modality: Optional[VoiceModalityDeclaration] = None
+    generative_presentations: Optional[GenerativePresentationDeclaration] = None
     prompt_first: bool = True
     allowed_prompt_overrides: List[str] = Field(default_factory=list)
 
