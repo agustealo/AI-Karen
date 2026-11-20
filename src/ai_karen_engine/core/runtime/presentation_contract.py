@@ -9,6 +9,22 @@ from collections.abc import Mapping
 from typing import Any
 
 
+# Match ECMAScript String.prototype.trim() for chart metadata. Python's default
+# strip() disagrees on U+FEFF and on certain C0/NEL control characters.
+_CHART_JS_WHITESPACE = (
+    "\\u0009\\u000a\\u000b\\u000c\\u000d\\u0020\\u00a0\\u1680"
+    "\\u2000\\u2001\\u2002\\u2003\\u2004\\u2005\\u2006"
+    "\\u2007\\u2008\\u2009\\u200a\\u2028\\u2029\\u202f"
+    "\\u205f\\u3000\\ufeff"
+)
+
+
+def _trim_chart_text(value: str) -> str:
+    """Apply the host's exact JavaScript trim whitespace set."""
+    return value.strip(_CHART_JS_WHITESPACE)
+
+
+
 def validate_presentation(raw: Any) -> dict[str, Any] | None:
     """Allow only bounded, JSON-native, evidence-referenced UI envelopes.
 
@@ -144,7 +160,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             return None
         for field in ("title", "x_label", "y_label"):
             value = data[field]
-            if not isinstance(value, str) or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in value.strip()) <= 160:
+            if not isinstance(value, str) or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in _trim_chart_text(value)) <= 160:
                 return None
         unit = data.get("unit")
         if unit is not None and (not isinstance(unit, str) or sum(2 if ord(ch) > 0xFFFF else 1 for ch in unit) > 32):
@@ -158,14 +174,14 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             if not isinstance(point, dict) or set(point) != {"label", "value"}:
                 return None
             label, number = point["label"], point["value"]
-            if (not isinstance(label, str) or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in label.strip()) <= 80
-                or label.strip() in seen or type(number) not in (int, float)
+            if (not isinstance(label, str) or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in _trim_chart_text(label)) <= 80
+                or _trim_chart_text(label) in seen or type(number) not in (int, float)
                 or not 0 <= number <= 1_000_000_000 or not math.isfinite(number)):
                 return None
-            seen.add(label.strip())
-            safe_points.append({"label": label.strip(), "value": number})
+            seen.add(_trim_chart_text(label))
+            safe_points.append({"label": _trim_chart_text(label), "value": number})
         safe = {key: value for key, value in raw.items() if key != "data"}
-        safe["data"] = {key: data[key].strip() for key in ("title", "x_label", "y_label")}
+        safe["data"] = {key: _trim_chart_text(data[key]) for key in ("title", "x_label", "y_label")}
         if unit is not None:
             safe["data"]["unit"] = unit
         safe["data"]["points"] = safe_points
