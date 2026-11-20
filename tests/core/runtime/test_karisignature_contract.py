@@ -64,9 +64,7 @@ async def test_current_approved_style_uses_existing_persona_prompt_sanitizer():
     assert result.revision_id == REVISION
     assert result.revision_number == 3
     assert result.content_digest == KariSignatureRevision.digest(EXPRESSION)
-    existing.read_current_published.assert_awaited_once_with(
-        tenant_id=TENANT, profile_id=PROFILE,
-    )
+    existing.read_current_published.assert_awaited_once_with(request=request())
     existing.authorize_use.assert_awaited_once()
     assert "system_prompt" not in result.presentation
     assert "tools" not in result.presentation
