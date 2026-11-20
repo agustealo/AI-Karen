@@ -408,6 +408,22 @@ class CortexExecutionDecider:
                 memory_policy["write_requested"] = False
                 memory_policy["recall_required"] = False
 
+            if capability_decision.intent == "artifact.code.read":
+                # Viewing one's existing code is not code execution, shell
+                # access, file mutation, search or an agent workflow. ML and
+                # heuristic tool hints cannot widen this owner-only read.
+                # RuntimePolicy may still deny the request on security risk.
+                topology["tool_requirements"] = []
+                topology["plugin_candidates"] = []
+                topology["agent_delegation"] = False
+                topology["requires_parallel_execution"] = False
+                topology["requires_resumability"] = False
+                capabilities["required"] = ["artifact.code.read"]
+                workflow = {"required": False, "workflow_id": None}
+                reasoning_modes = []
+                memory_policy["write_requested"] = False
+                memory_policy["recall_required"] = False
+
             return {
                 "intent": (
                     capability_decision.intent
