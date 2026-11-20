@@ -9,6 +9,9 @@ import base64
 import binascii
 import io
 import json
+import hashlib
+import hmac
+import re
 import uuid
 import logging
 import time
@@ -22,6 +25,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
     Artifact,
     ArtifactStore,
     ArtifactUploadRequest,
+    VerifiedArtifactText,
     RepositoryResult,
 )
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
@@ -147,6 +151,117 @@ class SupabaseArtifactStore(ArtifactStore):
         except Exception as exc:
             logger.error("download failed: %s", exc)
             return RepositoryResult(success=False, error=str(exc))
+
+    @instrument_repository(operation="read_owner_active_code", repository="SupabaseArtifactStore")
+    async def read_owner_active_code(
+        self, artifact_id: str, tenant_id: str, user_id: str
+    ) -> RepositoryResult[VerifiedArtifactText]:
+        """Read an inert, owner-owned active code artifact under a row lock.
+
+        The metadata lock serializes archive/delete updates against this read.
+        Storage bytes are never returned unless their digest, UTF-8 encoding,
+        filename, media type and presentation size all match the DB record.
+        No transport-facing mutation or executable representation is created.
+        """
+        unavailable = "artifact_code_unavailable"
+        try:
+            identity = (artifact_id, tenant_id, user_id)
+            if any(
+                not isinstance(value, str)
+                or str(uuid.UUID(value)) != value
+                for value in identity
+            ):
+                return RepositoryResult(success=False, error=unavailable)
+        except (ValueError, TypeError, AttributeError):
+            return RepositoryResult(success=False, error=unavailable)
+
+        try:
+            async with await self._session() as session:
+                statement = text(
+                    "SELECT file_id, tenant_id, owner_user_id, name, mime_type, "
+                    "bytes, storage_uri, sha256 FROM files "
+                    "WHERE file_id = :file_id AND tenant_id = :tenant_id "
+                    "AND owner_user_id = :user_id AND deleted_at IS NULL "
+                    "FOR SHARE"
+                )
+                record = await session.execute(statement, {
+                    "file_id": artifact_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                })
+                row = record.fetchone()
+                if row is None:
+                    return RepositoryResult(success=False, error=unavailable)
+
+                filename = row.name
+                mime_type = row.mime_type
+                size_bytes = row.bytes
+                expected_sha = row.sha256
+                storage_uri = row.storage_uri
+                if (
+                    not isinstance(filename, str)
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", filename)
+                    or filename in {".", ".."}
+                    or not filename.lower().endswith((
+                        ".py", ".js", ".ts", ".tsx", ".jsx", ".json",
+                        ".css", ".sql", ".sh", ".rs", ".go", ".java",
+                        ".c", ".h", ".cpp", ".hpp", ".md", ".txt",
+                    ))
+                    or mime_type not in {
+                        "text/plain", "text/x-python", "text/javascript",
+                        "application/javascript", "application/json",
+                        "text/typescript", "text/x-typescript",
+                        "text/css", "text/x-sql", "text/x-shellscript",
+                        "text/markdown",
+                    }
+                    or type(size_bytes) is not int
+                    or not 1 <= size_bytes <= 32768
+                    or not isinstance(expected_sha, str)
+                    or re.fullmatch(r"[a-f0-9]{64}", expected_sha) is None
+                    or not isinstance(storage_uri, str)
+                    or storage_uri != (
+                        f"supabase://artifacts/{tenant_id}/{artifact_id}/{filename}"
+                    )
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+
+                # The row remains locked until this method returns. No archived
+                # or cross-owner artifact can become an eligible code view.
+                downloaded = self._bucket().download(
+                    f"{tenant_id}/{artifact_id}/{filename}"
+                )
+                if (
+                    not isinstance(downloaded, bytes)
+                    or len(downloaded) != size_bytes
+                    or not hmac.compare_digest(
+                        hashlib.sha256(downloaded).hexdigest(), expected_sha
+                    )
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+                source = downloaded.decode("utf-8", errors="strict")
+                if (
+                    not source
+                    or sum(2 if ord(ch) > 0xFFFF else 1 for ch in source) > 12000
+                    or any(ord(ch) < 32 and ch not in "\n\r\t" for ch in source)
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+
+                return RepositoryResult(success=True, data=VerifiedArtifactText(
+                    artifact_id=artifact_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    filename=filename,
+                    mime_type=mime_type,
+                    sha256=expected_sha,
+                    text=source,
+                ))
+        except (UnicodeError, ValueError, TypeError, OverflowError):
+            return RepositoryResult(success=False, error=unavailable)
+        except Exception as exc:
+            logger.warning("Owner-scoped active code artifact read failed", extra={
+                "error_type": type(exc).__name__,
+            })
+            return RepositoryResult(success=False, error=unavailable)
 
     @instrument_repository(operation="get_metadata", repository="SupabaseArtifactStore")
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> RepositoryResult[Optional[Artifact]]:
