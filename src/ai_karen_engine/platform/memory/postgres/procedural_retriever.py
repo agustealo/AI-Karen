@@ -68,8 +68,6 @@ class PostgresProceduralRecallRetriever:
             (row, source_type, source_ref)
             for row, source_type, source_ref in rows
             if self._matches(row, query_text)
-            and row.source_type == source_type
-            and row.source_ref == source_ref
         ]
         return [
             self._entry(row, query, source_type, source_ref)
