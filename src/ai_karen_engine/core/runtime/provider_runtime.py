@@ -652,7 +652,7 @@ class ProviderRuntime:
                         fallback_level=decision.fallback_level + i,
                         degraded_mode=True,
                         degradation_type="provider_fallback",
-                        degradation_reason=f"primary_failed: {str(exc)}",
+                        degradation_reason=f"primary_failed:{type(exc).__name__}",
                         latency_ms=latency_ms,
                         correlation_id=correlation_id,
                         provider_attempts=provider_attempts,
@@ -1673,8 +1673,8 @@ class ProviderRuntime:
             )
             return final_text
         except Exception as degraded_error:
-            logger.exception(
-                "Failed to generate degraded mode response: %s", degraded_error
+            logger.error(
+                "Failed to prepare degraded mode response (%s)", type(degraded_error).__name__
             )
 
         return None
@@ -1723,7 +1723,7 @@ class ProviderRuntime:
                 "model": requested_model,
                 "status": "failed",
                 "error_type": "requested_provider_failure",
-                "error_message": failure_reason,
+                "error_message": self._safe_error_detail(failure_reason),
                 "latency_ms": 0.0,
             }
         ]
@@ -1854,7 +1854,7 @@ class ProviderRuntime:
                                 response_source="live_model",
                                 fallback_level=fallback_level,
                                 degraded_mode=True,
-                                degradation_reason=failure_reason,
+                                degradation_reason=self._safe_error_detail(failure_reason),
                                 success=True,
                             )
                         except Exception as metrics_error:
@@ -1870,7 +1870,7 @@ class ProviderRuntime:
                         source="runtime_fallback",
                         degraded_mode=True,
                         fallback_level=fallback_level,
-                        degradation_reason=failure_reason,
+                        degradation_reason=self._safe_error_detail(failure_reason),
                         used_fallback=True,
                         provider_health=provider_info,
                         provider_attempts=provider_attempts,
@@ -1988,7 +1988,7 @@ class ProviderRuntime:
             extra={
                 "requested_provider": requested_provider,
                 "attempted_providers": [item["provider"] for item in provider_attempts],
-                "failure_reason": failure_reason,
+                "failure_reason": self._safe_error_detail(failure_reason),
             }
         )
 
@@ -2016,7 +2016,7 @@ class ProviderRuntime:
                     "used_fallback": True,
                     "fallback_from": requested_provider,
                     "fallback_level": 99,
-                    "degradation_reason": failure_reason,
+                    "degradation_reason": self._safe_error_detail(failure_reason),
                     "fallback_chain": list(RUNTIME_DEGRADED_FALLBACK_ORDER),
                     "attempted_providers": [item["provider"] for item in provider_attempts],
                     "provider_attempts": provider_attempts,
