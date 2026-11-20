@@ -17,6 +17,6 @@ The wiki includes:
 - [SR-01 consumer release](CONSUMER_RELEASE_SR01.md), **RED until authenticated real deployment acceptance**
 - [Historical plugin completion report](../INTELLIGENT_SEARCH_COMPLETION.md), **not proof of current deployed route, live provider or consumer readiness**
 
-**Baseline:** `main@f9ff898f036b071d38bee9fafe43cf458e2e2bd4`, 2026-11-20. PR #1118 and #1119 are tracked as open in the wiki snapshot. Refresh GitHub live before making claims about PR/check/merge status.
+**Baseline:** `main@9b956d892a8f4773c0173a7773af74d23ad0eb33`, 2026-11-20. PR #1118 and #1119 have both merged; this docs PR remains pending exact-head validation. Refresh GitHub live before making claims about PR/check/merge status.
 
 Update the wiki and its evidence matrix in the same PR whenever search mode semantics, runtime routing, API shapes, graph schema, plugin packaging, provider policy, UI states or release requirements change.
