@@ -624,3 +624,100 @@ async def test_graph_source_verification_errors_fail_closed_without_exposing_sec
     assert result.memories == ()
     assert "secret grant token" not in str(result.source_health)
     assert "secret grant token" not in str(result.provenance)
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_manager_composes_explicit_source_authorizer(monkeypatch):
+    """A trusted composition-edge verifier reaches real NeuroRecall selection."""
+    from ai_karen_engine.core.memory.memory_runtime_manager import MemoryRuntimeManager
+
+    external = _graph_candidate(
+        "runtime-source-event", source_type="web", source_ref="external-1"
+    )
+    decisions = []
+
+    class _LiveAuthorizer:
+        def __init__(self):
+            self.allowed = False
+
+        async def authorize(self, memory, request):
+            decisions.append((memory.id, request.tenant_id, request.user_id))
+            return self.allowed
+
+    verifier = _LiveAuthorizer()
+
+    def _compose(stm, *, source_authorizer=None):
+        assert stm is not None
+        return NeuroRecall(
+            _FakeRetriever([external]), source_authorizer=source_authorizer
+        )
+
+    monkeypatch.setattr(MemoryRuntimeManager, "_build_neuro_recall", staticmethod(_compose))
+    manager = MemoryRuntimeManager(
+        stm=object(),
+        formation_service=object(),
+        control_service=object(),
+        shadow_evaluator=object(),
+        formation_evaluator=object(),
+        source_authorizer=verifier,
+    )
+
+    denied = await manager.recall_context(
+        user_id="user-1", tenant_id="tenant-1", query="external source"
+    )
+    assert denied["results"] == []
+    assert denied["provenance"] == []
+
+    verifier.allowed = True
+    allowed = await manager.recall_context(
+        user_id="user-1", tenant_id="tenant-1", query="external source"
+    )
+    assert [entry["id"] for entry in allowed["results"]] == ["runtime-source-event"]
+    assert decisions == [
+        ("runtime-source-event", "tenant-1", "user-1"),
+        ("runtime-source-event", "tenant-1", "user-1"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_memory_runtime_manager_without_source_authorizer_stays_fail_closed(monkeypatch):
+    from ai_karen_engine.core.memory.memory_runtime_manager import MemoryRuntimeManager
+
+    external = _graph_candidate(
+        "unverified-runtime-source", source_type="plugin", source_ref="resource-1"
+    )
+
+    def _compose(stm, *, source_authorizer=None):
+        assert source_authorizer is None
+        return NeuroRecall(
+            _FakeRetriever([external]), source_authorizer=source_authorizer
+        )
+
+    monkeypatch.setattr(MemoryRuntimeManager, "_build_neuro_recall", staticmethod(_compose))
+    manager = MemoryRuntimeManager(
+        stm=object(),
+        formation_service=object(),
+        control_service=object(),
+        shadow_evaluator=object(),
+        formation_evaluator=object(),
+    )
+    result = await manager.recall_context(
+        user_id="user-1", tenant_id="tenant-1", query="external source"
+    )
+    assert result["results"] == []
+    assert result["provenance"] == []
+
+
+def test_memory_runtime_manager_rejects_missing_or_conflicting_source_authority():
+    from ai_karen_engine.core.memory.memory_runtime_manager import MemoryRuntimeManager
+
+    with pytest.raises(TypeError, match="source_authorizer"):
+        MemoryRuntimeManager(source_authorizer=object())
+    with pytest.raises(ValueError, match="cannot be combined"):
+        MemoryRuntimeManager(
+            recall_service=_FakeRetriever([]),
+            source_authorizer=type(
+                "_Authorizer", (),
+                {"authorize": lambda self, memory, request: True},
+            )(),
+        )
