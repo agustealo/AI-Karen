@@ -28,7 +28,7 @@ Evidence states are distinct:
 
 In `InternetCapabilityService._build_sources`, fetched-source records set `evidence_level: fetched_page`; discovery-only rows can survive with empty content and must not be upgraded to fetched. Large documents expose `article_preview` rather than `full_content`, and `article_complete` must remain accurate.
 
-PR #1119 proposes `evidenceGraph` as read-only `source` / `passage` nodes with `DERIVED_FROM` edges. Only exact matching fetched URLs produce those edges. This **does not** certify semantic, temporal, identity or causal relations and cannot substitute for server-governed cognitive graph traversal.
+Merged PR #1119 provides `evidenceGraph` as read-only `source` / `passage` nodes with `DERIVED_FROM` edges. Only exact matching fetched URLs produce those edges. This **does not** certify semantic, temporal, identity or causal relations and cannot substitute for server-governed cognitive graph traversal.
 
 ## 4. Prompt injection defenses
 
