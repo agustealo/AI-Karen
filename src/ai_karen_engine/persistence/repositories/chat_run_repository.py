@@ -313,7 +313,8 @@ class SqlChatRunRepository:
         if event_type == "CUSTOM" and (
             not isinstance(event.get("name"), str)
             or event.get("name") not in {
-            "karen.presentation.v1", "karen.execution_receipt.v1",
+            "karen.presentation.v1", "karen.presentation.withheld.v1",
+            "karen.execution_receipt.v1",
             "karen.response_integrity.v1", "karen.citations",
             "karen.agent_step", "karen.tool_activity", "karen.learning_decision",
             "karen.approval_required", "karen.status", "karen.warning",
