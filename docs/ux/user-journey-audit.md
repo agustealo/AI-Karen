@@ -109,3 +109,12 @@ The default generic Playwright config uses `KAREN_BASE_URL` and saves failure sc
 ### Explicit limitations of this audit pass
 
 The repository was inspected, but no authenticated browser was launched against a live Karen deployment for this report. Therefore every journey above remains **NOT RUN**. There is no new screenshot, no measured pass rate, and no evidence of current broken behavior from this pass. Existing screenshots remain historical, not fresh release signoff.
+
+ 
+## UX-DEL-01: Deliver a verified Karen response (NOT RUN)
+
+- **Entry:** authenticated CopilotKit response action, not generic conversation-wide sharing.
+- **Success path:** pick an actual saved assistant response, inspect backend-confirmed formats and destinations, choose an eligible channel, review recipient and data disclosure, explicitly authorize, receive a durable queued/accepted receipt, then provider-confirmed sent/delivered readback. Reload must display the same verified state.
+- **Negative paths:** no saved response, stale session, disconnected channel, revoked user/tenant, unavailable manifest, unsupported export/voice engine, unapproved send, concurrent double-click, provider timeout/unknown, unconfirmed cancellation, stale receipt. No fabricated availability or delivery state.
+- **Accessibility:** 390, 768, 1024 and 1440 px; keyboard-only sheet opening/closing, focus return, role=status/alert for transitions, escape behavior and screen reader live regions.
+- **Observed evidence:** NOT RUN. Owner contract: `docs/development/CONSUMER_EXPERIENCE_CONTRACT.md` KDEL-CONSUMER-01. Reuse existing chat/voice/channel providers; no new UX evidence register.
