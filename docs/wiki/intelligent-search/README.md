@@ -2,7 +2,7 @@
 
 > **Audience:** KAREN/KARI maintainers, core-runtime developers, graph/memory engineers, plugin authors, UX developers, security reviewers, release engineers.
 >
-> **Baseline verified:** `main@f9ff898f036b071d38bee9fafe43cf458e2e2bd4`, 2026-11-20.
+> **Baseline verified:** `main@9b956d892a8f4773c0173a7773af74d23ad0eb33`, 2026-11-20.
 > **Release status:** NOT consumer certified. See [SR-01](../../intelligent-search/CONSUMER_RELEASE_SR01.md) for the release gate.
 > **Documentation status:** This wiki describes live code, historical behavior and proposed capabilities separately. A documented planned contract is **not** an implemented endpoint.
 
