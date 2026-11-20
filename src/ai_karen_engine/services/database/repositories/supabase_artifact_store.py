@@ -257,8 +257,10 @@ class SupabaseArtifactStore(ArtifactStore):
                 ))
         except (UnicodeError, ValueError, TypeError, OverflowError):
             return RepositoryResult(success=False, error=unavailable)
-        except Exception:
-            logger.exception("Owner-scoped active code artifact read failed")
+        except Exception as exc:
+            logger.warning("Owner-scoped active code artifact read failed", extra={
+                "error_type": type(exc).__name__,
+            })
             return RepositoryResult(success=False, error=unavailable)
 
     @instrument_repository(operation="get_metadata", repository="SupabaseArtifactStore")
