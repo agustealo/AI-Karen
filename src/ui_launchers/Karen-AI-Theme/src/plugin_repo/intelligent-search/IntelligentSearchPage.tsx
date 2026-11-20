@@ -11,7 +11,7 @@ import { ResultsWorkspace } from './components/ResultsWorkspace';
  */
 export default function IntelligentSearchPage() {
   const {
-    state, modeConfig, setQuery, setMode, updateOptions, executeSearch, resetSearch,
+    state, modeConfig, resultModeConfig, setQuery, setMode, updateOptions, executeSearch, resetSearch,
   } = useIntelligentSearch();
   const [showControls, setShowControls] = React.useState(false);
 
@@ -53,7 +53,7 @@ export default function IntelligentSearchPage() {
                 Your search settings have changed. Run Search to update the results.
               </div>
             )}
-            <ResultsWorkspace state={state} modeConfig={modeConfig} />
+            <ResultsWorkspace state={state} modeConfig={resultModeConfig} />
           </main>
         </div>
       </div>
