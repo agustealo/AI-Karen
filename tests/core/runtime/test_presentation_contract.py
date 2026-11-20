@@ -583,6 +583,46 @@ def test_kgui02_unicode_metadata_limits_match_browser_utf16_units():
     assert validate_presentation(artifact) is None
 
 
+
+def test_kgui02_chart_unicode_whitespace_normalization_matches_react():
+    """FEFF is trimmed by JS; NEL and C0 separators are not."""
+    from copy import deepcopy
+
+    base = {
+        "schema_version": 1, "presentation_id": "space-chart",
+        "component_type": "chart.bar", "evidence_ref": "owned:chart",
+        "data": {
+            "title": "\\ufeffOrders\\ufeff", "x_label": " Month ",
+            "y_label": "\\ufeffCount", "points": [
+                {"label": "\\ufeffJan", "value": 1},
+                {"label": "Feb", "value": 2},
+            ],
+        },
+    }
+    valid = validate_presentation(base)
+    assert valid is not None
+    assert valid["data"]["title"] == "Orders"
+    assert valid["data"]["x_label"] == "Month"
+    assert valid["data"]["y_label"] == "Count"
+    assert valid["data"]["points"][0]["label"] == "Jan"
+
+    for field in ("title", "x_label", "y_label"):
+        empty = deepcopy(base)
+        empty["data"][field] = "\\ufeff"
+        assert validate_presentation(empty) is None
+
+    duplicate = deepcopy(base)
+    duplicate["data"]["points"][1]["label"] = "Jan"
+    assert validate_presentation(duplicate) is None
+
+    # Python strip() removes these, whereas ECMAScript trim() does not.
+    uncommon = deepcopy(base)
+    uncommon["data"]["points"][0]["label"] = "\\x85"
+    assert validate_presentation(uncommon) is not None
+    uncommon["data"]["points"][0]["label"] = "\\x1c"
+    assert validate_presentation(uncommon) is not None
+
+
 def test_kgui02_code_artifact_is_read_only_and_bounded():
     base = {"schema_version": 1, "presentation_id": "code-1",
             "component_type": "code.artifact", "evidence_ref": "owned:code",
