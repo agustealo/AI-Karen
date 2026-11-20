@@ -543,6 +543,46 @@ def test_kgui02_chart_rejects_untrusted_values_and_malformed_series():
         assert validate_presentation(payload) is None
 
 
+
+def test_kgui02_unicode_metadata_limits_match_browser_utf16_units():
+    """Chart and artifact metadata cannot pass Python and fail React limits."""
+    chart = {
+        "schema_version": 1, "presentation_id": "unicode-chart",
+        "component_type": "chart.bar", "evidence_ref": "owned:unicode",
+        "data": {
+            "title": "📊" * 80,
+            "x_label": "📊" * 80,
+            "y_label": "📊" * 80,
+            "unit": "📊" * 16,
+            "points": [{"label": "📊" * 40, "value": 0.0001}],
+        },
+    }
+    assert validate_presentation(chart) == chart
+    from copy import deepcopy
+
+    for field, over_limit in (
+        ("title", "📊" * 81),
+        ("x_label", "📊" * 81),
+        ("y_label", "📊" * 81),
+        ("unit", "📊" * 17),
+    ):
+        invalid = deepcopy(chart)
+        invalid["data"][field] = over_limit
+        assert validate_presentation(invalid) is None
+    invalid = deepcopy(chart)
+    invalid["data"]["points"][0]["label"] = "📊" * 41
+    assert validate_presentation(invalid) is None
+
+    artifact = {
+        "schema_version": 1, "presentation_id": "unicode-code",
+        "component_type": "code.artifact", "evidence_ref": "owned:unicode",
+        "data": {"filename": "📊" * 80, "language": "python", "code": "x"},
+    }
+    assert validate_presentation(artifact) == artifact
+    artifact["data"]["filename"] = "📊" * 81
+    assert validate_presentation(artifact) is None
+
+
 def test_kgui02_code_artifact_is_read_only_and_bounded():
     base = {"schema_version": 1, "presentation_id": "code-1",
             "component_type": "code.artifact", "evidence_ref": "owned:code",
