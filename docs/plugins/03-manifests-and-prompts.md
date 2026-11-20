@@ -18,6 +18,29 @@ and its [GUI manifest](../../src/ai_karen_engine/extensions/plugins/time-query/m
 for existing real packages. They are reference code, not guarantees that all
 legacy fields will be accepted in a new strict manifest.
 
+### Generative presentations (KGUI-01)
+
+The optional `capabilities.generative_presentations` declaration is validated
+by the canonical `ExtensionManifest`. It advertises compatible **existing**
+host component types, a semantic version, allowed host surfaces (`chat`,
+`workspace`) and `interaction_mode: read_only`. The projected plugin
+catalog marks it `status: declaration_only` and never asserts provider,
+renderer, model or plugin health. Unknown types, executable UI code, mutable
+interaction modes, and unknown declaration keys are rejected.
+
+The declaration is **not** installation, action permission, data evidence,
+lifecycle readiness or a new presentation registry. RuntimePolicy, the
+owned-snapshot gateway, completed-run evidence and
+`presentation_contract.validate_presentation` still determine what may be
+emitted, restored and displayed. The TypeScript
+`KarenPresentationRegistry` continues validating the exact bounded envelope.
+Do not create dynamic imports or trust arbitrary plugin JSX from chat content.
+
+The first contract slice does **not** enable charts, code execution, movie
+posters, forms, custom interactive components or full-card pinning. Add new
+types only after host schema parity, source provenance, replay and authenticated
+browser acceptance. See [Generative experiences and migration](13-generative-experiences.md).
+
 ### Canonical system manifest fields
 
 | Field | Required or default | Meaning |
