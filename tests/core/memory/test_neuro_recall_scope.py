@@ -951,3 +951,106 @@ async def test_external_profile_grant_then_revocation_at_next_recall():
     assert revoked.memories == ()
     assert revoked.provenance == ()
     assert authorizer.calls == 2
+
+
+_DERIVED_PROJECTION_KINDS = (
+    ("postgres_procedure", "memory_procedure", "procedure_id", "source_event_id"),
+    ("postgres_user_goal", "memory_user_goal", "goal_id", "event_id"),
+    ("postgres_open_loop", "memory_open_loop", "open_loop_id", "event_id"),
+    ("postgres_prospective_memory", "memory_prospective_item", "prospective_id", "event_id"),
+)
+
+
+def _derived_projection(
+    kind, record_type, id_field, event_field,
+    *, source_type="chat_user", source_ref="message-1",
+):
+    memory = _memory("projected-1", "tenant-1", "user-1", source_store=kind)
+    memory.metadata.custom["source_store"] = "postgres"
+    memory.metadata.custom[event_field] = "canonical-event-1"
+    memory.metadata.custom["provenance"] = {
+        "store": "postgres", "record_type": record_type,
+        id_field: "projected-1", event_field: "canonical-event-1",
+        "source_type": source_type, "source_ref": source_ref,
+    }
+    return memory
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,record_type,id_field,event_field", _DERIVED_PROJECTION_KINDS)
+async def test_derived_projection_direct_chat_remains_recallable(
+    kind, record_type, id_field, event_field,
+):
+    memory = _derived_projection(kind, record_type, id_field, event_field)
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="my workflow", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert [item.id for item in result.memories] == ["projected-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,record_type,id_field,event_field", _DERIVED_PROJECTION_KINDS)
+async def test_derived_projection_external_origin_fail_closed(
+    kind, record_type, id_field, event_field,
+):
+    memory = _derived_projection(
+        kind, record_type, id_field, event_field,
+        source_type="web", source_ref="document-1",
+    )
+    denied = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="my workflow", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert denied.memories == ()
+    assert denied.provenance == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,record_type,id_field,event_field", _DERIVED_PROJECTION_KINDS)
+async def test_derived_projection_rejects_mismatched_event_or_missing_source(
+    kind, record_type, id_field, event_field,
+):
+    memory = _derived_projection(kind, record_type, id_field, event_field)
+    memory.metadata.custom["provenance"][event_field] = "forged-event"
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="my workflow", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+    memory.metadata.custom["provenance"][event_field] = "canonical-event-1"
+    memory.metadata.custom["provenance"]["source_type"] = None
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="my workflow", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,record_type,id_field,event_field", _DERIVED_PROJECTION_KINDS)
+async def test_derived_projection_permission_revocation_rechecked(
+    kind, record_type, id_field, event_field,
+):
+    memory = _derived_projection(
+        kind, record_type, id_field, event_field,
+        source_type="plugin", source_ref="connector-1",
+    )
+
+    class _CurrentACL:
+        allowed = True
+        calls = 0
+
+        async def authorize(self, entry, request):
+            self.calls += 1
+            assert entry.id == "projected-1"
+            assert request.tenant_id == "tenant-1"
+            assert request.user_id == "user-1"
+            return self.allowed
+
+    authorizer = _CurrentACL()
+    recall = NeuroRecall(_FakeRetriever([memory]), source_authorizer=authorizer)
+    request = RecallRequest(query="my workflow", tenant_id="tenant-1", user_id="user-1")
+    allowed = await recall.recall(request)
+    assert [item.id for item in allowed.memories] == ["projected-1"]
+    authorizer.allowed = False
+    denied = await recall.recall(request)
+    assert denied.memories == ()
+    assert denied.provenance == ()
+    assert authorizer.calls == 2
