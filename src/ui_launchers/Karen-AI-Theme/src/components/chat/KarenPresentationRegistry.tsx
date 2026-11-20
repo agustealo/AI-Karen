@@ -274,7 +274,7 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
             <div className="h-4 rounded bg-muted">
               <div className="h-4 rounded bg-primary" style={{ width: `${maxValue ? (point.value / maxValue) * 100 : 0}%` }} />
             </div>
-            <span className="tabular-nums">{point.value.toLocaleString()}{chart.unit ? ` ${chart.unit}` : ""}</span>
+            <span className="tabular-nums">{String(point.value)}{chart.unit ? ` ${chart.unit}` : ""}</span>
           </div>)}
         </div>
         <div className="mt-4 w-full overflow-x-auto">
@@ -284,7 +284,7 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
               <th scope="col" className="border-b py-2">{chart.y_label}{chart.unit ? ` (${chart.unit})` : ""}</th></tr></thead>
             <tbody>{chart.points.map(point => <tr key={point.label}>
               <th scope="row" className="border-b py-2 font-normal">{point.label}</th>
-              <td className="border-b py-2 tabular-nums">{point.value.toLocaleString()}</td>
+              <td className="border-b py-2 tabular-nums">{String(point.value)}</td>
             </tr>)}</tbody>
           </table>
         </div>
