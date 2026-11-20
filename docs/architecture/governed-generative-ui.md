@@ -127,3 +127,16 @@ The next implementation must trace the canonical completion/persistence transact
 `MessageResponse.structured_content` now projects a dictionary already stored as `message.metadata['structured_content']` by the existing runtime transcript path. This closes the backend serializer omission without adding a new persistence owner. The serializer does not synthesize presentation records when data is absent or malformed. Its tests are at `tests/api_routes/chat/test_conversation_structured_content_response.py`.
 
 **Not yet replay-complete:** structured content is not necessarily a validated `karen.presentation.v1` envelope, and `readOwnedHistory` still imports text-only assistant-ui messages. Before feeding stored data into assistant-ui, bind the presentation to a verified capability receipt, validate it server-side, and convert it using a supported AG-UI activity/message restoration contract. Neither schema exposure nor these tests proves durable generative UI replay.
+
+## KGUI-02 read-only host primitives
+
+`chart.bar` (nonnegative bounded numeric points with labels, title and units)
+and `code.artifact` (bounded, display-only source code) extend the *existing*
+canonical backend envelope and the frontend allowlist. A chart must expose
+the exact underlying values as a semantic table. Code must be escaped by React
+and must not execute. Each requires a runtime-authorized `evidence_ref`.
+They may be composed using existing authorized layout rules, not new graph
+execution. This is a **source-only renderer/schema slice**: no producer or
+plugin is entitled to create factual data by declaring a component type.
+Actual source-producer wiring, browser replay and installed renderer health
+remain separate acceptance gates.

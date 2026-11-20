@@ -26,7 +26,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table"}:
+    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table", "chart.bar", "code.artifact"}:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -128,6 +128,69 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         safe["data"] = {"formatted": value.strip()}
         if timezone:
             safe["data"]["timezone"] = timezone
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "chart.bar":
+        # Numerical observations come from runtime-authorized evidence, not
+        # text guessed by the UI. A bar chart is read-only and nonnegative.
+        import math
+        if not isinstance(data, dict) or set(data) not in (
+            {"title", "x_label", "y_label", "points"},
+            {"title", "x_label", "y_label", "unit", "points"},
+        ):
+            return None
+        for field in ("title", "x_label", "y_label"):
+            value = data[field]
+            if not isinstance(value, str) or not 1 <= len(value.strip()) <= 160:
+                return None
+        unit = data.get("unit")
+        if unit is not None and (not isinstance(unit, str) or len(unit) > 32):
+            return None
+        points = data["points"]
+        if not isinstance(points, list) or not 1 <= len(points) <= 20:
+            return None
+        safe_points = []
+        seen = set()
+        for point in points:
+            if not isinstance(point, dict) or set(point) != {"label", "value"}:
+                return None
+            label, number = point["label"], point["value"]
+            if (not isinstance(label, str) or not 1 <= len(label.strip()) <= 80
+                or label.strip() in seen or type(number) not in (int, float)
+                or not math.isfinite(number) or not 0 <= number <= 1_000_000_000):
+                return None
+            seen.add(label.strip())
+            safe_points.append({"label": label.strip(), "value": number})
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe["data"] = {key: data[key].strip() for key in ("title", "x_label", "y_label")}
+        if unit is not None:
+            safe["data"]["unit"] = unit
+        safe["data"]["points"] = safe_points
+        try:
+            encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "code.artifact":
+        # This is display-only source text, never executable code.
+        import re
+        if not isinstance(data, dict) or set(data) != {"filename", "language", "code"}:
+            return None
+        filename, language, code = data["filename"], data["language"], data["code"]
+        if (not isinstance(filename, str) or not 1 <= len(filename) <= 160
+            or any(ord(ch) < 32 or ch in "/\\\\\\\\ " for ch in filename)
+            or filename in (".", "..")
+            or not isinstance(language, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_+.-]{0,31}", language)
+            or not isinstance(code, str)
+            or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in code) <= 12000
+            or any(ord(ch) < 32 and ch not in "\\n\\r\\t" for ch in code)):
+            return None
+        safe = {key: value for key, value in raw.items() if key != "data"}
+        safe["data"] = {"filename": filename, "language": language, "code": code}
         try:
             encoded = json.dumps(safe, allow_nan=False, separators=(",", ":"))
         except (TypeError, ValueError, OverflowError):

@@ -502,3 +502,62 @@ def test_kcon771_layout_proposals_cannot_expand_evidence_or_execution_authority(
         ]},
         proposed_layout={"layout": "stack", "part_ids": ["clock"]},
     ) is None
+
+
+def test_kgui02_readonly_chart_accepts_evidence_bound_numeric_series():
+    envelope = {
+        "schema_version": 1, "presentation_id": "bar-1",
+        "component_type": "chart.bar", "evidence_ref": "owned:series",
+        "data": {"title": "Orders", "x_label": "Month", "y_label": "Count",
+                 "unit": "items", "points": [
+                     {"label": "Jan", "value": 0},
+                     {"label": "Feb", "value": 18.5},
+                 ]},
+    }
+    assert validate_presentation(envelope) == envelope
+    from ai_karen_engine.core.runtime.presentation_contract import compose_authorized_surface
+    composite = compose_authorized_surface(
+        presentation_id="combined", evidence_ref="owned:series",
+        authorized_parts=[envelope], proposed_layout={"layout": "stack", "part_ids": ["bar-1"]},
+    )
+    assert composite is not None
+    assert composite["data"]["items"][0] == envelope
+
+
+def test_kgui02_chart_rejects_untrusted_values_and_malformed_series():
+    base = {"schema_version": 1, "presentation_id": "chart",
+            "component_type": "chart.bar", "evidence_ref": "owned:chart",
+            "data": {"title": "Orders", "x_label": "Month", "y_label": "Count",
+                     "points": [{"label": "Jan", "value": 12}]}}
+    from copy import deepcopy
+    for bad in [True, -1, float("nan"), float("inf"), 1_000_000_001, "12"]:
+        payload = deepcopy(base)
+        payload["data"]["points"][0]["value"] = bad
+        assert validate_presentation(payload) is None
+    for patch in [
+        {"points": []}, {"points": [{"label": "Jan", "value": 1}, {"label": "Jan", "value": 2}]},
+        {"run": "javascript:alert(1)"}, {"x_label": ""}, {"unit": "X" * 33},
+    ]:
+        payload = deepcopy(base)
+        payload["data"].update(patch)
+        assert validate_presentation(payload) is None
+
+
+def test_kgui02_code_artifact_is_read_only_and_bounded():
+    base = {"schema_version": 1, "presentation_id": "code-1",
+            "component_type": "code.artifact", "evidence_ref": "owned:code",
+            "data": {"filename": "analysis.py", "language": "python",
+                     "code": "print('<script>alert(1)</script>')\\n"}}
+    assert validate_presentation(base) == base
+    from copy import deepcopy
+    for field, bad in [
+        ("filename", "../secrets.py"), ("filename", "a/b.py"),
+        ("language", "JavaScript<>"), ("code", ""),
+        ("code", "x" * 12001), ("code", "bad\\x00code"),
+    ]:
+        payload = deepcopy(base)
+        payload["data"][field] = bad
+        assert validate_presentation(payload) is None
+    payload = deepcopy(base)
+    payload["data"]["execute"] = True
+    assert validate_presentation(payload) is None

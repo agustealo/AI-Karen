@@ -313,3 +313,51 @@ describe("KCON-770 unsupported media and presentation faults", () => {
     expect(html).not.toContain("<button");
   });
 });
+
+
+describe("KGUI-02 governed chart and code host presentation", () => {
+  const chart = {
+    schema_version: 1, presentation_id: "chart-1",
+    component_type: "chart.bar", evidence_ref: "owned:chart",
+    data: { title: "Orders", x_label: "Month", y_label: "Count", unit: "items",
+      points: [{ label: "Jan", value: 0 }, { label: "Feb", value: 18.5 }] },
+  };
+  const artifact = {
+    schema_version: 1, presentation_id: "code-1",
+    component_type: "code.artifact", evidence_ref: "owned:code",
+    data: { filename: "analysis.py", language: "python",
+      code: "print('<script>alert(1)</script>')\\n" },
+  };
+  it("renders numeric bars with an accessible source table", () => {
+    expect(parseKarenPresentation(chart)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={chart} />);
+    expect(html).toContain('data-testid="karen-bar-chart"');
+    expect(html).toContain("<table");
+    expect(html).toContain("18.5");
+    expect(html).toContain("0%");
+  });
+  it("rejects unverified chart values and action injection", () => {
+    for (const value of [NaN, Infinity, -1, 1_000_000_001, true, "12"]) {
+      expect(parseKarenPresentation({ ...chart, data: {
+        ...chart.data, points: [{ label: "Jan", value }],
+      } })).toBeNull();
+    }
+    expect(parseKarenPresentation({ ...chart, data: {
+      ...chart.data, actions: ["delete"], points: chart.data.points,
+    } })).toBeNull();
+  });
+  it("escapes code without allowing execution or UI insertion", () => {
+    expect(parseKarenPresentation(artifact)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={artifact} />);
+    expect(html).toContain('data-testid="karen-code-artifact"');
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<button");
+    expect(parseKarenPresentation({ ...artifact, data: {
+      ...artifact.data, execute: true,
+    } })).toBeNull();
+    expect(parseKarenPresentation({ ...artifact, data: {
+      ...artifact.data, filename: "../secrets.py",
+    } })).toBeNull();
+  });
+});
