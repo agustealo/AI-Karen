@@ -73,6 +73,15 @@ class CortexExecutionDecider:
             meta.get("forbidden_capabilities") or []
         )
 
+        # Caller metadata and ML hints cannot widen an exact owner-code read
+        # into filesystem access, shell execution, arbitrary plugins or agents.
+        # Keep explicit graph/human policy gates: they may deny the direct read.
+        artifact_view = analysis.get("intent") == "artifact.code.read"
+        if artifact_view:
+            tool_requirements = []
+            plugin_candidates = []
+            required_capabilities = ["artifact.code.read"]
+
         if meta.get("agent_delegation"):
             analysis["agent_delegation"] = True
         if meta.get("workflow_required"):
@@ -137,7 +146,7 @@ class CortexExecutionDecider:
                 or is_profile_summary_followup(user_content, request.messages)
             )
         )
-        memory_recall_required = bool(
+        memory_recall_required = not artifact_view and bool(
             analysis.get("memory_recall_required", False)
             or meta.get("memory_recall_required", False)
             or needs_location_recall
@@ -158,6 +167,8 @@ class CortexExecutionDecider:
         )
         memory_write_requested = memory_write_requested or is_explicit_memory_save_request(user_content)
         if analysis.get("memory_write_denied", False):
+            memory_write_requested = False
+        if artifact_view:
             memory_write_requested = False
 
         memory_scope = (
@@ -186,9 +197,14 @@ class CortexExecutionDecider:
         if isinstance(raw_reasoning_modes, str):
             raw_reasoning_modes = [raw_reasoning_modes]
         reasoning_modes = normalize_reasoning_modes(list(raw_reasoning_modes))
+        if artifact_view:
+            reasoning_modes = []
+            reasoning_depth = "standard"
         if (
-            reasoning_depth == "deep" or analysis.get("reasoning_required")
-        ) and not reasoning_modes:
+            not artifact_view
+            and (reasoning_depth == "deep" or analysis.get("reasoning_required"))
+            and not reasoning_modes
+        ):
             # Depth/effort alone never establishes a causal-identification
             # request. Preserve explicit Intelligence/CORTEX modes above;
             # otherwise use a conservative, noncausal reasoning preflight.
