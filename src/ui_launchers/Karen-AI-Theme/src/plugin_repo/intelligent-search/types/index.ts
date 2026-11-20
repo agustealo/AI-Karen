@@ -106,6 +106,30 @@ export interface WeatherResult {
   units: 'metric' | 'imperial';
 }
 
+export interface SearchEvidenceGraph {
+  version: number;
+  kind: 'retrieval_evidence';
+  status: 'available' | 'empty';
+  truncated: boolean;
+  nodes: Array<{
+    id: string;
+    kind: 'source' | 'passage';
+    label: string;
+    url: string;
+    evidence_level: 'fetched_page' | 'search_snippet';
+    article_id?: string | null;
+    published_at?: string | null;
+  }>;
+  edges: Array<{
+    id: string;
+    from: string;
+    to: string;
+    type: 'DERIVED_FROM';
+    provenance_url: string;
+    verification_state: 'source_matched';
+  }>;
+}
+
 export interface IntelligentSearchResponse {
   summary: string;
   query?: string;
@@ -117,6 +141,7 @@ export interface IntelligentSearchResponse {
   can_execute?: boolean;
   reason?: string;
   sources?: SearchSourceItem[];
+  evidenceGraph?: SearchEvidenceGraph;
   extractedData?: Record<string, unknown>;
   insights?: string[];
   diagnostics?: SearchDiagnostics;
@@ -198,6 +223,10 @@ export interface IntelligentSearchState {
   isLoading: boolean;
   error: Error | null;
   response: IntelligentSearchResponse | null;
+  /** Last successful request, never inferred from editable form fields. */
+  completedSearch?: { query: string; mode: SearchModeId } | null;
+  /** True when visible evidence belongs to a previous request configuration. */
+  isResultsStale?: boolean;
 }
 
 // Aliases for backward compatibility if needed, but primary naming is now IntelligentSearch
