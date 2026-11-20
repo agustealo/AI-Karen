@@ -840,3 +840,114 @@ async def test_durable_external_missing_ref_is_denied_even_with_authorizer():
         query="memory", tenant_id="tenant-1", user_id="user-1"
     ))
     assert result.memories == ()
+
+
+def _profile_candidate(
+    memory_id: str,
+    *,
+    source_type: str | None = "chat_user",
+    source_ref: str | None = "conversation-message-1",
+) -> MemoryEntry:
+    memory = _memory(
+        memory_id, "tenant-1", "user-1",
+        source_store="postgres_profile_fact",
+    )
+    memory.metadata.custom["source_store"] = "postgres"
+    memory.metadata.custom["event_id"] = "canonical-profile-event"
+    memory.metadata.custom["provenance"] = {
+        "store": "postgres",
+        "record_type": "profile_fact",
+        "fact_id": memory_id,
+        "event_id": "canonical-profile-event",
+        "source_type": source_type,
+        "source_ref": source_ref,
+    }
+    return memory
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_type", ["chat", "chat_user", "conversation"])
+async def test_direct_chat_profile_fact_survives_canonical_gate(source_type):
+    memory = _profile_candidate("direct-profile", source_type=source_type)
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="my name", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert [entry.id for entry in result.memories] == ["direct-profile"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_type", ["web", "plugin", "uploaded_document", "user"])
+async def test_profile_external_origin_denied_without_live_authorizer(source_type):
+    memory = _profile_candidate("external-profile", source_type=source_type)
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="my name", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+    assert result.provenance == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [
+    {"store": "other"},
+    {"record_type": "memory_assertion"},
+    {"fact_id": "wrong-fact"},
+    {"event_id": "wrong-event"},
+    {"source_type": ""},
+    {"source_type": None},
+])
+async def test_profile_invalid_source_receipt_fails_closed(invalid):
+    memory = _profile_candidate("invalid-profile")
+    memory.metadata.custom["provenance"].update(invalid)
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="my name", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+
+
+@pytest.mark.asyncio
+async def test_external_profile_requires_source_reference_even_with_authorizer():
+    memory = _profile_candidate(
+        "missing-profile-reference", source_type="web", source_ref=None
+    )
+
+    class _NeverCalled:
+        async def authorize(self, entry, request):
+            pytest.fail("missing canonical source reference must fail closed")
+
+    result = await NeuroRecall(
+        _FakeRetriever([memory]), source_authorizer=_NeverCalled()
+    ).recall(
+        RecallRequest(query="my name", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+
+
+@pytest.mark.asyncio
+async def test_external_profile_grant_then_revocation_at_next_recall():
+    memory = _profile_candidate("revocable-profile", source_type="web")
+
+    class _LiveAuthorizer:
+        allowed = True
+        calls = 0
+
+        async def authorize(self, entry, request):
+            self.calls += 1
+            assert entry.id == "revocable-profile"
+            assert request.tenant_id == "tenant-1"
+            assert request.user_id == "user-1"
+            return self.allowed
+
+    authorizer = _LiveAuthorizer()
+    recall = NeuroRecall(
+        _FakeRetriever([memory]), source_authorizer=authorizer
+    )
+    request = RecallRequest(
+        query="my name", tenant_id="tenant-1", user_id="user-1"
+    )
+    granted = await recall.recall(request)
+    assert [entry.id for entry in granted.memories] == ["revocable-profile"]
+    authorizer.allowed = False
+    revoked = await recall.recall(request)
+    assert revoked.memories == ()
+    assert revoked.provenance == ()
+    assert authorizer.calls == 2
