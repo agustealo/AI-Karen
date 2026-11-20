@@ -858,7 +858,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
       input().onSubmitMessage("Hello");
     });
     await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("could not complete"));
+      .toContain("could not verify completion"));
     expect(screen.getByRole("alert").textContent).not.toContain("private");
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
     expect(sdk.agent.messages).toHaveLength(2);
