@@ -28,7 +28,7 @@ def test_provider_processing_error_keeps_failure_types_not_raw_contents():
 @pytest.mark.parametrize(
     ("message", "expected"),
     [
-        (f"Authorization: Bearer {SECRET}", "credentials or API key"),
+        (f"Authorization: Bearer {SECRET}", "credentials or api key"),
         (f"Connection to https://private.invalid/path?token={SECRET} failed", "could not connect"),
         (f"Timed out reading prompt={SECRET}", "timed out"),
         (f"Unanticipated response: {SECRET}", "failed while handling"),
