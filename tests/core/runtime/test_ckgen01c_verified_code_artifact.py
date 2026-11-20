@@ -211,3 +211,92 @@ async def test_executor_denies_wrong_policy_and_never_opens_storage(monkeypatch)
     assert result.degraded
     factory.assert_not_awaited()
     meter.consume_tool_call.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_durable_event_journal_replaces_code_with_source_free_marker():
+    """Live UI may see source but observed-run replay must never retain it."""
+    from ai_karen_engine.core.runtime.chat_run_lifecycle import ChatRunCoordinator
+
+    request, decision, plan, result = _execution()
+    presentation = ChatRuntime._verified_code_artifact_presentation(
+        request, decision, plan, result,
+    )
+    live_event = {
+        "type": "CUSTOM", "name": "karen.presentation.v1",
+        "value": presentation,
+    }
+    repository = SimpleNamespace(
+        append_projected_event=AsyncMock(return_value=9),
+    )
+    coordinator = ChatRunCoordinator(repository=repository)
+    lease = object()
+    sequence = await coordinator.append_observed_event(lease, live_event)
+
+    assert sequence == 9
+    repository.append_projected_event.assert_awaited_once()
+    args = repository.append_projected_event.await_args
+    assert args.args == (lease,)
+    persisted = args.kwargs["event"]
+    assert persisted == {
+        "type": "CUSTOM",
+        "name": "karen.presentation.withheld.v1",
+        "value": {"reason": "revocable_code_not_replayable"},
+    }
+    assert CODE not in str(persisted)
+    assert ARTIFACT not in str(persisted)
+    assert live_event["value"] == presentation
+    assert CODE in str(live_event)
+
+
+@pytest.mark.asyncio
+async def test_nested_revocable_code_is_never_durable_but_other_presentations_remain():
+    from ai_karen_engine.core.runtime.chat_run_lifecycle import ChatRunCoordinator
+
+    repository = SimpleNamespace(
+        append_projected_event=AsyncMock(side_effect=[1, 2, 3]),
+    )
+    coordinator = ChatRunCoordinator(repository=repository)
+    lease = object()
+
+    composite = {
+        "type": "CUSTOM", "name": "karen.presentation.v1",
+        "value": {
+            "component_type": "surface.composition",
+            "data": {"items": [{"component_type": "code.artifact",
+                                "data": {"code": CODE}}]},
+        },
+    }
+    weather = {
+        "type": "CUSTOM", "name": "karen.presentation.v1",
+        "value": {"component_type": "weather.observation",
+                  "data": {"location": "Detroit"}},
+    }
+    other = {"type": "RUN_FINISHED", "threadId": "owned-thread"}
+
+    assert await coordinator.append_observed_event(lease, composite) == 1
+    assert await coordinator.append_observed_event(lease, weather) == 2
+    assert await coordinator.append_observed_event(lease, other) == 3
+
+    events = [
+        call.kwargs["event"]
+        for call in repository.append_projected_event.await_args_list
+    ]
+    assert events[0]["name"] == "karen.presentation.withheld.v1"
+    assert CODE not in repr(events[0])
+    assert events[1] is weather
+    assert events[2] is other
+    assert composite["value"]["data"]["items"][0]["data"]["code"] == CODE
+
+
+def test_unrecognized_deep_presentation_nesting_fails_closed_for_journal():
+    from ai_karen_engine.core.runtime.chat_run_lifecycle import ChatRunCoordinator
+
+    nested = {"component_type": "code.artifact", "data": {"code": CODE}}
+    for _ in range(15):
+        nested = {"items": [nested]}
+    event = {
+        "type": "CUSTOM", "name": "karen.presentation.v1", "value": nested,
+    }
+    safe = ChatRunCoordinator._journal_safe_event(event)
+    assert safe["name"] == "karen.presentation.withheld.v1"
+    assert CODE not in repr(safe)
