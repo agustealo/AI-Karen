@@ -278,9 +278,38 @@ class NeuroRecall:
             # governed source-ACL verifier is connected, exclude explicitly
             # source-derived entries rather than reuse revoked/stale content.
             custom_metadata = getattr(metadata, "custom", {}) if metadata else {}
-            if isinstance(custom_metadata, dict) and (
+            custom_metadata = (
+                custom_metadata if isinstance(custom_metadata, dict) else {}
+            )
+            graph_provenance = custom_metadata.get("provenance")
+            graph_candidate = (
+                custom_metadata.get("source_store") == "postgres_graph"
+                or getattr(metadata, "source", None) == "postgres_graph"
+            )
+            if graph_candidate and (
+                not isinstance(graph_provenance, dict)
+                or graph_provenance.get("store") != "postgres"
+                or graph_provenance.get("record_type") != "memory_event"
+                or graph_provenance.get("event_id") != str(memory.id)
+            ):
+                # An unproved graph event must never slip through by omitting
+                # its lineage keys. Canonical graph source emits this receipt.
+                rejected_count += 1
+                continue
+            graph_external_source = bool(
+                graph_candidate
+                and graph_provenance.get("source_type") != "conversation"
+            )
+            if graph_external_source and not str(
+                graph_provenance.get("source_ref") or ""
+            ).strip():
+                # A live verifier cannot authorize an unidentified source.
+                rejected_count += 1
+                continue
+            if (
                 "source_lineage" in custom_metadata
                 or "derived_source_ids" in custom_metadata
+                or graph_external_source
             ):
                 # A source authority must independently recheck the complete
                 # source set against current ACL/revocation state. Missing or

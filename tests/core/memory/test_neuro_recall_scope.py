@@ -505,3 +505,122 @@ async def test_malformed_lineage_never_reaches_trusted_authorizer(key, value):
     ))
     assert result.memories == ()
     assert result.provenance == ()
+
+
+def _graph_candidate(
+    memory_id: str,
+    *,
+    source_type: str = "conversation",
+    source_ref: str | None = "message-1",
+):
+    memory = _memory(
+        memory_id,
+        "tenant-1",
+        "user-1",
+        source_store="postgres_graph",
+    )
+    memory.metadata.custom["provenance"] = {
+        "store": "postgres",
+        "record_type": "memory_event",
+        "event_id": memory_id,
+        "source_type": source_type,
+        "source_ref": source_ref,
+        "graph_relationship": "MENTIONS",
+        "graph_depth": 1,
+        "matched_entity_cue": "example",
+    }
+    return memory
+
+
+@pytest.mark.asyncio
+async def test_graph_conversation_event_retains_existing_scoped_recall():
+    result = await NeuroRecall(
+        _FakeRetriever([_graph_candidate("conversation-graph")])
+    ).recall(RecallRequest(
+        query="example", tenant_id="tenant-1", user_id="user-1"
+    ))
+    assert [memory.id for memory in result.memories] == ["conversation-graph"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_type", ["web", "plugin", "uploaded_document", None, ""])
+async def test_unverified_graph_source_is_denied_even_without_lineage_keys(source_type):
+    derived = _graph_candidate(
+        "derived-graph",
+        source_type=source_type,
+        source_ref="external-source-1",
+    )
+    assert "source_lineage" not in derived.metadata.custom
+    assert "derived_source_ids" not in derived.metadata.custom
+    result = await NeuroRecall(_FakeRetriever([derived])).recall(RecallRequest(
+        query="example", tenant_id="tenant-1", user_id="user-1",
+    ))
+    assert result.memories == ()
+    assert result.provenance == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_provenance", [None, {}, {"source_type": "conversation"}])
+async def test_graph_candidate_without_canonical_event_receipt_is_denied(bad_provenance):
+    derived = _graph_candidate("missing-proof")
+    derived.metadata.custom["provenance"] = bad_provenance
+    result = await NeuroRecall(_FakeRetriever([derived])).recall(RecallRequest(
+        query="example", tenant_id="tenant-1", user_id="user-1",
+    ))
+    assert result.memories == ()
+
+
+@pytest.mark.asyncio
+async def test_external_graph_source_without_reference_denied_before_verifier():
+    derived = _graph_candidate("missing-external-ref", source_type="web", source_ref=None)
+
+    class _UnexpectedAuthorizer:
+        async def authorize(self, memory, request):
+            pytest.fail("missing source reference must fail before authorization")
+
+    result = await NeuroRecall(
+        _FakeRetriever([derived]), source_authorizer=_UnexpectedAuthorizer()
+    ).recall(RecallRequest(
+        query="example", tenant_id="tenant-1", user_id="user-1",
+    ))
+    assert result.memories == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", [True, False, None])
+async def test_external_graph_event_requires_live_source_authorizer(verdict):
+    derived = _graph_candidate("verified-external", source_type="web", source_ref="web-5")
+    decisions = []
+
+    class _Authorizer:
+        async def authorize(self, memory, request):
+            decisions.append((memory.id, request.tenant_id, request.user_id))
+            return verdict
+
+    result = await NeuroRecall(
+        _FakeRetriever([derived]), source_authorizer=_Authorizer()
+    ).recall(RecallRequest(
+        query="example", tenant_id="tenant-1", user_id="user-1",
+    ))
+    assert decisions == [("verified-external", "tenant-1", "user-1")]
+    assert [item.id for item in result.memories] == (
+        ["verified-external"] if verdict is True else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_source_verification_errors_fail_closed_without_exposing_secrets():
+    derived = _graph_candidate("revoked-source", source_type="plugin", source_ref="plugin-1")
+
+    class _ErrorAuthorizer:
+        async def authorize(self, memory, request):
+            raise RuntimeError("secret grant token")
+
+    result = await NeuroRecall(
+        _FakeRetriever([derived]), source_authorizer=_ErrorAuthorizer()
+    ).recall(RecallRequest(
+        query="example", tenant_id="tenant-1", user_id="user-1",
+    ))
+    assert result.memories == ()
+    assert "secret grant token" not in str(result.source_health)
+    assert "secret grant token" not in str(result.provenance)
