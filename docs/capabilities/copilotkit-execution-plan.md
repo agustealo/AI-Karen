@@ -885,3 +885,20 @@ completion, content-size or presentation validation to silence the UI.
 
 - 2026-11-19: Extend the existing `presentation_pin_admission.py` runtime owner. The same canonical owned-history projector validates completed-run digest, owner/tenant, message and presentation/evidence identity. The helper exposes a separately bounded canonical `validate_presentation` envelope only to the new read-only `restore_attested_presentation_envelope` function, while the existing `admit_presentation_pin_reference` keeps its metadata-only public contract. Regression coverage: exact envelope; foreign principal; missing attestation; forged reference; post-commit digest drift; unsupported type; oversized data. No new store, executor, provider or authorization path.
 - **SOURCE ONLY; CONSUMER RELEASE NOT VERIFIED.** No full-card API route or frontend display is enabled in this change. Exact-head CI, authenticated browser proof, revocation acceptance, and deployment verification remain outstanding. Production pin mutations remain disabled.
+ 
+## KCON-770 / KGUI-01: Canonical plugin generative presentation declaration (2026-11-20)
+
+- **Source candidate / NOT consumer certified.** Extend existing
+  `extensions/platform/core/manifest.py` with a bounded, strictly validated
+  `generative_presentations` declaration and existing extension manager's
+  read-only declaration projection; preserve PluginKernel lifecycle authority,
+  RuntimePolicy execution, runtime presentation evidence and the existing React
+  host renderer. Negative tests reject unsupported/unregistered renderers,
+  duplicate types, arbitrary JS keys, unrecognized surfaces, invalid versions,
+  and interaction grants. Update canonical plugin developer wiki and
+  `docs/architecture/governed-generative-ui.md`.
+- No plugin migration, new executable renderer, provider route, pin mutation,
+  model-generated HTML/React, or UI health assertion in this slice. Follow-up
+  gates: actual consumer execution on current host, backend/frontend schema
+  parity for expanded chart/code/media, authenticated session/replay,
+  tenant/RBAC denial, lifecycle disable/uninstall, accessibility and exact-head CI.

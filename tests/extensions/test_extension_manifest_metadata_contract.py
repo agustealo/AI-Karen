@@ -64,3 +64,61 @@ def test_non_voice_manifest_does_not_invent_voice_capability():
     manifest = ExtensionManifest.from_dict(_manifest())
     projected = ExtensionCoreManager._extension_capabilities(manifest)
     assert "voice_modality" not in projected
+
+
+def test_canonical_generative_declaration_is_bounded_and_catalog_only():
+    manifest_data = _manifest()
+    manifest_data["capabilities"] = {
+        "provides_ui": False,
+        "generative_presentations": {
+            "version": "1.0.0",
+            "component_types": ["time.observation", "data.table"],
+            "surfaces": ["chat", "workspace"],
+            "interaction_mode": "read_only",
+        },
+    }
+    manifest = ExtensionManifest.from_dict(manifest_data)
+    result = ExtensionCoreManager._extension_capabilities(manifest)
+    assert result["provides_ui"] is False
+    assert result["generative_presentations"] == {
+        "version": "1.0.0",
+        "component_types": ["time.observation", "data.table"],
+        "surfaces": ["chat", "workspace"],
+        "interaction_mode": "read_only",
+        "status": "declaration_only",
+    }
+    assert "generative_presentations" not in ExtensionCoreManager._extension_capabilities(
+        ExtensionManifest.from_dict(_manifest())
+    )
+
+
+@pytest.mark.parametrize("declaration", [
+    {"component_types": ["arbitrary.html"]},
+    {"component_types": ["chart.line"]},
+    {"component_types": ["data.table", "data.table"]},
+    {"component_types": []},
+    {"component_types": ["data.table"], "surfaces": ["untrusted_dom"]},
+    {"component_types": ["data.table"], "surfaces": ["chat", "chat"]},
+    {"component_types": ["data.table"], "interaction_mode": "execute"},
+    {"component_types": ["data.table"], "javascript": "alert(1)"},
+    {"component_types": ["data.table"], "version": "not-semver"},
+])
+def test_manifest_rejects_untrusted_generative_renderer_and_action_contract(declaration):
+    manifest_data = _manifest()
+    manifest_data["capabilities"] = {"generative_presentations": declaration}
+    with pytest.raises(ValueError):
+        ExtensionManifest.from_dict(manifest_data)
+
+
+def test_generative_declaration_survives_manifest_roundtrip():
+    manifest_data = _manifest()
+    manifest_data["capabilities"] = {
+        "generative_presentations": {
+            "component_types": ["search.results"],
+        },
+    }
+    parsed = ExtensionManifest.from_dict(manifest_data)
+    restored = ExtensionManifest.model_validate(parsed.model_dump())
+    assert restored.capabilities.generative_presentations is not None
+    assert restored.capabilities.generative_presentations.component_types == ["search.results"]
+    assert restored.capabilities.generative_presentations.surfaces == ["chat"]
