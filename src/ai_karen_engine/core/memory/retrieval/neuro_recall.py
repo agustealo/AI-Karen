@@ -306,6 +306,31 @@ class NeuroRecall:
             ).strip():
                 rejected_count += 1
                 continue
+            profile_candidate = getattr(metadata, "source", None) == "postgres_profile_fact"
+            if profile_candidate and (
+                not isinstance(graph_provenance, dict)
+                or graph_provenance.get("store") != "postgres"
+                or graph_provenance.get("record_type") != "profile_fact"
+                or graph_provenance.get("fact_id") != str(memory.id)
+                or graph_provenance.get("event_id") != custom_metadata.get("event_id")
+                or not isinstance(graph_provenance.get("event_id"), str)
+                or not graph_provenance["event_id"].strip()
+                or not isinstance(graph_provenance.get("source_type"), str)
+                or not graph_provenance["source_type"].strip()
+            ):
+                # A rebuildable profile fact must prove its canonical event origin.
+                rejected_count += 1
+                continue
+            profile_external_source = bool(
+                profile_candidate
+                and graph_provenance["source_type"]
+                not in {"chat", "chat_user", "conversation"}
+            )
+            if profile_external_source and not str(
+                graph_provenance.get("source_ref") or ""
+            ).strip():
+                rejected_count += 1
+                continue
             graph_candidate = (
                 custom_metadata.get("source_store") == "postgres_graph"
                 or getattr(metadata, "source", None) == "postgres_graph"
@@ -335,6 +360,7 @@ class NeuroRecall:
                 or "derived_source_ids" in custom_metadata
                 or graph_external_source
                 or ledger_external_source
+                or profile_external_source
             ):
                 # A source authority must independently recheck the complete
                 # source set against current ACL/revocation state. Missing or
