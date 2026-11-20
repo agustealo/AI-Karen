@@ -25,6 +25,30 @@ def _trim_chart_text(value: str) -> str:
 
 
 
+def contains_revocable_code_artifact(value: Any, *, _depth: int = 0) -> bool:
+    """Detect revocable source bytes inside nested presentation metadata.
+
+    This single predicate governs both transcript retention and the durable
+    AG-UI journal. Unreasonably deep structures fail closed. It never grants
+    authorization to render, execute, or replay code.
+    """
+    if _depth > 12:
+        return True
+    if isinstance(value, Mapping):
+        if value.get("component_type") == "code.artifact":
+            return True
+        return any(
+            contains_revocable_code_artifact(item, _depth=_depth + 1)
+            for item in value.values()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(
+            contains_revocable_code_artifact(item, _depth=_depth + 1)
+            for item in value
+        )
+    return False
+
+
 def validate_presentation(raw: Any) -> dict[str, Any] | None:
     """Allow only bounded, JSON-native, evidence-referenced UI envelopes.
 
