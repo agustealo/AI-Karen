@@ -151,6 +151,39 @@ async def test_serialized_append_preserves_owner_fence_and_monotonic_cursor(monk
 
 
 @pytest.mark.asyncio
+async def test_repository_accepts_source_free_withheld_code_marker_and_rejects_unknown_custom(monkeypatch):
+    """The real journal allowlist must accept the marker, not only a mocked append."""
+    tx = Transaction()
+    scoped(monkeypatch, tx)
+    owned = lease()
+    repo = repository.SqlChatRunRepository()
+    withheld = {
+        "type": "CUSTOM",
+        "name": "karen.presentation.withheld.v1",
+        "value": {"reason": "revocable_code_not_replayable"},
+    }
+    assert await repo.append_projected_event(owned, event=withheld) == 1
+    writes = [
+        params for sql, params in zip(tx.queries, tx.params)
+        if "INSERT INTO public.runtime_chat_run_events" in sql
+    ]
+    assert len(writes) == 1
+    encoded = writes[0]["event_payload"]
+    assert json.loads(encoded) == withheld
+    assert "code" not in encoded
+    with pytest.raises(ValueError, match="unsupported_chat_projection_custom_event"):
+        await repo.append_projected_event(owned, event={
+            "type": "CUSTOM",
+            "name": "karen.presentation.withheld.untrusted",
+            "value": {"reason": "revocable_code_not_replayable"},
+        })
+    assert len([
+        sql for sql in tx.queries
+        if "INSERT INTO public.runtime_chat_run_events" in sql
+    ]) == 1
+
+
+@pytest.mark.asyncio
 async def test_stop_or_expired_fence_refuses_further_projected_tokens(monkeypatch):
     tx = Transaction(status="cancelling")
     scoped(monkeypatch, tx)
