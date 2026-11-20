@@ -41,7 +41,7 @@ Expected response fields (optional where mode does not produce them):
 | `diagnostics`, `crawl` | Technical counters, warnings, degradation |
 | `metadata` | Provider, correlation/request IDs, timing, degraded status and selected strategy |
 | `liveSearch` | Compatibility metadata; response intentionally does not embed unbounded crawler HTML/processed chunks |
-| `evidenceGraph` | **Open PR #1119** bounded source-and-passage graph; not merged in this baseline |
+| `evidenceGraph` | **Merged PR #1119**: bounded fetched-source and passage provenance graph, not a cognitive-memory relationship graph |
 
 ### Fetching full articles
 
