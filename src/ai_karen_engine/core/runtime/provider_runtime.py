@@ -1508,9 +1508,9 @@ class ProviderRuntime:
         if provider_attempts is not None:
             metadata["provider_attempts"] = provider_attempts
         if degradation_reason and not provider_error:
-            metadata["failure_reason"] = degradation_reason
+            metadata["failure_reason"] = self._safe_error_detail(degradation_reason)
         elif provider_error:
-            metadata["failure_reason"] = provider_error
+            metadata["failure_reason"] = self._safe_error_detail(provider_error)
         return metadata
 
     def _effective_provider_model(self, provider_info: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -1858,7 +1858,7 @@ class ProviderRuntime:
                                 success=True,
                             )
                         except Exception as metrics_error:
-                            logger.debug(f"Failed to record provider metrics: {metrics_error}")
+                            logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
 
                     llm_metadata = self._build_llm_metadata(
                         requested_provider=requested_provider,
@@ -1924,7 +1924,7 @@ class ProviderRuntime:
                             error_code=type(exc).__name__,
                         )
                     except Exception as metrics_error:
-                        logger.debug(f"Failed to record provider metrics: {metrics_error}")
+                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
 
                 continue
 
@@ -1959,7 +1959,7 @@ class ProviderRuntime:
                             error_code=type(exc).__name__,
                         )
                     except Exception as metrics_error:
-                        logger.debug(f"Failed to record provider metrics: {metrics_error}")
+                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
 
                 continue
 
@@ -2069,15 +2069,7 @@ class ProviderRuntime:
 
     @staticmethod
     def _redact_error_message(error: Optional[BaseException]) -> str:
-        raw = str(error or "")
-        if not raw:
-            return ""
-        redacted = re.sub(
-            r"(?i)(api[_-]?key|authorization|bearer|token|secret)[=: ]+[^\s,;]+",
-            r"\1=[redacted]",
-            raw,
-        )
-        return redacted[:500]
+        return ProviderRuntime._safe_error_detail(error) if error is not None else ""
 
     def _derive_error_reason(self, error: Optional[BaseException]) -> str:
         if error is None:
