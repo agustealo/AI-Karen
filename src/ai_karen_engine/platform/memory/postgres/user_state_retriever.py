@@ -73,7 +73,7 @@ class PostgresUserStateRecallRetriever:
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
             goal_rows = (
                 await session.execute(
-                    select(MemoryUserGoal)
+                    select(MemoryUserGoal, MemoryEvent.source_type, MemoryEvent.source_ref)
                     .join(MemoryEvent, MemoryEvent.event_id == MemoryUserGoal.event_id)
                     .where(
                         MemoryUserGoal.tenant_id == tenant_uuid,
@@ -95,11 +95,11 @@ class PostgresUserStateRecallRetriever:
                     )
                     .limit(top_k * 2)
                 )
-            ).scalars().all()
+            ).all()
 
             open_loop_rows = (
                 await session.execute(
-                    select(MemoryOpenLoop)
+                    select(MemoryOpenLoop, MemoryEvent.source_type, MemoryEvent.source_ref)
                     .join(MemoryEvent, MemoryEvent.event_id == MemoryOpenLoop.event_id)
                     .where(
                         MemoryOpenLoop.tenant_id == tenant_uuid,
@@ -117,11 +117,11 @@ class PostgresUserStateRecallRetriever:
                     )
                     .limit(top_k * 2)
                 )
-            ).scalars().all()
+            ).all()
 
             prospective_rows = (
                 await session.execute(
-                    select(MemoryProspectiveItem)
+                    select(MemoryProspectiveItem, MemoryEvent.source_type, MemoryEvent.source_ref)
                     .join(
                         MemoryEvent,
                         MemoryEvent.event_id == MemoryProspectiveItem.event_id,
@@ -147,10 +147,12 @@ class PostgresUserStateRecallRetriever:
                     )
                     .limit(top_k * 2)
                 )
-            ).scalars().all()
+            ).all()
 
         candidates: list[MemoryEntry] = []
-        for row in goal_rows:
+        for row, source_type, source_ref in goal_rows:
+            if row.source_type != source_type or row.source_ref != source_ref:
+                continue
             relevance = self._relevance(
                 query_text,
                 f"{row.description} {row.target_text or ''}",
@@ -158,9 +160,11 @@ class PostgresUserStateRecallRetriever:
             )
             if relevance <= 0.0:
                 continue
-            candidates.append(self._goal_entry(row, query, relevance))
+            candidates.append(self._goal_entry(row, query, relevance, source_type, source_ref))
 
-        for row in open_loop_rows:
+        for row, source_type, source_ref in open_loop_rows:
+            if row.source_type != source_type or row.source_ref != source_ref:
+                continue
             relevance = self._relevance(
                 query_text,
                 f"{row.description} {row.domain or ''} {row.target_text or ''}",
@@ -168,9 +172,11 @@ class PostgresUserStateRecallRetriever:
             )
             if relevance <= 0.0:
                 continue
-            candidates.append(self._open_loop_entry(row, query, relevance))
+            candidates.append(self._open_loop_entry(row, query, relevance, source_type, source_ref))
 
-        for row in prospective_rows:
+        for row, source_type, source_ref in prospective_rows:
+            if row.source_type != source_type or row.source_ref != source_ref:
+                continue
             relevance = self._relevance(
                 query_text,
                 f"{row.event_type} {row.description} {row.temporal_text or ''}",
@@ -178,7 +184,7 @@ class PostgresUserStateRecallRetriever:
             )
             if relevance <= 0.0:
                 continue
-            candidates.append(self._prospective_entry(row, query, relevance))
+            candidates.append(self._prospective_entry(row, query, relevance, source_type, source_ref))
 
         candidates.sort(
             key=lambda item: (float(item.relevance or 0.0), float(item.confidence or 0.0)),
@@ -209,6 +215,8 @@ class PostgresUserStateRecallRetriever:
         row: MemoryUserGoal,
         query: MemoryQuery,
         relevance: float,
+        source_type: str | None = None,
+        source_ref: str | None = None,
     ) -> MemoryEntry:
         created_at = row.created_at or datetime.utcnow()
         metadata = MemoryMetadata(
@@ -233,8 +241,8 @@ class PostgresUserStateRecallRetriever:
                     "record_type": "memory_user_goal",
                     "goal_id": str(row.goal_id),
                     "event_id": str(row.event_id),
-                    "source_type": row.source_type,
-                    "source_ref": row.source_ref,
+                    "source_type": source_type,
+                    "source_ref": source_ref,
                 },
             },
         )
@@ -257,6 +265,8 @@ class PostgresUserStateRecallRetriever:
         row: MemoryOpenLoop,
         query: MemoryQuery,
         relevance: float,
+        source_type: str | None = None,
+        source_ref: str | None = None,
     ) -> MemoryEntry:
         created_at = row.created_at or datetime.utcnow()
         metadata = MemoryMetadata(
@@ -284,8 +294,8 @@ class PostgresUserStateRecallRetriever:
                     "record_type": "memory_open_loop",
                     "open_loop_id": str(row.open_loop_id),
                     "event_id": str(row.event_id),
-                    "source_type": row.source_type,
-                    "source_ref": row.source_ref,
+                    "source_type": source_type,
+                    "source_ref": source_ref,
                 },
             },
         )
@@ -308,6 +318,8 @@ class PostgresUserStateRecallRetriever:
         row: MemoryProspectiveItem,
         query: MemoryQuery,
         relevance: float,
+        source_type: str | None = None,
+        source_ref: str | None = None,
     ) -> MemoryEntry:
         created_at = row.created_at or datetime.utcnow()
         temporal = f" ({row.temporal_text})" if row.temporal_text else ""
@@ -333,8 +345,8 @@ class PostgresUserStateRecallRetriever:
                     "record_type": "memory_prospective_item",
                     "prospective_id": str(row.prospective_id),
                     "event_id": str(row.event_id),
-                    "source_type": row.source_type,
-                    "source_ref": row.source_ref,
+                    "source_type": source_type,
+                    "source_ref": source_ref,
                 },
             },
         )
