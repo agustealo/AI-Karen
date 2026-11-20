@@ -188,3 +188,21 @@ the only execution and replay paths. Tests are in
 successful authenticated deployed weather query, restart/relogin replay,
 accessible real-browser rendering, or production code-artifact provenance.
 Complete those acceptance gates separately before calling this consumer-ready.
+
+## CK-GEN-01B: Source code artifacts, repository proof first
+
+The canonical `ArtifactStore.read_owner_active_code` contract is the only source
+readback admitted for future display-only `code.artifact` production. Its
+Supabase implementation locks a tenant+owner-scoped active metadata row,
+checks a strict source file/media allowlist and size cap, reads the exact
+storage key, and verifies SHA-256 against the PostgreSQL record before yielding
+bounded UTF-8 text. Rejected or revoked artifacts disclose no bytes. The caller
+must obtain principal IDs from authenticated runtime context; neither model
+text nor frontend-provided IDs can grant read authority.
+
+This is **not** a runnable code tool, source editor, code-execution permission,
+or consumer-facing artifact presenter. The runtime producer must separately
+bind a permitted artifact selection to its authenticated conversation and
+preserve completed-run, digest-attested replay. Current acceptance is limited
+to source contracts and repository unit tests. Live storage, authenticated
+browser replay, and revocation trials remain unverified.
