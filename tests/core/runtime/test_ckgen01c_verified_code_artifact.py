@@ -86,7 +86,7 @@ def test_explicit_artifact_view_routes_to_governed_read_only_capability(command)
     f"delete my code artifact {ARTIFACT}",
     f"show my code artifact {ARTIFACT} then run it",
     f"show my code artifact ../{ARTIFACT}",
-    f"show my code artifact {ARTIFACT.upper()}",
+    f"show my code artifact {ARTIFACT[:-1]}A",
     f"show my code artifact {ARTIFACT} and share it",
     f"show their code artifact {ARTIFACT}",
     "show my code artifact not-an-uuid",
