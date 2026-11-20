@@ -56,7 +56,7 @@ class PostgresProfileRecallRetriever:
         top_k = min(max(int(query.top_k or 10), 1), 50)
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
             stmt = (
-                select(ProfileFact)
+                select(ProfileFact, MemoryEvent.source_type, MemoryEvent.source_ref)
                 .join(MemoryEvent, MemoryEvent.event_id == ProfileFact.event_id)
                 .where(
                     ProfileFact.tenant_id == tenant_uuid,
@@ -94,9 +94,15 @@ class PostgresProfileRecallRetriever:
                     stmt = stmt.where(
                         func.lower(ProfileFact.value[key].astext) == expected
                     )
-            rows = (await session.execute(stmt)).scalars().all()
+            rows = (await session.execute(stmt)).all()
 
-        return [self._entry(row, query) for row in rows]
+        return [
+            self._entry(row, query, source_type, source_ref)
+            for row, source_type, source_ref in rows
+            # A projection cannot override canonical event origin. Any
+            # discrepancy is quarantined at the read boundary.
+            if row.source_type == source_type and row.source_ref == source_ref
+        ]
 
     @staticmethod
     def _preferred_attribute(text: str) -> str | None:
@@ -166,7 +172,12 @@ class PostgresProfileRecallRetriever:
         return any(cue in q for cue in cues)
 
     @staticmethod
-    def _entry(row: ProfileFact, query: MemoryQuery) -> MemoryEntry:
+    def _entry(
+        row: ProfileFact,
+        query: MemoryQuery,
+        canonical_source_type: str | None = None,
+        canonical_source_ref: str | None = None,
+    ) -> MemoryEntry:
         value = row.value
         if isinstance(value, dict) and "value" in value:
             fact_value = value["value"]
@@ -221,8 +232,8 @@ class PostgresProfileRecallRetriever:
                     "record_type": "profile_fact",
                     "fact_id": str(row.fact_id),
                     "event_id": str(row.event_id),
-                    "source_type": row.source_type,
-                    "source_ref": row.source_ref,
+                    "source_type": canonical_source_type,
+                    "source_ref": canonical_source_ref,
                 },
             },
         )
