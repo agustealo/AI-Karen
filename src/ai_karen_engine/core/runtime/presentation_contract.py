@@ -160,7 +160,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             label, number = point["label"], point["value"]
             if (not isinstance(label, str) or not 1 <= len(label.strip()) <= 80
                 or label.strip() in seen or type(number) not in (int, float)
-                or not math.isfinite(number) or not 0 <= number <= 1_000_000_000):
+                or not 0 <= number <= 1_000_000_000 or not math.isfinite(number)):
                 return None
             seen.add(label.strip())
             safe_points.append({"label": label.strip(), "value": number})
@@ -181,13 +181,13 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             return None
         filename, language, code = data["filename"], data["language"], data["code"]
         if (not isinstance(filename, str) or not 1 <= len(filename) <= 160
-            or any(ord(ch) < 32 or ch in "/\\\\\\\\ " for ch in filename)
+            or any(ord(ch) < 33 or ch in ("/", "\\") for ch in filename)
             or filename in (".", "..")
             or not isinstance(language, str)
             or not re.fullmatch(r"[a-z][a-z0-9_+.-]{0,31}", language)
             or not isinstance(code, str)
             or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in code) <= 12000
-            or any(ord(ch) < 32 and ch not in "\\n\\r\\t" for ch in code)):
+            or any(ord(ch) < 32 and ch not in "\n\r\t" for ch in code)):
             return None
         safe = {key: value for key, value in raw.items() if key != "data"}
         safe["data"] = {"filename": filename, "language": language, "code": code}

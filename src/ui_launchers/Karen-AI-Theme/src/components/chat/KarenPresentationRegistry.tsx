@@ -140,12 +140,13 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     const data = raw as Record<string, unknown>;
     if (Object.keys(data).sort().join(",") !== "code,filename,language" ||
         typeof data.filename !== "string" || !data.filename || data.filename.length > 160 ||
-        /[\\s/\\\\\\x00-\\x1f]/.test(data.filename) ||
+        Array.from(data.filename).some(ch => ch.charCodeAt(0) < 33 || ch === "/" || ch === "\\") ||
         data.filename === "." || data.filename === ".." ||
         typeof data.language !== "string" ||
         !/^[a-z][a-z0-9_+.-]{0,31}$/.test(data.language) ||
         typeof data.code !== "string" || !data.code ||
-        data.code.length > 12_000 || /[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]/.test(data.code)) return null;
+        data.code.length > 12_000 || Array.from(data.code).some(ch =>
+          ch.charCodeAt(0) < 32 && ch !== "\n" && ch !== "\r" && ch !== "\t")) return null;
   } else if (result.data.component_type === "data.table") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
