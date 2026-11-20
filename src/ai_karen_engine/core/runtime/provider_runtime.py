@@ -1391,7 +1391,7 @@ class ProviderRuntime:
                 health.latency_samples.pop(0)
             health.latency_samples.append(latency)
 
-        message = str(error).lower()
+        message = str(self._provider_failure_cause(error)).lower()
         if "rate limit" in message or "429" in message:
             if isinstance(health, dict):
                 health["rate_limited_until"] = time.time() + self.rate_limit_backoff
@@ -2065,9 +2065,22 @@ class ProviderRuntime:
         return "The provider failed while handling the request."
 
     @staticmethod
+    def _provider_failure_cause(error: BaseException | str) -> BaseException | str:
+        """Inspect retained private cause for backoff without exposing its text."""
+        cause = error
+        for _ in range(8):
+            if not isinstance(cause, ProviderProcessingError) or cause.last_error is None:
+                break
+            if cause.last_error is cause:
+                break
+            cause = cause.last_error
+        return cause
+
+    @staticmethod
     def _safe_error_detail(error: BaseException | str) -> str:
         """Classify untrusted provider errors without publishing their contents."""
-        return ProviderRuntime._classify_failure_detail(str(error))
+        cause = ProviderRuntime._provider_failure_cause(error)
+        return ProviderRuntime._classify_failure_detail(str(cause))
 
     @staticmethod
     def _redact_error_message(error: Optional[BaseException]) -> str:
