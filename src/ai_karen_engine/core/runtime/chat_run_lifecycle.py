@@ -97,12 +97,51 @@ class ChatRunCoordinator:
             transport_run_id=run_id,
         )
 
+    @staticmethod
+    def _journal_safe_event(event: dict[str, Any]) -> dict[str, Any]:
+        """Persist a source-free observation for revocable code presentations.
+
+        Live delivery remains the original verified event. Durable AG-UI
+        observations cannot replay bytes after a source is archived, deleted
+        or its owner's permissions change. Keep the journal sequence and
+        cursor consistent by writing a harmless marker, not skipping a row.
+        """
+        def contains_code_artifact(value: Any, depth: int = 0) -> bool:
+            if depth > 12:
+                # Unknown deep structures must not become a durable code leak.
+                return True
+            if isinstance(value, dict):
+                if value.get("component_type") == "code.artifact":
+                    return True
+                return any(
+                    contains_code_artifact(item, depth + 1)
+                    for item in value.values()
+                )
+            if isinstance(value, (list, tuple)):
+                return any(
+                    contains_code_artifact(item, depth + 1) for item in value
+                )
+            return False
+
+        if (
+            isinstance(event, dict)
+            and event.get("type") == "CUSTOM"
+            and event.get("name") == "karen.presentation.v1"
+            and contains_code_artifact(event.get("value"))
+        ):
+            return {
+                "type": "CUSTOM",
+                "name": "karen.presentation.withheld.v1",
+                "value": {"reason": "revocable_code_not_replayable"},
+            }
+        return event
+
     async def append_observed_event(
         self, lease: ChatRunLease, event: dict[str, Any],
     ) -> int:
-        """Persist only an already-projected event, never raw model metadata."""
+        """Append only journal-safe events, preserving the live wire payload."""
         return await self._repository.append_projected_event(
-            lease, event=event,
+            lease, event=self._journal_safe_event(event),
         )
 
     async def read_observed_events(
