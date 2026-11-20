@@ -79,3 +79,43 @@ test('clearing a refined search removes previous evidence and the previous-resul
   await expect(page.getByText('Previous search evidence')).not.toBeVisible();
   await expect(query).toHaveValue('');
 });
+
+
+test('retained Deep Research insights remain accessible after draft mode changes', async ({ page }) => {
+  await page.route('**/api/plugins/execute', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        result: {
+          query: 'Graph retrieval evaluation',
+          mode: 'deep_research',
+          summary: 'Completed multi-source investigation',
+          insights: ['Evidence shows the important dependency'],
+          sources: [{
+            id: 'research-source',
+            title: 'Research reference',
+            url: 'https://example.org/research',
+            snippet: 'Documented research evidence',
+          }],
+          results: [],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/plugins/intelligent-search');
+  await page.getByRole('combobox', { name: 'Search mode' }).selectOption('deep_research');
+  await page.getByRole('textbox', { name: 'Query' }).fill('Graph retrieval evaluation');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Show Insights search information' })).toBeVisible();
+
+  await page.getByRole('combobox', { name: 'Search mode' }).selectOption('weather');
+  await expect(page.getByText('Previous search evidence')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show Insights search information' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Show Sources search information' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Show Insights search information' }).click();
+  await expect(page.getByText('Evidence shows the important dependency')).toBeVisible();
+});
