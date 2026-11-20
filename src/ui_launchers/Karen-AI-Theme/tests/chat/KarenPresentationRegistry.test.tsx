@@ -336,6 +336,18 @@ describe("KGUI-02 governed chart and code host presentation", () => {
     expect(html).toContain("18.5");
     expect(html).toContain("0%");
   });
+  it("preserves fractional precision in both labels and accessible source table", () => {
+    const precise = { ...chart, data: { ...chart.data, points: [
+      { label: "Tiny", value: 0.0001 },
+      { label: "Measured", value: 18.56789 },
+    ] } };
+    expect(parseKarenPresentation(precise)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={precise} />);
+    expect((html.match(/0\.0001/g) ?? []).length).toBe(2);
+    expect((html.match(/18\.56789/g) ?? []).length).toBe(2);
+    expect(html).not.toContain(">18.568<");
+    expect(html).not.toContain(">0<");
+  });
   it("rejects unverified chart values and action injection", () => {
     for (const value of [NaN, Infinity, -1, 1_000_000_001, true, "12"]) {
       expect(parseKarenPresentation({ ...chart, data: {
