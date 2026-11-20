@@ -66,7 +66,7 @@ These are **planned** full-workspace capabilities. PR #1119 adds a limited read-
 | Action requested | Preview RBAC/permissions and consequences; show confirmed receipts |
 | Clear | Explicitly remove draft and displayed snapshot; does not claim server-side deletion |
 
-PR #1118 addresses preserving previous evidence through draft query/mode/settings changes, with a review correction to tie retained tabs to completed mode. It remains **open** at this baseline. Avoid promising durability across reloads: the hook is in-memory UI state.
+PR #1118 addresses preserving previous evidence through draft query/mode/settings changes, with a review correction to tie retained tabs to completed mode. **Merged 2026-11-20** after this wiki's original source audit. Avoid promising durability across reloads: the hook is in-memory UI state.
 
 ## 5. Search continuity and cancellation model
 
