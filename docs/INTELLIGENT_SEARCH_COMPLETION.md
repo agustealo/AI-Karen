@@ -1,5 +1,8 @@
 # Intelligent Search Plugin - Completion Summary
 
+> **Historical implementation report, not current release authority (2026-11-20).** This document retains previous route names, checklists and completion assertions for historical traceability. The current mounted consumer calls `POST /api/plugins/execute` through `IntelligentSearchApi.ts`, and consumer-readiness certification remains **RED** pending real deployment acceptance. For current ownership, API and graph contracts, use the [maintained Intelligent Search Developer Wiki](wiki/intelligent-search/README.md) and [SR-01 release gate](intelligent-search/CONSUMER_RELEASE_SR01.md). Do not treat old mocked Playwright or historical completion marks as proof of current target-host behavior.
+
+
 ## Overview
 
 This document summarizes the completion of the Intelligent Search plugin UI framework with full Crawl4AI integration and Playwright verification.
