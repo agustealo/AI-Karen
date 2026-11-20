@@ -242,7 +242,7 @@ class SupabaseArtifactStore(ArtifactStore):
                 if (
                     not source
                     or sum(2 if ord(ch) > 0xFFFF else 1 for ch in source) > 12000
-                    or any(ord(ch) < 32 and ch not in "\\n\\r\\t" for ch in source)
+                    or any(ord(ch) < 32 and ch not in "\n\r\t" for ch in source)
                 ):
                     return RepositoryResult(success=False, error=unavailable)
 
