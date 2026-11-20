@@ -2,7 +2,45 @@
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
+_OWNER_CODE_ARTIFACT_COMMAND = re.compile(
+    r"^(?:please\\s+)?(?:show|view|display)\\s+"
+    r"(?:me\\s+)?my\\s+code\\s+artifact\\s+"
+    r"(?P<artifact_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12})[?!.]*$",
+    re.IGNORECASE,
+)
+
+
+def parse_owner_code_artifact_view(query: str) -> Optional[str]:
+    """Recognize an explicit owner-file lookup, never grant access.
+
+    No aliases, conversational pronouns, free-form file paths, model-supplied
+    references or compound instructions are accepted as artifact selectors.
+    """
+    if not isinstance(query, str) or not 1 <= len(query) <= 160:
+        return None
+    match = _OWNER_CODE_ARTIFACT_COMMAND.fullmatch(" ".join(query.strip().split()))
+    if match is None:
+        return None
+    import uuid
+
+    raw_id = match.group("artifact_id")
+    try:
+        artifact_id = str(uuid.UUID(raw_id))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return artifact_id if raw_id == artifact_id else None
+
+
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    "artifact.code.read": {
+        "triggers": [],
+        "patterns": [],
+        "required_capability": "artifact.code.read",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
+
     "plugin.inspect": {
         # Read-only catalog discovery only. Side effects belong to a later,
         # separately authorized host/plugin action, never this direct route.
@@ -525,6 +563,15 @@ def _plugin_inspection_decision(
 
 
 def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
+    # Exact, owner-scoped artifact viewing outranks broad search and model intents.
+    # A parsed identifier is a lookup request, not permission to read it.
+    if parse_owner_code_artifact_view(query) is not None:
+        return CapabilityDecision(
+            intent="artifact.code.read", confidence=confidence,
+            requires_tool=True, requires_live_data=True,
+            capability="artifact.code.read", allow_llm_only=False,
+            requires_chat_capable_model=False,
+        )
     plugin_request = parse_plugin_inspection_request(query)
     # Explicit catalog discovery, use and lifecycle requests must outrank
     # unanchored generic search/weather patterns, but CORTEX grants no action.
