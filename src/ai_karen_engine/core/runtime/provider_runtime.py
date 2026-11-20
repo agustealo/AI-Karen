@@ -174,7 +174,7 @@ class ProviderProcessingError(RuntimeError):
         self.last_error: Optional[BaseException] = self.errors[-1] if self.errors else None
         unique_messages: List[str] = []
         for error in self.errors:
-            message = str(error)
+            message = type(error).__name__
             if message and message not in unique_messages:
                 unique_messages.append(message)
         attempts = len(self.errors) or 1
@@ -331,7 +331,7 @@ class ProviderRuntime:
             latency_ms=(time.time() - start_time) * 1000,
             correlation_id=correlation_id,
             provider_attempts=provider_attempts,
-            metadata={"source": "emergency_static", "request_message": request.message[:200]},
+            metadata={"source": "emergency_static"},
         )
 
     @staticmethod
@@ -448,13 +448,13 @@ class ProviderRuntime:
             )
             
         except Exception as exc:
-            logger.warning(f"Primary provider {current_provider} failed: {exc}. Attempting fallbacks.")
+            logger.warning("Primary provider %s failed (%s). Attempting fallbacks.", current_provider, type(exc).__name__)
             provider_attempts.append({
                 "provider": current_provider,
                 "model": current_model,
                 "status": "failed",
                 "error_type": type(exc).__name__,
-                "error_message": str(exc),
+                "error_message": self._safe_error_detail(exc),
                 "latency_ms": (time.time() - attempt_start) * 1000
             })
 
@@ -522,7 +522,7 @@ class ProviderRuntime:
                 latency_ms=(time.time() - start_time) * 1000,
                 correlation_id=correlation_id,
                 provider_attempts=provider_attempts,
-                metadata={"source": "emergency_static", "request_message": request.message[:200]},
+                metadata={"source": "emergency_static"},
             )
             return
         
@@ -568,13 +568,13 @@ class ProviderRuntime:
             )
             
         except Exception as exc:
-            logger.warning(f"Primary provider {current_provider} failed during stream: {exc}. Attempting fallbacks.")
+            logger.warning("Primary provider %s failed during stream (%s).", current_provider, type(exc).__name__)
             provider_attempts.append({
                 "provider": current_provider,
                 "model": current_model,
                 "status": "failed",
                 "error_type": type(exc).__name__,
-                "error_message": str(exc),
+                "error_message": self._safe_error_detail(exc),
                 "latency_ms": (time.time() - attempt_start) * 1000
             })
 
@@ -601,7 +601,7 @@ class ProviderRuntime:
                     fallback_level=decision.fallback_level,
                     degraded_mode=True,
                     degradation_type="requested_provider_failure",
-                    degradation_reason=str(exc),
+                    degradation_reason=self._safe_error_detail(exc),
                     latency_ms=(time.time() - start_time) * 1000,
                     correlation_id=correlation_id,
                     provider_attempts=provider_attempts,
@@ -652,7 +652,7 @@ class ProviderRuntime:
                         fallback_level=decision.fallback_level + i,
                         degraded_mode=True,
                         degradation_type="provider_fallback",
-                        degradation_reason=f"primary_failed: {str(exc)}",
+                        degradation_reason=f"primary_failed:{type(exc).__name__}",
                         latency_ms=latency_ms,
                         correlation_id=correlation_id,
                         provider_attempts=provider_attempts,
@@ -665,7 +665,7 @@ class ProviderRuntime:
                         "model": fallback_model,
                         "status": "failed",
                         "error_type": type(fall_exc).__name__,
-                        "error_message": str(fall_exc),
+                        "error_message": self._safe_error_detail(fall_exc),
                         "latency_ms": (time.time() - fallback_attempt_start) * 1000
                     })
                     continue
@@ -746,7 +746,7 @@ class ProviderRuntime:
                     fallback_level=decision.fallback_level + i,
                     degraded_mode=True,
                     degradation_type="provider_fallback",
-                    degradation_reason=f"primary_failed: {str(primary_exc)}",
+                    degradation_reason=f"primary_failed:{type(primary_exc).__name__}",
                     latency_ms=latency_ms,
                     correlation_id=correlation_id,
                     provider_attempts=provider_attempts,
@@ -763,7 +763,7 @@ class ProviderRuntime:
                     "model": fallback_model,
                     "status": "failed",
                     "error_type": type(fall_exc).__name__,
-                    "error_message": str(fall_exc),
+                    "error_message": self._safe_error_detail(fall_exc),
                     "latency_ms": (time.time() - fallback_attempt_start) * 1000,
                 })
                 continue
@@ -1094,11 +1094,10 @@ class ProviderRuntime:
             raise
         except Exception as exc:
             logger.error(
-                f"Unexpected error invoking provider {getattr(provider, 'provider_name', 'unknown')}: {exc}",
-                extra={"provider": getattr(provider, 'provider_name', 'unknown'), "error": str(exc)},
-                exc_info=True
+                "Unexpected provider invocation failure (%s)", type(exc).__name__,
+                extra={"provider": getattr(provider, 'provider_name', 'unknown'), "error_type": type(exc).__name__},
             )
-            raise GenerationFailed(f"Provider generation failed: {exc}") from exc
+            raise GenerationFailed("Provider generation failed") from None
 
         if inspect.isawaitable(result):
             result = await result
@@ -1243,12 +1242,12 @@ class ProviderRuntime:
             )
         else:
             logger.warning(
-                "[%s] Provider %s failed on attempt %d in %.2fs: %s",
+                "[%s] Provider %s failed on attempt %d in %.2fs (%s)",
                 request_id,
                 provider_name,
                 attempt,
                 duration,
-                error,
+                type(error).__name__ if error is not None else "UnknownError",
             )
 
     async def _respect_rate_limit(self, provider_name: str) -> None:
@@ -1373,7 +1372,7 @@ class ProviderRuntime:
         if isinstance(health, dict):
             health["is_healthy"] = False
             health["consecutive_failures"] = health.get("consecutive_failures", 0) + 1
-            health["error_message"] = str(error)
+            health["error_message"] = self._safe_error_detail(error)
             health["last_failure"] = time.time()
             health["last_exception_type"] = type(error).__name__
 
@@ -1385,14 +1384,14 @@ class ProviderRuntime:
         else:
             health.is_healthy = False
             health.consecutive_failures += 1
-            health.error_message = str(error)
+            health.error_message = self._safe_error_detail(error)
             health.last_failure = time.time()
             health.last_exception_type = type(error).__name__
             if len(health.latency_samples) >= self.latency_history_size:
                 health.latency_samples.pop(0)
             health.latency_samples.append(latency)
 
-        message = str(error).lower()
+        message = str(self._provider_failure_cause(error)).lower()
         if "rate limit" in message or "429" in message:
             if isinstance(health, dict):
                 health["rate_limited_until"] = time.time() + self.rate_limit_backoff
@@ -1509,9 +1508,9 @@ class ProviderRuntime:
         if provider_attempts is not None:
             metadata["provider_attempts"] = provider_attempts
         if degradation_reason and not provider_error:
-            metadata["failure_reason"] = degradation_reason
+            metadata["failure_reason"] = self._safe_error_detail(degradation_reason)
         elif provider_error:
-            metadata["failure_reason"] = provider_error
+            metadata["failure_reason"] = self._safe_error_detail(provider_error)
         return metadata
 
     def _effective_provider_model(self, provider_info: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -1674,8 +1673,8 @@ class ProviderRuntime:
             )
             return final_text
         except Exception as degraded_error:
-            logger.exception(
-                "Failed to generate degraded mode response: %s", degraded_error
+            logger.error(
+                "Failed to prepare degraded mode response (%s)", type(degraded_error).__name__
             )
 
         return None
@@ -1724,7 +1723,7 @@ class ProviderRuntime:
                 "model": requested_model,
                 "status": "failed",
                 "error_type": "requested_provider_failure",
-                "error_message": failure_reason,
+                "error_message": self._safe_error_detail(failure_reason),
                 "latency_ms": 0.0,
             }
         ]
@@ -1855,11 +1854,11 @@ class ProviderRuntime:
                                 response_source="live_model",
                                 fallback_level=fallback_level,
                                 degraded_mode=True,
-                                degradation_reason=failure_reason,
+                                degradation_reason=self._safe_error_detail(failure_reason),
                                 success=True,
                             )
                         except Exception as metrics_error:
-                            logger.debug(f"Failed to record provider metrics: {metrics_error}")
+                            logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
 
                     llm_metadata = self._build_llm_metadata(
                         requested_provider=requested_provider,
@@ -1871,7 +1870,7 @@ class ProviderRuntime:
                         source="runtime_fallback",
                         degraded_mode=True,
                         fallback_level=fallback_level,
-                        degradation_reason=failure_reason,
+                        degradation_reason=self._safe_error_detail(failure_reason),
                         used_fallback=True,
                         provider_health=provider_info,
                         provider_attempts=provider_attempts,
@@ -1881,7 +1880,7 @@ class ProviderRuntime:
                             "fallback_from": requested_provider,
                             "fallback_chain": list(RUNTIME_DEGRADED_FALLBACK_ORDER),
                             "attempted_providers": [item["provider"] for item in provider_attempts],
-                            "raw_failure_reason": failure_reason,
+                            "failure_reason": self._safe_error_detail(failure_reason),
                         }
                     )
 
@@ -1900,7 +1899,7 @@ class ProviderRuntime:
                     extra={
                         "provider": provider_name,
                         "requested_provider": requested_provider,
-                        "error": str(exc),
+                        "error_type": type(exc).__name__,
                         "fallback_level": fallback_level,
                     }
                 )
@@ -1909,7 +1908,7 @@ class ProviderRuntime:
                     "model": self._effective_provider_model(provider_info) if "provider_info" in locals() else None,
                     "status": "failed",
                     "error_type": "provider_not_available",
-                    "error_message": str(exc),
+                    "error_message": self._safe_error_detail(exc),
                     "latency_ms": 0.0,
                 })
 
@@ -1922,10 +1921,10 @@ class ProviderRuntime:
                             requested_model=requested_model,
                             success=False,
                             error_type="ProviderNotAvailable",
-                            error_code=str(exc),
+                            error_code=type(exc).__name__,
                         )
                     except Exception as metrics_error:
-                        logger.debug(f"Failed to record provider metrics: {metrics_error}")
+                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
 
                 continue
 
@@ -1935,7 +1934,7 @@ class ProviderRuntime:
                     extra={
                         "provider": provider_name,
                         "requested_provider": requested_provider,
-                        "error": str(exc),
+                        "error_type": type(exc).__name__,
                         "fallback_level": fallback_level,
                     }
                 )
@@ -1944,7 +1943,7 @@ class ProviderRuntime:
                     "model": self._effective_provider_model(provider_info) if "provider_info" in locals() else None,
                     "status": "failed",
                     "error_type": "generation_failed",
-                    "error_message": str(exc),
+                    "error_message": self._safe_error_detail(exc),
                     "latency_ms": 0.0,
                 })
 
@@ -1957,10 +1956,10 @@ class ProviderRuntime:
                             requested_model=requested_model,
                             success=False,
                             error_type="GenerationFailed",
-                            error_code=str(exc),
+                            error_code=type(exc).__name__,
                         )
                     except Exception as metrics_error:
-                        logger.debug(f"Failed to record provider metrics: {metrics_error}")
+                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
 
                 continue
 
@@ -1970,17 +1969,16 @@ class ProviderRuntime:
                     extra={
                         "provider": provider_name,
                         "requested_provider": requested_provider,
-                        "error": str(exc),
+                        "error_type": type(exc).__name__,
                         "fallback_level": fallback_level,
                     },
-                    exc_info=True
                 )
                 provider_attempts.append({
                     "provider": provider_name,
                     "model": self._effective_provider_model(provider_info) if "provider_info" in locals() else None,
                     "status": "failed",
                     "error_type": type(exc).__name__,
-                    "error_message": str(exc),
+                    "error_message": self._safe_error_detail(exc),
                     "latency_ms": 0.0,
                 })
                 continue
@@ -1990,7 +1988,7 @@ class ProviderRuntime:
             extra={
                 "requested_provider": requested_provider,
                 "attempted_providers": [item["provider"] for item in provider_attempts],
-                "failure_reason": failure_reason,
+                "failure_reason": self._safe_error_detail(failure_reason),
             }
         )
 
@@ -2018,7 +2016,7 @@ class ProviderRuntime:
                     "used_fallback": True,
                     "fallback_from": requested_provider,
                     "fallback_level": 99,
-                    "degradation_reason": failure_reason,
+                    "degradation_reason": self._safe_error_detail(failure_reason),
                     "fallback_chain": list(RUNTIME_DEGRADED_FALLBACK_ORDER),
                     "attempted_providers": [item["provider"] for item in provider_attempts],
                     "provider_attempts": provider_attempts,
@@ -2041,6 +2039,8 @@ class ProviderRuntime:
                 "forbidden",
                 "403",
                 "authentication",
+                "authorization",
+                "bearer",
             )
         ):
             return "The provider rejected the credentials or API key."
@@ -2065,16 +2065,26 @@ class ProviderRuntime:
         return "The provider failed while handling the request."
 
     @staticmethod
+    def _provider_failure_cause(error: BaseException | str) -> BaseException | str:
+        """Inspect retained private cause for backoff without exposing its text."""
+        cause = error
+        for _ in range(8):
+            if not isinstance(cause, ProviderProcessingError) or cause.last_error is None:
+                break
+            if cause.last_error is cause:
+                break
+            cause = cause.last_error
+        return cause
+
+    @staticmethod
+    def _safe_error_detail(error: BaseException | str) -> str:
+        """Classify untrusted provider errors without publishing their contents."""
+        cause = ProviderRuntime._provider_failure_cause(error)
+        return ProviderRuntime._classify_failure_detail(str(cause))
+
+    @staticmethod
     def _redact_error_message(error: Optional[BaseException]) -> str:
-        raw = str(error or "")
-        if not raw:
-            return ""
-        redacted = re.sub(
-            r"(?i)(api[_-]?key|authorization|bearer|token|secret)[=: ]+[^\s,;]+",
-            r"\1=[redacted]",
-            raw,
-        )
-        return redacted[:500]
+        return ProviderRuntime._safe_error_detail(error) if error is not None else ""
 
     def _derive_error_reason(self, error: Optional[BaseException]) -> str:
         if error is None:
