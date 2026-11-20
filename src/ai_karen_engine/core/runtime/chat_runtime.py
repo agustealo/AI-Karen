@@ -1771,11 +1771,15 @@ class ChatRuntime:
         Source artifacts therefore remain live-display-only in this phase.
         """
         durable = dict(provider_meta)
-        structured = durable.get("structured_content")
+        from ai_karen_engine.core.runtime.presentation_contract import (
+            contains_revocable_code_artifact,
+        )
+
         if (
-            isinstance(structured, dict)
-            and isinstance(structured.get("presentation"), dict)
-            and structured["presentation"].get("component_type") == "code.artifact"
+            contains_revocable_code_artifact(durable.get("structured_content"))
+            or contains_revocable_code_artifact(
+                durable.get("verified_presentations_v1")
+            )
         ):
             # Even a residual status inside structured_content would look
             # like unauthenticated rich history to the owned-history projector.
