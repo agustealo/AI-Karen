@@ -313,3 +313,109 @@ describe("KCON-770 unsupported media and presentation faults", () => {
     expect(html).not.toContain("<button");
   });
 });
+
+
+describe("KGUI-02 governed chart and code host presentation", () => {
+  const chart = {
+    schema_version: 1, presentation_id: "chart-1",
+    component_type: "chart.bar", evidence_ref: "owned:chart",
+    data: { title: "Orders", x_label: "Month", y_label: "Count", unit: "items",
+      points: [{ label: "Jan", value: 0 }, { label: "Feb", value: 18.5 }] },
+  };
+  const artifact = {
+    schema_version: 1, presentation_id: "code-1",
+    component_type: "code.artifact", evidence_ref: "owned:code",
+    data: { filename: "analysis.py", language: "python",
+      code: "print('<script>alert(1)</script>')\\n" },
+  };
+  it("renders numeric bars with an accessible source table", () => {
+    expect(parseKarenPresentation(chart)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={chart} />);
+    expect(html).toContain('data-testid="karen-bar-chart"');
+    expect(html).toContain("<table");
+    expect(html).toContain("18.5");
+    expect(html).toContain("0%");
+  });
+  it("preserves fractional precision in both labels and accessible source table", () => {
+    const precise = { ...chart, data: { ...chart.data, points: [
+      { label: "Tiny", value: 0.0001 },
+      { label: "Measured", value: 18.56789 },
+    ] } };
+    expect(parseKarenPresentation(precise)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={precise} />);
+    expect((html.match(/0\.0001/g) ?? []).length).toBe(2);
+    expect((html.match(/18\.56789/g) ?? []).length).toBe(2);
+    expect(html).not.toContain(">18.568<");
+    expect(html).not.toContain(">0<");
+  });
+  it("uses identical UTF-16 bounds for Unicode chart and code metadata", () => {
+    const unicodeChart = { ...chart, data: {
+      title: "📊".repeat(80), x_label: "📊".repeat(80),
+      y_label: "📊".repeat(80), unit: "📊".repeat(16),
+      points: [{ label: "📊".repeat(40), value: 0.0001 }],
+    } };
+    expect(parseKarenPresentation(unicodeChart)).not.toBeNull();
+    for (const field of ["title", "x_label", "y_label", "unit"] as const) {
+      const excess = field === "unit" ? "📊".repeat(17) : "📊".repeat(81);
+      expect(parseKarenPresentation({
+        ...unicodeChart, data: { ...unicodeChart.data, [field]: excess },
+      })).toBeNull();
+    }
+    expect(parseKarenPresentation({ ...unicodeChart, data: {
+      ...unicodeChart.data, points: [{ label: "📊".repeat(41), value: 0.0001 }],
+    } })).toBeNull();
+
+    const unicodeCode = { ...artifact, data: { ...artifact.data, filename: "📊".repeat(80) } };
+    expect(parseKarenPresentation(unicodeCode)).not.toBeNull();
+    expect(parseKarenPresentation({ ...unicodeCode, data: {
+      ...unicodeCode.data, filename: "📊".repeat(81),
+    } })).toBeNull();
+  });
+  it("aligns Unicode whitespace and duplicate detection with backend chart normalization", () => {
+    const bomChart = { ...chart, data: {
+      title: "\uFEFFOrders\uFEFF", x_label: " Month ",
+      y_label: "\uFEFFCount", points: [
+        { label: "\uFEFFJan", value: 1 },
+        { label: "Feb", value: 2 },
+      ],
+    } };
+    expect(parseKarenPresentation(bomChart)).not.toBeNull();
+    for (const field of ["title", "x_label", "y_label"] as const) {
+      expect(parseKarenPresentation({ ...bomChart, data: {
+        ...bomChart.data, [field]: "\uFEFF",
+      } })).toBeNull();
+    }
+    expect(parseKarenPresentation({ ...bomChart, data: {
+      ...bomChart.data, points: [{ label: "\uFEFFJan", value: 1 }, { label: "Jan", value: 2 }],
+    } })).toBeNull();
+    for (const label of ["\u0085", "\u001c"]) {
+      expect(parseKarenPresentation({ ...bomChart, data: {
+        ...bomChart.data, points: [{ label, value: 1 }],
+      } })).not.toBeNull();
+    }
+  });
+  it("rejects unverified chart values and action injection", () => {
+    for (const value of [NaN, Infinity, -1, 1_000_000_001, true, "12"]) {
+      expect(parseKarenPresentation({ ...chart, data: {
+        ...chart.data, points: [{ label: "Jan", value }],
+      } })).toBeNull();
+    }
+    expect(parseKarenPresentation({ ...chart, data: {
+      ...chart.data, actions: ["delete"], points: chart.data.points,
+    } })).toBeNull();
+  });
+  it("escapes code without allowing execution or UI insertion", () => {
+    expect(parseKarenPresentation(artifact)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={artifact} />);
+    expect(html).toContain('data-testid="karen-code-artifact"');
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<button");
+    expect(parseKarenPresentation({ ...artifact, data: {
+      ...artifact.data, execute: true,
+    } })).toBeNull();
+    expect(parseKarenPresentation({ ...artifact, data: {
+      ...artifact.data, filename: "../secrets.py",
+    } })).toBeNull();
+  });
+});

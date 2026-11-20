@@ -902,3 +902,9 @@ completion, content-size or presentation validation to silence the UI.
   gates: actual consumer execution on current host, backend/frontend schema
   parity for expanded chart/code/media, authenticated session/replay,
   tenant/RBAC denial, lifecycle disable/uninstall, accessibility and exact-head CI.
+
+## KCON-770 / KGUI-02: Read-only chart and code host primitives (source candidate, 2026-11-20)
+
+- Extend existing `presentation_contract.py` and `KarenPresentationRegistry.tsx` in parallel for `chart.bar` and `code.artifact`; strict bounded values, evidence-linked envelope, read-only UI, accessible underlying table, and escaped code text. The model may never supply renderer code or execute artifacts.
+- Backend/frontend contract tests reject nonfinite, negative, oversized and malformed chart values, duplicate labels, path traversal filenames, executable flags, control bytes and extra keys. Existing `surface.composition` continues to admit only separately authorized child envelopes.
+- **Not yet producer-integrated or consumer certified:** no inferred series or movie facts, data source registry, code execution, plugin UI loading, third-party renderer registration or signed-in browser claim. Requires reviewed source provenance, producer wiring, schema/version migrations, exact-head CI and authenticated replay/tenant checks. KGUI-01 prerequisite merged in PR #1122. Host primitive support does not automatically add chart/code to the plugin manifest declaration allowlist.

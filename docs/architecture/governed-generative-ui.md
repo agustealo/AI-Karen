@@ -152,3 +152,16 @@ custom components into arbitrary executable React or HTML.
 **2026-11-20 status: contract declaration only.** No current first-party
 plugin manifest is migrated by this first slice. No browser acceptance or
 tenant-enabled renderer availability is implied.
+
+## KGUI-02 read-only host primitives
+
+`chart.bar` (nonnegative bounded numeric points with labels, title and units)
+and `code.artifact` (bounded, display-only source code) extend the *existing*
+canonical backend envelope and the frontend allowlist. A chart must expose
+the exact underlying values as a semantic table. Code must be escaped by React
+and must not execute. Each requires a runtime-authorized `evidence_ref`.
+They may be composed using existing authorized layout rules, not new graph
+execution. This is a **source-only renderer/schema slice**: no producer or
+plugin is entitled to create factual data by declaring a component type.
+Actual source-producer wiring, browser replay and installed renderer health
+remain separate acceptance gates.

@@ -12,7 +12,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table", "chart.bar", "code.artifact"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -114,6 +114,39 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
     if (typeof clock !== "string" || !clock.trim() || clock.length > 160) return null;
     if (timezone !== undefined && (typeof timezone !== "string" || timezone.length > 100)) return null;
     if (Object.keys(value).some((key) => !["formatted", "timezone"].includes(key))) return null;
+  } else if (result.data.component_type === "chart.bar") {
+    const raw = result.data.data;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const data = raw as Record<string, unknown>;
+    if (Object.keys(data).some(k => !["title", "x_label", "y_label", "unit", "points"].includes(k)) ||
+        !["title", "x_label", "y_label", "points"].every(k => k in data) ||
+        !["title", "x_label", "y_label"].every(k => typeof data[k] === "string" &&
+          (data[k] as string).trim().length > 0 && (data[k] as string).trim().length <= 160) ||
+        (data.unit !== undefined && (typeof data.unit !== "string" || data.unit.length > 32)) ||
+        !Array.isArray(data.points) || data.points.length < 1 || data.points.length > 20) return null;
+    const labels = new Set<string>();
+    for (const rawPoint of data.points) {
+      if (!rawPoint || typeof rawPoint !== "object" || Array.isArray(rawPoint)) return null;
+      const point = rawPoint as Record<string, unknown>;
+      if (Object.keys(point).sort().join(",") !== "label,value" ||
+          typeof point.label !== "string" || !point.label.trim() || point.label.trim().length > 80 ||
+          labels.has(point.label.trim()) || typeof point.value !== "number" ||
+          !Number.isFinite(point.value) || point.value < 0 || point.value > 1_000_000_000) return null;
+      labels.add(point.label.trim());
+    }
+  } else if (result.data.component_type === "code.artifact") {
+    const raw = result.data.data;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const data = raw as Record<string, unknown>;
+    if (Object.keys(data).sort().join(",") !== "code,filename,language" ||
+        typeof data.filename !== "string" || !data.filename || data.filename.length > 160 ||
+        Array.from(data.filename).some(ch => ch.charCodeAt(0) < 33 || ch === "/" || ch === "\\") ||
+        data.filename === "." || data.filename === ".." ||
+        typeof data.language !== "string" ||
+        !/^[a-z][a-z0-9_+.-]{0,31}$/.test(data.language) ||
+        typeof data.code !== "string" || !data.code ||
+        data.code.length > 12_000 || Array.from(data.code).some(ch =>
+          ch.charCodeAt(0) < 32 && ch !== "\n" && ch !== "\r" && ch !== "\t")) return null;
   } else if (result.data.component_type === "data.table") {
     const value = result.data.data;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -223,6 +256,49 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
         <p className="mt-1 text-2xl font-semibold tabular-nums">{display.time}</p>
         {display.date && <p className="mt-1 text-xs text-muted-foreground">{display.date}</p>}
         {clock.timezone && <p className="mt-1 text-xs text-muted-foreground">{clock.timezone}</p>}
+      </section>;
+    }
+    case "chart.bar": {
+      const chart = envelope.data as {
+        title: string; x_label: string; y_label: string; unit?: string;
+        points: { label: string; value: number }[];
+      };
+      const maxValue = Math.max(...chart.points.map(point => point.value), 0);
+      return <section aria-label={chart.title} data-testid="karen-bar-chart"
+        className="my-3 min-w-0 rounded-xl border border-border/70 p-4">
+        <h3 className="font-semibold">{chart.title}</h3>
+        <p className="mt-1 text-xs text-muted-foreground">{chart.y_label}{chart.unit ? ` (${chart.unit})` : ""}</p>
+        <div role="img" aria-label={`Bar chart: ${chart.title}`} className="mt-3 space-y-2">
+          {chart.points.map(point => <div key={point.label} className="grid grid-cols-[minmax(5rem,9rem)_1fr_auto] items-center gap-2 text-xs">
+            <span className="truncate" title={point.label}>{point.label}</span>
+            <div className="h-4 rounded bg-muted">
+              <div className="h-4 rounded bg-primary" style={{ width: `${maxValue ? (point.value / maxValue) * 100 : 0}%` }} />
+            </div>
+            <span className="tabular-nums">{String(point.value)}{chart.unit ? ` ${chart.unit}` : ""}</span>
+          </div>)}
+        </div>
+        <div className="mt-4 w-full overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <caption className="mb-2 text-left text-muted-foreground">Accessible source values: {chart.title}</caption>
+            <thead><tr><th scope="col" className="border-b py-2">{chart.x_label}</th>
+              <th scope="col" className="border-b py-2">{chart.y_label}{chart.unit ? ` (${chart.unit})` : ""}</th></tr></thead>
+            <tbody>{chart.points.map(point => <tr key={point.label}>
+              <th scope="row" className="border-b py-2 font-normal">{point.label}</th>
+              <td className="border-b py-2 tabular-nums">{String(point.value)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      </section>;
+    }
+    case "code.artifact": {
+      const artifact = envelope.data as { filename: string; language: string; code: string };
+      return <section aria-label={`Source artifact ${artifact.filename}`} data-testid="karen-code-artifact"
+        className="my-3 min-w-0 rounded-xl border border-border/70">
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b p-3 text-xs">
+          <span className="break-all font-mono font-medium">{artifact.filename}</span>
+          <span className="text-muted-foreground">{artifact.language} · Read-only · Not executed</span>
+        </header>
+        <pre className="max-h-[40rem] overflow-auto whitespace-pre p-3 text-xs"><code>{artifact.code}</code></pre>
       </section>;
     }
     case "data.table": {
