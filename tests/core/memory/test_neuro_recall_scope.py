@@ -721,3 +721,122 @@ def test_memory_runtime_manager_rejects_missing_or_conflicting_source_authority(
                 {"authorize": lambda self, memory, request: True},
             )(),
         )
+
+
+def _durable_assertion(
+    memory_id: str,
+    *,
+    source_type: str | None = "chat",
+    source_ref: str | None = "message-1",
+) -> MemoryEntry:
+    memory = _memory(
+        memory_id, "tenant-1", "user-1",
+        source_store="postgres_memory_ledger",
+    )
+    memory.metadata.custom["source_store"] = "postgres"
+    memory.metadata.custom["provenance"] = {
+        "store": "postgres",
+        "record_type": "memory_assertion",
+        "assertion_id": memory_id,
+        "event_id": "canonical-event-1",
+        "source_type": source_type,
+        "source_ref": source_ref,
+    }
+    return memory
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_type", ["chat", "chat_user", "conversation"])
+async def test_canonical_direct_chat_durable_assertion_is_retained(source_type):
+    memory = _durable_assertion("direct-memory", source_type=source_type)
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="memory", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert [entry.id for entry in result.memories] == ["direct-memory"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_type", ["web", "plugin", "uploaded_document", "user"])
+async def test_durable_external_source_cannot_bypass_authorizer(source_type):
+    memory = _durable_assertion(
+        "external-memory", source_type=source_type, source_ref="source-1"
+    )
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="memory", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+    assert result.provenance == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_type", [None, "", " "])
+async def test_durable_missing_source_type_is_not_assumed_to_be_chat(source_type):
+    memory = _durable_assertion("unknown-memory", source_type=source_type)
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="memory", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", [
+    {"store": "other"},
+    {"record_type": "memory_event"},
+    {"assertion_id": "other-memory"},
+    {"event_id": ""},
+])
+async def test_durable_malformed_canonical_receipt_is_denied(broken):
+    memory = _durable_assertion("untrusted-memory")
+    memory.metadata.custom["provenance"].update(broken)
+    result = await NeuroRecall(_FakeRetriever([memory])).recall(
+        RecallRequest(query="memory", tenant_id="tenant-1", user_id="user-1")
+    )
+    assert result.memories == ()
+
+
+@pytest.mark.asyncio
+async def test_durable_external_source_revocation_at_recall_time():
+    memory = _durable_assertion(
+        "derived-memory", source_type="web", source_ref="web-source-1"
+    )
+    decisions = []
+
+    class _LiveAuthorizer:
+        def __init__(self):
+            self.active = True
+
+        async def authorize(self, entry, request):
+            decisions.append((entry.id, request.tenant_id, request.user_id))
+            return self.active
+
+    verifier = _LiveAuthorizer()
+    recall = NeuroRecall(
+        _FakeRetriever([memory]), source_authorizer=verifier
+    )
+    request = RecallRequest(query="memory", tenant_id="tenant-1", user_id="user-1")
+    granted = await recall.recall(request)
+    assert [entry.id for entry in granted.memories] == ["derived-memory"]
+
+    verifier.active = False
+    revoked = await recall.recall(request)
+    assert revoked.memories == ()
+    assert revoked.provenance == ()
+    assert len(decisions) == 2
+
+
+@pytest.mark.asyncio
+async def test_durable_external_missing_ref_is_denied_even_with_authorizer():
+    memory = _durable_assertion(
+        "missing-source", source_type="plugin", source_ref=None
+    )
+
+    class _UnexpectedAuthorizer:
+        async def authorize(self, entry, request):
+            pytest.fail("source without canonical reference must be denied")
+
+    result = await NeuroRecall(
+        _FakeRetriever([memory]), source_authorizer=_UnexpectedAuthorizer()
+    ).recall(RecallRequest(
+        query="memory", tenant_id="tenant-1", user_id="user-1"
+    ))
+    assert result.memories == ()
