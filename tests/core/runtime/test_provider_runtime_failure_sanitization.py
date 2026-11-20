@@ -82,3 +82,21 @@ def test_emergency_result_contains_no_prompt_excerpt():
     assert result.actual_model is None
     assert SECRET not in repr(result.metadata)
     assert "request_message" not in result.metadata
+
+
+@pytest.mark.asyncio
+async def test_wrapped_rate_limit_preserves_backoff_without_exposing_secret():
+    runtime = ProviderRuntime.__new__(ProviderRuntime)
+    runtime.provider_health = {"local-runtime": {"consecutive_failures": 0}}
+    runtime.latency_history_size = 5
+    runtime.circuit_breaker_threshold = 10
+    runtime.circuit_breaker_timeout = 10
+    runtime.rate_limit_backoff = 60
+    underlying = RuntimeError(f"429 rate limit exceeded token={SECRET}")
+    failure = ProviderProcessingError("local-runtime", [underlying])
+    await runtime._record_provider_failure("local-runtime", 0.01, failure)
+    health = runtime.provider_health["local-runtime"]
+    assert health["rate_limited_until"] > health["last_failure"]
+    assert "rate limits" in health["error_message"].lower()
+    assert SECRET not in repr(health)
+    assert SECRET not in str(failure)
