@@ -226,3 +226,12 @@ owned-history authorization check confirms current artifact eligibility and
 the exact digest. Existing weather/chart/search presentation replay is
 unaffected. Browser acceptance, signed-in replay proof and storage concurrency
 proof are not claimed by this source-only implementation.
+
+**Observed AG-UI event journal:** Durable run events are a separate replay path from
+completed-turn transcript history. The canonical `ChatRunCoordinator` replaces
+`code.artifact` presentation events with a bounded, source-free withheld marker
+*before* appending to the journal. It preserves the observed event sequence
+without storing source bytes, while the first live stream continues to carry
+the verified inert card. Future replay must explicitly reauthorize current
+owner/active status and matching digest before rendering code; no stale code is
+restored from either event history or transcript metadata.
