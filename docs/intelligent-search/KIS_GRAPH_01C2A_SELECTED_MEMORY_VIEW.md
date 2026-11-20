@@ -13,7 +13,7 @@ The sole public function, `project_selected_memory_graph(request=..., result=...
 
 ## Current edge contract
 
-Only already-selected `postgres_graph` memory events with `record_type: memory_event`, `store: postgres`, `event_id` equal to the selected memory ID, direct `MENTIONS` and depth 1 can produce `memory_event -> entity` relationships. The entity label is the already-extracted matched entity cue, capped at 120 characters. Raw event IDs become scope-derived opaque IDs. Limit is 12 selected memories. A duplicate entity is represented once.
+Only already-selected `postgres_graph` memory events with `record_type: memory_event`, `store: postgres`, `event_id` equal to the selected memory ID, direct `MENTIONS` and depth 1 can produce `memory_event -> entity` relationships. The `entity_cue` label is the already-extracted matched text cue, capped at 120 characters and marked `retrieval_cue`. It does **not** establish canonical entity identity or a verified source match; unresolved cues remain unresolved. Raw event IDs become scope-derived opaque IDs. Limit is 12 selected memories. A duplicate entity is represented once.
 
 Output kind `selected_memory_graph` with `version:1`, `status: available|empty`, `nodes`, `edges`, `truncated`, `degraded`, `degradation_reason`.
 
