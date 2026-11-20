@@ -36,7 +36,7 @@ Five synchronized **lenses** over a single authorized investigation snapshot:
 | **Evidence** | Inspect original sources | Search snippets versus full fetched article, citation spans, source revision, trust/freshness | Source inaccessible, revoked, stale or incomplete: label and gate |
 | **Workflow** | Investigate/delegate actions | Runtime plan, dependency, approval, and execution receipts | Simple query: no invented agent workflow |
 
-These are **planned** full-workspace capabilities. PR #1119 adds a limited read-only source graph only when the backend returns `evidenceGraph`. Do not confuse that with complete graph-native investigation UX.
+These are **planned** full-workspace capabilities. Merged PR #1119 adds a limited read-only source graph only when the backend returns `evidenceGraph`. Do not confuse that with complete graph-native investigation UX.
 
 ## 3. Layout rules
 
