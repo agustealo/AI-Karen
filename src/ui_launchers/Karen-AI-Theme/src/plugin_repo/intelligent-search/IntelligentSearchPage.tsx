@@ -11,7 +11,7 @@ import { ResultsWorkspace } from './components/ResultsWorkspace';
  */
 export default function IntelligentSearchPage() {
   const {
-    state, modeConfig, setQuery, setMode, updateOptions, executeSearch, resetSearch,
+    state, modeConfig, resultModeConfig, setQuery, setMode, updateOptions, executeSearch, resetSearch,
   } = useIntelligentSearch();
   const [showControls, setShowControls] = React.useState(false);
 
@@ -46,7 +46,14 @@ export default function IntelligentSearchPage() {
               showAdvanced={showControls} />
           </aside>
           <main className="min-w-0" aria-label="Search evidence and results">
-            <ResultsWorkspace state={state} modeConfig={modeConfig} />
+            {state.isResultsStale && state.response && !state.isLoading && (
+              <div role="status" className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-foreground">
+                <strong>Previous search evidence.</strong> These results belong to your last completed search
+                {state.completedSearch?.query ? ` for “${state.completedSearch.query}”` : ""}.
+                Your search settings have changed. Run Search to update the results.
+              </div>
+            )}
+            <ResultsWorkspace state={state} modeConfig={resultModeConfig} />
           </main>
         </div>
       </div>

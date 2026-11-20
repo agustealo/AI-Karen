@@ -12,6 +12,8 @@ export function useIntelligentSearch() {
     isLoading: false,
     error: null,
     response: null,
+    completedSearch: null,
+    isResultsStale: false,
   });
 
   const { buildPayload } = useSearchPayload();
@@ -35,19 +37,28 @@ export function useIntelligentSearch() {
 
   const setQuery = useCallback((query: string) => {
     invalidatePending();
-    setState((prev) => ({ ...prev, query, isLoading: false, response: null, error: null }));
+    setState((prev) => ({
+      ...prev, query, isLoading: false, error: null,
+      isResultsStale: Boolean(prev.response) && (prev.isResultsStale || prev.query !== query),
+    }));
   }, [invalidatePending]);
 
   const setMode = useCallback((mode: SearchModeId) => {
     invalidatePending();
-    setState((prev) => ({ ...prev, mode, options: {}, isLoading: false, response: null, error: null }));
+    setState((prev) => ({
+      ...prev, mode, options: {}, isLoading: false, error: null,
+      isResultsStale: Boolean(prev.response) && (prev.isResultsStale || prev.mode !== mode),
+    }));
   }, [invalidatePending]);
 
   const updateOptions = useCallback((newOptions: Partial<IntelligentSearchOptions>) => {
     invalidatePending();
     // Keep the last completed evidence visible while the user adjusts settings.
     // Invalidate any in-flight execution so its result cannot overwrite this state.
-    setState((prev) => ({ ...prev, options: { ...prev.options, ...newOptions }, isLoading: false, error: null }));
+    setState((prev) => ({
+      ...prev, options: { ...prev.options, ...newOptions }, isLoading: false, error: null,
+      isResultsStale: Boolean(prev.response),
+    }));
   }, [invalidatePending]);
 
   const executeSearch = useCallback(async () => {
@@ -60,13 +71,17 @@ export function useIntelligentSearch() {
     const requestId = requestSequence.current;
     const controller = new AbortController();
     activeRequest.current = controller;
-    setState((prev) => ({ ...prev, isLoading: true, error: null, response: null }));
+    setState((prev) => ({ ...prev, isLoading: true, error: null }));
 
     try {
       const payload = buildPayload(state.mode, state.query, state.options);
       const response = await IntelligentSearchApi.executeSearch(payload, controller.signal);
       if (mounted.current && requestId === requestSequence.current) {
-        setState((prev) => ({ ...prev, isLoading: false, response }));
+        setState((prev) => ({
+          ...prev, isLoading: false, response,
+          completedSearch: { query: state.query, mode: state.mode },
+          isResultsStale: false,
+        }));
       }
     } catch (error: unknown) {
       if (controller.signal.aborted) return;
@@ -84,12 +99,18 @@ export function useIntelligentSearch() {
 
   const resetSearch = useCallback(() => {
     invalidatePending();
-    setState((prev) => ({ ...prev, query: '', isLoading: false, error: null, response: null }));
+    setState((prev) => ({
+      ...prev, query: '', isLoading: false, error: null, response: null,
+      completedSearch: null, isResultsStale: false,
+    }));
   }, [invalidatePending]);
 
   return {
     state,
     modeConfig: MODE_CONFIG[state.mode],
+    // The evidence workspace always reflects the completed request, never
+    // mutable draft mode controls. Retained tabs must not disappear on edits.
+    resultModeConfig: MODE_CONFIG[state.completedSearch?.mode ?? state.mode],
     setQuery,
     setMode,
     updateOptions,
