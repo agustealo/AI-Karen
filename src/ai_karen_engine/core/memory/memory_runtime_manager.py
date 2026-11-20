@@ -19,7 +19,12 @@ from .compat import export_promoted_artifacts, get_metrics, update_memory
 from .control import MemoryControlService
 from .episodic import EventSegmenter
 from .formation import MemoryFormationEvaluator, MemoryFormationService
-from .retrieval.neuro_recall import NeuroRecall, RecallRequest, RecallScopeError
+from .retrieval.neuro_recall import (
+    NeuroRecall,
+    RecallRequest,
+    RecallScopeError,
+    SourceLineageAuthorizer,
+)
 from .shadow_evaluator import MemoryShadowEvaluator
 from .telemetry import memory_metrics
 
@@ -39,6 +44,7 @@ class MemoryRuntimeManager:
         stm: Any | None = None,
         formation_evaluator: MemoryFormationEvaluator | None = None,
         shadow_evaluator: MemoryShadowEvaluator | None = None,
+        source_authorizer: SourceLineageAuthorizer | None = None,
     ) -> None:
         if retrieval_adapter is not None:
             logger.warning(
@@ -46,12 +52,23 @@ class MemoryRuntimeManager:
                 extra={"replacement": "NeuroRecall"},
             )
 
+        if source_authorizer is not None:
+            if not callable(getattr(source_authorizer, "authorize", None)):
+                raise TypeError("source_authorizer must provide authorize(memory, request)")
+            if recall_service is not None:
+                raise ValueError(
+                    "source_authorizer cannot be combined with an externally composed "
+                    "recall_service; configure its NeuroRecall authority directly"
+                )
+
         self.flags = get_feature_flags()
         self._consolidation_adapter = consolidation_adapter
         needs_default_stm = recall_service is None or formation_service is None
         self._stm = stm or (self._build_stm() if needs_default_stm else None)
         self._formation_evaluator = formation_evaluator or MemoryFormationEvaluator()
-        self._neuro_recall = recall_service or self._build_neuro_recall(self._stm)
+        self._neuro_recall = recall_service or self._build_neuro_recall(
+            self._stm, **({"source_authorizer": source_authorizer} if source_authorizer is not None else {})
+        )
         self._formation_service = formation_service or self._build_formation_service(
             self._stm,
             self._formation_evaluator,
@@ -73,8 +90,15 @@ class MemoryRuntimeManager:
         return RedisSTMAdapter()
 
     @staticmethod
-    def _build_neuro_recall(stm: Any) -> NeuroRecall:
-        """Compose concrete candidate sources beneath the one recall authority."""
+    def _build_neuro_recall(
+        stm: Any, *, source_authorizer: SourceLineageAuthorizer | None = None
+    ) -> NeuroRecall:
+        """Compose canonical retrievers with an optional trusted live ACL authority.
+
+        Absent an issuer-composed authorizer, NeuroRecall rejects all explicitly
+        source-derived and non-conversation graph evidence. Do not create or
+        infer grants from persisted lineage metadata.
+        """
         if stm is None:
             raise RuntimeError("STM adapter is required to compose NeuroRecall")
 
@@ -105,7 +129,8 @@ class MemoryRuntimeManager:
                 PostgresUserStateRecallRetriever(),
                 PostgresProceduralRecallRetriever(),
                 source_router,
-            )
+            ),
+            source_authorizer=source_authorizer,
         )
 
     @staticmethod
