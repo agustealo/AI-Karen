@@ -300,3 +300,36 @@ def test_unrecognized_deep_presentation_nesting_fails_closed_for_journal():
     safe = ChatRunCoordinator._journal_safe_event(event)
     assert safe["name"] == "karen.presentation.withheld.v1"
     assert CODE not in repr(safe)
+
+
+@pytest.mark.asyncio
+async def test_actual_agui_projection_keeps_live_card_but_journal_is_redacted():
+    from ai_karen_engine.core.runtime.ag_ui_event_projection import AGUIEventProjection
+    from ai_karen_engine.core.runtime.chat_run_lifecycle import ChatRunCoordinator
+
+    request, decision, plan, result = _execution()
+    verified = ChatRuntime._verified_code_artifact_presentation(
+        request, decision, plan, result,
+    )
+    projection = AGUIEventProjection(thread_id="owned-thread", run_id="owned-run")
+    projection.begin()
+    chunk = SimpleNamespace(
+        type="presentation", content="",
+        metadata={"presentation_verified": True, "presentation": verified},
+    )
+    events = projection.project(chunk)
+    assert len(events) == 1
+    assert events[0]["name"] == "karen.presentation.v1"
+    assert events[0]["value"]["data"]["code"] == CODE
+
+    repository = SimpleNamespace(append_projected_event=AsyncMock(return_value=2))
+    coordinator = ChatRunCoordinator(repository=repository)
+    seq = await coordinator.append_observed_event(object(), events[0])
+    assert seq == 2
+    persisted = repository.append_projected_event.await_args.kwargs["event"]
+    assert persisted["name"] == "karen.presentation.withheld.v1"
+    assert CODE not in repr(persisted)
+    assert ARTIFACT not in repr(persisted)
+    # The live stream is still the original inert, validated presentation.
+    assert events[0]["value"]["data"]["code"] == CODE
+
