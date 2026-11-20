@@ -1762,6 +1762,29 @@ class ChatRuntime:
     # Persistence
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _durable_presentation_metadata(provider_meta: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop revocable source bytes until historical authorization exists.
+
+        Completed-run digest attestation proves the transcript was persisted,
+        but does not prove a once-owned code artifact remains active later.
+        Source artifacts therefore remain live-display-only in this phase.
+        """
+        durable = dict(provider_meta)
+        structured = durable.get("structured_content")
+        if (
+            isinstance(structured, dict)
+            and isinstance(structured.get("presentation"), dict)
+            and structured["presentation"].get("component_type") == "code.artifact"
+        ):
+            durable["structured_content"] = {
+                key: value for key, value in structured.items()
+                if key != "presentation"
+            }
+            durable.pop("verified_presentations_v1", None)
+            durable.pop("presentation_replay_incomplete", None)
+        return durable
+
     async def _persist_transcript(
         self,
         request: ChatExecutionRequest,
@@ -1812,23 +1835,7 @@ class ChatRuntime:
         persona_scope_id = (
             snapshot.persona_id if snapshot.memory_filter_required else None
         )
-        # A code artifact can be revoked or archived after this live read.
-        # Persist only the textual result, never source bytes or a replayable
-        # code envelope, until authenticated historical reauthorization exists.
-        # This also prevents attested pin restoration from resurrecting code.
-        durable_meta = dict(provider_meta)
-        structured = durable_meta.get("structured_content")
-        if (
-            isinstance(structured, dict)
-            and isinstance(structured.get("presentation"), dict)
-            and structured["presentation"].get("component_type") == "code.artifact"
-        ):
-            durable_meta["structured_content"] = {
-                key: value for key, value in structured.items()
-                if key != "presentation"
-            }
-            durable_meta.pop("verified_presentations_v1", None)
-            durable_meta.pop("presentation_replay_incomplete", None)
+        durable_meta = self._durable_presentation_metadata(provider_meta)
 
         result = await gateway.persist_completed_turn(
             ctx,
