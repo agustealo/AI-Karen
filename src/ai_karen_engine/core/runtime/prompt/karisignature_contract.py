@@ -122,7 +122,7 @@ class KariSignatureAuthority(Protocol):
     """Existing host ownership/policy adapter, not an alternate ACL store."""
 
     async def read_current_published(
-        self, *, tenant_id: str, profile_id: str
+        self, *, request: KariSignatureRequest
     ) -> KariSignatureRevision | None: ...
 
     async def authorize_use(
@@ -148,9 +148,7 @@ class KariSignatureResolver:
         if not isinstance(request, KariSignatureRequest):
             raise ValueError("invalid_style_request")
         try:
-            revision = await self._authority.read_current_published(
-                tenant_id=request.tenant_id, profile_id=request.profile_id,
-            )
+            revision = await self._authority.read_current_published(request=request)
             if revision is None or not isinstance(revision, KariSignatureRevision):
                 raise PermissionError("style_unavailable")
             if revision.tenant_id != request.tenant_id or revision.profile_id != request.profile_id:
