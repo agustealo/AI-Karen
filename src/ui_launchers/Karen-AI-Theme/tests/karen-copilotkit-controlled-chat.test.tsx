@@ -26,7 +26,7 @@ const sdk = vi.hoisted(() => ({
   lifecycle: null as null | {
     onRunStartedEvent: (args: { event: { threadId: string; runId: string } }) => void;
     onRunFinalized: () => void;
-    onRunFailed: () => void;
+    onRunFailed: (failure?: unknown) => void;
   },
   useAgentOptions: [] as Array<Record<string, unknown>>,
 }));
@@ -735,10 +735,10 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     }));
     act(() => sdk.lifecycle?.onRunFailed());
     expect(screen.getByRole("alert").textContent)
-      .toContain("Karen could not complete the request");
+      .toContain("Karen could not verify completion");
     act(() => input().onChange(""));
     expect(screen.getByRole("alert").textContent)
-      .toContain("Karen could not complete the request");
+      .toContain("Karen could not verify completion");
     expect(sdk.draftWrites).toHaveLength(0);
     expect(sdk.agent.addMessage).not.toHaveBeenCalled();
     expect(sdk.runAgent).not.toHaveBeenCalled();
@@ -758,7 +758,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     });
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("Karen could not complete the request"));
+      .toContain("Karen could not verify completion"));
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
     expect(sdk.agent.messages).toHaveLength(2);
     expect(sdk.post).not.toHaveBeenCalled();
@@ -788,7 +788,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(screen.queryByRole("alert")).toBeNull();
     act(() => sdk.lifecycle?.onRunFailed());
     expect(screen.getByRole("alert").textContent).toContain(
-      "Karen could not complete the request. Check the conversation history.",
+      "Karen could not verify completion, and the chat transport did not provide a recognized failure code. Check API readiness, the selected model and verified conversation history before retrying.",
     );
     expect(sdk.agent.addMessage).not.toHaveBeenCalled();
     expect(sdk.runAgent).not.toHaveBeenCalled();
@@ -823,7 +823,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     });
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("Check the conversation history before retrying"));
+      .toContain("verified conversation history before retrying"));
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
     expect(sdk.draftWrites).toEqual(["An already queued question"]);
     expect(screen.queryByTestId("karen-copilot-failed-submission")).toBeNull();
@@ -846,7 +846,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(input().value).toBe("A newer unsent edit");
     expect(sdk.draftWrites).toEqual(["First queued message", "A newer unsent edit"]);
     expect(screen.getByRole("alert").textContent)
-      .toContain("Check the conversation history before retrying");
+      .toContain("verified conversation history before retrying");
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -858,7 +858,7 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
       input().onSubmitMessage("Hello");
     });
     await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("could not complete"));
+      .toContain("could not verify completion"));
     expect(screen.getByRole("alert").textContent).not.toContain("private");
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
     expect(sdk.agent.messages).toHaveLength(2);
@@ -870,5 +870,39 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     act(() => input().onStop());
     expect(sdk.post).not.toHaveBeenCalled();
     expect(sdk.stopAgent).not.toHaveBeenCalled();
+  });
+});
+
+describe("KCHAT: transparent, governed run diagnostics", () => {
+  it("shows a code-specific remedy for a verified AG-UI terminal failure", () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "run-failed-persistence" },
+    }));
+    act(() => sdk.lifecycle?.onRunFailed({
+      event: { code: "CHAT_TRANSCRIPT_PERSISTENCE_FAILED" },
+    }));
+    expect(screen.getByRole("alert").textContent)
+      .toContain("conversation history could not be verified as saved");
+    expect(screen.getByRole("alert").textContent)
+      .toContain("CHAT_TRANSCRIPT_PERSISTENCE_FAILED");
+    expect(sdk.agent.messages).toHaveLength(2);
+  });
+
+  it("explains a backend dependency outage without exposing private error details", async () => {
+    sdk.runAgent.mockRejectedValueOnce({
+      response: { status: 503 },
+      message: "password=secret; private upstream address",
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Is the model online?");
+      input().onSubmitMessage("Is the model online?");
+    });
+    await waitFor(() => expect(screen.getByRole("alert").textContent)
+      .toContain("required dependency is unavailable"));
+    expect(screen.getByRole("alert").textContent).not.toContain("password");
+    expect(screen.getByRole("alert").textContent).not.toContain("secret");
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
   });
 });

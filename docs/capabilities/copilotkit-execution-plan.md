@@ -432,6 +432,13 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-19: KCHAT native CopilotKit response failure diagnostics, PR #1116
+
+- **KCON-130 / KCON-652 / KCON-770, IN_PROGRESS:** On native CopilotKit v2 prompt submission, the generic SDK console error `Unable to complete the response.` does not identify a failure cause. The existing backend AG-UI projection already emits bounded `RUN_ERROR.code`, but the UI controller previously replaced observed run failure with a generic sentence. Reuse the existing `getDegradedResponseMessage.tsx` presentation owner, and pass lifecycle/rejected SDK errors through a strictly allowlisted error-code/HTTP-status mapping with actionable consumer guidance. Do not display raw exception messages, provider secrets, stacks, tokens or arbitrary error codes. Unknown SDK failures must be described as **unknown**, with verified history inspection before retry; no silent retry, model fallback, or fabricated completion.
+- **Proof:** Native CopilotKit controlled-view and standalone formatter tests added for known AG-UI errors, status 401/429/503, redaction, unknown SDK errors, and already-queued user message retention. Exact-head GitHub Main Quality, Chat System Burn, and Presentation Contract are pending after ledger update. **Actual local runtime cause, correlated backend error evidence, authenticated browser prompt send, and durable conversation readback: NOT_RUN.** Consumer release is not certified. Do not mark task DONE before those checks.
+
+
+
 | Date | Main/candidate SHA | What changed / observed | Affected IDs | Proof / next gate |
 |---|---|---|---|---|
 | 2026-11-19 | [PR #1111](https://github.com/agustealo/AI-Karen/pull/1111), KCHAT-ACCEPT-01B3 draft | Reuses merged personal planner completion action contract, existing RuntimePolicy `planner.update` / `PLANNER_WRITE`, canonical ChatRuntime direct mutation path and PostgreSQL owner-scoped revision compare-and-swap. CORTEX routes explicit completion commands only; users must supply full task UUID and expected revision. The runtime requires original policy plan, active tenant/owner principal, per-action retry-stable UUID, matching action fingerprint and verified committed receipt with status `completed` and revision +1. No new repository, task runner, scheduler, inferred task identity or fabricated completion. | KCON-490, KCON-720, KCON-770 | SOURCE_CANDIDATE / NOT MERGED: targeted regression tests added; exact-head CI, independent review, real authenticated browser create → read → complete → refresh and two-principal PostgreSQL proof pending. Do not mark consumer-ready. |
