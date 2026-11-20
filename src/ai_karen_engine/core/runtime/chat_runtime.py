@@ -3480,8 +3480,8 @@ class ChatRuntime:
         if (
             type(high) not in (int, float)
             or type(low) not in (int, float)
-            or not math.isfinite(high) or not math.isfinite(low)
             or not 0 <= low <= high <= 150
+            or not math.isfinite(high) or not math.isfinite(low)
         ):
             return None
         location = source.get("location")
