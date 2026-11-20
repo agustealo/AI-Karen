@@ -251,6 +251,8 @@ const RUN_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
     'The chat runtime failed during generation. Check runtime logs, the selected model and provider availability, then inspect history before retrying.',
   CHAT_RUNTIME_ERROR:
     'Karen reported a chat runtime failure. Check runtime logs and available models, then inspect history before retrying.',
+  CHAT_GENERATION_FAILED:
+    'The selected model or generation runtime could not complete this answer. Check the available provider and backend logs, then verified history before retrying.',
   CHAT_EXECUTION_FAILED:
     'The chat execution failed. Check provider availability and backend logs, then inspect history before retrying.',
   CHAT_RUN_LEASE_LOST:
