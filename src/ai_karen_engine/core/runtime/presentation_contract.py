@@ -12,10 +12,10 @@ from typing import Any
 # Match ECMAScript String.prototype.trim() for chart metadata. Python's default
 # strip() disagrees on U+FEFF and on certain C0/NEL control characters.
 _CHART_JS_WHITESPACE = (
-    "\\u0009\\u000a\\u000b\\u000c\\u000d\\u0020\\u00a0\\u1680"
-    "\\u2000\\u2001\\u2002\\u2003\\u2004\\u2005\\u2006"
-    "\\u2007\\u2008\\u2009\\u200a\\u2028\\u2029\\u202f"
-    "\\u205f\\u3000\\ufeff"
+    "\0009\000a\000b\000c\000d\0020\00a0\1680"
+    "\2000\2001\2002\2003\2004\2005\2006"
+    "\2007\2008\2009\200a\2028\2029\202f"
+    "\205f\3000\feff"
 )
 
 
