@@ -143,7 +143,7 @@ def test_code_is_never_retained_for_unreauthorized_history_or_pin_restore():
     }
     durable = ChatRuntime._durable_presentation_metadata(meta)
     assert durable["response_source"] == "artifact"
-    assert durable["structured_content"] == {"status": "source_verified"}
+    assert "structured_content" not in durable
     assert "verified_presentations_v1" not in durable
     assert "code" not in str(durable)
     assert meta["verified_presentations_v1"] == [presentation]
