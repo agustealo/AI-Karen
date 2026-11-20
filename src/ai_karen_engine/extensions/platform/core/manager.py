@@ -110,6 +110,17 @@ class ExtensionCoreManager:
                 "version": str(voice.version),
                 "modalities": list(voice.modalities),
             }
+        generative = getattr(capabilities, "generative_presentations", None)
+        if generative is not None:
+            # Registry metadata, NOT authorization, installed renderer health,
+            # live source evidence, or permission to execute an interaction.
+            projection["generative_presentations"] = {
+                "version": str(generative.version),
+                "component_types": list(generative.component_types),
+                "surfaces": list(generative.surfaces),
+                "interaction_mode": "read_only",
+                "status": "declaration_only",
+            }
         return projection
 
     @classmethod

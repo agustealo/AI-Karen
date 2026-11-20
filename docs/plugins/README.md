@@ -24,6 +24,7 @@ authentication, arbitrary tenant data, model routing, or system-wide policy.
 | Developer invoking a tool | [Execution and API contracts](05-execution-and-apis.md) |
 | Admin configuring a plugin | [Settings, credentials and persistence](06-settings-and-credentials.md) |
 | UI developer | [Frontend extension guide](07-frontend-integration.md) |
+| Generative UI and capability developer | [Canonical generative experience contracts and migration](13-generative-experiences.md) |
 | Voice/audio plugin author | [Voice and modality integration](08-voice-and-modalities.md) |
 | Operator accepting Pocket TTS on actual hardware | [Pocket native speech acceptance ledger](12-pocket-tts-native-acceptance.md) |
 | Test engineer | [Security, testing and telemetry](09-testing-and-observability.md) |

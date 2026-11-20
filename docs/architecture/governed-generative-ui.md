@@ -127,3 +127,28 @@ The next implementation must trace the canonical completion/persistence transact
 `MessageResponse.structured_content` now projects a dictionary already stored as `message.metadata['structured_content']` by the existing runtime transcript path. This closes the backend serializer omission without adding a new persistence owner. The serializer does not synthesize presentation records when data is absent or malformed. Its tests are at `tests/api_routes/chat/test_conversation_structured_content_response.py`.
 
 **Not yet replay-complete:** structured content is not necessarily a validated `karen.presentation.v1` envelope, and `readOwnedHistory` still imports text-only assistant-ui messages. Before feeding stored data into assistant-ui, bind the presentation to a verified capability receipt, validate it server-side, and convert it using a supported AG-UI activity/message restoration contract. Neither schema exposure nor these tests proves durable generative UI replay.
+
+## KGUI-01: Canonical plugin-to-generative presentation binding
+
+The canonical extension declaration is `ExtensionManifest.capabilities.generative_presentations`;
+the plugin kernel is the lifecycle owner and the existing catalog may report
+its bounded *declaration only*. The declaration does not register a renderer,
+transfer runtime authority, assert provider readiness, or elevate an action.
+
+Today the host vocabulary is exactly: `time.observation`, `date.observation`,
+`weather.observation`, `weather.comparison`, `search.results`, `data.table`,
+`planner.task_list`, and `surface.composition`. Version 1 requires
+`interaction_mode: read_only`. Only `chat` and `workspace` are declared
+surfaces. The runtime must still validate evidence, authorization and payload
+against the canonical `presentation_contract.py` before AG-UI emission; the
+front-end validates again in `KarenPresentationRegistry.tsx`.
+
+Next increments, contingent on separate verification: source-backed chart and
+movie card schemas; safe code and media viewers; approved interaction actions
+with separate permission/approval; full-card pin transport; responsive/accessibility
+and real-model signed-in consumer acceptance. Do not retrofit model-selected
+custom components into arbitrary executable React or HTML.
+
+**2026-11-20 status: contract declaration only.** No current first-party
+plugin manifest is migrated by this first slice. No browser acceptance or
+tenant-enabled renderer availability is implied.
