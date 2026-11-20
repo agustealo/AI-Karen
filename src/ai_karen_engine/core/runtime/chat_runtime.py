@@ -3166,6 +3166,7 @@ class ChatRuntime:
                 return []
             part = (
                 ChatRuntime._verified_planner_presentation(decision, plan, result)
+                or ChatRuntime._verified_weather_chart_presentation(request, decision, plan, result)
                 or ChatRuntime._verified_weather_presentation(request, decision, plan, result)
                 or ChatRuntime._verified_source_table_presentation(request, decision, plan, result)
                 or ChatRuntime._verified_search_presentation(request, decision, plan, result)
@@ -3435,6 +3436,73 @@ class ChatRuntime:
             "data": {"results": rows},
             "evidence_ref": evidence_id,
             "correlation_id": request.context.correlation_id,
+        })
+
+    @staticmethod
+    def _verified_weather_chart_presentation(request, decision, plan, result):
+        """Chart two directly observed Fahrenheit readings, never model values.
+
+        The existing weather projector is the single source of admitted
+        measurements and evidence identity. The chart is optional and replaces
+        the weather card only for an explicit chart request with comparable,
+        nonnegative source-reported high/low readings. No missing value is
+        estimated and no other weather measurement is silently mixed in.
+        """
+        if decision.intent != "search.weather":
+            return None
+        import math
+        import re
+        from ai_karen_engine.core.runtime.presentation_contract import (
+            validate_presentation,
+        )
+
+        latest_prompt = next((
+            item["content"]
+            for item in reversed(getattr(request, "messages", None) or ())
+            if isinstance(item, dict)
+            and item.get("role") == "user"
+            and isinstance(item.get("content"), str)
+        ), "")
+        if not re.search(r"\\b(?:chart|bar graph|bar chart|graph)\\b", latest_prompt, re.I):
+            return None
+
+        observed = ChatRuntime._verified_weather_presentation(
+            request, decision, plan, result,
+        )
+        if observed is None or observed["component_type"] != "weather.observation":
+            return None
+        source = observed["data"]
+        high, low = source.get("high_f"), source.get("low_f")
+        # The canonical weather observation validator bounds the current
+        # reading; high/low are additional fields, so require typed and
+        # comparable source numbers independently. Fahrenheit can be below
+        # zero, but the current chart.bar contract cannot represent it.
+        if (
+            type(high) not in (int, float)
+            or type(low) not in (int, float)
+            or not math.isfinite(high) or not math.isfinite(low)
+            or not 0 <= low <= high <= 150
+        ):
+            return None
+        location = source.get("location")
+        if not isinstance(location, str) or not location.strip():
+            return None
+        return validate_presentation({
+            "schema_version": 1,
+            "presentation_id": f"weather-chart-{request.context.request_id}",
+            "component_type": "chart.bar",
+            "evidence_ref": observed["evidence_ref"],
+            "correlation_id": request.context.correlation_id,
+            "data": {
+                "title": f"Reported Fahrenheit readings: {location.strip()}",
+                "x_label": "Reading",
+                "y_label": "Temperature",
+                "unit": "°F",
+                "points": [
+                    {"label": "High", "value": high},
+                    {"label": "Low", "value": low},
+                ],
+            },
         })
 
     @staticmethod
