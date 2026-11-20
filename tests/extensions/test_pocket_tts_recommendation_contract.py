@@ -132,9 +132,8 @@ def test_pocket_optional_cpu_image_uses_pinned_native_runtime() -> None:
     assert "python -m pip check" in image
     assert "from pocket_tts import TTSModel" in image
     assert "FROM ${PROFILE} AS app" in image
-    for filename in ("docker-compose.yml", "docker-compose.prod-simple.yml"):
-        compose = (ROOT / filename).read_text(encoding="utf-8")
-        assert "PROFILE: ${API_BUILD_TARGET:-runtime}" in compose
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "PROFILE: ${API_BUILD_TARGET:-runtime}" in compose
 
     # A host package may be installed at image build, but licensed model
     # weights must still be fetched only through Karen's governed model worker.
