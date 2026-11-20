@@ -206,3 +206,32 @@ bind a permitted artifact selection to its authenticated conversation and
 preserve completed-run, digest-attested replay. Current acceptance is limited
 to source contracts and repository unit tests. Live storage, authenticated
 browser replay, and revocation trials remain unverified.
+
+## CK-GEN-01C: Authenticated read-only code display, no stale-code replay
+
+A narrowly parsed request to view the owner's existing code artifact enters
+CORTEX only as `artifact.code.read`. RuntimePolicy authorizes this exact
+capability. The direct executor checks the authenticated principal, original
+plan scope and execution meter, then invokes the existing
+`ArtifactStore.read_owner_active_code` method. A successful owner-scoped,
+active-only, SHA-256-verified source receipt can be projected as `code.artifact`
+by `ChatRuntime`. Code remains inert display text; neither this path nor
+the React registry evaluates it.
+
+**Revocation guard:** Source code is not durably stored in the conversation's
+rich presentation envelope. The transcript stores only the read's textual
+receipt, so replay cannot restore archived or revoked source from an old
+attested run. Rich historical code viewing remains disabled until a future
+owned-history authorization check confirms current artifact eligibility and
+the exact digest. Existing weather/chart/search presentation replay is
+unaffected. Browser acceptance, signed-in replay proof and storage concurrency
+proof are not claimed by this source-only implementation.
+
+**Observed AG-UI event journal:** Durable run events are a separate replay path from
+completed-turn transcript history. The canonical `ChatRunCoordinator` replaces
+`code.artifact` presentation events with a bounded, source-free withheld marker
+*before* appending to the journal. It preserves the observed event sequence
+without storing source bytes, while the first live stream continues to carry
+the verified inert card. Future replay must explicitly reauthorize current
+owner/active status and matching digest before rendering code; no stale code is
+restored from either event history or transcript metadata.

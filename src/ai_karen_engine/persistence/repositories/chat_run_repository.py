@@ -313,7 +313,8 @@ class SqlChatRunRepository:
         if event_type == "CUSTOM" and (
             not isinstance(event.get("name"), str)
             or event.get("name") not in {
-            "karen.presentation.v1", "karen.execution_receipt.v1",
+            "karen.presentation.v1", "karen.presentation.withheld.v1",
+            "karen.execution_receipt.v1",
             "karen.response_integrity.v1", "karen.citations",
             "karen.agent_step", "karen.tool_activity", "karen.learning_decision",
             "karen.approval_required", "karen.status", "karen.warning",
@@ -321,6 +322,14 @@ class SqlChatRunRepository:
             }
         ):
             raise ValueError("unsupported_chat_projection_custom_event")
+        # A withheld presentation is a fixed source-free journal marker.
+        # Reject any extra fields or caller-supplied payload under this name.
+        if event_type == "CUSTOM" and event.get("name") == "karen.presentation.withheld.v1":
+            if (
+                set(event) != {"type", "name", "value"}
+                or event.get("value") != {"reason": "revocable_code_not_replayable"}
+            ):
+                raise ValueError("invalid_chat_projection_withheld_marker")
         try:
             encoded = json.dumps(
                 event, separators=(",", ":"), ensure_ascii=False, allow_nan=False,

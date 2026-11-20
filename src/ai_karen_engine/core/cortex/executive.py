@@ -73,6 +73,15 @@ class CortexExecutionDecider:
             meta.get("forbidden_capabilities") or []
         )
 
+        # Caller metadata and ML hints cannot widen an exact owner-code read
+        # into filesystem access, shell execution, arbitrary plugins or agents.
+        # Keep explicit graph/human policy gates: they may deny the direct read.
+        artifact_view = analysis.get("intent") == "artifact.code.read"
+        if artifact_view:
+            tool_requirements = []
+            plugin_candidates = []
+            required_capabilities = ["artifact.code.read"]
+
         if meta.get("agent_delegation"):
             analysis["agent_delegation"] = True
         if meta.get("workflow_required"):
@@ -130,11 +139,14 @@ class CortexExecutionDecider:
             or referenced_profile_attribute(user_content, request.messages)
         )
         personal_recall_query = (
-            is_personal_memory_recall_query(user_content)
-            or resolved_discourse_attribute is not None
-            or is_profile_summary_followup(user_content, request.messages)
+            capability_route.intent != "artifact.code.read"
+            and (
+                is_personal_memory_recall_query(user_content)
+                or resolved_discourse_attribute is not None
+                or is_profile_summary_followup(user_content, request.messages)
+            )
         )
-        memory_recall_required = bool(
+        memory_recall_required = not artifact_view and bool(
             analysis.get("memory_recall_required", False)
             or meta.get("memory_recall_required", False)
             or needs_location_recall
@@ -155,6 +167,8 @@ class CortexExecutionDecider:
         )
         memory_write_requested = memory_write_requested or is_explicit_memory_save_request(user_content)
         if analysis.get("memory_write_denied", False):
+            memory_write_requested = False
+        if artifact_view:
             memory_write_requested = False
 
         memory_scope = (
@@ -183,9 +197,14 @@ class CortexExecutionDecider:
         if isinstance(raw_reasoning_modes, str):
             raw_reasoning_modes = [raw_reasoning_modes]
         reasoning_modes = normalize_reasoning_modes(list(raw_reasoning_modes))
+        if artifact_view:
+            reasoning_modes = []
+            reasoning_depth = "standard"
         if (
-            reasoning_depth == "deep" or analysis.get("reasoning_required")
-        ) and not reasoning_modes:
+            not artifact_view
+            and (reasoning_depth == "deep" or analysis.get("reasoning_required"))
+            and not reasoning_modes
+        ):
             # Depth/effort alone never establishes a causal-identification
             # request. Preserve explicit Intelligence/CORTEX modes above;
             # otherwise use a conservative, noncausal reasoning preflight.
@@ -405,6 +424,22 @@ class CortexExecutionDecider:
                 topology["requires_resumability"] = False
                 capabilities["required"] = ["plugin.inspect"]
                 workflow = {"required": False, "workflow_id": None}
+                memory_policy["write_requested"] = False
+                memory_policy["recall_required"] = False
+
+            if capability_decision.intent == "artifact.code.read":
+                # Viewing one's existing code is not code execution, shell
+                # access, file mutation, search or an agent workflow. ML and
+                # heuristic tool hints cannot widen this owner-only read.
+                # RuntimePolicy may still deny the request on security risk.
+                topology["tool_requirements"] = []
+                topology["plugin_candidates"] = []
+                topology["agent_delegation"] = False
+                topology["requires_parallel_execution"] = False
+                topology["requires_resumability"] = False
+                capabilities["required"] = ["artifact.code.read"]
+                workflow = {"required": False, "workflow_id": None}
+                reasoning_modes = []
                 memory_policy["write_requested"] = False
                 memory_policy["recall_required"] = False
 

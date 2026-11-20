@@ -1762,6 +1762,29 @@ class ChatRuntime:
     # Persistence
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _durable_presentation_metadata(provider_meta: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop revocable source bytes until historical authorization exists.
+
+        Completed-run digest attestation proves the transcript was persisted,
+        but does not prove a once-owned code artifact remains active later.
+        Source artifacts therefore remain live-display-only in this phase.
+        """
+        durable = dict(provider_meta)
+        structured = durable.get("structured_content")
+        if (
+            isinstance(structured, dict)
+            and isinstance(structured.get("presentation"), dict)
+            and structured["presentation"].get("component_type") == "code.artifact"
+        ):
+            # Even a residual status inside structured_content would look
+            # like unauthenticated rich history to the owned-history projector.
+            # A revocable live code view must persist as plain text only.
+            durable.pop("structured_content", None)
+            durable.pop("verified_presentations_v1", None)
+            durable.pop("presentation_replay_incomplete", None)
+        return durable
+
     async def _persist_transcript(
         self,
         request: ChatExecutionRequest,
@@ -1812,6 +1835,8 @@ class ChatRuntime:
         persona_scope_id = (
             snapshot.persona_id if snapshot.memory_filter_required else None
         )
+        durable_meta = self._durable_presentation_metadata(provider_meta)
+
         result = await gateway.persist_completed_turn(
             ctx,
             user_text=self._extract_user_message_for_persistence(request),
@@ -1820,7 +1845,7 @@ class ChatRuntime:
             response_metadata={
                 **{
                     key: value
-                    for key, value in provider_meta.items()
+                    for key, value in durable_meta.items()
                     if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
                 **({"answer_composition_status": provider_meta["answer_composition_status"]}
@@ -1831,9 +1856,9 @@ class ChatRuntime:
                 **({"pending_clarification": provider_meta["pending_clarification"]}
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
-                **({"verified_presentations_v1": provider_meta["verified_presentations_v1"]}
+                **({"verified_presentations_v1": durable_meta["verified_presentations_v1"]}
                    if request.runtime_run_lease is not None
-                   and isinstance(provider_meta.get("verified_presentations_v1"), list)
+                   and isinstance(durable_meta.get("verified_presentations_v1"), list)
                    else {}),
                 **({"presentation_replay_incomplete": True}
                    if request.runtime_run_lease is not None
@@ -3166,6 +3191,7 @@ class ChatRuntime:
                 return []
             part = (
                 ChatRuntime._verified_planner_presentation(decision, plan, result)
+                or ChatRuntime._verified_code_artifact_presentation(request, decision, plan, result)
                 or ChatRuntime._verified_weather_chart_presentation(request, decision, plan, result)
                 or ChatRuntime._verified_weather_presentation(request, decision, plan, result)
                 or ChatRuntime._verified_source_table_presentation(request, decision, plan, result)
@@ -3195,6 +3221,93 @@ class ChatRuntime:
             seen.add(key)
             collected.append(part)
         return collected
+
+    @staticmethod
+    def _verified_code_artifact_presentation(request, decision, plan, result):
+        """Display only the canonical owner-verified artifact readback receipt."""
+        if (
+            decision.intent != "artifact.code.read"
+            or not result.success
+            or result.degraded
+            or result.source != "artifact"
+            or result.source_id != "artifact.code.read"
+            or "artifact.code.read" not in set(plan.allowed_capabilities)
+            or not plan.matches_execution_scope(
+                user_id=str(request.context.user_id),
+                tenant_id=str(request.context.tenant_id),
+                session_id=request.context.session_id,
+                policy_decision_id=decision.policy_decision_id,
+            )
+            or not any(
+                isinstance(attempt, dict)
+                and attempt.get("type") == "artifact"
+                and attempt.get("id") == "artifact.code.read"
+                and attempt.get("status") == "success"
+                for attempt in (result.attempts if isinstance(result.attempts, list) else ())
+            )
+        ):
+            return None
+
+        from ai_karen_engine.core.cortex.routing_intents import (
+            parse_owner_code_artifact_view,
+        )
+        from ai_karen_engine.core.runtime.presentation_contract import (
+            validate_presentation,
+        )
+        from ai_karen_engine.services.database.repositories.artifact_store import (
+            VerifiedArtifactText,
+        )
+
+        latest = next((
+            item["content"]
+            for item in reversed(getattr(request, "messages", None) or ())
+            if isinstance(item, dict) and item.get("role") == "user"
+            and isinstance(item.get("content"), str)
+        ), "")
+        requested_id = parse_owner_code_artifact_view(latest)
+        evidence = result.payload.get("verified_code_artifact") if isinstance(result.payload, dict) else None
+        if (
+            not requested_id
+            or not isinstance(evidence, VerifiedArtifactText)
+            or evidence.artifact_id != requested_id
+            or evidence.tenant_id != str(request.context.tenant_id)
+            or evidence.user_id != str(request.context.user_id)
+            or not isinstance(evidence.text, str)
+            or not isinstance(evidence.sha256, str)
+            or hashlib.sha256(evidence.text.encode("utf-8")).hexdigest() != evidence.sha256
+        ):
+            return None
+
+        filename = evidence.filename
+        extensions = {
+            ".py": "python", ".js": "javascript", ".ts": "typescript",
+            ".tsx": "tsx", ".jsx": "jsx", ".json": "json",
+            ".css": "css", ".sql": "sql", ".sh": "bash",
+            ".rs": "rust", ".go": "go", ".java": "java",
+            ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp",
+            ".md": "markdown", ".txt": "text",
+        }
+        language = next(
+            (kind for suffix, kind in extensions.items()
+             if filename.lower().endswith(suffix)), None
+        ) if isinstance(filename, str) else None
+        if language is None:
+            return None
+
+        return validate_presentation({
+            "schema_version": 1,
+            "presentation_id": f"code-{request.context.request_id}",
+            "component_type": "code.artifact",
+            "evidence_ref": (
+                f"{request.context.request_id}:artifact.code.read:{evidence.artifact_id}"
+            ),
+            "correlation_id": request.context.correlation_id,
+            "data": {
+                "filename": filename,
+                "language": language,
+                "code": evidence.text,
+            },
+        })
 
     @staticmethod
     def _verified_planner_presentation(decision, plan, result):
