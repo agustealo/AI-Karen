@@ -83,6 +83,8 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
             assert row.metadata.tenant_id == str(tenant)
             assert row.metadata.user_id == str(user)
             assert row.metadata.custom["provenance"]["record_type"] == "memory_assertion"
+            assert row.metadata.custom["provenance"]["source_type"] == "chat"
+            assert row.metadata.custom["provenance"]["source_ref"].startswith("kcr04a-test-message-")
             assert row.metadata.custom["provenance"]["event_id"] == (
                 row.metadata.custom["event_id"]
             )
@@ -100,7 +102,8 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
                         event_id=e_id,
                         tenant_id=t_id,
                         user_id=u_id,
-                        source_type="kcr04a_integration_test",
+                        source_type="chat",
+                        source_ref=f"kcr04a-test-message-{case}",
                         payload_hash=uuid.uuid4().hex,
                         event_type="memory_persisted",
                         consent_state="granted",
