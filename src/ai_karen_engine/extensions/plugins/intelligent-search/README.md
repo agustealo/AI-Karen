@@ -1,5 +1,8 @@
 # Intelligent Search Plugin
 
+> **Maintained developer documentation:** [Intelligent Search Developer Wiki](https://github.com/agustealo/AI-Karen/blob/main/docs/wiki/intelligent-search/README.md). Its [architecture and ownership](https://github.com/agustealo/AI-Karen/blob/main/docs/wiki/intelligent-search/01_ARCHITECTURE_OWNERSHIP.md), [active API contract](https://github.com/agustealo/AI-Karen/blob/main/docs/wiki/intelligent-search/02_SEARCH_RUNTIME_AND_CONTRACTS.md), and [security/graph boundaries](https://github.com/agustealo/AI-Karen/blob/main/docs/wiki/intelligent-search/05_SECURITY_PROVENANCE_OBSERVABILITY.md) take precedence over historical direct-invocation examples below. The consumer frontend currently uses `POST /api/plugins/execute`; search providers, models and RBAC are governed by the canonical runtime/configuration, not this README's historical fallback lists. Do not treat listed providers as live/healthy without verifying registry and host configuration.
+
+
 A unified plugin providing multiple search modes for web search operations.
 
 ## Modes
