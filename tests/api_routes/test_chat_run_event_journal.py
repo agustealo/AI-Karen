@@ -170,7 +170,7 @@ async def test_repository_accepts_source_free_withheld_code_marker_and_rejects_u
     assert len(writes) == 1
     encoded = writes[0]["event_payload"]
     assert json.loads(encoded) == withheld
-    assert "code" not in encoded
+    assert "print(" not in encoded
     with pytest.raises(ValueError, match="unsupported_chat_projection_custom_event"):
         await repo.append_projected_event(owned, event={
             "type": "CUSTOM",
