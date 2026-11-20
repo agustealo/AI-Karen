@@ -58,7 +58,12 @@ class PostgresRecallRetriever:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         stmt = (
-            select(MemoryAssertion, MemoryEvent.payload)
+            select(
+                MemoryAssertion,
+                MemoryEvent.payload,
+                MemoryEvent.source_type,
+                MemoryEvent.source_ref,
+            )
             .join(MemoryEvent, MemoryEvent.event_id == MemoryAssertion.event_id)
             .where(
                 MemoryAssertion.tenant_id == tenant_uuid,
@@ -93,7 +98,10 @@ class PostgresRecallRetriever:
                 result = await session.execute(stmt)
                 rows = result.all()
 
-        return [self._to_entry(row, query, text, payload) for row, payload in rows]
+        return [
+            self._to_entry(row, query, text, payload, source_type, source_ref)
+            for row, payload, source_type, source_ref in rows
+        ]
 
     @staticmethod
     def _query_terms(text: str) -> tuple[str, ...]:
@@ -114,6 +122,8 @@ class PostgresRecallRetriever:
     def _to_entry(
         row: MemoryAssertion, query: MemoryQuery, query_text: str,
         event_payload: dict[str, Any] | None = None,
+        source_type: str | None = None,
+        source_ref: str | None = None,
     ) -> MemoryEntry:
         content = str(row.content or "")
         relevance = PostgresRecallRetriever._lexical_relevance(query_text, content)
@@ -154,6 +164,8 @@ class PostgresRecallRetriever:
                     "record_type": "memory_assertion",
                     "assertion_id": str(row.assertion_id),
                     "event_id": str(row.event_id),
+                    "source_type": source_type,
+                    "source_ref": source_ref,
                 },
             },
         )
