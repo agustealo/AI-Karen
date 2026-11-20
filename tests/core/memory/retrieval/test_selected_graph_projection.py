@@ -197,3 +197,37 @@ def test_no_cognitive_graph_output_for_source_only_retrieval():
         request=request, result=_result(request, [memory], [receipt])
     )
     assert graph["status"] == "empty"
+
+
+def test_duplicate_selection_receipts_fail_closed():
+    request = _request()
+    memory, receipt = _selected()
+    duplicate = deepcopy(receipt)
+    graph = project_selected_memory_graph(
+        request=request, result=_result(request, [memory], [receipt, duplicate])
+    )
+    assert graph["status"] == "empty"
+    assert graph["nodes"] == []
+    assert graph["edges"] == []
+
+
+def test_graph_depth_mismatch_between_source_and_metadata_is_rejected():
+    request = _request()
+    memory, receipt = _selected()
+    memory.metadata.custom["provenance"]["graph_depth"] = 2
+    receipt["provenance"]["graph_depth"] = 2
+    graph = project_selected_memory_graph(
+        request=request, result=_result(request, [memory], [receipt])
+    )
+    assert graph["edges"] == []
+
+
+def test_unselected_receipt_is_not_published_as_graph():
+    request = _request()
+    memory, receipt = _selected()
+    extra = deepcopy(receipt)
+    extra["memory_id"] = "unselected-event"
+    graph = project_selected_memory_graph(
+        request=request, result=_result(request, [memory], [extra])
+    )
+    assert graph["status"] == "empty"
