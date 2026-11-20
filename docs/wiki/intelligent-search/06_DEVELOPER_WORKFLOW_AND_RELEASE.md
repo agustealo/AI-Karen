@@ -45,10 +45,12 @@ mypy src
 cd src/ui_launchers/Karen-AI-Theme
 npm run lint
 npm run typecheck
-npm run test
+npx vitest run --config vitest.config.ts
 npm run build
 npx playwright test tests/e2e/intelligent-search.spec.ts tests/e2e/intelligent-search-crawl4ai.spec.ts tests/e2e/intelligent-search-stale-response.spec.ts
 ```
+
+**Frontend unit tests:** The frontend `package.json` does not define `npm run test`. Run `npx vitest run --config vitest.config.ts` from `src/ui_launchers/Karen-AI-Theme`; its existing Vitest config selects unit/component test files and uses jsdom. **Browser/E2E tests:** Use Playwright separately with the checked-in project config; `npm run test:e2e` invokes `playwright test --config=e2e/playwright.config.ts` for that e2e project, while the explicit `npx playwright test tests/e2e/...` command above targets the plugin test files under the repository's root Playwright configuration. Check which suite/config is the required gate before running a subset. Neither suite alone verifies a live authenticated search backend.
 
 If a test file/path is absent on the checked-out revision, adjust to the actual test tree and record why. Repository CI is authoritative for configured gates; commands above establish local checks but never replace exact-head job receipts.
 
