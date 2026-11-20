@@ -88,7 +88,8 @@ def test_exact_selected_graph_event_emits_only_bounded_opaque_mentions():
         request=request, result=_result(request, [memory], [receipt])
     )
     assert graph["status"] == "available"
-    assert [node["kind"] for node in graph["nodes"]] == ["memory_event", "entity"]
+    assert [node["kind"] for node in graph["nodes"]] == ["memory_event", "entity_cue"]
+    assert graph["nodes"][1]["verification_state"] == "retrieval_cue"
     assert len(graph["edges"]) == 1
     assert graph["edges"][0]["type"] == "MENTIONS"
     text = str(graph)
@@ -184,7 +185,7 @@ def test_duplicate_entities_are_deduplicated_and_events_bounded():
         ),
     )
     assert len(graph["edges"]) == MAX_GRAPH_EVENTS
-    assert len([n for n in graph["nodes"] if n["kind"] == "entity"]) == 1
+    assert len([n for n in graph["nodes"] if n["kind"] == "entity_cue"]) == 1
     assert graph["truncated"] is True
     assert graph["degraded"] is True
     assert graph["degradation_reason"] == "partial_retrieval_failure"
@@ -231,3 +232,16 @@ def test_unselected_receipt_is_not_published_as_graph():
         request=request, result=_result(request, [memory], [extra])
     )
     assert graph["status"] == "empty"
+
+
+def test_unresolved_cue_does_not_claim_canonical_entity_identity():
+    request = _request()
+    memory, receipt = _selected(cue="Ambiguous Person")
+    memory.metadata.custom["provenance"]["entity_resolution"] = None
+    receipt["provenance"]["entity_resolution"] = None
+    graph = project_selected_memory_graph(
+        request=request, result=_result(request, [memory], [receipt])
+    )
+    assert graph["nodes"][1]["kind"] == "entity_cue"
+    assert graph["nodes"][1]["verification_state"] == "retrieval_cue"
+    assert "entity_id" not in graph["nodes"][1]
