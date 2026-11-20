@@ -36,3 +36,51 @@ def test_unattributed_ledger_memory_remains_shared():
     query = MemoryQuery(text="Shared fact", tenant_id=tenant, user_id=user)
     entry = PostgresRecallRetriever._to_entry(row, query, query.text, {})
     assert "persona_id" not in entry.metadata.custom
+
+
+def test_durable_assertion_receipt_uses_canonical_event_columns():
+    tenant, user = str(uuid4()), str(uuid4())
+    assertion_id, event_id = uuid4(), uuid4()
+    row = SimpleNamespace(
+        assertion_id=assertion_id,
+        event_id=event_id,
+        tenant_id=tenant,
+        user_id=user,
+        content="Derived from external resource",
+        confidence=0.8,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        scope="user",
+        consent_state="granted",
+        valid_from=None,
+        valid_to=None,
+    )
+    query = MemoryQuery(text="external resource", tenant_id=tenant, user_id=user)
+    entry = PostgresRecallRetriever._to_entry(
+        row,
+        query,
+        query.text,
+        {
+            "metadata": {
+                "custom": {
+                    "source_type": "chat",
+                    "source_ref": "spoofed-message",
+                    "persona_id": "Troy",
+                }
+            }
+        },
+        "web",
+        "canonical-external-resource-1",
+    )
+    assert entry.metadata.custom["persona_id"] == "Troy"
+    receipt = entry.metadata.custom["provenance"]
+    assert receipt == {
+        "store": "postgres",
+        "record_type": "memory_assertion",
+        "assertion_id": str(assertion_id),
+        "event_id": str(event_id),
+        "source_type": "web",
+        "source_ref": "canonical-external-resource-1",
+    }
+    assert entry.metadata.tenant_id == tenant
+    assert entry.metadata.user_id == user

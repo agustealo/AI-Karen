@@ -282,6 +282,30 @@ class NeuroRecall:
                 custom_metadata if isinstance(custom_metadata, dict) else {}
             )
             graph_provenance = custom_metadata.get("provenance")
+            ledger_candidate = getattr(metadata, "source", None) == "postgres_memory_ledger"
+            if ledger_candidate and (
+                not isinstance(graph_provenance, dict)
+                or graph_provenance.get("store") != "postgres"
+                or graph_provenance.get("record_type") != "memory_assertion"
+                or graph_provenance.get("assertion_id") != str(memory.id)
+                or not isinstance(graph_provenance.get("event_id"), str)
+                or not graph_provenance["event_id"].strip()
+                or not isinstance(graph_provenance.get("source_type"), str)
+                or not graph_provenance["source_type"].strip()
+            ):
+                # A durable assertion requires its canonical event source
+                # identity. Missing origin never falls back to direct chat.
+                rejected_count += 1
+                continue
+            ledger_external_source = bool(
+                ledger_candidate
+                and graph_provenance["source_type"] not in {"chat", "chat_user", "conversation"}
+            )
+            if ledger_external_source and not str(
+                graph_provenance.get("source_ref") or ""
+            ).strip():
+                rejected_count += 1
+                continue
             graph_candidate = (
                 custom_metadata.get("source_store") == "postgres_graph"
                 or getattr(metadata, "source", None) == "postgres_graph"
@@ -310,6 +334,7 @@ class NeuroRecall:
                 "source_lineage" in custom_metadata
                 or "derived_source_ids" in custom_metadata
                 or graph_external_source
+                or ledger_external_source
             ):
                 # A source authority must independently recheck the complete
                 # source set against current ACL/revocation state. Missing or

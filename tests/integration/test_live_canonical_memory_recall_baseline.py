@@ -61,6 +61,7 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
     event_cases = (
         ("public", tenant, user, "memory.write", -2, None),
         ("private", tenant, user, "kcr04a.private", -2, None),
+        ("external", tenant, user, "memory.write", -2, None),
         ("other_user", tenant, other_user, "memory.write", -2, None),
         ("other_tenant", other_tenant, user, "memory.write", -2, None),
         ("expired", tenant, user, "memory.write", -5, -1),
@@ -83,6 +84,8 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
             assert row.metadata.tenant_id == str(tenant)
             assert row.metadata.user_id == str(user)
             assert row.metadata.custom["provenance"]["record_type"] == "memory_assertion"
+            assert row.metadata.custom["provenance"]["source_type"] in {"chat", "web"}
+            assert row.metadata.custom["provenance"]["source_ref"].startswith("kcr04a-test-source-")
             assert row.metadata.custom["provenance"]["event_id"] == (
                 row.metadata.custom["event_id"]
             )
@@ -100,7 +103,8 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
                         event_id=e_id,
                         tenant_id=t_id,
                         user_id=u_id,
-                        source_type="kcr04a_integration_test",
+                        source_type=("web" if case == "external" else "chat"),
+                        source_ref=f"kcr04a-test-source-{case}",
                         payload_hash=uuid.uuid4().hex,
                         event_type="memory_persisted",
                         consent_state="granted",
@@ -141,6 +145,7 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
         assert observed_ids(before) == {
             str(event_ids["public"]),
             str(event_ids["private"]),
+            str(event_ids["external"]),
         }
 
         @asynccontextmanager
@@ -211,6 +216,11 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
         neuro_observed_ms = (time.perf_counter() - began) * 1000
         assert not neuro.degraded, neuro.degradation_reason
         assert neuro.source_health[0]["status"] == "success"
+        # The canonical SQL can retrieve an external event, but the
+        # NeuroRecall source gate rejects it without a live verifier.
+        assert str(event_ids["external"]) not in {
+            str(row.metadata.custom["event_id"]) for row in neuro.memories
+        }
         assert {str(row.metadata.custom["event_id"]) for row in neuro.memories} == {
             str(event_ids["public"]),
             str(event_ids["private"]),
@@ -231,7 +241,9 @@ async def test_live_canonical_assertion_recall_query_and_neurorecall_selection()
             ).scalar_one()
             grant.is_granted = False
             grant.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        assert observed_ids(await retrieve()) == {str(event_ids["public"])}
+        assert observed_ids(await retrieve()) == {
+            str(event_ids["public"]), str(event_ids["external"])
+        }
         revoked = await NeuroRecall(retriever=PostgresRecallRetriever()).recall(
             RecallRequest(
                 query=_TOKEN,
