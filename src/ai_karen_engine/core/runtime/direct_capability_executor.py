@@ -1225,6 +1225,85 @@ class DirectCapabilityExecutor:
         if decision.intent == "automation.create":
             return await self._execute_automation_create(request, plan, meter)
 
+        if decision.intent == "artifact.code.read":
+            from ai_karen_engine.core.cortex.routing_intents import (
+                parse_owner_code_artifact_view,
+            )
+            from ai_karen_engine.database.factory import DatabaseServiceFactory
+
+            started_at = time.perf_counter()
+            unavailable = "That code artifact is unavailable or not authorized."
+
+            def denied(reason: str) -> DirectCapabilityResult:
+                return DirectCapabilityResult(
+                    handled=True, success=False, degraded=True,
+                    source="capability_unavailable",
+                    source_id="artifact.code.read",
+                    error=reason, text=unavailable,
+                    attempts=[{"type": "capability", "id": "artifact.code.read",
+                               "status": "denied"}],
+                    latency_ms=(time.perf_counter() - started_at) * 1000.0,
+                )
+
+            artifact_id = parse_owner_code_artifact_view(
+                self._latest_user_text(request)
+            )
+            context = request.context
+            if (
+                artifact_id is None
+                or decision.is_graph_required
+                or not bool((decision.policy_constraints or {}).get("direct_capability"))
+                or "artifact.code.read" not in set(plan.allowed_capabilities)
+                or not plan.matches_execution_scope(
+                    user_id=str(context.user_id),
+                    tenant_id=str(context.tenant_id),
+                    session_id=context.session_id,
+                    policy_decision_id=decision.policy_decision_id,
+                )
+            ):
+                return denied("artifact_code_not_authorized")
+            try:
+                context.require_authenticated_user()
+                if not await meter.consume_tool_call():
+                    return denied("artifact_code_budget_exhausted")
+                factory = DatabaseServiceFactory()
+                factory.create_canonical_repositories()
+                store = factory.get_service("artifact_store")
+                if store is None:
+                    return denied("artifact_code_store_unavailable")
+                receipt = await store.read_owner_active_code(
+                    artifact_id, str(context.tenant_id), str(context.user_id),
+                )
+                if not receipt.success or receipt.data is None:
+                    return denied("artifact_code_not_available")
+                # No source bytes in the text answer, ordinary metadata, or logs.
+                verified = receipt.data
+                if (
+                    verified.artifact_id != artifact_id
+                    or verified.tenant_id != str(context.tenant_id)
+                    or verified.user_id != str(context.user_id)
+                ):
+                    return denied("artifact_code_scope_mismatch")
+            except (PermissionError, ValueError, TypeError):
+                return denied("artifact_code_principal_unverified")
+            except Exception as exc:
+                logger.warning("artifact_code_read_unavailable", extra={
+                    "correlation_id": context.correlation_id,
+                    "error_type": type(exc).__name__,
+                })
+                return denied("artifact_code_store_unavailable")
+            return DirectCapabilityResult(
+                handled=True, success=True,
+                source="artifact", source_id="artifact.code.read",
+                text="Verified code artifact retrieved for read-only display.",
+                payload={"verified_code_artifact": verified},
+                attempts=[{
+                    "type": "artifact", "id": "artifact.code.read",
+                    "status": "success",
+                }],
+                latency_ms=(time.perf_counter() - started_at) * 1000.0,
+            )
+
         if decision.intent == "planner.read":
             from ai_karen_engine.server.config import settings
             from ai_karen_engine.services.personal_planner import PersonalPlannerService
