@@ -348,6 +348,29 @@ describe("KGUI-02 governed chart and code host presentation", () => {
     expect(html).not.toContain(">18.568<");
     expect(html).not.toContain(">0<");
   });
+  it("uses identical UTF-16 bounds for Unicode chart and code metadata", () => {
+    const unicodeChart = { ...chart, data: {
+      title: "📊".repeat(80), x_label: "📊".repeat(80),
+      y_label: "📊".repeat(80), unit: "📊".repeat(16),
+      points: [{ label: "📊".repeat(40), value: 0.0001 }],
+    } };
+    expect(parseKarenPresentation(unicodeChart)).not.toBeNull();
+    for (const field of ["title", "x_label", "y_label", "unit"] as const) {
+      const excess = field === "unit" ? "📊".repeat(17) : "📊".repeat(81);
+      expect(parseKarenPresentation({
+        ...unicodeChart, data: { ...unicodeChart.data, [field]: excess },
+      })).toBeNull();
+    }
+    expect(parseKarenPresentation({ ...unicodeChart, data: {
+      ...unicodeChart.data, points: [{ label: "📊".repeat(41), value: 0.0001 }],
+    } })).toBeNull();
+
+    const unicodeCode = { ...artifact, data: { ...artifact.data, filename: "📊".repeat(80) } };
+    expect(parseKarenPresentation(unicodeCode)).not.toBeNull();
+    expect(parseKarenPresentation({ ...unicodeCode, data: {
+      ...unicodeCode.data, filename: "📊".repeat(81),
+    } })).toBeNull();
+  });
   it("rejects unverified chart values and action injection", () => {
     for (const value of [NaN, Infinity, -1, 1_000_000_001, true, "12"]) {
       expect(parseKarenPresentation({ ...chart, data: {
