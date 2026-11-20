@@ -3,6 +3,7 @@ import { ArrowUpRight, Database, Radar, Sparkles } from 'lucide-react';
 import { IntelligentSearchState } from '../types';
 import { ModeConfigItem } from '../configs/modeConfig';
 import { LoadingState, EmptyState, ErrorState } from './UIStates';
+import { EvidenceGraphPanel } from './EvidenceGraphPanel';
 import { ResultsPanel, SourcesPanel, ExtractedDataPanel, InsightsPanel, DiagnosticsPanel } from './Panels';
 
 interface ResultsWorkspaceProps {
@@ -16,9 +17,14 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const [detailsWidth, setDetailsWidth] = useState(280);
   const [showDetails, setShowDetails] = useState(false);
 
-  const validTabs = modeConfig.resultTabs;
-  const currentTab = validTabs.includes(activeTab) ? activeTab : validTabs[0];
   const response = state.response;
+  const validTabs = React.useMemo(
+    () => response?.evidenceGraph && !modeConfig.resultTabs.includes('graph')
+      ? [modeConfig.resultTabs[0], 'graph', ...modeConfig.resultTabs.slice(1)]
+      : modeConfig.resultTabs,
+    [modeConfig.resultTabs, response?.evidenceGraph],
+  );
+  const currentTab = validTabs.includes(activeTab) ? activeTab : validTabs[0];
   const sources = response?.sources ?? [];
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
@@ -94,6 +100,8 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         return <ResultsPanel response={response} />;
       case 'sources':
         return <SourcesPanel response={response} />;
+      case 'graph':
+        return <EvidenceGraphPanel graph={response.evidenceGraph} />;
       case 'extractedData':
         return <ExtractedDataPanel response={response} />;
       case 'insights':
