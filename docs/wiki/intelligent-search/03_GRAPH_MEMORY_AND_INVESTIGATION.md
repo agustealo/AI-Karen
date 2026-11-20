@@ -1,13 +1,13 @@
 # 03 | Graph-native discovery, cognitive memory and investigation design
 
-**Implementation truth:** Memory graph and graph retrieval exist on the verified mainline. A consumer investigation graph backed by web evidence is proposed in [PR #1119](https://github.com/agustealo/AI-Karen/pull/1119), not merged at this wiki baseline. Persistent cross-source investigation sessions, graph-selected entity followups and synchronized temporal/workflow lenses are **future work**.
+**Implementation truth:** Memory graph and graph retrieval exist on the verified mainline. The bounded retrieval evidence graph and accessible Graph lens are now merged via [PR #1119](https://github.com/agustealo/AI-Karen/pull/1119); a full cross-source investigation graph is still proposed. Persistent cross-source investigation sessions, graph-selected entity followups and synchronized temporal/workflow lenses are **future work**.
 
 ## 1. Four distinct graph responsibilities
 
 | Graph concept | What it represents | Existing implementation / source of truth | Publication rule |
 | --- | --- | --- | --- |
 | Cognitive memory graph | Entities, events, assertions, provenance, temporal relationships | `core/memory/graph/service.py` + `platform/memory/postgres/graph_repository.py`, governed PostgreSQL | Scope and source-authorize, then let NeuroRecall select recall memories |
-| Retrieval evidence graph | Document/source and passage provenance from an executed search | Proposed `services/search/evidence_graph_projection.py` in PR #1119 | Exact fetched-source URL relationship only, no fabricated entity/claim edges |
+| Retrieval evidence graph | Document/source and passage provenance from an executed search | Merged `services/search/evidence_graph_projection.py` in PR #1119 | Exact fetched-source URL relationship only, no fabricated entity/claim edges |
 | Investigation graph | Questions, evidence, claims, disputed relations, selected scope, investigation state | **Proposed typed server-authorized projection** over governed sources and memory/events | No standalone graph database, no private memory export, no unverified relationship as fact |
 | Workflow graph | Plans, steps, dependencies, tool runs, approval/termination states | Canonical runtime and LangGraph for true multistep workflows | Distinguish proposed vs running vs verified completion; server receipt required |
 
@@ -90,7 +90,7 @@ NeuroRecall owns ranking and candidate fusion. Experimental HippoRAG/LightRAG te
 
 ## 7. Implementation stages
 
-1. **Evidence source graph:** only exact source→passage links, bounded and backend-authored. [PR #1119](https://github.com/agustealo/AI-Karen/pull/1119), currently open; do not claim merged.
+1. **Evidence source graph:** only exact source→passage links, bounded and backend-authored. [PR #1119](https://github.com/agustealo/AI-Karen/pull/1119), merged in `main` at `9b956d892a8f4773c0173a7773af74d23ad0eb33`; not yet target-host consumer certified.
 2. **Authorized memory projection:** runtime-selected, NeuroRecall-authorized memories and metadata, no raw graph exposure; explicit degraded/empty state, security tests first.
 3. **Graph interaction:** entity focus, expandable neighborhood, evidence-highlighted selections, linked timeline; screen-reader list alternative.
 4. **Durable investigation identity:** server-created session ID, snapshot revision and selected source IDs, governed persistence and source revocation invalidation.
