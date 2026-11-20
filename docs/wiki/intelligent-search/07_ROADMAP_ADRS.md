@@ -1,6 +1,6 @@
 # 07 | Roadmap, architecture decisions, risks and maintenance log
 
-**Snapshot date:** 2026-11-20, source `main@f9ff898f036b071d38bee9fafe43cf458e2e2bd4`. PR status must be refreshed before work. This document is a living index, not a scheduling or release promise.
+**Snapshot date:** 2026-11-20, source `main@9b956d892a8f4773c0173a7773af74d23ad0eb33`. PR status must be refreshed before work. This document is a living index, not a scheduling or release promise.
 
 ## 1. Current development slices
 
@@ -9,7 +9,7 @@
 | **SR-01** | Consumer routing, cited synthesis, live provider and authenticated deployment acceptance | **RED**, not consumer-certified | [Consumer Release SR-01](../../intelligent-search/CONSUMER_RELEASE_SR01.md) |
 | **KIS-GRAPH-01A** | Graph-native UX, ownership, safety contract | **Merged** | [PR #1117](https://github.com/agustealo/AI-Karen/pull/1117), `f9ff898` |
 | **KIS-GRAPH-01B** | Draft vs completed search, stale labeling, retained tabs, race/cancel tests | **Merged** into main at `be559566b` | [PR #1118](https://github.com/agustealo/AI-Karen/pull/1118) |
-| **KIS-GRAPH-01C1** | Source-backed passage graph plus accessible Graph lens | **Open PR**, reconciled, new CI required, not deployed/certified | [PR #1119](https://github.com/agustealo/AI-Karen/pull/1119) |
+| **KIS-GRAPH-01C1** | Source-backed passage graph plus accessible Graph lens | **Merged**, CI green; target-host acceptance still pending | [PR #1119](https://github.com/agustealo/AI-Karen/pull/1119) |
 | **KIS-GRAPH-01C2** | Authorized cognitive memory graph projection via NeuroRecall selected results | **Design/ownership audit only** | [03](03_GRAPH_MEMORY_AND_INVESTIGATION.md) |
 | **KIS-GRAPH-01D** | Synchronized Answer/Graph/Timeline/Evidence panes, accessible selection | **Proposed** | [04](04_CONSUMER_UX_AND_ACCESSIBILITY.md) |
 | **KIS-GRAPH-01E** | Durable investigation session, source-bound followups, governed workflow receipts | **Proposed** | [02](02_SEARCH_RUNTIME_AND_CONTRACTS.md), [03](03_GRAPH_MEMORY_AND_INVESTIGATION.md) |
