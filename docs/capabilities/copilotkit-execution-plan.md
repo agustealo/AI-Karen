@@ -886,7 +886,7 @@ completion, content-size or presentation validation to silence the UI.
 - 2026-11-19: Extend the existing `presentation_pin_admission.py` runtime owner. The same canonical owned-history projector validates completed-run digest, owner/tenant, message and presentation/evidence identity. The helper exposes a separately bounded canonical `validate_presentation` envelope only to the new read-only `restore_attested_presentation_envelope` function, while the existing `admit_presentation_pin_reference` keeps its metadata-only public contract. Regression coverage: exact envelope; foreign principal; missing attestation; forged reference; post-commit digest drift; unsupported type; oversized data. No new store, executor, provider or authorization path.
 - **SOURCE ONLY; CONSUMER RELEASE NOT VERIFIED.** No full-card API route or frontend display is enabled in this change. Exact-head CI, authenticated browser proof, revocation acceptance, and deployment verification remain outstanding. Production pin mutations remain disabled.
  
-## KCON-781 / KGUI-01: Canonical plugin generative presentation declaration (2026-11-20)
+## KCON-770 / KGUI-01: Canonical plugin generative presentation declaration (2026-11-20)
 
 - **Source candidate / NOT consumer certified.** Extend existing
   `extensions/platform/core/manifest.py` with a bounded, strictly validated
