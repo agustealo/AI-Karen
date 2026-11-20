@@ -553,7 +553,7 @@ def test_kgui02_code_artifact_is_read_only_and_bounded():
     for field, bad in [
         ("filename", "../secrets.py"), ("filename", "a/b.py"),
         ("language", "JavaScript<>"), ("code", ""),
-        ("code", "x" * 12001), ("code", "bad\\x00code"),
+        ("code", "x" * 12001), ("code", "bad\x00code"),
     ]:
         payload = deepcopy(base)
         payload["data"][field] = bad
