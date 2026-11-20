@@ -46,6 +46,19 @@ class ArtifactUploadRequest:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedArtifactText:
+    """Inert, digest-verified text from one active artifact owned by a principal."""
+
+    artifact_id: str
+    tenant_id: str
+    user_id: str
+    filename: str
+    mime_type: str
+    sha256: str
+    text: str
+
+
 class ArtifactStore(Repository):
     """Canonical contract for durable artifact/object storage.
 
@@ -61,6 +74,17 @@ class ArtifactStore(Repository):
     @abstractmethod
     async def download(self, artifact_id: str, tenant_id: str) -> RepositoryResult[BinaryIO]:
         """Retrieve artifact bytes."""
+
+    @abstractmethod
+    async def read_owner_active_code(
+        self, artifact_id: str, tenant_id: str, user_id: str
+    ) -> RepositoryResult[VerifiedArtifactText]:
+        """Read small inert source text with owner, active state and digest proven.
+
+        Only caller-authenticated tenant/user IDs may be passed. The repository
+        must enforce these IDs in its read query, not rely on UI authorization.
+        Failure must never return source bytes or other tenants' metadata.
+        """
 
     @abstractmethod
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> RepositoryResult[Optional[Artifact]]:
