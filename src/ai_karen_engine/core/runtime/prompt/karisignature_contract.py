@@ -73,7 +73,10 @@ class KariSignatureRequest:
             _uuid(getattr(self, name))
         if not isinstance(self.purpose, str) or not _TOKEN.fullmatch(self.purpose):
             raise ValueError("invalid_style_purpose")
-        if (\n            not isinstance(self.correlation_id, str)\n            or not 1 <= len(self.correlation_id) <= 128\n        ):
+        if (
+            not isinstance(self.correlation_id, str)
+            or not 1 <= len(self.correlation_id) <= 128
+        ):
             raise ValueError("invalid_style_correlation")
 
 
@@ -96,7 +99,10 @@ class KariSignatureRevision:
             raise ValueError("style_not_published")
         if type(self.approved_expression) is not dict or not self.approved_expression:
             raise ValueError("invalid_style_expression")
-        if (\n            not isinstance(self.content_digest, str)\n            or not _SHA256.fullmatch(self.content_digest)\n        ):
+        if (
+            not isinstance(self.content_digest, str)
+            or not _SHA256.fullmatch(self.content_digest)
+        ):
             raise ValueError("invalid_style_digest")
 
     @staticmethod
@@ -105,7 +111,9 @@ class KariSignatureRevision:
         if not isinstance(expression, dict):
             raise ValueError("invalid_style_expression")
         return hashlib.sha256(
-            json.dumps(\n                expression, sort_keys=True, separators=(",", ":"), ensure_ascii=True\n            ).encode("utf-8")
+            json.dumps(
+                expression, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode("utf-8")
         ).hexdigest()
 
 
@@ -151,12 +159,17 @@ class KariSignatureResolver:
             revision = await self._authority.read_current_published(request=request)
             if revision is None or not isinstance(revision, KariSignatureRevision):
                 raise PermissionError("style_unavailable")
-            if (\n                revision.tenant_id != request.tenant_id\n                or revision.profile_id != request.profile_id\n            ):
+            if (
+                revision.tenant_id != request.tenant_id
+                or revision.profile_id != request.profile_id
+            ):
                 raise PermissionError("style_unavailable")
             expression = self._validated_expression(revision.approved_expression)
             if revision.content_digest != KariSignatureRevision.digest(expression):
                 raise PermissionError("style_unavailable")
-            allowed = await self._authority.authorize_use(\n                request=request, revision=revision\n            )
+            allowed = await self._authority.authorize_use(
+                request=request, revision=revision
+            )
             if allowed is not True:
                 raise PermissionError("style_unavailable")
         except (ValueError, TypeError, AttributeError, KeyError) as exc:
@@ -169,7 +182,11 @@ class KariSignatureResolver:
         # Reuse the existing persona presentation boundary, which cannot
         # elevate style data to system prompt, provider, memory or tools.
         sanitized = PersonaAssemblyPolicy().sanitize_persona(expression)
-        if (\n            sanitized.rejected_fields\n            or sanitized.ignored_fields\n            or sanitized.data != expression\n        ):
+        if (
+            sanitized.rejected_fields
+            or sanitized.ignored_fields
+            or sanitized.data != expression
+        ):
             raise PermissionError("style_unavailable")
         return KariSignatureResolution(
             profile_id=revision.profile_id,
@@ -181,7 +198,11 @@ class KariSignatureResolver:
 
     @staticmethod
     def _validated_expression(expression: dict[str, str]) -> dict[str, str]:
-        if (\n            type(expression) is not dict\n            or not expression\n            or len(expression) > len(_STYLE_FIELDS)\n        ):
+        if (
+            type(expression) is not dict
+            or not expression
+            or len(expression) > len(_STYLE_FIELDS)
+        ):
             raise ValueError("invalid_style_expression")
         validated: dict[str, str] = {}
         for key, value in expression.items():
