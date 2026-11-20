@@ -144,10 +144,10 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             return None
         for field in ("title", "x_label", "y_label"):
             value = data[field]
-            if not isinstance(value, str) or not 1 <= len(value.strip()) <= 160:
+            if not isinstance(value, str) or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in value.strip()) <= 160:
                 return None
         unit = data.get("unit")
-        if unit is not None and (not isinstance(unit, str) or len(unit) > 32):
+        if unit is not None and (not isinstance(unit, str) or sum(2 if ord(ch) > 0xFFFF else 1 for ch in unit) > 32):
             return None
         points = data["points"]
         if not isinstance(points, list) or not 1 <= len(points) <= 20:
@@ -158,7 +158,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
             if not isinstance(point, dict) or set(point) != {"label", "value"}:
                 return None
             label, number = point["label"], point["value"]
-            if (not isinstance(label, str) or not 1 <= len(label.strip()) <= 80
+            if (not isinstance(label, str) or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in label.strip()) <= 80
                 or label.strip() in seen or type(number) not in (int, float)
                 or not 0 <= number <= 1_000_000_000 or not math.isfinite(number)):
                 return None
@@ -180,7 +180,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         if not isinstance(data, dict) or set(data) != {"filename", "language", "code"}:
             return None
         filename, language, code = data["filename"], data["language"], data["code"]
-        if (not isinstance(filename, str) or not 1 <= len(filename) <= 160
+        if (not isinstance(filename, str) or not 1 <= sum(2 if ord(ch) > 0xFFFF else 1 for ch in filename) <= 160
             or any(ord(ch) < 33 or ch in ("/", "\\") for ch in filename)
             or filename in (".", "..")
             or not isinstance(language, str)
