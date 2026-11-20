@@ -207,3 +207,52 @@ Never invent baseline percentages.
 - Source-green, deployed-ready and consumer-certified are three different claims. State each separately.
 
 **Adoption test:** A person who has never read this repository can discover meaningful features, use them safely, understand what KAREN actually did, and return later without losing their work.
+
+ 
+## KDEL-CONSUMER-01: Answer presentation and delivery experience (design contract, NOT IMPLEMENTED)
+
+**Consumer language:** `Answer` is what Karen produces; `Format` is how it is presented; `Delivery` is where it goes; `When` is when an authorized operation happens. A format choice is not a provider request. A destination selector is not an authorization grant.
+
+### Entry and layout
+- Show a compact **Deliver** action beside an individually verified assistant response, with contextual **Save / Export / Send / Schedule** actions only when supported by backend eligibility. The action opens one accessible sheet/dialog on desktop and mobile; preserve message and conversation identity.
+- Sheet sections: **What** (selected saved assistant response or verified artifact, never arbitrary unsaved draft), **Format** (original text; verified table/card if present; PDF/document only through governed artifact creator), **Where** (in chat, local download, linked provider channel), **When** (now; schedule only if real scheduler and recurrence constraints are eligible), **Review** (preview, destination, disclosure, approval), and **Status** (actual committed receipt and recovery).
+- Default is **In chat**, already available without outbound action. Keep the composer uncluttered; progressive disclosure exposes advanced features.
+- **Read aloud** belongs to the existing voice controls and verified TTS engine selection. Speech playback is not sending, archival, or proof of remote delivery.
+- Available formats are backed by actual artifact/presentation schemas. Never convert unsupported media by relabeling a file, render HTML from untrusted model text, invent a PDF, or let the client choose an executable renderer.
+
+### Canonical authority and dependency mapping
+| Consumer requirement | Existing owner to reuse | Forbidden parallel owner |
+| --- | --- | --- |
+| Saved message content, auth and tenant scope | `ConversationRuntimeGateway`, `ChatRuntime`, owned history projection | UI-cached response as authorization |
+| Presentation formats | `presentation_contract.py`, `KarenPresentationRegistry.tsx`, governed artifact authority | New generic HTML renderer or model-derived file links |
+| Voice/read aloud | `KarenCopilotVoiceDock.tsx`, voice-engine catalog and saved selection | Client-invented voice capability |
+| Connected outbound channels | `ChannelHostServices`, canonical channel repository, `ChannelDeliveryService`, installed plugin manifest | Direct browser provider API calls, client provider tokens |
+| Channel capability discovery | Enabled/installed/tenant-authorized manifest and user-owned connection readback | Hardcoded WhatsApp, email, Telegram eligibility |
+| Scheduled delivery | Existing task/automation authorization, scheduling, immutable job and outbox receipts, where available | Browser timers and localStorage pending sends |
+| Action RBAC, approvals and audit | CORTEX decision, RuntimePolicy, `ActionExecutionGate`, outbox and provider reconciliation | UI-only button visibility checks |
+| Runtime result and status | Provider-backed source receipt, outbox state, observed events and correlation ID | Optimistic `sent` banners or invented receipt state |
+
+`api_routes/chat/copilotkit_settings.py` currently contains a simulated successful connection test and process-local config. **Do not use this legacy status as delivery eligibility**, and audit whether its routes are mounted before any retirement or migration; protect existing consumers and security contracts.
+
+### User-visible lifecycle and semantics
+- `Not available`: destination not installed/connected/authorized. Show why if safe; do not enable send.
+- `Needs connection`: offer the existing governed consent/connection journey, not a synthetic connected badge.
+- `Ready`: successful authenticated capability preflight; does **not** imply approval to send.
+- `Needs approval`: present explicit recipients, format, data disclosure, schedule and any charges before executing. Pending is not sent.
+- `Accepted/Queued`: durable idempotent record exists; transport delivery still unconfirmed.
+- `Sending`: worker owns an active claim with a current lease.
+- `Sent`: verified provider message ID, not just HTTP 200.
+- `Delivered/Read`: display only when adapter reports authenticated supported receipts; unavailable is not a failure.
+- `Unknown`: ambiguous provider outcome, reconcile rather than blindly resend.
+- `Failed/Cancelled`: show factual state and safe retry/recovery eligibility. Cancellation request is not proven cancellation.
+- All state changes require a scope-matched correlation ID, immutable audit evidence, and tenant/user isolation.
+
+### Execution phases, with independent acceptance gates
+1. **KDEL-01 Discovery:** a read-only authenticated capability/readiness projection from existing manifest/connection/user-permission owners, versioned and cache-controlled `private, no-store`. Include exact `available` and `reason_code`, never a canned fallback list. Test RBAC, absent plugin, stale connection, other tenant, missing provider and auth failure.
+2. **KDEL-02 Consumer surface:** reusable action/sheet mounted in the canonical chat workspace, driven exclusively by that projection. Copy-to-clipboard and read-aloud may reuse currently functional controls; no remote send until KDEL-03. Keyboard, focus restoration, 390/768/1024/1440 px, no disabled-action traps, readable status text.
+3. **KDEL-03 Authorized send:** server-bound selected saved message/artifact reference, explicit confirmed destination, validated content and recipient, one-use authorized execution plan and idempotency, native provider receipt and reconciliation, client readback before success. Tests for double-click, concurrent retries, unknown provider result, revoked channel and cross-tenant reference.
+4. **KDEL-04 Scheduled delivery:** ONLY after canonical scheduler supports scoped schedule, cancellation, timing, consent and idempotent jobs; show time zone and next occurrence. No fake scheduled success.
+5. **KDEL-05 Format/media export:** use governed artifact service for available PDF/DOCX/CSV/other export types, checked file metadata, actual accessible downloaded bytes and revocation; never call raw content an exported file.
+6. **KDEL-06 Consumer certification:** signed-in real browser, actual provider send/reconciliation, offline/reconnect, accessible mobile flows and persisted receipt reload. Capture sanitized exact-SHA evidence in `docs/ux/user-journey-audit.md`. No consumer-ready claim without this.
+
+**Current release status:** DESIGN CONTRACT ONLY; all KDEL-01..06 end-to-end gates NOT RUN. Existing voice dock, presentation renderer and channel infrastructure are reusable code, not proof of working consumer delivery UI.
