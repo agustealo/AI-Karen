@@ -639,3 +639,92 @@ def test_projection_target_summary_retains_internal_pipeline_failures():
     ) == [
         {"target": "projection_pipeline", "success_count": 0, "failure_count": 1},
     ]
+
+
+@pytest.mark.asyncio
+async def test_projection_reuses_committed_event_source_reference_when_caller_omits_it():
+    """The canonical NeuroVault receipt wins over optional input provenance."""
+    signal = MemorySignal(
+        text="My name is DirectChatProof",
+        signal_type="identity_fact",
+        confidence=0.98,
+        metadata={
+            "explicit_user_statement": True,
+            "category": "identity",
+            "attribute": "preferred_name",
+            "normalized_value": "DirectChatProof",
+        },
+    )
+
+    class _CanonicalReceiptVault(_Vault):
+        async def persist(self, entry, *, context):
+            self.calls.append((entry, context))
+            return VaultWriteReceipt(
+                memory_id=entry.id,
+                persisted=True,
+                version=entry.version,
+                metadata={
+                    "event_id": "00000000-0000-0000-0000-000000000010",
+                    "source_type": "chat_user",
+                    "source_ref": context.conversation_id,
+                },
+            )
+
+    vault = _CanonicalReceiptVault()
+    projector = _Projector()
+    result = await _service(vault, projector, signal).process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        source_type="chat_user",
+        source_ref=None,
+        conversation_id="conversation-canonical-1",
+        policy_context={"memory_write_authorized": True},
+    )
+    assert result["persisted"] == 1
+    assert vault.calls[0][0].metadata.custom["source_ref"] is None
+    assert projector.calls[0]["source_type"] == "chat_user"
+    assert projector.calls[0]["source_ref"] == "conversation-canonical-1"
+
+
+@pytest.mark.asyncio
+async def test_projector_does_not_rewrite_idempotent_canonical_source():
+    """An idempotent replay projects the original event's source identity."""
+    signal = MemorySignal(
+        text="My name is ReplayProof",
+        signal_type="identity_fact",
+        confidence=0.98,
+        metadata={
+            "explicit_user_statement": True,
+            "category": "identity",
+            "attribute": "preferred_name",
+            "normalized_value": "ReplayProof",
+        },
+    )
+
+    class _ReplayedVault(_Vault):
+        async def persist(self, entry, *, context):
+            return VaultWriteReceipt(
+                memory_id=entry.id,
+                persisted=True,
+                version=entry.version,
+                metadata={
+                    "event_id": "00000000-0000-0000-0000-000000000010",
+                    "idempotent_replay": True,
+                    "source_type": "chat_user",
+                    "source_ref": "original-conversation",
+                },
+            )
+
+    projector = _Projector()
+    result = await _service(_ReplayedVault(), projector, signal).process_interaction(
+        text=signal.text,
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        user_id="00000000-0000-0000-0000-000000000002",
+        source_type="chat_user",
+        source_ref=None,
+        conversation_id="later-conversation",
+        policy_context={"memory_write_authorized": True},
+    )
+    assert result["persisted"] == 1
+    assert projector.calls[0]["source_ref"] == "original-conversation"
