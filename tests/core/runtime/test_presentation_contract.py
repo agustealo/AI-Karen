@@ -592,9 +592,9 @@ def test_kgui02_chart_unicode_whitespace_normalization_matches_react():
         "schema_version": 1, "presentation_id": "space-chart",
         "component_type": "chart.bar", "evidence_ref": "owned:chart",
         "data": {
-            "title": "\\ufeffOrders\\ufeff", "x_label": " Month ",
-            "y_label": "\\ufeffCount", "points": [
-                {"label": "\\ufeffJan", "value": 1},
+            "title": "\ufeffOrders\ufeff", "x_label": " Month ",
+            "y_label": "\ufeffCount", "points": [
+                {"label": "\ufeffJan", "value": 1},
                 {"label": "Feb", "value": 2},
             ],
         },
@@ -608,7 +608,7 @@ def test_kgui02_chart_unicode_whitespace_normalization_matches_react():
 
     for field in ("title", "x_label", "y_label"):
         empty = deepcopy(base)
-        empty["data"][field] = "\\ufeff"
+        empty["data"][field] = "\ufeff"
         assert validate_presentation(empty) is None
 
     duplicate = deepcopy(base)
@@ -617,9 +617,9 @@ def test_kgui02_chart_unicode_whitespace_normalization_matches_react():
 
     # Python strip() removes these, whereas ECMAScript trim() does not.
     uncommon = deepcopy(base)
-    uncommon["data"]["points"][0]["label"] = "\\x85"
+    uncommon["data"]["points"][0]["label"] = "\x85"
     assert validate_presentation(uncommon) is not None
-    uncommon["data"]["points"][0]["label"] = "\\x1c"
+    uncommon["data"]["points"][0]["label"] = "\x1c"
     assert validate_presentation(uncommon) is not None
 
 
