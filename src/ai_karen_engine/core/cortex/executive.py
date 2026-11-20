@@ -130,9 +130,12 @@ class CortexExecutionDecider:
             or referenced_profile_attribute(user_content, request.messages)
         )
         personal_recall_query = (
-            is_personal_memory_recall_query(user_content)
-            or resolved_discourse_attribute is not None
-            or is_profile_summary_followup(user_content, request.messages)
+            capability_route.intent != "artifact.code.read"
+            and (
+                is_personal_memory_recall_query(user_content)
+                or resolved_discourse_attribute is not None
+                or is_profile_summary_followup(user_content, request.messages)
+            )
         )
         memory_recall_required = bool(
             analysis.get("memory_recall_required", False)
