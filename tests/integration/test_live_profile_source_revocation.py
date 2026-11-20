@@ -6,11 +6,10 @@ Only run on a migrated isolated test database.
 """
 import os
 import uuid
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, update
 
 from ai_karen_engine.core.memory.retrieval.neuro_recall import (
     NeuroRecall, RecallRequest,
