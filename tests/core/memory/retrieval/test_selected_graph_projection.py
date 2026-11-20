@@ -10,6 +10,7 @@ from ai_karen_engine.core.memory.retrieval.neuro_recall import (
     RecallRequest,
     RecallResult,
     RecallScopeError,
+    NeuroRecall,
 )
 from ai_karen_engine.core.memory.retrieval.selected_graph_projection import (
     MAX_GRAPH_EVENTS,
@@ -245,3 +246,40 @@ def test_unresolved_cue_does_not_claim_canonical_entity_identity():
     assert graph["nodes"][1]["kind"] == "entity_cue"
     assert graph["nodes"][1]["verification_state"] == "retrieval_cue"
     assert "entity_id" not in graph["nodes"][1]
+
+
+class _ControlledRetriever:
+    def __init__(self, memories):
+        self.memories = memories
+
+    async def recall(self, query):
+        return list(self.memories)
+
+
+@pytest.mark.asyncio
+async def test_projector_only_sees_neuro_recall_selected_memories():
+    request = _request(top_k=1)
+    allowed, _ = _selected(event_id="allowed-event")
+    excluded, _ = _selected(event_id="excluded-event", tenant_id="other-tenant")
+    result = await NeuroRecall(
+        _ControlledRetriever([allowed, excluded]),
+    ).recall(request)
+    assert [entry.id for entry in result.memories] == ["allowed-event"]
+    graph = project_selected_memory_graph(request=request, result=result)
+    assert graph["status"] == "available"
+    assert len(graph["edges"]) == 1
+    assert "allowed-event" not in str(graph)
+    assert "excluded-event" not in str(graph)
+
+
+@pytest.mark.asyncio
+async def test_neuro_recall_rejection_never_becomes_a_display_edge():
+    request = _request()
+    rejected, _ = _selected(event_id="rejected-event", user_id="another-user")
+    selected = await NeuroRecall(
+        _ControlledRetriever([rejected])
+    ).recall(request)
+    assert selected.memories == ()
+    graph = project_selected_memory_graph(request=request, result=selected)
+    assert graph["status"] == "empty"
+    assert graph["edges"] == []
