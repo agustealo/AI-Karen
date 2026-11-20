@@ -235,3 +235,14 @@ without storing source bytes, while the first live stream continues to carry
 the verified inert card. Future replay must explicitly reauthorize current
 owner/active status and matching digest before rendering code; no stale code is
 restored from either event history or transcript metadata.
+
+### CK-GEN-01D1: Shared revocable source detection
+
+A code artifact may be nested inside a surface composition or in the verified
+presentations list even if `structured_content.presentation` is not itself
+`code.artifact`. The canonical presentation contract now provides a single
+bounded, fail-closed recursive detection rule. Both the transcript persistence
+owner and observed AG-UI journal use this rule to withhold code-bearing rich
+metadata. Safe unrelated presentations retain their normal persistence path.
+This is a code-source privacy repair, not authorization for historical replay
+or consumer-readiness certification.
