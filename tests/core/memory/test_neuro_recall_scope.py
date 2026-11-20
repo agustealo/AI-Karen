@@ -746,8 +746,9 @@ def _durable_assertion(
 
 
 @pytest.mark.asyncio
-async def test_canonical_direct_chat_durable_assertion_is_retained():
-    memory = _durable_assertion("direct-memory", source_type="chat")
+@pytest.mark.parametrize("source_type", ["chat", "chat_user", "conversation"])
+async def test_canonical_direct_chat_durable_assertion_is_retained(source_type):
+    memory = _durable_assertion("direct-memory", source_type=source_type)
     result = await NeuroRecall(_FakeRetriever([memory])).recall(
         RecallRequest(query="memory", tenant_id="tenant-1", user_id="user-1")
     )
