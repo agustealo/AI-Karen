@@ -43,6 +43,8 @@ def _selected(
         "store": "postgres",
         "record_type": "memory_event",
         "event_id": event_id,
+        "source_type": "conversation",
+        "source_ref": "message-1",
         "matched_entity_cue": cue,
         "graph_relationship": relationship,
         "graph_depth": depth,
