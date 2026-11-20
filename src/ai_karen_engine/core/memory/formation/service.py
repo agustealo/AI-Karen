@@ -275,8 +275,11 @@ class MemoryFormationService:
                         memory_id=receipt.memory_id,
                         signal=signal,
                         confidence=score,
-                        source_type=source_type,
-                        source_ref=source_ref,
+                        # The committed NeuroVault event, not the caller's
+                        # optional source_ref, owns projection provenance.
+                        # Replays must use the original event's identity too.
+                        source_type=receipt.metadata.get("source_type", source_type),
+                        source_ref=receipt.metadata.get("source_ref", source_ref),
                         metadata=merged_metadata,
                     )
                 except Exception as exc:

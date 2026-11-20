@@ -707,6 +707,8 @@ class PostgresNeuroVault(VaultPort):
                 version=entry.version,
                 metadata={
                     "event_id": str(existing.event_id),
+                    "source_type": existing.source_type,
+                    "source_ref": existing.source_ref,
                     "idempotent_replay": True,
                 },
             )
@@ -717,6 +719,8 @@ class PostgresNeuroVault(VaultPort):
             version=entry.version,
             metadata={
                 "event_id": str(event_id),
+                "source_type": source_type,
+                "source_ref": source_ref,
                 "source_store": "postgres",
                 "retention_deadline": valid_to.isoformat() if valid_to else None,
                 "consent_scope": consent_scope,
