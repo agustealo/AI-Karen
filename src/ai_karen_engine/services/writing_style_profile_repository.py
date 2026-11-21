@@ -242,9 +242,10 @@ class WritingStyleProfileRepository:
             await session.execute(
                 text(
                     "INSERT INTO public.writing_style_grants "
-                    "(tenant_id, profile_id, actor_id, purpose, granted_by) VALUES "
+                    "(tenant_id, profile_id, owner_actor_id, actor_id, purpose, granted_by) VALUES "
                     "(CAST(:tenant AS uuid), CAST(:profile AS uuid), "
-                    "CAST(:grantee AS uuid), :purpose, CAST(:actor AS uuid)) "
+                    "CAST(:actor AS uuid), CAST(:grantee AS uuid), "
+                    ":purpose, CAST(:actor AS uuid)) "
                     "ON CONFLICT (tenant_id, profile_id, actor_id, purpose) "
                     "DO UPDATE SET granted_by = EXCLUDED.granted_by, revoked_at = NULL, "
                     "expires_at = NULL"
