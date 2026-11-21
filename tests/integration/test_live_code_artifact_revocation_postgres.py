@@ -333,3 +333,148 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
     finally:
         platform.reset()
         await engine.dispose()
+
+
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+    or os.getenv("KAREN_TEST_CODE_ARTIFACT_POSTGRES") != "1",
+    reason="Requires explicit disposable PostgreSQL artifact acceptance opt-in",
+)
+async def test_for_share_read_serializes_concurrent_archive_and_revokes_next_read() -> None:
+    """Hold a real repository read at Storage while PostgreSQL blocks archive."""
+    import asyncio
+    import threading
+
+    from sqlalchemy.exc import DBAPIError
+
+    dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
+    tenant_raw = os.getenv("KAREN_TEST_ARTIFACT_TENANT_ID", "")
+    owner_raw = os.getenv("KAREN_TEST_ARTIFACT_OWNER_ID", "")
+    if not dsn or not tenant_raw or not owner_raw:
+        pytest.fail("Explicit disposable database and seeded owner required")
+    parsed = _disposable_database_url(dsn)
+    tenant = str(UUID(tenant_raw))
+    owner = str(UUID(owner_raw))
+    engine = create_async_engine(parsed, pool_pre_ping=True, pool_size=3)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    artifact = str(uuid4())
+    filename = "concurrent_archive.py"
+    key = f"{tenant}/{artifact}/{filename}"
+    digest = hashlib.sha256(_SOURCE).hexdigest()
+    read_entered_storage = threading.Event()
+    release_storage = threading.Event()
+    bucket = MagicMock()
+
+    def blocked_download(storage_key: str) -> bytes:
+        assert storage_key == key
+        read_entered_storage.set()
+        if not release_storage.wait(timeout=10):
+            raise TimeoutError("Repository source read was not released")
+        return _SOURCE
+
+    bucket.download.side_effect = blocked_download
+    platform = SimpleNamespace(
+        storage=SimpleNamespace(
+            from_=lambda bucket_name: bucket if bucket_name == "artifacts" else None
+        )
+    )
+    inserted = False
+
+    def read_in_independent_thread():
+        """Use a separate asyncpg engine, never share connections across loops."""
+        async def run():
+            reader_engine = create_async_engine(parsed, pool_pre_ping=True)
+            reader_sessions = async_sessionmaker(reader_engine, expire_on_commit=False)
+            try:
+                reader_store = SupabaseArtifactStore(reader_sessions, platform)
+                return await reader_store.read_owner_active_code(artifact, tenant, owner)
+            finally:
+                await reader_engine.dispose()
+
+        return asyncio.run(run())
+
+    try:
+        async with sessions() as admin:
+            assert (
+                await admin.execute(text("SELECT current_database()"))
+            ).scalar_one() == "karen_code_artifact_test"
+            await admin.execute(
+                text(
+                    "INSERT INTO files "
+                    "(file_id, tenant_id, owner_user_id, name, mime_type, "
+                    "bytes, storage_uri, sha256, metadata, created_at) "
+                    "VALUES (:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
+                    ":name, :mime, :bytes, :uri, :digest, '{}'::jsonb, NOW())"
+                ),
+                {
+                    "id": artifact, "tenant": tenant, "owner": owner,
+                    "name": filename, "mime": "text/x-python",
+                    "bytes": len(_SOURCE), "uri": f"supabase://artifacts/{key}",
+                    "digest": digest,
+                },
+            )
+            await admin.commit()
+            inserted = True
+
+        # The real repository executes its SELECT FOR SHARE on its own async
+        # connection before entering the synchronous Storage download.
+        read_task = asyncio.create_task(asyncio.to_thread(read_in_independent_thread))
+        try:
+            assert await asyncio.to_thread(read_entered_storage.wait, 10), (
+                "Canonical repository never reached the controlled Storage boundary"
+            )
+            assert not read_task.done(), "Repository read ended before archive"
+
+            # The independent archive must collide with the repository's own
+            # row lock. If the repository drops FOR SHARE or closes its
+            # transaction early, UPDATE succeeds and this proof fails.
+            async with sessions() as writer:
+                await writer.execute(text("SET LOCAL lock_timeout = '250ms'"))
+                with pytest.raises(DBAPIError) as blocked:
+                    await writer.execute(
+                        text(
+                            "UPDATE files SET deleted_at = NOW() "
+                            "WHERE file_id = :file_id AND tenant_id = :tenant_id "
+                            "AND deleted_at IS NULL"
+                        ),
+                        {"file_id": artifact, "tenant_id": tenant},
+                    )
+                assert "lock timeout" in str(blocked.value).lower()
+                await writer.rollback()
+            assert not read_task.done(), "Source read escaped the held boundary"
+        finally:
+            release_storage.set()
+
+        granted = await asyncio.wait_for(read_task, timeout=15)
+        assert granted.success and granted.data is not None
+        assert granted.data.text.encode("utf-8") == _SOURCE
+        bucket.download.assert_called_once_with(key)
+
+        async with sessions() as writer:
+            changed = await writer.execute(
+                text(
+                    "UPDATE files SET deleted_at = NOW() "
+                    "WHERE file_id = :file_id AND tenant_id = :tenant_id "
+                    "AND deleted_at IS NULL"
+                ),
+                {"file_id": artifact, "tenant_id": tenant},
+            )
+            assert changed.rowcount == 1
+            await writer.commit()
+
+        # This call must refuse the archived record before Storage access.
+        store = SupabaseArtifactStore(sessions, platform)
+        revoked = await store.read_owner_active_code(artifact, tenant, owner)
+        assert not revoked.success and revoked.data is None
+        assert revoked.error == "artifact_code_unavailable"
+        assert bucket.download.call_count == 1
+    finally:
+        release_storage.set()
+        if inserted:
+            async with sessions() as admin:
+                await admin.execute(
+                    text("DELETE FROM files WHERE file_id = :file_id"),
+                    {"file_id": artifact},
+                )
+                await admin.commit()
+        await engine.dispose()
