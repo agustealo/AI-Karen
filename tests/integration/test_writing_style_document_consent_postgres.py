@@ -8,11 +8,21 @@ from __future__ import annotations
 
 import os
 import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from urllib.parse import urlparse
 
 import asyncpg
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+    PostgresDocumentStyleConsentIssuer,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -24,6 +34,7 @@ async def test_first_party_author_consent_postgres() -> None:
     if urlparse(dsn).path != "/karen_writing_style_test":
         pytest.fail("Refuse to run against a non-disposable database")
 
+    engine = None
     raw = await asyncpg.connect(
         dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
     )
@@ -161,13 +172,61 @@ async def test_first_party_author_consent_postgres() -> None:
                          tenant, profile, owner, artifact, owner,
                          "b" * 64, receipt)
 
-        await scoped(owner, tenant, insert,
-                     tenant, profile, owner, artifact, owner, digest, receipt)
+        # A server-side policy callback is required before any issuance.
+        engine = create_async_engine(
+            dsn.replace("postgresql://", "postgresql+asyncpg://", 1),
+            pool_size=2, max_overflow=0,
+        )
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+        class TrustedTestClient:
+            @asynccontextmanager
+            async def get_async_session(self):
+                async with sessions() as session:
+                    async with session.begin():
+                        await session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                        yield session
+
+        scope = dict(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(profile), artifact_id=str(artifact),
+        )
+        expiry = datetime.now(timezone.utc) + timedelta(days=1)
+        absent_policy = PostgresDocumentStyleConsentIssuer(
+            client_factory=TrustedTestClient
+        )
+        assert await absent_policy.issue_first_party(
+            **scope, analysis_allowed=True, style_use_allowed=True,
+            expires_at=expiry, correlation_id="denied-without-host-policy",
+        ) is None
+
+        policy = SimpleNamespace(
+            authorize_issuance=AsyncMock(return_value=False),
+            authorize_revocation=AsyncMock(return_value=False),
+        )
+        issuer = PostgresDocumentStyleConsentIssuer(
+            client_factory=TrustedTestClient, issuance_policy=policy
+        )
+        assert await issuer.issue_first_party(
+            **scope, analysis_allowed=True, style_use_allowed=True,
+            expires_at=expiry, correlation_id="denied-policy",
+        ) is None
+        policy.authorize_issuance.return_value = True
+        issued = await issuer.issue_first_party(
+            **scope, analysis_allowed=True, style_use_allowed=True,
+            expires_at=expiry, correlation_id="author-affirmative",
+        )
+        assert issued is not None
+        receipt = uuid.UUID(issued)
         assert await raw.fetchval(
             "SELECT receipt_id FROM public.writing_style_document_consents "
             "WHERE tenant_id=$1 AND profile_id=$2 AND artifact_id=$3",
             tenant, profile, artifact,
         ) == receipt
+        permission = await issuer.verify_current(**scope)
+        assert permission is not None
+        assert permission.consent_receipt_id == issued
+        assert permission.style_use_allowed is True
 
         with pytest.raises(asyncpg.PostgresError):
             await scoped(
@@ -206,12 +265,14 @@ async def test_first_party_author_consent_postgres() -> None:
 
         # Only one-way revocation is permitted; cannot un-revoke or alter
         # scope/digest/permissions even as the authenticated author.
-        await scoped(
-            owner, tenant,
-            "UPDATE public.writing_style_document_consents "
-            "SET revoked_at=clock_timestamp() WHERE receipt_id=$1",
-            receipt,
-        )
+        assert await issuer.revoke_first_party(
+            **scope, correlation_id="deny-revoke",
+        ) is False
+        policy.authorize_revocation.return_value = True
+        assert await issuer.revoke_first_party(
+            **scope, correlation_id="author-revoke",
+        ) is True
+        assert await issuer.verify_current(**scope) is None
         with pytest.raises(asyncpg.PostgresError):
             await scoped(
                 owner, tenant,
@@ -234,4 +295,6 @@ async def test_first_party_author_consent_postgres() -> None:
             tenant, profile, other_actor,
         ) is True
     finally:
+        if engine is not None:
+            await engine.dispose()
         await raw.close()
