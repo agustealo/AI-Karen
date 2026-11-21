@@ -6,9 +6,12 @@ import { apiClient } from '@/lib/api';
 
 interface ConsentPreview {
   approval_id: string;
-  status: 'pending' | 'approved';
+  status: 'pending' | 'approved' | 'consumed';
   profile_id: string;
   artifact_id: string;
+  source_name: string;
+  source_bytes: number;
+  source_mime_type: string;
   source_sha256: string;
   analysis_allowed: boolean;
   style_use_allowed: boolean;
@@ -57,9 +60,14 @@ export function DocumentAuthorConsentConfirmation({
       if (!active) return;
       if (
         record.approval_id !== approvalId ||
-        (record.status !== 'pending' && record.status !== 'approved') ||
+        !['pending', 'approved', 'consumed'].includes(record.status) ||
         !ID.test(record.profile_id) ||
         !ID.test(record.artifact_id) ||
+        typeof record.source_name !== 'string' ||
+        !record.source_name.trim() ||
+        !Number.isInteger(record.source_bytes) ||
+        record.source_bytes < 1 || record.source_bytes > 65536 ||
+        record.source_mime_type !== 'text/plain' ||
         !DIGEST.test(record.source_sha256) ||
         record.analysis_allowed !== true ||
         typeof record.style_use_allowed !== 'boolean' ||
@@ -69,6 +77,9 @@ export function DocumentAuthorConsentConfirmation({
         setError('Document authorization metadata could not be verified.');
       } else {
         setPreview(record);
+        if (record.status === 'consumed') {
+          void recoverReceipt(record.approval_id);
+        }
       }
     }).catch(() => {
       if (active) setError('Document approval could not be verified. No consent was granted.');
@@ -90,6 +101,28 @@ export function DocumentAuthorConsentConfirmation({
     confirmed &&
     expires > Date.now();
 
+  async function recoverReceipt(id: string): Promise<boolean> {
+    try {
+      const recovered = await apiClient.get<{
+        approval_id: string;
+        receipt_id: string;
+        status: string;
+      }>('/api/approvals/document-consent/' + id + '/receipt');
+      if (
+        recovered.approval_id !== id ||
+        recovered.status !== 'issued' ||
+        !ID.test(recovered.receipt_id)
+      ) {
+        return false;
+      }
+      setReceiptId(recovered.receipt_id);
+      setError(null);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function issueReceipt(id: string) {
     if (issuing || receiptId) return;
     setIssuing(true);
@@ -109,9 +142,12 @@ export function DocumentAuthorConsentConfirmation({
       }
       setReceiptId(issued.receipt_id);
     } catch {
-      setError(
-        'Your author decision was recorded, but the document-consent receipt was not issued. You may retry issuance.',
-      );
+      const recovered = await recoverReceipt(id);
+      if (!recovered) {
+        setError(
+          'Issuance could not be verified. No current document-consent receipt was found. You may retry.',
+        );
+      }
     } finally {
       setIssuing(false);
     }
@@ -155,6 +191,8 @@ export function DocumentAuthorConsentConfirmation({
       {preview && !decision && (
         <>
           <dl className="space-y-3 break-all text-sm">
+            <div><dt className="font-medium">Document name</dt><dd>{preview.source_name}</dd></div>
+            <div><dt className="font-medium">Document size</dt><dd>{preview.source_bytes} bytes ({preview.source_mime_type})</dd></div>
             <div><dt className="font-medium">Document ID</dt><dd>{preview.artifact_id}</dd></div>
             <div><dt className="font-medium">Writing-style profile</dt><dd>{preview.profile_id}</dd></div>
             <div><dt className="font-medium">Source SHA-256 fingerprint</dt><dd>{preview.source_sha256}</dd></div>
@@ -185,9 +223,11 @@ export function DocumentAuthorConsentConfirmation({
           ) : (
             <div className="space-y-2">
               <p role="status">
-                {preview.status === 'approved'
-                  ? 'This author decision is already approved.'
-                  : 'This author confirmation has expired.'}
+                {preview.status === 'consumed'
+                  ? 'The approval was consumed. Checking the current consent receipt.'
+                  : preview.status === 'approved'
+                    ? 'This author decision is already approved.'
+                    : 'This author confirmation has expired.'}
               </p>
               {preview.status === 'approved' && !receiptId && !issuing && (
                 <button
