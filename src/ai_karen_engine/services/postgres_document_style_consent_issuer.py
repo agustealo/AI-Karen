@@ -185,6 +185,86 @@ class PostgresDocumentStyleConsentIssuer:
             return None
         return digest
 
+    async def read_current_source_summary(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        profile_id: str,
+        artifact_id: str,
+        source_sha256: str,
+    ) -> dict[str, str | int] | None:
+        """Read bounded canonical metadata for deliberate author review.
+
+        Source bytes and external storage links are never returned. This
+        uses the same tenant/actor source owner and SQL scope as issuance.
+        """
+        if (
+            not all(
+                _canonical_uuid(value)
+                for value in (tenant_id, actor_id, profile_id, artifact_id)
+            )
+            or not isinstance(source_sha256, str)
+            or not _DIGEST.fullmatch(source_sha256)
+        ):
+            return None
+        try:
+            async with self._client_factory().get_async_session() as session:
+                await WritingStyleProfileRepository._scope(
+                    session, tenant_id, actor_id,
+                )
+                result = await session.execute(
+                    text(
+                        "SELECT f.name, f.bytes, f.mime_type, f.sha256 "
+                        "FROM public.files f "
+                        "JOIN public.writing_style_profiles p "
+                        "ON p.tenant_id=f.tenant_id "
+                        "AND p.owner_actor_id=f.owner_user_id "
+                        "WHERE f.file_id=:artifact "
+                        "AND f.tenant_id=CAST(:tenant AS uuid) "
+                        "AND f.owner_user_id=CAST(:actor AS uuid) "
+                        "AND p.profile_id=CAST(:profile AS uuid) "
+                        "AND p.state <> 'revoked' "
+                        "AND f.deleted_at IS NULL "
+                        "AND f.mime_type='text/plain' "
+                        "AND f.bytes BETWEEN 1 AND 65536 "
+                        "AND f.sha256=:digest "
+                        "FOR SHARE OF f, p"
+                    ),
+                    {
+                        "tenant": tenant_id,
+                        "actor": actor_id,
+                        "profile": profile_id,
+                        "artifact": artifact_id,
+                        "digest": source_sha256,
+                    },
+                )
+                row = result.mappings().one_or_none()
+                if row is None:
+                    return None
+                name = row["name"]
+                byte_count = row["bytes"]
+                if (
+                    not isinstance(name, str)
+                    or not name.strip()
+                    or not isinstance(byte_count, int)
+                    or not 1 <= byte_count <= 65536
+                    or row["mime_type"] != "text/plain"
+                    or row["sha256"] != source_sha256
+                ):
+                    return None
+                return {
+                    "name": name[:160],
+                    "bytes": byte_count,
+                    "mime_type": "text/plain",
+                }
+        except Exception as exc:
+            logger.warning(
+                "Document author source metadata unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+            return None
+
     @staticmethod
     async def _insert_receipt(
         session: object, *, tenant_id: str, actor_id: str,
