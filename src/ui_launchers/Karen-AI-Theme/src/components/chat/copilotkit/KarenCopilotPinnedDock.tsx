@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * KUI-002D3H: read-only by default. Optional guarded controls operate only
+ * KUI-002D3H: read-only by default. Optional guarded unpin operates only
  * on backend-admitted saved references. Mutation eligibility is NOT inferred
  * from a client flag or an accessible transport endpoint. The existing host
  * deliberately passes no eligibility until an authenticated runtime
@@ -9,10 +9,10 @@
  *
  * Every mutation requires a matching committed backend receipt and then a
  * fresh authorized readback. No local pin cache, optimistic update, receipt
- * fabrication, card reconstruction, or POST retry.
+ * fabrication, card reconstruction, or POST retry. Reorder is withheld until\n * its backend contract guarantees an atomic collision-free move.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Bookmark, ShieldCheck, X } from "lucide-react";
+import { Bookmark, ShieldCheck, X } from "lucide-react";
 import { z } from "zod";
 import { apiClient, ApiError } from "@/lib/api";
 
@@ -42,7 +42,7 @@ const committedReceipt = z.object({
   receipt: z.object({
     receipt_id: z.string().min(1),
     idempotency_key: z.string().uuid(),
-    operation: z.enum(["unpin", "reorder"]),
+    operation: z.literal("unpin"),
     pin_id: z.string().uuid(),
   }).passthrough(),
 }).passthrough();
@@ -53,7 +53,7 @@ type DockState =
   | { kind: "empty" }
   | { kind: "available"; pins: PinReference[] }
   | { kind: "unavailable" };
-type MutationAction = "unpin" | "reorder";
+type MutationAction = "unpin";
 
 export function parseAuthorizedPinReadback(value: unknown): PinReference[] | null {
   const parsed = pinReadback.safeParse(value);
@@ -127,11 +127,7 @@ export function KarenCopilotPinnedDock({
     };
   }, [refresh]);
 
-  const mutate = useCallback(async (
-    operation: MutationAction,
-    pin: PinReference,
-    position?: number,
-  ) => {
+  const mutate = useCallback(async (pin: PinReference) => {
     if (!mutationControlsEnabled || mutatingRef.current || state.kind !== "available") return;
     // No mutation can derive authority from the displayed reference alone.
     // The authenticated runtime rechecks principal, revision and source.
@@ -139,26 +135,18 @@ export function KarenCopilotPinnedDock({
     setPending(true);
     setMessage(null);
     const idempotencyKey = crypto.randomUUID();
-    const request = operation === "reorder"
-      ? {
-          operation,
-          idempotency_key: idempotencyKey,
-          pin_id: pin.pin_id,
-          expected_revision: pin.revision,
-          position,
-        }
-      : {
-          operation,
-          idempotency_key: idempotencyKey,
-          pin_id: pin.pin_id,
-        };
+    const request = {
+      operation: "unpin" as const,
+      idempotency_key: idempotencyKey,
+      pin_id: pin.pin_id,
+    };
     let verified = false;
     let conflict = false;
     try {
       const answer = await apiClient.post<unknown>(
         "/api/chat/ag-ui/pins/mutations", request,
       );
-      verified = verifyCommittedPinMutation(answer, operation, pin.pin_id, idempotencyKey);
+      verified = verifyCommittedPinMutation(answer, "unpin", pin.pin_id, idempotencyKey);
     } catch (error) {
       conflict = error instanceof ApiError && error.status === 409;
     } finally {
@@ -234,21 +222,9 @@ export function KarenCopilotPinnedDock({
                 </p>
                 {mutationControlsEnabled && (
                   <div className="mt-2 flex flex-wrap gap-1" data-testid="karen-pin-controls">
-                    <button type="button" aria-label={`Move reference ${index + 1} up`}
-                      disabled={pending || index === 0}
-                      onClick={() => void mutate("reorder", pin, index - 1)}
-                      className="rounded border border-border p-1 disabled:opacity-40">
-                      <ArrowUp aria-hidden="true" className="h-3.5 w-3.5" />
-                    </button>
-                    <button type="button" aria-label={`Move reference ${index + 1} down`}
-                      disabled={pending || index === state.pins.length - 1}
-                      onClick={() => void mutate("reorder", pin, index + 1)}
-                      className="rounded border border-border p-1 disabled:opacity-40">
-                      <ArrowDown aria-hidden="true" className="h-3.5 w-3.5" />
-                    </button>
                     <button type="button" aria-label={`Unpin reference ${index + 1}`}
                       disabled={pending}
-                      onClick={() => void mutate("unpin", pin)}
+                      onClick={() => void mutate(pin)}
                       className="rounded border border-border px-2 py-1 text-xs disabled:opacity-40">
                       <X aria-hidden="true" className="mr-1 inline h-3 w-3" /> Unpin
                     </button>
