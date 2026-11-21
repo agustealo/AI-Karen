@@ -137,6 +137,42 @@ async def confirm_document_author_consent(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+class DocumentAuthorConsentReceipt(BaseModel):
+    approval_id: str
+    receipt_id: UUID
+    status: str
+
+
+@router.post(
+    "/document-consent/{approval_id}/issue",
+    response_model=DocumentAuthorConsentReceipt,
+)
+async def issue_document_author_consent(
+    approval_id: UUID,
+    request: Request,
+):
+    """Mint the actual receipt only through the durable approved SQL contract."""
+    from uuid import uuid4
+
+    try:
+        receipt = await get_approval_service().issue_stored_document_consent(
+            str(approval_id),
+            request=request,
+            correlation_id=str(uuid4()),
+        )
+        return DocumentAuthorConsentReceipt(
+            approval_id=str(approval_id),
+            receipt_id=UUID(receipt),
+            status="issued",
+        )
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Document approval not found") from exc
+    except (ApprovalScopeError, PermissionError) as exc:
+        raise HTTPException(status_code=403, detail="Document issuance denied") from exc
+    except (ApprovalStateError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="Document receipt not issued") from exc
+
+
 @router.get("/", response_model=List[ApprovalResponse])
 async def list_approvals(
     conversation_id: Optional[UUID] = None,
