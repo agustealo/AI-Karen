@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
@@ -203,8 +204,10 @@ async def test_non_bypass_actor_rls_owner_archive_and_transaction_isolation() ->
 
         # The real repository is exercised under a non-bypass role for every
         # fresh transaction, not just an administrative query with a predicate.
+        @asynccontextmanager
         async def owner_scoped_session():
-            return await actor_session(tenant_a, owner_a)
+            async with await actor_session(tenant_a, owner_a) as session:
+                yield session
 
         store_a = SupabaseArtifactStore(
             session_factory=owner_scoped_session,
