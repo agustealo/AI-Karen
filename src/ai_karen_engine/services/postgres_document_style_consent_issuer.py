@@ -16,6 +16,7 @@ from typing import Callable, Protocol
 from fastapi import Request
 from sqlalchemy import text
 
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.runtime.document_consent_approval import (
     DocumentConsentApprovalScope,
 )
@@ -52,15 +53,76 @@ class FirstPartyConsentPolicy(Protocol):
     """
 
     async def authorize_issuance(
-        self, *, tenant_id: str, actor_id: str, profile_id: str,
-        artifact_id: str, analysis_allowed: bool, style_use_allowed: bool,
-        expires_at: datetime, correlation_id: str,
+        self, *, context: "ChatExecutionContext",
+        scope: DocumentConsentApprovalScope,
+        correlation_id: str,
     ) -> bool: ...
 
     async def authorize_revocation(
-        self, *, tenant_id: str, actor_id: str, profile_id: str,
+        self, *, context: "ChatExecutionContext",
+        tenant_id: str, actor_id: str, profile_id: str,
         artifact_id: str, correlation_id: str,
     ) -> bool: ...
+
+
+class RuntimeDocumentConsentPolicy:
+    """Adapter to the existing RuntimePolicy authority, not a new enforcer.
+
+    Only a host explicitly constructing an issuer with this policy may admit
+    a first-party consent attempt. A preflight decision is NOT a receipt;
+    the issuer separately requires its durable author-approved SQL CAS.
+    """
+
+    def __init__(self, enforcer: "RuntimePolicyEnforcer") -> None:
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+        if not isinstance(enforcer, RuntimePolicyEnforcer):
+            raise TypeError("runtime_policy_enforcer_required")
+        self._enforcer = enforcer
+
+    async def authorize_issuance(
+        self, *, context: "ChatExecutionContext",
+        scope: DocumentConsentApprovalScope,
+        correlation_id: str,
+    ) -> bool:
+        decision = await self._enforcer.authorize_document_consent_preflight(
+            context=context, scope=scope,
+        )
+        return (
+            decision.allowed is True
+            and decision.requires_human_gate is True
+            and not decision.allowed_capabilities
+            and decision.runtime_constraints.get(
+                "document_consent_fingerprint"
+            ) == scope.fingerprint()
+            and decision.runtime_constraints.get(
+                "authorized_session_id"
+            ) == context.session_id
+        )
+
+    async def authorize_revocation(
+        self, *, context: "ChatExecutionContext",
+        tenant_id: str, actor_id: str, profile_id: str,
+        artifact_id: str, correlation_id: str,
+    ) -> bool:
+        decision = await self._enforcer.authorize_document_consent_revocation(
+            context=context, tenant_id=tenant_id, actor_id=actor_id,
+        )
+        return (
+            decision.allowed is True
+            and decision.requires_human_gate is True
+            and not decision.allowed_capabilities
+            and decision.runtime_constraints.get(
+                "authorized_session_id"
+            ) == context.session_id
+            and decision.runtime_constraints.get(
+                "authorized_user_id"
+            ) == actor_id
+            and decision.runtime_constraints.get(
+                "authorized_tenant_id"
+            ) == tenant_id
+        )
 
 
 class PostgresDocumentStyleConsentIssuer:
@@ -198,14 +260,7 @@ class PostgresDocumentStyleConsentIssuer:
             context = await get_document_style_consent_context(request)
             scope.require_matching_context(context)
             allowed = await self._issuance_policy.authorize_issuance(
-                tenant_id=scope.tenant_id,
-                actor_id=scope.author_actor_id,
-                profile_id=scope.profile_id,
-                artifact_id=scope.artifact_id,
-                analysis_allowed=scope.analysis_allowed,
-                style_use_allowed=scope.style_use_allowed,
-                expires_at=scope.expires_at,
-                correlation_id=correlation_id,
+                context=context, scope=scope, correlation_id=correlation_id,
             )
             if allowed is not True:
                 return None
@@ -278,6 +333,7 @@ class PostgresDocumentStyleConsentIssuer:
             ):
                 return False
             permission = await self._issuance_policy.authorize_revocation(
+                context=context,
                 tenant_id=tenant_id, actor_id=actor_id, profile_id=profile_id,
                 artifact_id=artifact_id, correlation_id=correlation_id,
             )
@@ -414,4 +470,7 @@ class PostgresDocumentStyleConsentIssuer:
             return None
 
 
-__all__ = ["PostgresDocumentStyleConsentIssuer", "FirstPartyConsentPolicy"]
+__all__ = [
+    "PostgresDocumentStyleConsentIssuer", "FirstPartyConsentPolicy",
+    "RuntimeDocumentConsentPolicy",
+]
