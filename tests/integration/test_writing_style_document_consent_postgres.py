@@ -358,6 +358,28 @@ async def test_first_party_author_consent_postgres() -> None:
             approval_id=str(bound_approval),
             correlation_id="replay-denied",
         ) is None
+        # A SECOND, independently approved attempt cannot replace the
+        # immutable document receipt. Its approval consumption must roll
+        # back when the unique document INSERT fails in the same transaction.
+        duplicate_approval = uuid.uuid4()
+        await raw.execute(
+            "INSERT INTO public.runtime_approval_requests "
+            "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
+            "risk_level,request_payload,status,decided_by,expires_at) "
+            "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
+            "'high','{}'::jsonb,'approved',$3,"
+            "clock_timestamp()+interval '1 hour')",
+            duplicate_approval, tenant, owner, approval_scope.fingerprint(),
+        )
+        assert await issuer.issue_with_approved_scope(
+            scope=approval_scope, context=authenticated,
+            approval_id=str(duplicate_approval),
+            correlation_id="duplicate-document-denied",
+        ) is None
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests "
+            "WHERE approval_id=$1", duplicate_approval,
+        ) == "approved"
         receipt = uuid.UUID(issued)
         assert await raw.fetchval(
             "SELECT receipt_id FROM public.writing_style_document_consents "
