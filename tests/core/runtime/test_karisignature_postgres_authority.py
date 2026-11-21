@@ -34,6 +34,7 @@ def row(**changes):
     data = {
         "profile_id": uuid.UUID(PROFILE),
         "tenant_id": uuid.UUID(TENANT),
+        "owner_user_id": uuid.UUID(OWNER),
         "current_revision_id": uuid.UUID(REVISION),
         "revision_counter": 2,
         "revision_id": uuid.UUID(REVISION),
@@ -115,6 +116,7 @@ async def test_permission_revoked_between_read_and_final_gate_is_denied(monkeypa
     ("revision_number", 1),
     ("revision_counter", 1),
     ("tenant_id", uuid.UUID("ffffffff-ffff-4fff-8fff-ffffffffffff")),
+    ("owner_user_id", uuid.UUID("ffffffff-ffff-4fff-8fff-ffffffffffff")),
     ("approved_expression", {"provider": "external"}),
     ("content_digest", "0" * 64),
 ])
