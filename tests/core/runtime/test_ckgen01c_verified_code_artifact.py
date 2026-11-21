@@ -429,3 +429,85 @@ async def test_event_repository_rejects_withheld_marker_payload_injection(monkey
                 SimpleNamespace(conversation_id="thread", transport_run_id="run"),
                 event=event,
             )
+
+@pytest.mark.parametrize("metadata", [
+    {
+        "structured_content": {
+            "presentation": {
+                "component_type": "surface.composition",
+                "data": {"items": [{
+                    "component_type": "code.artifact",
+                    "data": {"code": CODE},
+                }]},
+            },
+        },
+    },
+    {
+        "structured_content": {"status": "source_verified"},
+        "verified_presentations_v1": [{
+            "component_type": "code.artifact",
+            "data": {"code": CODE},
+        }],
+    },
+    {
+        "verified_presentations_v1": [{
+            "component_type": "surface.composition",
+            "data": {"items": [{
+                "component_type": "code.artifact",
+                "data": {"code": CODE},
+            }]},
+        }],
+    },
+])
+def test_nested_or_standalone_revocable_code_never_persists(metadata):
+    """A top-level-only scrub would expose composed source in owned history."""
+    original = {"response_source": "artifact", **metadata}
+    durable = ChatRuntime._durable_presentation_metadata(original)
+    assert durable["response_source"] == "artifact"
+    assert "structured_content" not in durable
+    assert "verified_presentations_v1" not in durable
+    assert CODE not in repr(durable)
+    assert CODE in repr(original)
+
+
+def test_shared_revocable_detector_agrees_for_journal_and_transcript():
+    from ai_karen_engine.core.runtime.presentation_contract import (
+        contains_revocable_code_artifact,
+    )
+    from ai_karen_engine.core.runtime.chat_run_lifecycle import ChatRunCoordinator
+
+    composed = {
+        "component_type": "surface.composition",
+        "data": {"items": [{
+            "component_type": "code.artifact",
+            "data": {"code": CODE},
+        }]},
+    }
+    assert contains_revocable_code_artifact(composed)
+    original = {"structured_content": {"presentation": composed}}
+    assert "structured_content" not in ChatRuntime._durable_presentation_metadata(original)
+    event = {"type": "CUSTOM", "name": "karen.presentation.v1", "value": composed}
+    journal = ChatRunCoordinator._journal_safe_event(event)
+    assert journal["name"] == "karen.presentation.withheld.v1"
+    assert CODE not in repr(journal)
+    assert event["value"] is composed
+
+
+def test_deep_or_noncode_rich_metadata_keeps_safe_replay_behavior():
+    from ai_karen_engine.core.runtime.presentation_contract import (
+        contains_revocable_code_artifact,
+    )
+
+    weather = {"component_type": "weather.observation", "data": {"location": "Detroit"}}
+    normal = {"structured_content": {"presentation": weather},
+              "verified_presentations_v1": [weather]}
+    assert not contains_revocable_code_artifact(normal)
+    assert ChatRuntime._durable_presentation_metadata(normal) == normal
+
+    nested = {"component_type": "weather.observation"}
+    for _ in range(14):
+        nested = {"items": [nested]}
+    assert contains_revocable_code_artifact(nested)
+    assert "structured_content" not in ChatRuntime._durable_presentation_metadata(
+        {"structured_content": {"presentation": nested}}
+    )
