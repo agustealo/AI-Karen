@@ -826,6 +826,11 @@ class ChatRuntime:
             await ChatRuntime._authorize_selected_memory_before_generation(
                 request, decision
             )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
         except RuntimeError as exc:
             if str(exc) != "memory_source_revoked_or_unverifiable":
                 raise
@@ -857,6 +862,11 @@ class ChatRuntime:
             await ChatRuntime._authorize_selected_memory_before_generation(
                 request, decision
             )
+        except asyncio.CancelledError:
+            await self._observe_request_cancellation(
+                trajectory, decision, request, plan, meter, start,
+            )
+            raise
         except RuntimeError as exc:
             if str(exc) != "memory_source_revoked_or_unverifiable":
                 raise
@@ -1534,6 +1544,12 @@ class ChatRuntime:
                 await ChatRuntime._authorize_selected_memory_before_generation(
                     request, decision
                 )
+            except asyncio.CancelledError:
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
             except RuntimeError as exc:
                 if str(exc) != "memory_source_revoked_or_unverifiable":
                     raise
@@ -1711,6 +1727,12 @@ class ChatRuntime:
                 await ChatRuntime._authorize_selected_memory_before_generation(
                     request, decision
                 )
+            except asyncio.CancelledError:
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
+                raise
             except RuntimeError as exc:
                 if str(exc) != "memory_source_revoked_or_unverifiable":
                     raise
