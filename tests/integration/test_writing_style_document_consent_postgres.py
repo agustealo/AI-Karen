@@ -30,8 +30,12 @@ from ai_karen_engine.core.runtime.document_consent_approval import (
 from ai_karen_engine.persistence.repositories.approval_repository import (
     SqlApprovalRepository,
 )
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    RuntimePolicyEnforcer,
+)
 from ai_karen_engine.services.postgres_document_style_consent_issuer import (
     PostgresDocumentStyleConsentIssuer,
+    RuntimeDocumentConsentPolicy,
 )
 from ai_karen_engine.services.writing_style_profile_repository import (
     WritingStyleAccessDenied,
@@ -411,6 +415,14 @@ async def test_first_party_author_consent_postgres(
             action="issue", analysis_allowed=True,
             style_use_allowed=True, expires_at=expiry,
         )
+        # Production-shaped policy: use the canonical RuntimePolicyEnforcer
+        # instead of a boolean AsyncMock for the actual approval/receipt flow.
+        runtime_issuer = PostgresDocumentStyleConsentIssuer(
+            client_factory=TrustedTestClient,
+            issuance_policy=RuntimeDocumentConsentPolicy(
+                RuntimePolicyEnforcer(),
+            ),
+        )
         bound_approval = uuid.uuid4()
         await raw.execute(
             "INSERT INTO public.runtime_approval_requests "
@@ -423,7 +435,7 @@ async def test_first_party_author_consent_postgres(
             bound_approval, tenant, owner, approval_scope.fingerprint(),
             json.dumps({"document_consent_scope": approval_scope.to_record()}),
         )
-        assert await issuer.issue_with_approved_scope(
+        assert await runtime_issuer.issue_with_approved_scope(
             scope=approval_scope, request=bearer_request,
             approval_id=str(uuid.uuid4()),
             correlation_id="wrong-approval",
@@ -439,7 +451,7 @@ async def test_first_party_author_consent_postgres(
             "status": auth_middleware.TokenStatus.REVOKED,
             "payload": claims,
         }
-        assert await issuer.issue_with_approved_scope(
+        assert await runtime_issuer.issue_with_approved_scope(
             scope=approval_scope, request=bearer_request,
             approval_id=str(bound_approval),
             correlation_id="revoked-session-denied",
@@ -452,7 +464,7 @@ async def test_first_party_author_consent_postgres(
             "status": auth_middleware.TokenStatus.VALID,
             "payload": claims,
         }
-        issued = await issuer.issue_with_approved_scope(
+        issued = await runtime_issuer.issue_with_approved_scope(
             scope=approval_scope, request=bearer_request,
             approval_id=str(bound_approval),
             correlation_id="author-affirmative",
@@ -462,7 +474,7 @@ async def test_first_party_author_consent_postgres(
             "SELECT status FROM public.runtime_approval_requests "
             "WHERE approval_id=$1", bound_approval,
         ) == "consumed"
-        assert await issuer.issue_with_approved_scope(
+        assert await runtime_issuer.issue_with_approved_scope(
             scope=approval_scope, request=bearer_request,
             approval_id=str(bound_approval),
             correlation_id="replay-denied",
@@ -482,7 +494,7 @@ async def test_first_party_author_consent_postgres(
             duplicate_approval, tenant, owner, approval_scope.fingerprint(),
             json.dumps({"document_consent_scope": approval_scope.to_record()}),
         )
-        assert await issuer.issue_with_approved_scope(
+        assert await runtime_issuer.issue_with_approved_scope(
             scope=approval_scope, request=bearer_request,
             approval_id=str(duplicate_approval),
             correlation_id="duplicate-document-denied",
