@@ -242,3 +242,11 @@ A further P2 review finding demonstrated that percent-encoding the *query parame
 At the current audit checkpoint, the linked Supabase project inventory does **not** expose an identifiable active AI Karen test project: the only returned project was an inactive, differently named project. It would be inappropriate to mutate or use that unrelated project for acceptance. Therefore **live authenticated storage streaming, size-transfer measurement, real post-archive denial and concurrency have NOT been verified**. A genuinely provisioned AI Karen test host with configured storage and PostgreSQL contract is a prerequisite for those tests.
 
 No feature activation or consumer writing-style source use is authorized by this documentation or by mock HTTP transport tests.
+
+## WS-04A7 follow-up: Encoded signed-path bypass denied
+
+Fresh independent review of `3fefdcbd0cf105ee313575660cfef63cb87104f4` found a separate P2 logging bypass: URL validation used `unquote(parts.path)`, allowing percent-encoded path components such as `/object/%73ign/`. The HTTPX pre-handler credential redaction filter expects the **canonical literal** `/storage/v1/object/sign/`, so a noncanonical raw path could reach the network and log a live token.
+
+The canonical `SupabaseArtifactStore.read_owner_active_text_bounded` now requires `parts.path == expected_path` **without unquoting**. This fails closed on encoded path components, including the signed route name and filename, before any HTTP request. The existing exact raw `token` query key validation remains in place. The regression matrix now includes encoded route and filename paths and uses a forbidden HTTP transport to prove rejection is pre-request.
+
+This correction is committed but cannot be considered independently accepted until current-head code/security review and exact-head CI pass. The live authenticated Karen storage target, durable author consent and WS-02C runtime composition remain outstanding. Consumer feature remains disabled.
