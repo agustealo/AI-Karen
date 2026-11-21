@@ -57,6 +57,7 @@ class Kernel:
     def __init__(self):
         self.calls = []
         self.enabled = True
+        self.allowed_roles = {"user", "admin", "developer"}
 
     def get_record(self, name):
         assert name == "content-intelligence"
@@ -65,6 +66,9 @@ class Kernel:
 
     async def execute(self, request):
         self.calls.append(request)
+        roles = request.context.audit_context.get("user_roles", ["user"])
+        if not self.allowed_roles.intersection(roles):
+            return SimpleNamespace(status="denied", payload=None)
         return SimpleNamespace(
             status="success", payload={"operation": request.payload["operation"]},
         )
@@ -78,10 +82,12 @@ async def test_owner_text_only_reaches_kernel_after_verified_read():
     )
     assert answer == {"operation": "analyze"}
     assert store.calls == [(FILE_ID, TENANT, OWNER)]
-    assert kernel.calls[0].payload["documents"] == [{
+    assert len(kernel.calls) == 2
+    assert kernel.calls[0].payload["documents"][0]["text"] == FILE_ID
+    assert kernel.calls[1].payload["documents"] == [{
         "id": FILE_ID, "name": "notes.txt", "text": TEXT,
     }]
-    assert kernel.calls[0].authorized_plan.policy_decision_id == "policy"
+    assert kernel.calls[1].authorized_plan.policy_decision_id == "policy"
 
 
 @pytest.mark.asyncio
@@ -125,7 +131,8 @@ async def test_stale_revision_revoked_owner_and_changed_bytes_denied():
     store.artifact.user_id = OTHER
     with pytest.raises(PermissionError, match="evidence_invalid"):
         await host.execute_owner_text(**args)
-    assert not kernel.calls
+    assert len(kernel.calls) == 4
+    assert all(request.payload["operation"] == "analyze" for request in kernel.calls)
 
 
 @pytest.mark.asyncio
@@ -149,3 +156,16 @@ async def test_forged_sources_and_disabled_plugin_fail_before_storage():
                 references=invalid,
             )
     assert not store.calls
+
+
+@pytest.mark.asyncio
+async def test_guest_role_fails_canonical_kernel_admission_without_source_read():
+    store, kernel = Store(), Kernel()
+    with pytest.raises(PermissionError, match="kernel_admission_denied"):
+        await ContentSourceHost(store=store, kernel=kernel).execute_owner_text(
+            context=context(audit_context={"user_roles": ["guest"]}),
+            plan=plan(), operation="analyze", references=REFS,
+        )
+    assert store.calls == []
+    assert len(kernel.calls) == 1
+    assert kernel.calls[0].payload["documents"][0]["text"] == FILE_ID
