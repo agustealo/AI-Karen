@@ -7,8 +7,13 @@ The runtime supplies a typed, scope-bound `AuthorizedExecutionPlan`,
 Owner-active inert source text is retrieved using
 `ArtifactStore.read_owner_active_code()`, whose repository implementation
 must verify current owner, active state, content digest and safe text type.
-The host additionally checks source revision and bound principal before
-forwarding the bounded documents to the existing plugin execution gate.
+The host first calls the kernel's admission-only path, which performs the
+canonical executor's lifecycle, permission, role, tenant, budget, action and
+trust checks **without invoking the plugin handler or reading source bytes**.
+The host then checks source revision and bound principal before forwarding
+bounded documents through the existing, fully validated execution gate.
+The runtime must supply authentic role and policy audit context. No admission
+receipt confers future access: actual execution is reauthorized.
 
 No new route, file storage owner, plugin runtime or commercial dependency is
 introduced. This does **not** support arbitrary PDF/DOCX files, authorize direct
