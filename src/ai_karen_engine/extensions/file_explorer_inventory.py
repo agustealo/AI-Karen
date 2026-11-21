@@ -130,7 +130,7 @@ class FileExplorerInventoryHost:
         ))
         if (
             getattr(admission, "status", None) != "success"
-            or getattr(admission, "payload", None) is None
+            or not isinstance(getattr(admission, "payload", None), dict)
             or admission.payload.get("operation") != "list"
             or admission.payload.get("items") != []
         ):
