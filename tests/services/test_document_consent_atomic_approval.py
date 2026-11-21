@@ -69,7 +69,7 @@ async def test_approval_consumption_requires_author_actor_intent_and_exact_finge
         "expires_at>clock_timestamp()", "RETURNING *",
         "SET status='consumed'", "request_payload='{}'::jsonb",
         "decision_reason='explicit_author_confirmation'",
-        "NULLIF(policy_decision_id, '') IS NOT NULL",
+        "policy_decision_id LIKE 'policy-document-consent-preflight-%'",
         "CAST(:scope_record AS jsonb)", "risk_level='high'",
         "decided_at IS NOT NULL",
     ):
