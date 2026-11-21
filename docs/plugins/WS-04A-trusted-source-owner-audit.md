@@ -234,3 +234,11 @@ This workstream now reuses the **canonical** logging redaction owner, `src/ai_ka
 The regression in `tests/services/test_artifact_storage_platform_client.py` exercises a real HTTPX INFO request via mocked transport, formats captured records with `RuntimeTextFormatter`, and rejects the raw token in captured records or formatted text. Short and URL-encoded token values are separately verified.
 
 **No live Supabase storage acceptance, durable author-issued consent issuer or authenticated WS-02C runtime registration is claimed.** Treat the logging correction as unverified until new-head CI and independent review pass; keep consumer writing-style ingestion disabled.
+
+## WS-04A7 follow-up: Canonical token spellings and live-target verification
+
+A further P2 review finding demonstrated that percent-encoding the *query parameter name* (`?%74oken=...`) could pass `urllib.parse.parse_qs` as `token` while bypassing the literal HTTPX signed-URL redaction check. The canonical `SupabaseArtifactStore.read_owner_active_text_bounded` now checks the **raw query key is exactly `token` before making an outbound request**, as well as verifying the decoded one-token parameter set. The adversarial signed-URL tests reject encoded key names with encoded JWT separators without contacting the host. All signed-link logging uses the existing central redaction owner; do not weaken either defense.
+
+At the current audit checkpoint, the linked Supabase project inventory does **not** expose an identifiable active AI Karen test project: the only returned project was an inactive, differently named project. It would be inappropriate to mutate or use that unrelated project for acceptance. Therefore **live authenticated storage streaming, size-transfer measurement, real post-archive denial and concurrency have NOT been verified**. A genuinely provisioned AI Karen test host with configured storage and PostgreSQL contract is a prerequisite for those tests.
+
+No feature activation or consumer writing-style source use is authorized by this documentation or by mock HTTP transport tests.
