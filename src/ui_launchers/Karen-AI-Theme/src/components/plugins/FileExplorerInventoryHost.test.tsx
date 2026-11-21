@@ -7,10 +7,11 @@ import { FileExplorerInventoryHost } from './FileExplorerInventoryHost';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  post: vi.fn(),
   useAuth: vi.fn(),
 }));
 
-vi.mock('@/lib/api', () => ({ apiClient: { get: mocks.get } }));
+vi.mock('@/lib/api', () => ({ apiClient: { get: mocks.get, post: mocks.post } }));
 vi.mock('@/lib/useAuth', () => ({ useAuth: mocks.useAuth }));
 
 const SHA = 'a'.repeat(64);
@@ -93,6 +94,7 @@ function Consumer() {
 
 beforeEach(() => {
   mocks.get.mockReset();
+  mocks.post.mockReset();
   mocks.useAuth.mockReset();
   mocks.useAuth.mockReturnValue(auth());
 });
@@ -189,5 +191,91 @@ describe('File Explorer authenticated UI host', () => {
     render(<Consumer />);
     expect(mocks.get).not.toHaveBeenCalled();
     expect(screen.getByTestId('authorized').textContent).toBe('false');
+  });
+});
+
+
+function analyzed(id = FILE_A, revision = SHA) {
+  return {
+    operation: 'analyze',
+    persisted: false,
+    documents: [{
+      id,
+      name: 'alpha.txt',
+      sha256: revision,
+      characters: 24,
+      top_terms: [{ term: 'vendor', count: 2 }],
+    }],
+  };
+}
+
+describe('File Explorer to Content Intelligence handoff', () => {
+  it('submits only the selected source id and revision, then displays verified analysis', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    mocks.post.mockResolvedValue(analyzed());
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByText('vendor (2)')).toBeTruthy());
+
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    const [path, payload, options] = mocks.post.mock.calls[0];
+    expect(path).toBe('/api/plugins/content-intelligence/owner-sources');
+    expect(payload).toEqual({
+      operation: 'analyze',
+      references: [{ source_id: FILE_A, revision: SHA }],
+    });
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(screen.getByText(/Lexical analysis of 1 authorized file/)).toBeTruthy();
+  });
+
+  it('rejects a response whose digest does not match the current selection', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    mocks.post.mockResolvedValue(analyzed(FILE_A, 'b'.repeat(64)));
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByText(/Analysis is unavailable or access was denied/)).toBeTruthy());
+    expect(screen.queryByText('vendor (2)')).toBeNull();
+  });
+
+  it('does not expose an old analysis after refresh changes page generation', async () => {
+    let resolveAnalysis!: (value: unknown) => void;
+    mocks.get.mockResolvedValue(response(FILE_A));
+    mocks.post.mockImplementation(() => new Promise((resolve) => {
+      resolveAnalysis = resolve;
+    }));
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('Refresh'));
+    await act(async () => resolveAnalysis(analyzed()));
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    expect(screen.queryByText('vendor (2)')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Verified analysis results' })).toBeNull();
+  });
+
+  it('fails closed when the backend denies authorization', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    mocks.post.mockRejectedValue(new Error('Forbidden with private details'));
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByText(/Analysis is unavailable or access was denied/)).toBeTruthy());
+    expect(screen.queryByText(/private details/)).toBeNull();
+  });
+
+  it('never initiates content analysis for an unauthenticated principal', async () => {
+    mocks.useAuth.mockReturnValue({ user: null, isAuthenticated: false, isLoading: false });
+    render(<Consumer />);
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });
