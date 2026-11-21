@@ -23,12 +23,50 @@ For each family below, identify the actual active production store and owner, in
 
 | Source family | Production owner verified by this audit | WS-04A activation |
 | --- | --- | --- |
-| document | Not yet verified | Disabled |
-| message | Not yet verified | Disabled |
+| document | ArtifactStore / SupabaseArtifactStore verified as resource owner, author-style-consent owner unverified | Disabled |
+| message | Conversation-owner message CRUD exists, style-source authorization unverified | Disabled |
 | email | Not yet verified | Disabled |
 | transcript | Not yet verified | Disabled |
 
 `source_type` values in WS-02B express allowed metadata categories, **not** live provider availability. The presence of a graph-memory `source_ref` or a previously saved receipt does not enable any family.
+
+
+## WS-04A1 source ownership investigation (verified against live repository)
+
+### Canonical artifact storage is real, but not writing-style consent
+
+The concrete persistent document/artifact layer is:
+- `src/ai_karen_engine/services/database/repositories/artifact_store.py`: `ArtifactStore` contract, canonical `Artifact` metadata and owner-scoped operations.
+- `src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py`: Supabase Storage + PostgreSQL `files` backing, with `file_id`, `tenant_id`, `owner_user_id`, metadata, SHA-256, and `deleted_at`. The `list_owner_artifacts_page` operation is a metadata-listing contract, not an ACL grant.
+- `src/ai_karen_engine/services/search/article_document_service.py`: saves research text as `kind='search_article'`, checks authenticated user/tenant, current owner and deleted state, and verifies bytes/citation provenance on reading.
+
+These prove durable artifact ownership and active/deleted state for the user who saved the object. They **do not** establish that user authored the text, that a third-party author consented to writing-style analysis or imitation, or that a server-issued style-use grant is attached. A retrieved article's citation URL and user ownership of a copy are not authorization to impersonate the original writer. Do not bind `search_article` directly to a `VerifiedWritingStyleSource`, set `style_use_allowed=True` from artifact metadata, or treat `ArtifactStore.get_metadata` as consent proof.
+
+**Implementation consequence:** The existing `ArtifactStore` and its PostgreSQL `files` records are the preferred document resource owners when a genuine style-consent source relationship can be established. Any new feature-specific consent must use the already governed consent infrastructure, issuer-signed/persisted decisions, and source-record references instead of a second artifact or ACL database. Current audit does not establish such a production association.
+
+### Message/channel source ownership is not equivalent to authorship permission
+
+- `server/chat/message_service.py` has conversation-owner-scoped message CRUD. Its message retrieval joins a conversation's `user_id`; its soft deletion marks message metadata. The examined contract does not prove the canonical tenant-aware, author-consent-verified production source-authorizer required by KariSignature.
+- `src/ai_karen_engine/services/channels/execution.py` authenticates a claimed inbound event and enforces runtime policy before execution. It is an **execution** authority; accepting an inbound message is not permission to analyze or imitate its sender's writing style.
+- `src/ai_karen_engine/services/channels/personal_pairing_policy.py` describes consent to connecting a managed personal transport. It expressly does not grant unrelated writing-style use. Connection consent must never be converted to author consent.
+- No production owner plus explicit writing-style author consent and live revoke/read API was verified for email or transcript in this audit.
+
+### Source-family eligibility after inspecting concrete owners
+
+| Family | Existing store discovered | Verified consent + authorship + live revocation for style? | Eligibility |
+| --- | --- | --- | --- |
+| document | `ArtifactStore` / `SupabaseArtifactStore`; `SearchArticleService` for research documents | **No.** Artifact owner/deletion checks exist; author's explicit analysis/use rights are not established | **Disabled** |
+| message | `server/chat/message_service.py` and runtime channel execution paths | **No.** Conversation ownership and transport execution are not style-use author consent | **Disabled** |
+| email | No canonical style-authorizing owner verified in this audit | **No** | **Disabled** |
+| transcript | No canonical style-authorizing owner verified in this audit | **No** | **Disabled** |
+
+### Precise implementation blocker for WS-04A2
+
+**Do not build an adapter that unconditionally allows a source because its bytes or metadata are readable.** To implement the first viable document adapter, identify or extend the *canonical source/consent owner's* existing current-permission contract to verify: exact tenant, authenticated actor, **actual source author** (not storage owner by default), source revision/deletion state, independently governed `analysis_allowed` and `style_use_allowed`, current grant expiry/revocation and receipt issuer. A source-author grant must be persisted and revocable through the canonical owner; it cannot be synthesized by KariSignature or accepted from free-form artifact metadata. Reuse the source owner's event/outbox and query current permissions at publication/use to avoid asynchronous revocation windows.
+
+Audit proof before any code change: find the canonical consent issuer, show an authorized source decision under live tenant RLS, revoke it in the owner, then demonstrate a fresh decision becomes false. Only then implement the `WritingStyleSourceAuthority.verify_analysis` adapter against that owner and wire its live-use counterpart.
+
+This is a **confirmed functional dependency**, not merely a missing adapter class. Building the class before trustworthy grant evidence would produce an authorization bypass rather than progress.
 
 ## Minimal trusted adapter contract
 
