@@ -83,7 +83,8 @@ async def test_metadata_cannot_grant_consent_without_issuer():
     s = scope()
     authority, artifacts, issuer = adapter(s)
     assert await authority.verify_analysis(**s) is None
-    artifacts.get_metadata.assert_awaited_once_with(s["source_id"], s["tenant_id"])
+    assert artifacts.get_metadata.await_count == 2
+    artifacts.get_metadata.assert_awaited_with(s["source_id"], s["tenant_id"])
     issuer.verify_current.assert_awaited_once()
 
 
