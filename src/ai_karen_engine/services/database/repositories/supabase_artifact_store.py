@@ -16,7 +16,7 @@ import re
 import uuid
 import logging
 import time
-from urllib.parse import unquote, urljoin, urlsplit, parse_qs
+from urllib.parse import urljoin, urlsplit, parse_qs
 
 import httpx
 from datetime import datetime
@@ -363,7 +363,7 @@ class SupabaseArtifactStore(ArtifactStore):
                     or parts.netloc != origin_parts.netloc
                     or parts.username is not None or parts.password is not None
                     or parts.fragment
-                    or unquote(parts.path) != expected_path
+                    or parts.path != expected_path
                     or parts.query.split("=", 1)[0] != "token"
                     or set(params) != {"token"}
                     or len(params["token"]) != 1
