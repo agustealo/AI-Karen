@@ -229,8 +229,10 @@ jobs:
           set -euo pipefail
           python -m compileall -q \
             src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py \
-            tests/integration/test_live_code_artifact_revocation_postgres.py
+            tests/integration/test_live_code_artifact_revocation_postgres.py \
+            tests/integration/test_artifact_rls_actor_postgres.py
           pytest tests/integration/test_live_code_artifact_revocation_postgres.py \
+            tests/integration/test_artifact_rls_actor_postgres.py \
             -q -rs --junitxml=ckgen-artifact-postgres-junit.xml
 
       - name: Preserve PostgreSQL proof evidence
