@@ -67,7 +67,7 @@
     },
     "local_first_mode": true
   },
-  "last_selected_model": "goekdenizguelmez/JOSIEFIED-Qwen3:8b",
+  "last_selected_model": "hhao/qwen2.5-coder-tools:3b",
   "use_memory": true,
   "context_length": 512,
   "decay": 0.1,
@@ -126,7 +126,7 @@
     }
   },
   "provider": "ollama",
-  "model": "goekdenizguelmez/JOSIEFIED-Qwen3:8b",
+  "model": "hhao/qwen2.5-coder-tools:3b",
   "model_providers": {
     "builtin_transformers": {
       "last_model": "auto",
@@ -140,7 +140,7 @@
       "last_model": "gemini-2.5-flash"
     },
     "ollama": {
-      "last_model": "goekdenizguelmez/JOSIEFIED-Qwen3:8b",
+      "last_model": "hhao/qwen2.5-coder-tools:3b",
       "base_url": "http://host.docker.internal:11434/v1",
       "runtime_source": "host"
     },
