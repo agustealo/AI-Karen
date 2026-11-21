@@ -67,6 +67,32 @@ CREATE TRIGGER writing_style_sample_revoke_only
     BEFORE UPDATE ON public.writing_style_sample_evidence
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_sample_revoke_only();
 
+-- Publishing an identity that contains reference evidence requires
+-- current style-use permission for every active source. This condition
+-- applies to direct SQL as well as approved repository mutations.
+CREATE FUNCTION public.writing_style_require_source_use_consent()
+RETURNS trigger LANGUAGE plpgsql AS $style_publish_consent$
+BEGIN
+    IF NEW.state = 'published' AND EXISTS (
+        SELECT 1 FROM public.writing_style_sample_evidence s
+        WHERE s.tenant_id = NEW.tenant_id
+          AND s.profile_id = NEW.profile_id
+          AND (
+              s.revoked_at IS NOT NULL
+              OR s.style_use_allowed IS NOT TRUE
+              OR (s.consent_expires_at IS NOT NULL
+                  AND s.consent_expires_at <= clock_timestamp())
+          )
+    ) THEN
+        RAISE EXCEPTION 'writing style source use consent unavailable';
+    END IF;
+    RETURN NEW;
+END
+$style_publish_consent$;
+CREATE TRIGGER writing_style_profile_publish_source_gate
+    BEFORE UPDATE OF state, current_revision_id ON public.writing_style_profiles
+    FOR EACH ROW EXECUTE FUNCTION public.writing_style_require_source_use_consent();
+
 REVOKE ALL ON public.writing_style_sample_evidence,
     public.writing_style_sample_audit FROM PUBLIC;
 REVOKE ALL ON SEQUENCE public.writing_style_sample_audit_id_seq FROM PUBLIC;
