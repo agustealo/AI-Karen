@@ -285,3 +285,49 @@ async def test_bounded_signed_range_denies_invalid_byte_cap_without_session(monk
         )
         assert not result.success
     assert store._session.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_bounded_signed_range_stops_consuming_oversized_stream(monkeypatch):
+    """A hostile server may emit unlimited bytes despite correct 206 headers."""
+    class CountingStream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.chunks_sent = 0
+
+        async def __aiter__(self):
+            for _ in range(4096):
+                self.chunks_sent += 1
+                yield b"Z" * 4096
+
+    hostile = CountingStream()
+
+    def response(request):
+        return httpx.Response(
+            206,
+            headers={"Content-Range": f"bytes 0-{len(_BODY)-1}/{len(_BODY)}"},
+            stream=hostile,
+        )
+
+    store, bucket, _ = bounded_store(
+        monkeypatch, transport=httpx.MockTransport(response)
+    )
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER
+    )
+    assert not result.success
+    assert result.data is None
+    # Incremental consumption must stop on the first over-budget chunk.
+    assert hostile.chunks_sent == 1
+    assert len(bucket.signatures) == 1
+
+
+@pytest.mark.asyncio
+async def test_bounded_signed_range_fails_closed_for_insecure_origin(monkeypatch):
+    store, bucket, _ = bounded_store(monkeypatch)
+    store._storage.url = "http://remote-storage.example.test"
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER
+    )
+    assert not result.success
+    assert result.data is None
+    assert bucket.signatures == []
