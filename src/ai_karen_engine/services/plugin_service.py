@@ -285,6 +285,7 @@ class PluginService:
     ) -> Dict[str, Any]:
         """Apply fresh RuntimePolicy before owner-source text and plugin execution."""
         from ai_karen_engine.database.factory import get_database_client
+        from ai_karen_engine.integrations.supabase_client import get_supabase_platform
         from ai_karen_engine.extensions.content_intelligence_sources import (
             ContentSourceHost,
         )
@@ -338,8 +339,15 @@ class PluginService:
         database = get_database_client()
         if database is None or not callable(getattr(database, "get_async_session", None)):
             raise RuntimeError("content_source_database_unavailable")
+        # Supply the canonical initialized Storage holder; the ArtifactStore
+        # expects a platform with .storage.from_("artifacts"), not the raw
+        # storage object. A missing capability must remain unavailable.
+        platform = get_supabase_platform()
+        if platform is None or getattr(platform, "storage", None) is None:
+            raise RuntimeError("content_source_storage_unavailable")
         store = RepositoryFactory(
             session_factory=database.get_async_session,
+            storage_client=platform,
         ).create_artifact_store()
         context = ExtensionExecutionContext(
             request_id=request_id,
