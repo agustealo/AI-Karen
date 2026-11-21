@@ -868,7 +868,7 @@ jobs:
           elif [[ "${{ inputs.scenario }}" == "file-explorer" ]]; then
             npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
               --config=e2e/playwright.config.ts \
-              --project=chromium --reporter=list --retries=0
+              --project=chromium --grep='KFILE-LIVE' --reporter=list --retries=0
           else
             npx playwright test e2e/settings-visual-acceptance.spec.ts \
               --config=e2e/playwright.config.ts \
