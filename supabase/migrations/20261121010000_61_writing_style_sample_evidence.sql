@@ -139,6 +139,51 @@ CREATE TRIGGER writing_style_profile_publish_source_gate
     BEFORE UPDATE OF state, current_revision_id ON public.writing_style_profiles
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_require_source_use_consent();
 
+-- A user who owns a profile can also write grants through SQL. Apply
+-- consent fences at that database boundary, not only in Python, because
+-- delegates cannot see owner-private evidence through FORCE RLS.
+-- Serialize grant creation with source revocation against the parent row.
+CREATE FUNCTION public.writing_style_bound_grant_to_source_consent()
+RETURNS trigger LANGUAGE plpgsql AS $style_grant_consent$
+DECLARE
+    minimum_expiry timestamptz;
+    all_usable boolean;
+BEGIN
+    PERFORM 1 FROM public.writing_style_profiles p
+    WHERE p.tenant_id = NEW.tenant_id
+      AND p.profile_id = NEW.profile_id
+      AND p.owner_actor_id = NEW.owner_actor_id
+      AND p.state = 'published'
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'writing style grant unavailable';
+    END IF;
+
+    SELECT min(s.consent_expires_at),
+           bool_and(s.style_use_allowed AND s.revoked_at IS NULL
+               AND (s.consent_expires_at IS NULL
+                    OR s.consent_expires_at > clock_timestamp()))
+      INTO minimum_expiry, all_usable
+    FROM public.writing_style_sample_evidence s
+    WHERE s.tenant_id = NEW.tenant_id
+      AND s.profile_id = NEW.profile_id;
+
+    IF all_usable IS FALSE THEN
+        RAISE EXCEPTION 'writing style source use consent unavailable';
+    END IF;
+
+    IF minimum_expiry IS NOT NULL AND (
+        NEW.expires_at IS NULL OR NEW.expires_at > minimum_expiry
+    ) THEN
+        NEW.expires_at := minimum_expiry;
+    END IF;
+    RETURN NEW;
+END
+$style_grant_consent$;
+CREATE TRIGGER writing_style_grant_consent_fence
+    BEFORE INSERT OR UPDATE ON public.writing_style_grants
+    FOR EACH ROW EXECUTE FUNCTION public.writing_style_bound_grant_to_source_consent();
+
 REVOKE ALL ON public.writing_style_sample_evidence,
     public.writing_style_sample_audit FROM PUBLIC;
 REVOKE ALL ON SEQUENCE public.writing_style_sample_audit_id_seq FROM PUBLIC;
