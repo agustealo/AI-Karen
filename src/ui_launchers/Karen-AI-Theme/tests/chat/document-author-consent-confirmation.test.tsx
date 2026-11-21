@@ -116,6 +116,11 @@ describe('first-party document author confirmation', () => {
     expect(await screen.findByText('This author decision is already approved.')).toBeTruthy();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(api.post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Issue approved consent receipt' }));
+    expect(await screen.findByText(/Verified receipt ID/)).toBeTruthy();
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/issue',
+    );
   });
 
   it('does not send an invalid approval id', async () => {
