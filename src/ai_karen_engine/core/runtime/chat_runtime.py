@@ -1454,17 +1454,17 @@ class ChatRuntime:
                 else:
                     logger.error(
                         "ChatRuntime stream fallback failed",
-                    extra={
-                        "correlation_id": ctx.correlation_id,
-                        "error_type": type(fallback_exc).__name__,
-                    },
-                )
-                self._emitter.emit(
-                    RuntimeEventType.REQUEST_FAILED,
-                    error_type=type(fallback_exc).__name__,
-                    status="fallback_error",
-                    metadata={"error_code": "CHAT_STREAM_FALLBACK_FAILED"},
-                )
+                        extra={
+                            "correlation_id": ctx.correlation_id,
+                            "error_type": type(fallback_exc).__name__,
+                        },
+                    )
+                    self._emitter.emit(
+                        RuntimeEventType.REQUEST_FAILED,
+                        error_type=type(fallback_exc).__name__,
+                        status="fallback_error",
+                        metadata={"error_code": "CHAT_STREAM_FALLBACK_FAILED"},
+                    )
 
             if (fallback is not None and fallback.answer
                 and _stream_fallback_allowed(streamed_text)
