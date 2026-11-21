@@ -71,10 +71,21 @@ class WritingStyleProfileRepository:
         self._client_factory = client_factory
 
     @staticmethod
-    async def _scope(session: Any, tenant_id: str) -> None:
+    async def _scope(
+        session: Any, tenant_id: str, actor_id: str, *, purpose: str = "",
+    ) -> None:
+        """Bind the same trusted principal used by canonical PostgreSQL RLS."""
         await session.execute(
             text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
             {"tenant": tenant_id},
+        )
+        await session.execute(
+            text("SELECT set_config('app.current_user_id', :actor, true)"),
+            {"actor": actor_id},
+        )
+        await session.execute(
+            text("SELECT set_config('app.current_style_purpose', :purpose, true)"),
+            {"purpose": purpose},
         )
 
     @staticmethod
@@ -118,7 +129,7 @@ class WritingStyleProfileRepository:
         # Owner/tenant membership and create permission MUST be authorized by
         # the host RuntimePolicy before this mutating method is called.
         async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant)
+            await self._scope(session, tenant, owner)
             await session.execute(
                 text(
                     "INSERT INTO public.writing_style_profiles "
@@ -155,7 +166,7 @@ class WritingStyleProfileRepository:
         expression = KariSignatureResolver._validated_expression(approved_expression)
         digest = KariSignatureRevision.digest(expression)
         async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant)
+            await self._scope(session, tenant, actor)
             await session.execute(text("SET CONSTRAINTS writing_style_current_revision_fk DEFERRED"))
             result = await session.execute(
                 text(
@@ -216,7 +227,7 @@ class WritingStyleProfileRepository:
         _purpose(purpose)
         _correlation(correlation_id)
         async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant)
+            await self._scope(session, tenant, actor)
             result = await session.execute(
                 text(
                     "SELECT publication_revision FROM public.writing_style_profiles "
@@ -256,7 +267,7 @@ class WritingStyleProfileRepository:
         _purpose(purpose)
         _correlation(correlation_id)
         async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant)
+            await self._scope(session, tenant, actor)
             owner = await session.execute(
                 text(
                     "SELECT publication_revision FROM public.writing_style_profiles "
@@ -293,7 +304,7 @@ class WritingStyleProfileRepository:
         tenant, actor, profile = map(_uuid, (tenant_id, actor_id, profile_id))
         _correlation(correlation_id)
         async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant)
+            await self._scope(session, tenant, actor)
             result = await session.execute(
                 text(
                     "UPDATE public.writing_style_profiles SET state='revoked', "
@@ -334,7 +345,7 @@ class WritingStyleProfileRepository:
             _uuid, (request.tenant_id, request.profile_id, request.actor_id)
         )
         async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant)
+            await self._scope(session, tenant, actor, purpose=request.purpose)
             result = await session.execute(
                 text(
                     "SELECT r.revision_id, r.revision_number, r.approved_expression, "
@@ -373,7 +384,7 @@ class WritingStyleProfileRepository:
         if revision.tenant_id != tenant or revision.profile_id != profile:
             return False
         async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant)
+            await self._scope(session, tenant, actor, purpose=request.purpose)
             result = await session.execute(
                 text(
                     "SELECT 1 FROM public.writing_style_profiles p "
