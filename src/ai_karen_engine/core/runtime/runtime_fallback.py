@@ -82,6 +82,11 @@ async def build_runtime_fallback(
             request, decision, plan, meter, memory_recall_meta
         )
     except Exception as fb_exc:  # pragma: no cover - defensive boundary
+        # Consent withdrawal is a terminal runtime policy denial, not a
+        # recoverable provider failure. Preserve it for ChatRuntime's
+        # canonical memory-denial response and stream error projection.
+        if str(fb_exc) == "memory_source_revoked_or_unverifiable":
+            raise
         logger.error(
             "Runtime fallback chain failed",
             extra={
