@@ -25,6 +25,12 @@ from ai_karen_engine.core.runtime.prompt.karisignature_contract import (
 from ai_karen_engine.services.writing_style_profile_repository import (
     WritingStyleProfileRepository,
 )
+from ai_karen_engine.services.formatting.karisignature_sample_analysis import (
+    KariSignatureSample,
+)
+from ai_karen_engine.services.formatting.karisignature_persisted_sample_authority import (
+    WritingStylePersistedSampleAuthority,
+)
 from ai_karen_engine.services.writing_style_sample_provenance import (
     VerifiedWritingStyleSource, WritingStyleSampleProvenance,
 )
@@ -217,6 +223,39 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             source_type="document", source_id=str(live_source),
             correlation_id="consented-sample",
         )
+        # WS-02C: evidence record alone is insufficient. Current author/receipt
+        # and the exact text must come from the canonical live source owner.
+        sample_body = " ".join(
+            ["A real source owner must verify these writing samples"] * 5
+        )
+        current_sample = KariSignatureSample(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(live_profile), sample_id=str(live_sample),
+            source_ref=f"document:{live_source}", content=sample_body,
+            digest=KariSignatureSample.content_digest(sample_body),
+        )
+        source_reader = type(
+            "ContentOwner", (),
+            {"read_current_content": AsyncMock(return_value=sample_body)}
+        )()
+        sample_gate = WritingStylePersistedSampleAuthority(
+            source_authority=authority, content_reader=source_reader,
+            client_factory=client_factory,
+        )
+        analysis_request = KariSignatureRequest(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(live_profile), purpose="analyze_style",
+            correlation_id="live-source-analysis-proof",
+        )
+        assert await sample_gate.authorize_analysis(
+            request=analysis_request, sample=current_sample
+        )
+        source_reader.read_current_content.return_value = sample_body + " drift"
+        assert not await sample_gate.authorize_analysis(
+            request=analysis_request, sample=current_sample
+        )
+        source_reader.read_current_content.return_value = sample_body
+
         published = await identities.publish(
             tenant_id=str(tenant), actor_id=str(owner),
             profile_id=str(live_profile), revision_id=str(uuid.uuid4()),
@@ -224,6 +263,10 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             correlation_id="consented-publish",
         )
         assert published.revision_number == 1
+        # Published profiles cannot accept further sample-analysis changes.
+        assert not await sample_gate.authorize_analysis(
+            request=analysis_request, sample=current_sample
+        )
         await identities.grant_use(
             tenant_id=str(tenant), actor_id=str(owner),
             profile_id=str(live_profile), grantee_actor_id=str(delegate),
