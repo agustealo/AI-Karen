@@ -23,6 +23,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from ai_karen_engine.services.postgres_document_style_consent_issuer import (
     PostgresDocumentStyleConsentIssuer,
 )
+from ai_karen_engine.services.writing_style_profile_repository import (
+    WritingStyleAccessDenied,
+    WritingStyleProfileRepository,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -296,6 +300,27 @@ async def test_first_party_author_consent_postgres() -> None:
             "SELECT state FROM public.writing_style_profiles "
             "WHERE tenant_id=$1 AND profile_id=$2", tenant, profile,
         ) == "published"
+
+        # A previously valid consent receipt must not authorize a NEW grant
+        # when the canonical file has changed. Exercise the owner-scoped
+        # repository and its real PostgreSQL query, not a mocked SQL result.
+        await raw.execute(
+            "UPDATE public.files SET sha256=$1 WHERE file_id=$2",
+            "c" * 64, str(artifact),
+        )
+        with pytest.raises(WritingStyleAccessDenied) as denied:
+            await WritingStyleProfileRepository(
+                client_factory=TrustedTestClient
+            ).grant_use(
+                tenant_id=str(tenant), actor_id=str(owner),
+                profile_id=str(profile), grantee_actor_id=str(other_actor),
+                purpose="draft_email", correlation_id="changed-source-grant",
+            )
+        assert denied.value.args[0] == "style_source_unavailable"
+        await raw.execute(
+            "UPDATE public.files SET sha256=$1 WHERE file_id=$2",
+            digest, str(artifact),
+        )
 
         # Only one-way revocation is permitted; cannot un-revoke or alter
         # scope/digest/permissions even as the authenticated author.
