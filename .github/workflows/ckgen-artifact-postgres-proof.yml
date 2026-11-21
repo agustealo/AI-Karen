@@ -7,6 +7,7 @@ on:
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
+      - "tests/integration/test_artifact_rls_actor_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   push:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
+      - "tests/integration/test_artifact_rls_actor_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   workflow_dispatch:
 
@@ -33,10 +35,13 @@ jobs:
       PYTHONPATH: src
       KAREN_TEST_DISPOSABLE_DATABASE: "1"
       KAREN_TEST_CODE_ARTIFACT_POSTGRES: "1"
+      KAREN_TEST_CODE_ARTIFACT_RLS: "1"
       KAREN_TEST_CODE_ARTIFACT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_code_artifact_test
       KAREN_TEST_ARTIFACT_TENANT_ID: 10000000-0000-4000-8000-000000000001
       KAREN_TEST_ARTIFACT_OWNER_ID: 10000000-0000-4000-8000-000000000002
       KAREN_TEST_ARTIFACT_OTHER_USER_ID: 10000000-0000-4000-8000-000000000003
+      KAREN_TEST_ARTIFACT_TENANT_B_ID: 20000000-0000-4000-8000-000000000001
+      KAREN_TEST_ARTIFACT_OWNER_B_ID: 20000000-0000-4000-8000-000000000002
     steps:
       - uses: actions/checkout@v4
 
