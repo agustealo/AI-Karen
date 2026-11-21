@@ -8,7 +8,7 @@
 
 **Writing Studio** is the first-class user/admin experience for acquiring, governing, testing, applying and evolving *communication identities* for individuals, businesses, clients, teams and authorized agents.
 
-**KariSignature** is the **proposed**, not yet brand-verified, name of the reusable underlying communication-style capability. It is not a voice-cloning system. Do not rename or replace the existing Persona, Memory, CORTEX, Agent or VoiceRuntime authorities in order to implement it. The temporary contract identifier `writing_style.v1` is intentionally brand-neutral pending naming approval.
+**KariSignature** is the product-owner-selected name for the reusable underlying communication-style capability; trademark clearance and production availability remain unverified. It is not a voice-cloning system. Do not rename or replace the existing Persona, Memory, CORTEX, Agent or VoiceRuntime authorities in order to implement it. The temporary contract identifier `writing_style.v1` is intentionally brand-neutral pending naming approval.
 
 A **communication identity** is a versioned, evidence-supported description of how an actor or organization expresses information: vocabulary, sentence structure, rhetorical patterns, register, tone, degree of formality, format, audience adaptation, accepted phrases, avoided phrases and explicit style rules. Its purpose is *expression*, not deciding what to say, what facts are true, what memory may be retrieved, what tools may run, or which provider executes.
 
@@ -239,3 +239,36 @@ Add targeted contract tests and real integration/browser acceptance for every im
 Before implementing, examine the repository for prior labels such as "Voice DNA", "VDNA", "Writing Studio", "KariSignature", communication-style profiles and Persona Studio. An empty exact-name search is not proof of absence. Reuse the strongest existing implementation and preserve its tests, migrations, guards and canonical paths. Rename only with migration/compatibility review and confirmed product approval.
 
 Every implementing PR must amend this chapter's **status** and cite concrete implemented source paths, manifest version, migration IDs, corresponding backend/UI tests, exact-head checks, unavailable prerequisites and observed UX evidence. Keep proposed APIs visibly proposed until verified. If the current code differs, source plus executable tests take precedence over this blueprint.
+
+## WS-01 implementation ledger (source-only, not consumer enabled)
+
+**Implemented on the WS-01 feature branch:** `KariSignatureRequest`,
+`KariSignatureRevision`, `KariSignatureAuthority`,
+`KariSignatureResolver` and `KariSignatureResolution` in
+`src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py`.
+This is a bounded, asynchronous, read-only style-resolution kernel. It reads
+the current published revision through a host-supplied authority, compares
+canonical tenant/profile identity, validates the approved expression schema,
+verifies the SHA-256 digest, and requires the host to return **literal True**
+for current use authorization. Failure or revocation denies the resolution.
+No raw sample text is admitted. Approved fields reuse
+`PersonaAssemblyPolicy.sanitize_persona` and cannot set provider, model,
+tools, memory, permissions or system policy.
+
+**Current limitations:** This slice does **not** provide a production
+`KariSignatureAuthority` adapter, PostgreSQL profile/revision persistence,
+consent or source-sample ingestion, publication workflows, prompt-runtime
+selection, provider execution, user/admin UI, agent bindings or consumer
+acceptance. The interface cannot grant permission merely because a caller
+instantiated a revision. Production adapters must fetch the authoritative
+published version and check active RBAC/consent/tenant and purpose. Do not
+enable style selection or claim user availability until those paths are wired
+and tested. The bounded enum vocabulary is intentionally conservative and
+is subject to versioned review before broader internationalization.
+
+**Proof target:** `pytest tests/core/runtime/test_karisignature_contract.py -q`,
+`ruff check src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py
+tests/core/runtime/test_karisignature_contract.py`, canonical prompt/persona
+regressions, and exact-head CI. WS-02 must reuse the already-existing database
+and user-preference owners for scoped immutable revision storage and authority;
+it must not introduce a duplicate prompt assembler, model router or ACL store.
