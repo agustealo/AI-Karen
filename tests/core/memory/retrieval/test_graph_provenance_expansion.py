@@ -34,7 +34,7 @@ class _Graph:
                 "event_id": self.event_id,
                 "relationship": "MENTIONS",
                 "depth": 1,
-                "path": ["entity", self.event_id],
+                "path": ["unverified-neighbor-secret", self.event_id],
             }
         ]
 
@@ -65,7 +65,7 @@ class _Events:
 def _router(event_id, *, include_event=True):
     router = object.__new__(HybridRetrievalRouter)
     router.entity_resolver = _Resolver()
-    router.leangraph = _Graph(event_id)
+    router.graph = _Graph(event_id)
     router.event_source = _Events(event_id, include=include_event)
     return router
 
@@ -91,6 +91,9 @@ async def test_graph_hit_expands_to_canonical_event_content():
     assert provenance["graph_relationship"] == "MENTIONS"
     assert provenance["matched_entity_cue"] == "Supabase"
     assert provenance["entity_resolution"]["match_type"] == "exact"
+    assert "graph_path" not in provenance
+    assert "graph_path" not in entries[0].metadata.custom
+    assert "unverified-neighbor-secret" not in repr(entries[0].metadata.custom)
 
 
 @pytest.mark.asyncio
@@ -105,3 +108,4 @@ async def test_graph_path_without_governed_source_does_not_create_pseudo_memory(
     )
 
     assert await router._query_graph(query) == []
+
