@@ -109,6 +109,13 @@ def test_disabled_recall_cannot_release_context_memory():
     ) == []
 
 
+@pytest.mark.parametrize("top_k", [0, -1])
+def test_zero_or_negative_memory_limit_never_releases_one_entry(top_k):
+    decision = _decision(context=_context())
+    decision.memory_top_k = top_k
+    assert ChatRuntime._selected_memory_for_generation(_request(), decision) == []
+
+
 def test_unresolved_memory_source_is_not_usable_for_generation():
     context = _context()
     context.unresolved_sources.append(EvidenceSource.MEMORY.value)
