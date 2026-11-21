@@ -258,7 +258,7 @@ describe('File Explorer to Content Intelligence handoff', () => {
     await act(async () => resolveAnalysis(analyzed()));
     await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
     expect(screen.queryByText('vendor (2)')).toBeNull();
-    expect(screen.queryByRole('region', { name: 'Verified analysis results' })).toBeNull();
+    expect(screen.queryByRole('status', { name: 'Verified analysis results' })).toBeNull();
   });
 
   it('fails closed when the backend denies authorization', async () => {
