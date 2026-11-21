@@ -53,6 +53,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             DROP TABLE IF EXISTS public.writing_style_sample_audit CASCADE;
             DROP TABLE IF EXISTS public.writing_style_sample_evidence CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_only() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_fence() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_require_source_use_consent() CASCADE;
             DROP TABLE IF EXISTS public.writing_style_audit CASCADE;
             DROP TABLE IF EXISTS public.writing_style_grants CASCADE;
