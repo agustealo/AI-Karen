@@ -11,6 +11,7 @@ on:
       - "src/ai_karen_engine/api_routes/chat/runtime.py"
       - "src/ai_karen_engine/config/runtime.py"
       - "tests/api_routes/test_presentation_pin_mutation_route.py"
+      - "tests/api_routes/test_presentation_pin_active_session_route.py"
       - "tests/api_routes/test_presentation_pin_readback_route.py"
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"
@@ -26,6 +27,7 @@ on:
       - "src/ai_karen_engine/api_routes/chat/runtime.py"
       - "src/ai_karen_engine/config/runtime.py"
       - "tests/api_routes/test_presentation_pin_mutation_route.py"
+      - "tests/api_routes/test_presentation_pin_active_session_route.py"
       - "tests/api_routes/test_presentation_pin_readback_route.py"
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"
@@ -123,6 +125,7 @@ jobs:
             tests/core/runtime/test_presentation_pin_mutation.py \
             tests/core/runtime/test_presentation_pin_readback.py -q -rs
           pytest tests/api_routes/test_presentation_pin_mutation_route.py \
+            tests/api_routes/test_presentation_pin_active_session_route.py \
             tests/api_routes/test_presentation_pin_readback_route.py -q -rs
           pytest tests/integration/test_presentation_pins_postgres.py -q -rs
 
