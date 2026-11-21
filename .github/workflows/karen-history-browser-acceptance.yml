@@ -741,6 +741,7 @@ jobs:
       KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence' && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID }}
+      KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID }}
       KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence-denial' && 'true' || 'false' }}
       KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
       KAREN_NAV_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'navigation' && 'true' || 'false' }}
@@ -819,6 +820,7 @@ jobs:
               --project=chromium --grep="UX-16" --reporter=list --retries=0
           elif [[ "${{ inputs.scenario }}" == "content-intelligence-denial" ]]; then
             test -n "$KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" || { echo "::error::Missing genuine owner source ID"; exit 1; }
+            test -n "$KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID" || { echo "::error::Missing genuine second-owner source ID"; exit 1; }
             test -n "$KAREN_UX_ISOLATION_EMAIL" || { echo "::error::Missing second sanitized identity"; exit 1; }
             test -n "$KAREN_UX_ISOLATION_PASSWORD" || { echo "::error::Missing second sanitized credential"; exit 1; }
             npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
