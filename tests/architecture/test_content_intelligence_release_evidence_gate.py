@@ -41,7 +41,8 @@ def test_runbook_requires_real_protected_browser_proof():
     assert (
         "KAREN_FILE_EXPLORER_ACCEPTANCE: "
         "${{ (inputs.scenario == 'file-explorer' || "
-        "inputs.scenario == 'content-intelligence') && 'true' || 'false' }}"
+        "inputs.scenario == 'content-intelligence' || "
+        "inputs.scenario == 'content-intelligence-denial') && 'true' || 'false' }}"
     ) in protected_job
     assert (
         "KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: "
@@ -63,6 +64,7 @@ def test_live_cross_principal_negative_acceptance_is_protected_and_not_skipped()
     assert "          - content-intelligence-denial" in workflow
     assert "inputs.scenario == 'content-intelligence-denial') && github.ref == 'refs/heads/main'" in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE:" in workflow
+    assert "KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID:" in workflow
     assert "KAREN_UX_ISOLATION_EMAIL: ${{ secrets.KAREN_UX_ISOLATION_EMAIL }}" in workflow
     assert "KAREN_UX_ISOLATION_PASSWORD: ${{ secrets.KAREN_UX_ISOLATION_PASSWORD }}" in workflow
     assert "--grep='KCONTENT-DENY-LIVE'" in workflow
@@ -70,6 +72,9 @@ def test_live_cross_principal_negative_acceptance_is_protected_and_not_skipped()
     assert "otherInventoryHttp.status()" in spec
     assert "ownerBad.status()" in spec
     assert "foreign.status()" in spec
+    assert "ownerGood.status()" in spec
+    assert "otherGood.status()" in spec
+    assert "isolated.addCookies(deploymentCookies)" in spec
     assert "browser.newContext" in spec
     assert "page.route(" not in spec
     assert "route.fulfill(" not in spec
