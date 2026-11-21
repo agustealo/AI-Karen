@@ -232,3 +232,59 @@ async def test_expiration_during_final_metadata_read_denies_use(monkeypatch):
     assert await authority.verify_use(**s) is False
     assert ConsentClock.checks >= 2
     assert artifacts.get_metadata.await_count == 2
+
+
+@pytest.mark.parametrize("mutation", ["revoked", "receipt_rotated", "use_denied", "expiry_changed", "issuer_error"])
+async def test_consent_change_during_final_artifact_read_denies(mutation):
+    """An issuer change after source revalidation cannot reuse the first grant."""
+    s = scope()
+    grant = decision(s, style_use=True)
+    authority, artifacts, issuer = adapter(s, consent=grant)
+    if mutation == "revoked":
+        changed = None
+    elif mutation == "receipt_rotated":
+        changed = decision(s, style_use=True)
+    elif mutation == "use_denied":
+        changed = VerifiedWritingStyleSource(
+            tenant_id=grant.tenant_id,
+            owner_actor_id=grant.owner_actor_id,
+            profile_id=grant.profile_id,
+            source_type=grant.source_type,
+            source_id=grant.source_id,
+            author_actor_id=grant.author_actor_id,
+            consent_receipt_id=grant.consent_receipt_id,
+            analysis_allowed=True,
+            style_use_allowed=False,
+            consent_expires_at=grant.consent_expires_at,
+        )
+    elif mutation == "expiry_changed":
+        changed = VerifiedWritingStyleSource(
+            tenant_id=grant.tenant_id,
+            owner_actor_id=grant.owner_actor_id,
+            profile_id=grant.profile_id,
+            source_type=grant.source_type,
+            source_id=grant.source_id,
+            author_actor_id=grant.author_actor_id,
+            consent_receipt_id=grant.consent_receipt_id,
+            analysis_allowed=True,
+            style_use_allowed=True,
+            consent_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+    else:
+        changed = None
+    issuer.verify_current.side_effect = (
+        [grant, RuntimeError("private issuer credential")]
+        if mutation == "issuer_error" else [grant, changed]
+    )
+    assert await authority.verify_use(**s) is False
+    assert issuer.verify_current.await_count == 2
+    assert artifacts.get_metadata.await_count == 2
+
+
+async def test_positive_current_consent_reverified_after_final_source_read():
+    s = scope()
+    grant = decision(s, style_use=True)
+    authority, artifacts, issuer = adapter(s, consent=grant)
+    assert await authority.verify_use(**s) is True
+    assert issuer.verify_current.await_count == 2
+    assert artifacts.get_metadata.await_count == 2
