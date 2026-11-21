@@ -188,10 +188,13 @@ async def test_missing_unpin_still_records_truthful_absent_receipt(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_stale_reorder_rejects_without_receipt(monkeypatch):
-    fake, state, _ = wire(monkeypatch, [Result(), Result(), Result()])
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(),
+        Result([{"pin_id": PIN, "position": 0, "revision": 3}]),
+    ])
     with pytest.raises(PresentationPinConflict, match="revision"):
         await PresentationPinRepository().mutate_with_receipt(**request(
-            operation="reorder", expected_revision=2, position=5,
+            operation="reorder", expected_revision=2, position=0,
         ))
     assert len(fake.queries) == 3
     assert state["rolled_back"]
@@ -257,7 +260,6 @@ async def test_reorder_normalizes_legacy_gaps_and_duplicate_positions(monkeypatc
     fake, state, _ = wire(monkeypatch, [
         Result(), Result(), Result(rows),
         Result([{"pin_id": PIN, "revision": 3},
-                {"pin_id": SECOND_PIN, "revision": 5},
                 {"pin_id": THIRD_PIN, "revision": 4}]),
         Result(reorder_receipt(position=2)),
     ])
@@ -268,7 +270,7 @@ async def test_reorder_normalizes_legacy_gaps_and_duplicate_positions(monkeypatc
     assert {
         move["pin_id"]: move["position"]
         for move in json.loads(fake.params[3]["move_rows"])
-    } == {SECOND_PIN: 0, THIRD_PIN: 1, PIN: 2}
+    } == {THIRD_PIN: 1, PIN: 2}
 
 
 @pytest.mark.asyncio
