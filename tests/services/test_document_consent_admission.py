@@ -71,10 +71,18 @@ def service(repo):
 
 async def wire_auth(monkeypatch, context):
     from ai_karen_engine.auth import session as auth_session
+    from ai_karen_engine.core.runtime import composition
+
     monkeypatch.setattr(
         auth_session, "get_document_style_consent_context",
         AsyncMock(return_value=context),
     )
+    canonical = RuntimePolicyEnforcer()
+    monkeypatch.setattr(
+        composition, "get_runtime_composition",
+        lambda: SimpleNamespace(runtime_policy=canonical),
+    )
+    return canonical
 
 
 async def test_generic_user_only_decision_cannot_approve_document_consent():
@@ -117,7 +125,6 @@ async def test_approval_confirmation_denies_untrusted_scope(monkeypatch, mismatc
         await service(repo).decide_document_consent(
             record["approval_id"], request=object(), scope=scope,
             confirmed=mismatch != "not_confirmed",
-            runtime_policy=RuntimePolicyEnforcer(),
         )
     repo.decide.assert_not_awaited()
 
@@ -178,7 +185,6 @@ async def test_pending_admission_uses_canonical_source_check(monkeypatch):
     target = service(repo)
     result = await target.request_document_consent(
         request=object(), scope=scope, correlation_id="fresh-bearer-admission",
-        runtime_policy=RuntimePolicyEnforcer(),
     )
     assert result == record
     assert repo.create.await_args.kwargs["request_fingerprint"] == scope.fingerprint()
@@ -229,23 +235,28 @@ async def test_document_approval_requires_live_canonical_runtime_policy(
         create=AsyncMock(return_value=record),
         decide=AsyncMock(return_value={**record, "status": "approved"}),
     )
+    from ai_karen_engine.core.runtime import composition
+
     policy = (
         None if policy_mode == "missing"
         else RuntimePolicyEnforcer(
             RuntimePolicyConfig(default_level=RuntimeLevel.SAFE),
         )
     )
+    monkeypatch.setattr(
+        composition, "get_runtime_composition",
+        lambda: SimpleNamespace(runtime_policy=policy),
+    )
     target = service(repo)
     with pytest.raises(ApprovalScopeError, match="runtime policy|Runtime policy"):
         if stage == "request":
             await target.request_document_consent(
                 request=object(), scope=scope, correlation_id="denied",
-                runtime_policy=policy,
             )
         else:
             await target.decide_document_consent(
                 record["approval_id"], request=object(), scope=scope,
-                confirmed=True, runtime_policy=policy,
+                confirmed=True,
             )
     repo.get.assert_not_awaited()
     repo.create.assert_not_awaited()
@@ -261,7 +272,7 @@ async def test_document_confirmation_denied_after_runtime_degrades(
         get=AsyncMock(return_value=approval(scope)),
         decide=AsyncMock(),
     )
-    policy = RuntimePolicyEnforcer()
+    policy = await wire_auth(monkeypatch, context)
     assert (
         await policy.authorize_document_consent_preflight(
             context=context, scope=scope,
@@ -272,7 +283,6 @@ async def test_document_confirmation_denied_after_runtime_degrades(
         await service(repo).decide_document_consent(
             repo.get.return_value["approval_id"],
             request=object(), scope=scope, confirmed=True,
-            runtime_policy=policy,
         )
     repo.get.assert_not_awaited()
     repo.decide.assert_not_awaited()
@@ -295,12 +305,18 @@ async def test_canonical_runtime_composes_only_one_approved_issuer(monkeypatch):
         issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
     )
     repo = SimpleNamespace()
+    from ai_karen_engine.core.runtime import composition
+
+    monkeypatch.setattr(
+        composition, "get_runtime_composition",
+        lambda: SimpleNamespace(runtime_policy=policy),
+    )
     target = service(repo)
     approval_id = str(uuid.uuid4())
     request = object()
     result = await target.issue_confirmed_document_consent(
         request=request, scope=scope, approval_id=approval_id,
-        correlation_id="runtime-verified", runtime_policy=policy,
+        correlation_id="runtime-verified",
     )
     assert result == receipt
     kwargs = construction.call_args.kwargs
@@ -329,12 +345,18 @@ async def test_execution_composition_denies_absent_runtime_policy(
     monkeypatch.setattr(
         issuer_module, "PostgresDocumentStyleConsentIssuer", create,
     )
-    target = service(SimpleNamespace())
+    from ai_karen_engine.core.runtime import composition
+
     policy = None if mode == "none" else object()
+    monkeypatch.setattr(
+        composition, "get_runtime_composition",
+        lambda: SimpleNamespace(runtime_policy=policy),
+    )
+    target = service(SimpleNamespace())
     with pytest.raises(ApprovalScopeError, match="runtime authority"):
         await target.issue_confirmed_document_consent(
             request=object(), scope=scope, approval_id=str(uuid.uuid4()),
-            correlation_id="deny", runtime_policy=policy,
+            correlation_id="deny",
         )
     with pytest.raises(ApprovalScopeError, match="runtime authority"):
         await target.revoke_document_consent(
@@ -362,6 +384,12 @@ async def test_revoke_composition_uses_same_authority_and_one_way_issuer(
     monkeypatch.setattr(
         issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
     )
+    from ai_karen_engine.core.runtime import composition
+
+    monkeypatch.setattr(
+        composition, "get_runtime_composition",
+        lambda: SimpleNamespace(runtime_policy=policy),
+    )
     target = service(SimpleNamespace())
     request = object()
     result = await target.revoke_document_consent(
@@ -370,7 +398,6 @@ async def test_revoke_composition_uses_same_authority_and_one_way_issuer(
         profile_id=scope.profile_id,
         artifact_id=scope.artifact_id,
         correlation_id="confirmed-revoke",
-        runtime_policy=policy,
     )
     assert result is True
     assert construction.call_args.kwargs["issuance_policy"]._enforcer is policy
