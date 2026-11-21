@@ -185,6 +185,17 @@ def bounded_store(monkeypatch, *, body=_BODY, signed_url=None, row=None, transpo
 
 
 @pytest.mark.asyncio
+async def test_bounded_signed_range_preserves_multiline_utf8(monkeypatch):
+    body = "First line of an author's note.\n\tSecond line.\r\nThird line.".encode("utf-8")
+    store, _, _ = bounded_store(monkeypatch, body=body)
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER, max_bytes=65536
+    )
+    assert result.success
+    assert result.data.text == body.decode("utf-8")
+
+
+@pytest.mark.asyncio
 async def test_bounded_signed_range_returns_verified_owner_text(monkeypatch):
     store, bucket, session = bounded_store(monkeypatch)
     result = await store.read_owner_active_text_bounded(
