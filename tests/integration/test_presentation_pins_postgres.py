@@ -783,6 +783,12 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     UPDATE public.auth_sessions SET is_active=true
                     WHERE access_token=$1
                 """, owner_token)
+                # Earlier cascade tests intentionally deleted tenant_a.
+                # Recreate only that disposable tenant to make the drift
+                # scenario reach durable session validation, not an FK error.
+                await raw.execute(
+                    "INSERT INTO public.tenants (id) VALUES ($1)", tenant_a
+                )
                 await raw.execute("""
                     UPDATE public.auth_users SET tenant_id=$1 WHERE user_id=$2
                 """, tenant_a, owner_b)
