@@ -449,6 +449,154 @@ class ApprovalService:
         )
         return record
 
+    async def request_document_consent(
+        self,
+        *,
+        request: "Request",
+        scope: "DocumentConsentApprovalScope",
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Create a pending source-bound author approval, never the consent."""
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+        from ai_karen_engine.persistence.postgres.transactions import (
+            async_transaction_scope,
+        )
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+        )
+        from ai_karen_engine.services.writing_style_profile_repository import (
+            WritingStyleProfileRepository,
+        )
+
+        if not isinstance(scope, DocumentConsentApprovalScope):
+            raise ApprovalScopeError("Valid author consent scope required")
+        if scope.action != "issue":
+            raise ApprovalScopeError("Unsupported consent request action")
+        context = await get_document_style_consent_context(request)
+        scope.require_matching_context(context)
+        if (
+            not isinstance(correlation_id, str)
+            or not 1 <= len(correlation_id) <= 128
+        ):
+            raise ApprovalScopeError("Invalid consent correlation")
+
+        # The issuer rechecks canonical SHA-256 and profile state in the
+        # final atomic transaction. Admission checks those facts first.
+        async with async_transaction_scope(scope.tenant_id) as session:
+            await WritingStyleProfileRepository._scope(
+                session, scope.tenant_id, scope.author_actor_id
+            )
+            digest = await PostgresDocumentStyleConsentIssuer._read_source_digest(
+                session,
+                tenant_id=scope.tenant_id,
+                actor_id=scope.author_actor_id,
+                profile_id=scope.profile_id,
+                artifact_id=scope.artifact_id,
+            )
+        if digest != scope.source_sha256:
+            raise ApprovalScopeError("Current document cannot be authorized")
+
+        record = await self._repository.create(
+            tenant_id=scope.tenant_id,
+            user_id=scope.author_actor_id,
+            conversation_id=None,
+            request_fingerprint=scope.fingerprint(),
+            policy_decision_id=None,
+            intent="writing_style.document_consent.issue",
+            risk_level="high",
+            reason_codes=["explicit_document_author_confirmation_required"],
+            request_payload={"document_consent_scope": scope.to_record()},
+            ttl_minutes=15,
+        )
+        self._audit.log_audit_event({
+            "event_type": AuditEventType.SECURITY_EVENT,
+            "severity": AuditSeverity.INFO,
+            "message": "document_author_consent_requested",
+            "user_id": scope.author_actor_id,
+            "tenant_id": scope.tenant_id,
+            "session_id": scope.session_id,
+            "correlation_id": correlation_id,
+            "metadata": {
+                "approval_id": record["approval_id"],
+                "profile_id": scope.profile_id,
+                "artifact_id": scope.artifact_id,
+            },
+        })
+        return record
+
+    async def decide_document_consent(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+        scope: "DocumentConsentApprovalScope",
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        """Approve only explicit author confirmation with fresh bearer scope."""
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+
+        if not isinstance(scope, DocumentConsentApprovalScope):
+            raise ApprovalScopeError("Valid author consent scope required")
+        if scope.action != "issue":
+            raise ApprovalScopeError("Unsupported consent decision action")
+        context = await get_document_style_consent_context(request)
+        scope.require_matching_context(context)
+        if confirmed is not True:
+            raise ApprovalScopeError("Explicit author confirmation required")
+        try:
+            if str(uuid.UUID(approval_id)) != approval_id:
+                raise ValueError("Noncanonical approval ID")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ApprovalScopeError("Invalid author consent approval") from exc
+
+        current = await self._repository.get(
+            approval_id,
+            tenant_id=scope.tenant_id,
+            user_id=scope.author_actor_id,
+        )
+        if (
+            current is None
+            or current.get("status") != "pending"
+            or current.get("intent") != "writing_style.document_consent.issue"
+            or current.get("request_fingerprint") != scope.fingerprint()
+            or current.get("request_payload", {}).get(
+                "document_consent_scope"
+            ) != scope.to_record()
+        ):
+            raise ApprovalScopeError("Author consent confirmation scope mismatch")
+
+        record = await self._repository.decide(
+            approval_id,
+            tenant_id=scope.tenant_id,
+            user_id=scope.author_actor_id,
+            decision="approved",
+            reason="explicit_author_confirmation",
+            decided_by=scope.author_actor_id,
+        )
+        if record is None:
+            raise ApprovalStateError("Author consent approval already decided")
+        self._audit.log_audit_event({
+            "event_type": AuditEventType.SECURITY_EVENT,
+            "severity": AuditSeverity.INFO,
+            "message": "document_author_consent_confirmed",
+            "user_id": scope.author_actor_id,
+            "tenant_id": scope.tenant_id,
+            "session_id": scope.session_id,
+            "correlation_id": context.correlation_id,
+            "metadata": {
+                "approval_id": approval_id,
+                "profile_id": scope.profile_id,
+                "artifact_id": scope.artifact_id,
+            },
+        })
+        return record
+
     async def consume_for_request(
         self,
         approval_id: str,
