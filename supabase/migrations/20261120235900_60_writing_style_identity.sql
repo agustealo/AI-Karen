@@ -35,7 +35,7 @@ CREATE TABLE public.writing_style_revisions (
     PRIMARY KEY (tenant_id, profile_id, revision_id),
     UNIQUE (tenant_id, profile_id, revision_number),
     FOREIGN KEY (tenant_id, profile_id)
-      REFERENCES public.writing_style_profiles(tenant_id, profile_id) ON DELETE RESTRICT
+      REFERENCES public.writing_style_profiles(tenant_id, profile_id) ON DELETE CASCADE
 );
 
 ALTER TABLE public.writing_style_profiles ADD CONSTRAINT writing_style_current_revision_fk
@@ -54,7 +54,7 @@ CREATE TABLE public.writing_style_grants (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (tenant_id, profile_id, actor_id, purpose),
     FOREIGN KEY (tenant_id, profile_id)
-      REFERENCES public.writing_style_profiles(tenant_id, profile_id) ON DELETE RESTRICT
+      REFERENCES public.writing_style_profiles(tenant_id, profile_id) ON DELETE CASCADE
 );
 
 CREATE TABLE public.writing_style_audit (
@@ -74,16 +74,25 @@ CREATE INDEX writing_style_audit_profile ON public.writing_style_audit(tenant_id
 
 -- Immutable published revision history, even for privileged backend callers.
 CREATE FUNCTION public.writing_style_prevent_revision_mutation()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql AS $
 BEGIN
+    -- A committed revision cannot be edited or deleted directly. Governed
+    -- parent/tenant deletion must still erase dependent private revisions.
+    -- FK cascades run after the owning parent row has been removed.
+    IF TG_OP = 'DELETE' AND NOT EXISTS (
+        SELECT 1 FROM public.writing_style_profiles p
+        WHERE p.tenant_id = OLD.tenant_id AND p.profile_id = OLD.profile_id
+    ) THEN
+        RETURN OLD;
+    END IF;
     RAISE EXCEPTION 'published style revisions are immutable';
-END $$;
+END $;
 CREATE TRIGGER writing_style_no_revision_update
     BEFORE UPDATE OR DELETE ON public.writing_style_revisions
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_prevent_revision_mutation();
 
--- Retention is managed by explicit governed lifecycle, not cascade deletion of
--- referenced profiles/revisions. Tenant deletion follows canonical tenant policy.
+-- Private revision/grant rows follow existing governed tenant/profile erasure.
+-- Direct revision deletion remains blocked by the immutable trigger and RLS.
 REVOKE ALL ON public.writing_style_profiles, public.writing_style_revisions,
     public.writing_style_grants, public.writing_style_audit FROM PUBLIC;
 REVOKE ALL ON SEQUENCE public.writing_style_audit_id_seq FROM PUBLIC;
