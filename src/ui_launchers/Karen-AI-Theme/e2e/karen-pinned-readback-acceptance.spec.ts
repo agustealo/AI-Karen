@@ -402,5 +402,86 @@ test("KPIN-MUTATION-LIVE: authenticated dual-account denial, revision CAS and co
     await livePinRequest(page, "GET", "/api/chat/ag-ui/pins"),
   );
   expect(restored.find(pin => pin.pin_id === moving.pin_id)?.position).toBe(intendedPosition);
+  // Revoke the same real PostgreSQL-backed session that committed the pin.
+  // Never return, log, retain in Node, or persist its bearer/refresh tokens.
+  // Follow the application logout wire contract, then reuse only the captured
+  // access token within the same browser evaluation to prove server denial.
+  const revoked = await page.evaluate(async ({ pinId, currentRevision, position }) => {
+    const token = window.localStorage.getItem("access_token");
+    const refreshToken = window.localStorage.getItem("refresh_token");
+    if (!token || !refreshToken) {
+      throw new Error("Active persisted session credentials required for revocation proof");
+    }
+    const origin = new URL(window.location.href).origin;
+    const logout = await window.fetch(new URL("/api/auth/logout", origin), {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (logout.status !== 200) {
+      throw new Error(`Durable logout was not acknowledged: HTTP ${logout.status}`);
+    }
+    const authorizedHeaders = { Authorization: `Bearer ${token}` };
+    const staleRead = await window.fetch(new URL("/api/chat/ag-ui/pins", origin), {
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      headers: authorizedHeaders,
+    });
+    const staleCapability = await window.fetch(
+      new URL("/api/chat/ag-ui/pins/capabilities", origin), {
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        headers: authorizedHeaders,
+      },
+    );
+    const staleMutation = await window.fetch(
+      new URL("/api/chat/ag-ui/pins/mutations", origin), {
+        method: "POST",
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        headers: {
+          ...authorizedHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          operation: "reorder",
+          idempotency_key: crypto.randomUUID(),
+          pin_id: pinId,
+          expected_revision: currentRevision,
+          position,
+        }),
+      },
+    );
+    window.localStorage.removeItem("access_token");
+    window.localStorage.removeItem("refresh_token");
+    window.localStorage.removeItem("user_data");
+    // Only HTTP statuses cross the Playwright page boundary.
+    return {
+      readStatus: staleRead.status,
+      capabilityStatus: staleCapability.status,
+      mutationStatus: staleMutation.status,
+    };
+  }, {
+    pinId: moving.pin_id,
+    currentRevision: restored.find(pin => pin.pin_id === moving.pin_id)!.revision,
+    position: moving.position,
+  });
+  expect(revoked).toEqual({
+    readStatus: 401,
+    capabilityStatus: 401,
+    mutationStatus: 401,
+  });
+  await page.reload();
+  await expect(page.getByTestId("karen-pins-authorized")).toHaveCount(0);
+  await expect(page.getByTestId("karen-pin-controls")).toHaveCount(0);
   await expect(dock.getByTestId("karen-pin-controls")).toHaveCount(0);
 });
