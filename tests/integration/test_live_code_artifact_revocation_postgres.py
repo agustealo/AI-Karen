@@ -29,6 +29,46 @@ _SOURCE = b"print('disposable source, never execute')\n"
 _TEST_DB_NAME = "/karen_code_artifact_test"
 
 
+def _disposable_database_url(dsn: str):
+    """Reject ambiguous asyncpg connection targets before any SQL opens."""
+    try:
+        parsed = make_url(dsn)
+    except (ValueError, TypeError):
+        pytest.fail("Invalid disposable PostgreSQL connection URL")
+    if (
+        parsed.drivername not in ("postgresql", "postgresql+asyncpg")
+        or parsed.database != _TEST_DB_NAME.lstrip("/")
+        or not parsed.host
+        or parsed.query
+    ):
+        pytest.fail("Refusing artifact proof outside an unambiguous disposable database")
+    return parsed.set(drivername="postgresql+asyncpg")
+
+
+@pytest.mark.parametrize("dsn", [
+    "postgresql+asyncpg://user:password@localhost/karen_code_artifact_test?database=production",
+    "postgresql+asyncpg://user:password@localhost/karen_code_artifact_test?host=production",
+    "postgresql+asyncpg://user:password@localhost/karen_code_artifact_test?port=5433",
+    "postgresql+asyncpg://user:password@localhost/production",
+    "postgresql+asyncpg:///karen_code_artifact_test",
+    "sqlite:///karen_code_artifact_test",
+    "not a database URL",
+])
+async def test_disposable_database_target_override_denied_before_engine(dsn):
+    with pytest.raises(pytest.fail.Exception):
+        _disposable_database_url(dsn)
+
+
+async def test_disposable_database_url_preserves_explicit_target():
+    parsed = _disposable_database_url(
+        "postgresql://test_user:test_password@localhost:5432/karen_code_artifact_test"
+    )
+    assert parsed.drivername == "postgresql+asyncpg"
+    assert parsed.database == "karen_code_artifact_test"
+    assert parsed.host == "localhost"
+    assert not parsed.query
+
+
 @pytest.mark.skipif(
     os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
     or os.getenv("KAREN_TEST_CODE_ARTIFACT_POSTGRES") != "1",
@@ -41,20 +81,7 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
     other_raw = os.getenv("KAREN_TEST_ARTIFACT_OTHER_USER_ID", "")
     if not dsn or not all((tenant_raw, owner_raw, other_raw)):
         pytest.fail("Explicit disposable database URL and seeded principals required")
-    # asyncpg accepts connection URL query arguments that can override the
-    # URL path's target database. Reject all connection-target overrides
-    # before creating an engine or issuing a single SQL command.
-    try:
-        parsed = make_url(dsn)
-    except (ValueError, TypeError):
-        pytest.fail("Invalid disposable PostgreSQL connection URL")
-    if (
-        parsed.drivername not in ("postgresql", "postgresql+asyncpg")
-        or parsed.database != _TEST_DB_NAME.lstrip("/")
-        or not parsed.host
-        or parsed.query
-    ):
-        pytest.fail("Refusing artifact proof outside an unambiguous disposable database")
+    parsed = _disposable_database_url(dsn)
     tenant = str(UUID(tenant_raw))
     owner = str(UUID(owner_raw))
     foreign_owner = str(UUID(other_raw))
