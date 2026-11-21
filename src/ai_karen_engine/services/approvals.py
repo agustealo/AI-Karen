@@ -641,6 +641,118 @@ class ApprovalService:
         })
         return record
 
+    async def issue_confirmed_document_consent(
+        self,
+        *,
+        request: "Request",
+        scope: "DocumentConsentApprovalScope",
+        approval_id: str,
+        correlation_id: str,
+        runtime_policy: "RuntimePolicyEnforcer",
+    ) -> str | None:
+        """Host-only receipt execution through canonical policy and SQL owner.
+
+        No caller-supplied policy decisions, request metadata, approval
+        dictionaries or model output may substitute for the issuer's fresh
+        bearer validation, exact author-approved CAS, and source row lock.
+        This entry point is NOT registered with any HTTP or plugin route.
+        """
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+            RuntimeDocumentConsentPolicy,
+        )
+
+        if (
+            not isinstance(scope, DocumentConsentApprovalScope)
+            or not isinstance(runtime_policy, RuntimePolicyEnforcer)
+            or scope.action != "issue"
+        ):
+            raise ApprovalScopeError(
+                "Author consent issuance requires canonical runtime authority"
+            )
+        issuer = PostgresDocumentStyleConsentIssuer(
+            issuance_policy=RuntimeDocumentConsentPolicy(runtime_policy),
+        )
+        receipt_id = await issuer.issue_with_approved_scope(
+            request=request,
+            scope=scope,
+            approval_id=approval_id,
+            correlation_id=correlation_id,
+        )
+        if receipt_id is not None:
+            self._audit.log_audit_event({
+                "event_type": AuditEventType.SECURITY_EVENT,
+                "severity": AuditSeverity.INFO,
+                "message": "document_author_consent_issued",
+                "user_id": scope.author_actor_id,
+                "tenant_id": scope.tenant_id,
+                "session_id": scope.session_id,
+                "correlation_id": correlation_id,
+                "metadata": {
+                    "approval_id": approval_id,
+                    "receipt_id": receipt_id,
+                    "profile_id": scope.profile_id,
+                    "artifact_id": scope.artifact_id,
+                },
+            })
+        return receipt_id
+
+    async def revoke_document_consent(
+        self,
+        *,
+        request: "Request",
+        tenant_id: str,
+        actor_id: str,
+        profile_id: str,
+        artifact_id: str,
+        correlation_id: str,
+        runtime_policy: "RuntimePolicyEnforcer",
+    ) -> bool:
+        """Host-only author revocation through the existing one-way SQL owner."""
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+            RuntimeDocumentConsentPolicy,
+        )
+
+        if not isinstance(runtime_policy, RuntimePolicyEnforcer):
+            raise ApprovalScopeError(
+                "Author revocation requires canonical runtime authority"
+            )
+        issuer = PostgresDocumentStyleConsentIssuer(
+            issuance_policy=RuntimeDocumentConsentPolicy(runtime_policy),
+        )
+        revoked = await issuer.revoke_first_party(
+            request=request,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            profile_id=profile_id,
+            artifact_id=artifact_id,
+            correlation_id=correlation_id,
+        )
+        if revoked:
+            self._audit.log_audit_event({
+                "event_type": AuditEventType.SECURITY_EVENT,
+                "severity": AuditSeverity.INFO,
+                "message": "document_author_consent_revoked",
+                "user_id": actor_id,
+                "tenant_id": tenant_id,
+                "correlation_id": correlation_id,
+                "metadata": {
+                    "profile_id": profile_id,
+                    "artifact_id": artifact_id,
+                },
+            })
+        return revoked
+
     async def consume_for_request(
         self,
         approval_id: str,
