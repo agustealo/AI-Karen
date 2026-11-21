@@ -538,6 +538,68 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     **unpin_args(race_id, uuid.uuid4(), "race-cleanup")
                 )
 
+            # KUI-002D3J: Exercise the ACTUAL repository's canonical PIN
+            # admission and UNPIN receipt paths against occupied positions.
+            # Trusted source admission is deterministic here, but the same
+            # PostgreSQL tenant/user transaction and receipt machinery is real.
+            from unittest.mock import Mock
+            from ai_karen_engine.core.runtime.presentation_pin_admission import (
+                PresentationPinReference,
+            )
+            source = PresentationPinReference(
+                conversation_id=str(thread_b),
+                assistant_message_id=str(message_b),
+                presentation_id="canonical-lifecycle-invariant",
+                evidence_ref="completed-run-evidence",
+            )
+            baseline_a = await create_owned_pin("lifecycle-neighbor-a")
+            baseline_b = await create_owned_pin("lifecycle-neighbor-b")
+            with monkeypatch.context() as scoped_patch:
+                scoped_patch.setattr(
+                    presentation_pin_repository,
+                    "admit_presentation_pin_reference",
+                    lambda **kw: SimpleNamespace(reference=source),
+                )
+                created_receipt = await repository.mutate_with_receipt(
+                    authenticated_tenant_id=str(tenant_b),
+                    authenticated_user_id=str(owner_b),
+                    idempotency_key=str(uuid.uuid4()),
+                    request_id="lifecycle-create",
+                    correlation_id="lifecycle-create-proof",
+                    operation="pin",
+                    reference=source,
+                    owned_snapshot=Mock(),
+                    completed_run_attestations={},
+                    position=1,
+                )
+            assert created_receipt.outcome == "pinned"
+            saved_pin = uuid.UUID(created_receipt.pin_id)
+            ordered = await raw.fetch("""
+                SELECT pin_id, position FROM public.conversation_presentation_pins
+                WHERE tenant_id=$1 AND user_id=$2 ORDER BY position, pin_id
+            """, tenant_b, owner_b)
+            assert [row["position"] for row in ordered] == list(range(len(ordered)))
+            assert ordered[1]["pin_id"] == saved_pin
+            assert {row["pin_id"] for row in ordered} >= {
+                baseline_a, baseline_b, saved_pin,
+            }
+
+            unpinned = await repository.mutate_with_receipt(
+                **unpin_args(baseline_a, uuid.uuid4(), "lifecycle-delete"),
+            )
+            assert unpinned.outcome == "unpinned"
+            remaining = await raw.fetch("""
+                SELECT pin_id, position FROM public.conversation_presentation_pins
+                WHERE tenant_id=$1 AND user_id=$2 ORDER BY position, pin_id
+            """, tenant_b, owner_b)
+            assert [row["position"] for row in remaining] == list(range(len(remaining)))
+            assert baseline_a not in {row["pin_id"] for row in remaining}
+            assert saved_pin in {row["pin_id"] for row in remaining}
+            for identity in (baseline_b, saved_pin):
+                await repository.mutate_with_receipt(
+                    **unpin_args(identity, uuid.uuid4(), "lifecycle-cleanup"),
+                )
+
             # Exercise the canonical signed-JWT -> durable AuthService session
             # -> FastAPI route -> runtime -> actual PostgreSQL receipt path.
             # Both the auth-session query and pin transaction use the same
