@@ -192,7 +192,9 @@ async def test_pending_admission_uses_canonical_source_check(monkeypatch):
         "document_consent_scope": scope.to_record()
     }
     assert repo.create.await_args.kwargs["ttl_minutes"] == 15
-    assert repo.create.await_args.kwargs["policy_decision_id"] is None
+    assert repo.create.await_args.kwargs["policy_decision_id"].startswith(
+        "policy-document-consent-preflight-"
+    )
     read.return_value = "b" * 64
     with pytest.raises(ApprovalScopeError, match="Current document"):
         await target.request_document_consent(
