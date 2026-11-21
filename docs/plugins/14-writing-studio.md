@@ -346,7 +346,7 @@ Real source-ownership/consent database tests are a later separate gate.
 
 **Target:** Sample-reference registration with *independently verified* authorship
 and consent, not document ingestion or model training. The WS-02B branch adds
-`supabase/migrations/20261121010000_61_writing_style_sample_evidence.sql`,
+`supabase/migrations/20261122010001_61_writing_style_sample_evidence.sql`,
 `services/writing_style_sample_provenance.py`, unit and disposable PostgreSQL
 tests, and extends the existing KariSignature proof workflow rather than
 creating a new CI pipeline.
