@@ -5187,7 +5187,7 @@ class ChatRuntime:
         # Model-visible memories must originate from the resolved, scoped
         # CognitiveContext. Request metadata and legacy memory_context inputs
         # are presentation/telemetry copies, never evidence authority.
-        recall_items = self._selected_memory_for_generation(request, decision)
+        recall_items = ChatRuntime._selected_memory_for_generation(request, decision)
         continuity_items = (
             (request.metadata or {})
             .get("proactive_continuity", {})
