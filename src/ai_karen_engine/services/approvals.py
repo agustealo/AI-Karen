@@ -688,7 +688,7 @@ class ApprovalService:
         source = payload.get("document_consent_scope") if isinstance(payload, dict) else None
         if (
             record.get("intent") != "writing_style.document_consent.issue"
-            or record.get("status") not in {"pending", "approved"}
+            or record.get("status") not in {"pending", "approved", "consumed"}
             or not isinstance(record.get("policy_decision_id"), str)
             or not record["policy_decision_id"].startswith(
                 "policy-document-consent-preflight-"
@@ -738,6 +738,43 @@ class ApprovalService:
             approval_id, request=request, scope=scope, confirmed=True,
         )
 
+    async def recover_stored_document_consent_receipt(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+    ) -> str | None:
+        """Read back a real current receipt after an uncertain issue response.
+
+        A consumed approval is necessary but insufficient. The existing source
+        verifier must independently prove live, nonrevoked consent against the
+        canonical file revision and exact stored purpose/expiration. Never
+        manufacture a receipt from an approval state.
+        """
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+        )
+
+        record, scope = await self.get_document_consent_confirmation(
+            approval_id, request=request,
+        )
+        if record.get("status") != "consumed":
+            return None
+        verified = await PostgresDocumentStyleConsentIssuer().verify_current(
+            tenant_id=scope.tenant_id,
+            actor_id=scope.author_actor_id,
+            profile_id=scope.profile_id,
+            artifact_id=scope.artifact_id,
+        )
+        if (
+            verified is None
+            or verified.consent_expires_at != scope.expires_at
+            or verified.style_use_allowed is not scope.style_use_allowed
+            or verified.analysis_allowed is not True
+        ):
+            return None
+        return verified.consent_receipt_id
+
     async def issue_stored_document_consent(
         self,
         approval_id: str,
@@ -753,6 +790,13 @@ class ApprovalService:
         record, scope = await self.get_document_consent_confirmation(
             approval_id, request=request,
         )
+        if record.get("status") == "consumed":
+            receipt = await self.recover_stored_document_consent_receipt(
+                approval_id, request=request,
+            )
+            if receipt is None:
+                raise ApprovalStateError("Consumed approval has no current consent receipt")
+            return receipt
         if record.get("status") != "approved":
             raise ApprovalStateError("Author consent has not been confirmed")
         receipt = await self.issue_confirmed_document_consent(
