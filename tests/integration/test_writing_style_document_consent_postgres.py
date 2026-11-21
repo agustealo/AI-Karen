@@ -229,9 +229,9 @@ async def test_first_party_author_consent_postgres(
         await raw.execute(
             "INSERT INTO public.runtime_approval_requests "
             "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
-            "risk_level,request_payload,status,decided_by,decision_reason,decided_at,expires_at) "
+            "risk_level,policy_decision_id,request_payload,status,decided_by,decision_reason,decided_at,expires_at) "
             "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
-            "'high',CAST($5 AS jsonb),'approved',$3,"
+            "'high','policy-document-author-confirmed',CAST($5 AS jsonb),'approved',$3,"
             "'explicit_author_confirmation',clock_timestamp(),"
             "clock_timestamp()+interval '1 hour')",
             approval_id, tenant, owner, approval_fingerprint,
@@ -427,9 +427,9 @@ async def test_first_party_author_consent_postgres(
         await raw.execute(
             "INSERT INTO public.runtime_approval_requests "
             "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
-            "risk_level,request_payload,status,decided_by,decision_reason,decided_at,expires_at) "
+            "risk_level,policy_decision_id,request_payload,status,decided_by,decision_reason,decided_at,expires_at) "
             "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
-            "'high',CAST($5 AS jsonb),'approved',$3,"
+            "'high','policy-document-author-confirmed',CAST($5 AS jsonb),'approved',$3,"
             "'explicit_author_confirmation',clock_timestamp(),"
             "clock_timestamp()+interval '1 hour')",
             bound_approval, tenant, owner, approval_scope.fingerprint(),
@@ -486,9 +486,9 @@ async def test_first_party_author_consent_postgres(
         await raw.execute(
             "INSERT INTO public.runtime_approval_requests "
             "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
-            "risk_level,request_payload,status,decided_by,decision_reason,decided_at,expires_at) "
+            "risk_level,policy_decision_id,request_payload,status,decided_by,decision_reason,decided_at,expires_at) "
             "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
-            "'high',CAST($5 AS jsonb),'approved',$3,"
+            "'high','policy-document-author-confirmed',CAST($5 AS jsonb),'approved',$3,"
             "'explicit_author_confirmation',clock_timestamp(),"
             "clock_timestamp()+interval '1 hour')",
             duplicate_approval, tenant, owner, approval_scope.fingerprint(),
