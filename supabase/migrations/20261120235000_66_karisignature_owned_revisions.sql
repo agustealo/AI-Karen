@@ -49,7 +49,7 @@ CREATE TABLE public.karisignature_revisions (
     CONSTRAINT kari_revision_digest CHECK (content_digest ~ '^[0-9a-f]{64}$'),
     CONSTRAINT kari_revision_expression CHECK (
         jsonb_typeof(approved_expression) = 'object'
-        AND jsonb_object_length(approved_expression) BETWEEN 1 AND 5
+        AND approved_expression <> '{}'::jsonb
         AND octet_length(approved_expression::text) <= 1024
     )
 );
