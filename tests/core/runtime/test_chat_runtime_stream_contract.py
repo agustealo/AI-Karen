@@ -2366,6 +2366,7 @@ async def test_cancel_during_stream_final_source_check_records_terminal():
     entered = asyncio.Event()
     blocked = asyncio.Event()
     checks = 0
+    producer_closed = asyncio.Event()
 
     async def source_check(*args, **kwargs):
         nonlocal checks
@@ -2375,9 +2376,13 @@ async def test_cancel_during_stream_final_source_check_records_terminal():
             await blocked.wait()
 
     async def provider_stream(*args, **kwargs):
-        yield ChatStreamChunk(
-            type="content", content="partial", correlation_id="corr-1",
-        )
+        try:
+            yield ChatStreamChunk(
+                type="content", content="partial", correlation_id="corr-1",
+            )
+            await asyncio.Event().wait()
+        finally:
+            producer_closed.set()
 
     with patch.object(
         ChatRuntime, "_authorize_selected_memory_before_generation",
@@ -2398,6 +2403,7 @@ async def test_cancel_during_stream_final_source_check_records_terminal():
                 if not task.done():
                     task.cancel()
     observer.assert_awaited()
+    assert producer_closed.is_set()
 
 
 @pytest.mark.asyncio
