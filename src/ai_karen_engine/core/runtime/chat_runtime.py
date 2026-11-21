@@ -800,15 +800,8 @@ class ChatRuntime:
                 ),
             )
 
-        # Finality fence: a source withdrawn after generation must not
-        # become a successful memory write or transcript receipt.
-        try:
-            await ChatRuntime._authorize_selected_memory_before_generation(
-                request, decision
-            )
-        except RuntimeError as exc:
-            if str(exc) != "memory_source_revoked_or_unverifiable":
-                raise
+        # One denial contract for both non-streaming finality checks.
+        def revoked_memory_result() -> ChatExecutionResult:
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
                 status="denied",
@@ -827,6 +820,16 @@ class ChatRuntime:
                     extra={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
                 ),
             )
+
+        # A source revoked after inference cannot become a durable success.
+        try:
+            await ChatRuntime._authorize_selected_memory_before_generation(
+                request, decision
+            )
+        except RuntimeError as exc:
+            if str(exc) != "memory_source_revoked_or_unverifiable":
+                raise
+            return revoked_memory_result()
 
         if decision.memory_write_allowed and not self._is_explicit_save_turn(request):
             persistence_started = time.perf_counter()
@@ -850,9 +853,14 @@ class ChatRuntime:
         # Ordinary and streamed chat must both persist the accepted final
         # answer through the same authorized transcript owner. Episodic memory
         # projection above is a separate concern, not transcript storage.
-        await ChatRuntime._authorize_selected_memory_before_generation(
-            request, decision
-        )
+        try:
+            await ChatRuntime._authorize_selected_memory_before_generation(
+                request, decision
+            )
+        except RuntimeError as exc:
+            if str(exc) != "memory_source_revoked_or_unverifiable":
+                raise
+            return revoked_memory_result()
         try:
             transcript_result = await self._persist_transcript(
                 request, text, provider_meta, trajectory_id=trajectory.trajectory_id
@@ -5254,7 +5262,7 @@ class ChatRuntime:
             request, decision, plan, reasoning_meta
         ):
             generation_meta: Dict[str, Any] = {}
-            async for chunk in self._run_simple_stream(
+            inner_stream = self._run_simple_stream(
                 request,
                 decision,
                 plan,
@@ -5263,8 +5271,14 @@ class ChatRuntime:
                 reasoning_preflight=self._trusted_reasoning_prompt_context(
                     plan, reasoning_meta
                 ),
-            ):
-                yield chunk
+            )
+            try:
+                async for chunk in inner_stream:
+                    yield chunk
+            finally:
+                # Closing the outer reasoning generator must immediately
+                # close the provider-backed generator and cancel its worker.
+                await inner_stream.aclose()
             if _meta is not None:
                 _meta.update(self._combine_reasoning_and_generation_receipts(
                     reasoning_meta, generation_meta
