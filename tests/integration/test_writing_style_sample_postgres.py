@@ -5,6 +5,7 @@ uses the non-superuser test role for RLS and backend sample mutations.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -363,6 +364,76 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
                 {"profile": str(live_profile)},
             )
             assert result.scalar_one() == 1
+
+        # A grant UPDATE has already locked its row. It must not then acquire
+        # the profile lock in reverse order while concurrent revocation holds
+        # profile first and waits for its grants.
+        race_profile = uuid.uuid4()
+        await identities.create_draft(
+            tenant_id=str(tenant), owner_actor_id=str(owner),
+            profile_id=str(race_profile), kind="personal",
+            label="Grant lock order", correlation_id="lock-order-create",
+        )
+        await identities.publish(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(race_profile), revision_id=str(uuid.uuid4()),
+            approved_expression=expression, expected_revision=0,
+            correlation_id="lock-order-publish",
+        )
+        await identities.grant_use(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(race_profile), grantee_actor_id=str(delegate),
+            purpose="draft_email", correlation_id="lock-order-grant",
+        )
+        grant_updated = asyncio.Event()
+        allow_commit = asyncio.Event()
+
+        async def grant_update_first():
+            async with TestClient().get_async_session() as session:
+                await WritingStyleProfileRepository._scope(
+                    session, str(tenant), str(owner)
+                )
+                await session.execute(
+                    text(
+                        "UPDATE public.writing_style_grants SET expires_at=NULL "
+                        "WHERE tenant_id=CAST(:tenant AS uuid) "
+                        "AND profile_id=CAST(:profile AS uuid) "
+                        "AND actor_id=CAST(:delegate AS uuid)"
+                    ),
+                    {
+                        "tenant": str(tenant), "profile": str(race_profile),
+                        "delegate": str(delegate),
+                    },
+                )
+                grant_updated.set()
+                await allow_commit.wait()
+
+        async def profile_revocation_second():
+            await grant_updated.wait()
+            revoking = asyncio.create_task(identities.revoke_profile(
+                tenant_id=str(tenant), actor_id=str(owner),
+                profile_id=str(race_profile), correlation_id="lock-order-revoke",
+            ))
+            await asyncio.sleep(0.15)
+            allow_commit.set()
+            return await revoking
+
+        try:
+            updated, revoked = await asyncio.wait_for(
+                asyncio.gather(grant_update_first(), profile_revocation_second()),
+                timeout=8,
+            )
+        finally:
+            allow_commit.set()
+        assert revoked is True
+        with pytest.raises(PermissionError, match="style_unavailable"):
+            await KariSignatureResolver(identities).resolve(
+                KariSignatureRequest(
+                    tenant_id=str(tenant), actor_id=str(delegate),
+                    profile_id=str(race_profile), purpose="draft_email",
+                    correlation_id="lock-order-denied",
+                )
+            )
 
         # A source-revoked profile is never a path to style application.
         with pytest.raises(PermissionError):
