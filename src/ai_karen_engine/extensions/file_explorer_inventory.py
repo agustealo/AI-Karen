@@ -110,6 +110,31 @@ class FileExplorerInventoryHost:
             or any(c not in "0123456789abcdefABCDEF" for c in expected_revision)
         ):
             raise PermissionError("file_explorer_revision_invalid")
+        # Run the full canonical execution gate before touching source metadata.
+        # An empty host-issued list has no source contents but triggers the same
+        # lifecycle, role, action and permission checks as inventory listing.
+        admission_context = replace(
+            context,
+            resource_scope={
+                **context.resource_scope,
+                "file_explorer_grant": "host_verified",
+                "file_explorer_entries": [],
+            },
+        )
+        admission = await self._kernel.execute(ExtensionExecutionRequest(
+            plugin_id=PLUGIN_ID,
+            capability="execute",
+            payload={"operation": "list"},
+            context=admission_context,
+            authorized_plan=plan,
+        ))
+        if (
+            getattr(admission, "status", None) != "success"
+            or getattr(admission, "payload", None) is None
+            or admission.payload.get("operation") != "list"
+            or admission.payload.get("items") != []
+        ):
+            raise PermissionError("file_explorer_kernel_denied")
         evidence = await self._source.revalidate_owner_reference(
             tenant_id=context.tenant_id, user_id=context.user_id,
             source_id=source_id, expected_revision=expected_revision,
