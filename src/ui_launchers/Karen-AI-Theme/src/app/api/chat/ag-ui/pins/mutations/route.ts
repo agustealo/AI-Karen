@@ -66,14 +66,33 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return rejection("Pin mutation request too large", 413);
   }
 
-  let raw: string;
+  // Never buffer an unbounded chunked body before authentication.
+  // Count raw bytes as they arrive and cancel immediately at the limit.
+  const reader = request.body?.getReader();
+  if (!reader) {
+    return rejection("Missing pin mutation body", 400);
+  }
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let raw = "";
+  let receivedBytes = 0;
   try {
-    raw = await request.text();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      receivedBytes += value.byteLength;
+      if (receivedBytes > 4096) {
+        // A cancellation failure cannot turn an oversized request into a
+        // second read or an attempted backend mutation.
+        await reader.cancel().catch(() => undefined);
+        return rejection("Pin mutation request too large", 413);
+      }
+      raw += decoder.decode(value, { stream: true });
+    }
+    raw += decoder.decode();
   } catch {
     return rejection("Unreadable pin mutation body", 400);
-  }
-  if (new TextEncoder().encode(raw).byteLength > 4096) {
-    return rejection("Pin mutation request too large", 413);
+  } finally {
+    reader.releaseLock();
   }
 
   let value: unknown;
