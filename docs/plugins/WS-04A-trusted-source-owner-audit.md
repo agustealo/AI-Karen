@@ -144,3 +144,18 @@ The live mainline schema audit confirmed `public.files` stores `file_id` as text
 The inactive artifact adapter now issues a **second current-consent call after its final artifact metadata read**. It rejects revocation, missing decisions, changed consent receipts, author/owner/scope changes, changed explicit use rights, changed expiration and verifier failures. Focused tests exercise revocation/receipt rotation/permission expiry changes between issuer reads and require two real source metadata reads on the positive path. The adapter remains fail closed with no production consent issuer.
 
 This is an intermediate consistency fence, **not** a serializable database transaction; consent may still change just after verification. A complete authenticated publication/use path must enforce a trusted persisted grant and transactional or monotonic revocation fence with real source-owner evidence. Reuse WS-02C's `WritingStylePersistedSampleAuthority` for analysis, not a duplicate analysis engine. Keep every source family disabled until this end-to-end proof exists.
+
+## WS-04A3: Bounded canonical document-content reader (inactive)
+
+To support the existing mainline `WritingStylePersistedSampleAuthority` **without building a second analyzer**, `src/ai_karen_engine/services/artifact_writing_style_source_authority.py` now also exports `ArtifactWritingStyleContentReader`. This implements the exact existing `WritingStyleSourceContentReader.read_current_content` method and accepts a trusted `ArtifactStore` dependency.
+
+The reader:
+- Rejects all source families except `document` and noncanonical tenant, actor or artifact UUID identities.
+- Requires the current canonical artifact metadata to show the same tenant, owner, active state and `document`/`attachment` kind; only `text/plain` UTF-8 documents are allowed. `search_article` and other external document kinds are excluded.
+- Bounds downloads to 64 KiB maximum; requires a valid SHA-256 digest and exact byte length, strictly decodes UTF-8, and rejects empty content.
+- Revalidates canonical metadata after downloading and rejects deletion, owner changes, content digest drift, MIME changes and kind changes.
+- Never accepts a client-supplied file path, source bytes or consent receipt and never logs/returns storage exceptions to the authorizer.
+
+**Integration status:** This class is **not instantiated by production runtime** and does not claim to be an author-consent issuer. The source authority's independently issued current consent must still be verified by WS-02C both before and after reading bytes. The underlying `ArtifactStore.download` uses its canonical metadata and storage API; the two metadata checks reduce drift but do not make the entire download and source-consent verification serializable. The explicit content-reader test matrix is part of `tests/extensions/test_artifact_writing_style_source_authority.py`.
+
+**Next required gate:** canonical PostgreSQL author-issued consent and source-revocation fencing, followed by authenticated runtime composition of the already-owned WS-02C authority, document source adapter, and content reader. No user-facing feature should be toggled on before these are proven.
