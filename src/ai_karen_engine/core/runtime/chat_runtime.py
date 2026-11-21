@@ -477,6 +477,27 @@ class ChatRuntime:
             )
             raise
 
+        # One denial contract for both non-streaming finality checks.
+        def revoked_memory_result() -> ChatExecutionResult:
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                error_type="MemorySourceRevoked",
+                metadata={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    mode="emergency",
+                    degraded_mode=True,
+                    degradation_reason="memory_source_revoked_or_unverifiable",
+                    extra={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
+                ),
+            )
+
         try:
             grounded = self._grounded_personal_response(
                 decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
@@ -554,6 +575,10 @@ class ChatRuntime:
             )
             raise
         except Exception as exc:
+            # A source revoked during provider generation is the same
+            # authorization denial as revocation at later finality checks.
+            if str(exc) == "memory_source_revoked_or_unverifiable":
+                return revoked_memory_result()
             error_type = type(exc).__name__
             # Log code location only. Never log exception arguments, prompts, or secrets.
             import traceback
@@ -797,27 +822,6 @@ class ChatRuntime:
                         "actual_model": provider_meta.get("actual_model"),
                         "response_source": provider_meta.get("response_source"),
                     },
-                ),
-            )
-
-        # One denial contract for both non-streaming finality checks.
-        def revoked_memory_result() -> ChatExecutionResult:
-            self._emitter.emit(
-                RuntimeEventType.REQUEST_FAILED,
-                status="denied",
-                error_type="MemorySourceRevoked",
-                metadata={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
-            )
-            return ChatExecutionResult(
-                answer="",
-                status=ChatExecutionStatus.ERROR,
-                metadata=ChatRuntimeMetadata(
-                    correlation_id=ctx.correlation_id,
-                    latency_ms=(time.time() - start) * 1000.0,
-                    mode="emergency",
-                    degraded_mode=True,
-                    degradation_reason="memory_source_revoked_or_unverifiable",
-                    extra={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
                 ),
             )
 
