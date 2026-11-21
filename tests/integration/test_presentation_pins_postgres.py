@@ -673,6 +673,84 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 )
                 assert invalid.status_code == 422
 
+                # Compare-and-swap ordering is enforced through the same
+                # authenticated HTTP and durable receipt path.
+                reorder_pin = await create_owned_pin("runtime-http-reorder")
+                reorder_key = str(uuid.uuid4())
+                reorder_body = {
+                    "operation": "reorder",
+                    "idempotency_key": reorder_key,
+                    "pin_id": str(reorder_pin),
+                    "expected_revision": 1,
+                    "position": 7,
+                }
+                reordered = await http.post(
+                    mutation_url, json=reorder_body, headers=owner_headers
+                )
+                assert reordered.status_code == 200, reordered.text
+                assert reordered.json()["receipt"]["committed_revision"] == 2
+                assert await raw.fetchrow("""
+                    SELECT position, revision FROM public.conversation_presentation_pins
+                    WHERE pin_id=$1
+                """, reorder_pin) == {"position": 7, "revision": 2}
+                reordered_retry = await http.post(
+                    mutation_url, json=reorder_body, headers=owner_headers
+                )
+                assert reordered_retry.status_code == 200
+                assert reordered_retry.json()["receipt"] == reordered.json()["receipt"]
+                stale = await http.post(
+                    mutation_url,
+                    json={**reorder_body, "idempotency_key": str(uuid.uuid4())},
+                    headers=owner_headers,
+                )
+                assert stale.status_code == 409
+                assert await raw.fetchval("""
+                    SELECT revision FROM public.conversation_presentation_pins
+                    WHERE pin_id=$1
+                """, reorder_pin) == 2
+
+                # Receipt insert failure must roll back the underlying DELETE
+                # through the real HTTP route; a 503 can never mean committed.
+                failed_pin = await create_owned_pin("runtime-http-receipt-failure")
+                failed_key = uuid.uuid4()
+                await raw.execute("""
+                    CREATE FUNCTION public.reject_http_pin_receipt_insert()
+                    RETURNS trigger LANGUAGE plpgsql AS $reject$
+                    BEGIN
+                      RAISE EXCEPTION 'disposable HTTP receipt insert failure';
+                    END;
+                    $reject$;
+                    CREATE TRIGGER reject_http_pin_receipt_insert
+                    BEFORE INSERT ON public.conversation_presentation_pin_mutation_receipts
+                    FOR EACH ROW EXECUTE FUNCTION public.reject_http_pin_receipt_insert();
+                """)
+                try:
+                    failed = await http.post(
+                        mutation_url,
+                        json={
+                            "operation": "unpin",
+                            "idempotency_key": str(failed_key),
+                            "pin_id": str(failed_pin),
+                        },
+                        headers=owner_headers,
+                    )
+                    assert failed.status_code == 503, failed.text
+                    assert "committed" not in failed.text
+                    assert await raw.fetchval("""
+                        SELECT count(*) FROM public.conversation_presentation_pins
+                        WHERE pin_id=$1
+                    """, failed_pin) == 1
+                    assert await raw.fetchval("""
+                        SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                        WHERE tenant_id=$1 AND user_id=$2 AND idempotency_key=$3
+                    """, tenant_b, owner_b, failed_key) == 0
+                finally:
+                    await raw.execute("""
+                        DROP TRIGGER IF EXISTS reject_http_pin_receipt_insert
+                          ON public.conversation_presentation_pin_mutation_receipts;
+                        DROP FUNCTION IF EXISTS public.reject_http_pin_receipt_insert();
+                    """)
+
                 # Revocation in the actual auth_sessions table must reject a
                 # still-cryptographically-valid JWT before pin mutation.
                 revoked_pin = await create_owned_pin("runtime-http-revoked")
@@ -691,6 +769,31 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 )
                 assert revoked.status_code == 401, revoked.text
                 assert "committed" not in revoked.text
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pins
+                    WHERE pin_id=$1
+                """, revoked_pin) == 1
+
+                # A previously valid bearer token becomes unusable when the
+                # durable user's tenant changes, even if the session is active.
+                await raw.execute("""
+                    UPDATE public.auth_sessions SET is_active=true
+                    WHERE access_token=$1
+                """, owner_token)
+                await raw.execute("""
+                    UPDATE public.auth_users SET tenant_id=$1 WHERE user_id=$2
+                """, tenant_a, owner_b)
+                drifted = await http.post(
+                    mutation_url,
+                    json={
+                        "operation": "unpin",
+                        "idempotency_key": str(uuid.uuid4()),
+                        "pin_id": str(revoked_pin),
+                    },
+                    headers=owner_headers,
+                )
+                assert drifted.status_code == 401, drifted.text
+                assert "committed" not in drifted.text
                 assert await raw.fetchval("""
                     SELECT count(*) FROM public.conversation_presentation_pins
                     WHERE pin_id=$1
