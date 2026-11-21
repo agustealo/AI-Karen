@@ -442,3 +442,66 @@ async def test_builtin_trusted_handler_retains_canonical_execution() -> None:
     assert result.status == "success"
     assert result.payload == {"echo": "hello"}
     assert handler.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_admission_runs_full_gates_without_invoking_handler():
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler),
+        lifecycle=FakeLifecycle(),
+    )
+    request = _request(plan=_plan())
+    request.payload = {}
+    result = await service.admit(request)
+    assert result.status == "admitted"
+    assert result.payload is None
+    assert result.source == ResponseSource.UNAVAILABLE
+    assert handler.calls == 0
+    # Full input schema remains mandatory for actual execution.
+    actual = await service.execute(request)
+    assert actual.status == "failed"
+    assert actual.error_code == "invalid_input"
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_admission_fails_closed_for_identity_and_action_gate(monkeypatch):
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler),
+        lifecycle=FakeLifecycle(),
+    )
+    denied_identity = await service.admit(
+        _request(plan=_plan(tenant_id="different"))
+    )
+    assert denied_identity.status == "failed"
+    assert denied_identity.error_code == "authorized_scope_mismatch"
+
+    async def deny(plan: AuthorizedExecutionPlan, action: str) -> bool:
+        return False
+
+    monkeypatch.setattr(ActionExecutionGate, "authorize", staticmethod(deny))
+    denied_action = await service.admit(_request(plan=_plan()))
+    assert denied_action.status == "failed"
+    assert denied_action.error_code == "action_gate_denied"
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_admission_never_executes_untrusted_or_disabled_handler():
+    handler = FakeHandler()
+    disabled = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler, enabled=False),
+        lifecycle=FakeLifecycle(),
+    )
+    assert (await disabled.admit(_request(plan=_plan()))).error_code == "disabled"
+    untrusted = ExtensionExecutionService(
+        registry=FakeRegistry(
+            handler=handler, manifest=_manifest(trust_tier=TrustTier.UNTRUSTED),
+        ), lifecycle=FakeLifecycle(),
+    )
+    assert (
+        await untrusted.admit(_request(plan=_plan()))
+    ).error_code == "isolation_unavailable"
+    assert handler.calls == 0

@@ -1096,6 +1096,20 @@ class PluginKernel:
         finally:
             self._active.pop(request.context.request_id, None)
 
+    async def admit(
+        self, request: ExtensionExecutionRequest,
+    ) -> ExtensionExecutionResult:
+        """Use the canonical executor gates without running extension code."""
+        async with self._state_lock:
+            if request.context.request_id in self._active:
+                raise RuntimeError("Plugin execution request ID already active")
+            self._active[request.context.request_id] = request.plugin_id
+            executor = self.executor
+        try:
+            return await executor.admit(request)
+        finally:
+            self._active.pop(request.context.request_id, None)
+
     def active_executions(self) -> Dict[str, str]:
         return dict(self._active)
 
