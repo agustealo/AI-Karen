@@ -121,3 +121,18 @@ The latest source adapter revision applies three explicit fail-closed correction
 3. Consent expiry is rechecked **after** the second awaited resource read, preventing a positive permission decision after the expiry passes while querying artifact metadata.
 
 The corresponding tests exercise both digest stages and a delayed second metadata read crossing the expiry boundary. **These are review-driven fixes, not a production consent issuer or an atomic source/consent transaction.** The latest commit's CI and review must pass before these tests count as evidence. External-source author grants, owner revocation propagation, authenticated publication/use integration and consumer UI remain disabled.
+
+## Mainline WS-02C integration discovered during reconciliation
+
+Live `main` added `src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py` (WS-02C) and corresponding `tests/services/test_karisignature_persisted_sample_authority.py`. **Reuse this production-owned analysis boundary instead of introducing a second analyzer or evidence adapter.**
+
+The existing `WritingStylePersistedSampleAuthority` already:
+- Reads owner-only `writing_style_sample_evidence` joined to a draft-only canonical profile under authenticated tenant/actor scope.
+- Requires the existing `WritingStyleSourceAuthority.verify_analysis` decision to match author, current consent receipt, source identity, tenant, owner, profile and expiration.
+- Requests content only through the existing trusted `WritingStyleSourceContentReader` and verifies exact sample-content SHA-256 against current source bytes.
+- Rechecks evidence and live source authorization after reading to deny content or consent revocation during analysis.
+- Never publishes a style, owns raw documents or creates a second ACL database.
+
+**WS-04A2 is intentionally subordinate.** Its `ArtifactWritingStyleSourceAuthority` implements the *already established* source-authorizer interface for one possible document resource, but cannot be activated until an actual author-consent issuer exists. Do not duplicate or replace the WS-02C persisted sample authority. Before runtime integration, verify whether the canonical ArtifactStore can provide WS-02C's content-reader requirement with authenticated ownership and source-digest stability; never substitute requester-provided sample bytes for a trusted source read.
+
+Source-adapter positive decisions are not end-to-end publication or delegated use grants; those need their own current-permission, source-issuer and audit proof.
