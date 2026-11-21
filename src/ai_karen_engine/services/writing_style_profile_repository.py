@@ -323,9 +323,16 @@ class WritingStyleProfileRepository:
         return True
 
     async def read_current_published(
-        self, *, tenant_id: str, profile_id: str,
+        self, *, request: KariSignatureRequest,
     ) -> KariSignatureRevision | None:
-        tenant, profile = _uuid(tenant_id), _uuid(profile_id)
+        """Return only the currently published revision authorized for this actor.
+
+        The CURRENT grant is checked at retrieval and again by authorize_use.
+        An untrusted caller cannot use a profile ID to obtain style metadata.
+        """
+        tenant, profile, actor = map(
+            _uuid, (request.tenant_id, request.profile_id, request.actor_id)
+        )
         async with self._client_factory().get_async_session() as session:
             await self._scope(session, tenant)
             result = await session.execute(
@@ -335,10 +342,15 @@ class WritingStyleProfileRepository:
                     "JOIN public.writing_style_revisions r "
                     "ON r.tenant_id=p.tenant_id AND r.profile_id=p.profile_id "
                     "AND r.revision_id=p.current_revision_id "
+                    "JOIN public.writing_style_grants g "
+                    "ON g.tenant_id=p.tenant_id AND g.profile_id=p.profile_id "
                     "WHERE p.tenant_id=CAST(:tenant AS uuid) "
-                    "AND p.profile_id=CAST(:profile AS uuid) AND p.state='published'"
+                    "AND p.profile_id=CAST(:profile AS uuid) AND p.state='published' "
+                    "AND g.actor_id=CAST(:actor AS uuid) AND g.purpose=:purpose "
+                    "AND g.revoked_at IS NULL "
+                    "AND (g.expires_at IS NULL OR g.expires_at>clock_timestamp())"
                 ),
-                dict(tenant=tenant, profile=profile),
+                dict(tenant=tenant, profile=profile, actor=actor, purpose=request.purpose),
             )
             row = result.mappings().one_or_none()
             if row is None:
