@@ -272,3 +272,45 @@ tests/core/runtime/test_karisignature_contract.py`, canonical prompt/persona
 regressions, and exact-head CI. WS-02 must reuse the already-existing database
 and user-preference owners for scoped immutable revision storage and authority;
 it must not introduce a duplicate prompt assembler, model router or ACL store.
+
+
+## WS-02A implementation ledger (draft, not consumer enabled)
+
+**Draft implementation:** [PR #1137](https://github.com/agustealo/AI-Karen/pull/1137)
+builds on merged WS-01 (#1136), adding
+`supabase/migrations/20261120235900_60_writing_style_identity.sql`,
+`src/ai_karen_engine/services/writing_style_profile_repository.py`, and
+`tests/integration/test_writing_style_identity_postgres.py`.
+
+The draft schema stores bounded identity metadata, immutable published
+expression revisions, explicit actor/purpose use grants, and value-free audit
+receipts with PostgreSQL FORCE RLS.
+The WS-02 security repair now binds the authenticated actor and intended
+purpose in every transaction, uses principal-aware PostgreSQL policies for
+profile/revision/grant visibility and owner-only writes, and tests direct SQL
+cross-user denial under a non-superuser role. Missing principal context fails
+closed. Immutable revision history cannot be changed directly, while the
+existing governed tenant erasure can cascade private child records; the
+integration test explicitly checks that cleanup. These are source and test
+contracts, not proof that the disposable test database was actually exercised. The host-side repository supports
+transactional draft creation, revision CAS publishing, grants, individual grant
+revocation, profile revocation, and current-grant resolution through the
+canonical KariSignatureAuthority protocol. The initial profile lookup and use
+decision both require the current actor's purpose-specific grant. This is
+**source code under review**, not production evidence.
+
+**Unimplemented or unverified:** No raw sample ingestion or sample-author
+consent records; no approved client delegation/ownership enrollment; no
+RuntimePolicy-approved authenticated API wiring; no active ChatRuntime style
+selection; no UI; no real consumer generation. The repository is not a
+standalone permission authority: trusted ingress/RuntimePolicy must authorize
+every mutation before calling it. Source consent and publication approval are
+distinct from permission to use a style. Execution must re-check revocation
+before model execution. Production database role grants and migration order
+need live verification.
+
+**Proof gate:** Dedicated disposable PostgreSQL test at
+`/karen_writing_style_test` (env `WRITING_STYLE_TEST_DATABASE_URL`),
+WS-01 resolution tests, exact-head CI, independent security review, migration
+and production first-boot evidence. Until all are verified, the feature
+remains disabled and should not appear as a ready consumer capability.
