@@ -2226,7 +2226,7 @@ def test_post_provider_and_finality_source_fences_are_runtime_owned():
         direct.index("result = await gateway.generate(task)"),
     )
     outer = runtime_source.split("    async def execute_stream(", 1)[1].split(
-        "    async def ", 1
+        "    async def _run_simple(", 1
     )[0]
     assert outer.index('if chunk.type == "content":') < outer.index(
         "await ChatRuntime._authorize_selected_memory_before_generation(",
