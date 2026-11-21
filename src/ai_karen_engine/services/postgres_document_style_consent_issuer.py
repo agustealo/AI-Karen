@@ -13,9 +13,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable, Protocol
 
+from fastapi import Request
 from sqlalchemy import text
 
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.runtime.document_consent_approval import (
     DocumentConsentApprovalScope,
 )
@@ -156,75 +156,32 @@ class PostgresDocumentStyleConsentIssuer:
         artifact_id: str, analysis_allowed: bool, style_use_allowed: bool,
         expires_at: datetime, correlation_id: str,
     ) -> str | None:
-        """Issue once, exclusively after trusted host first-party authorization.
+        """Legacy mutation disabled: policy booleans do not prove author consent.
 
-        No supplied digest, author ID, or receipt is accepted. The canonical
-        source record is locked and the digest is read inside the transaction.
-        A revoked grant is never reactivated; the author must use a new draft.
+        Use issue_with_approved_scope() with a fresh verified bearer request
+        and a canonical consumed-once, document-specific human approval.
+        This compatibility shim must never write a consent receipt.
         """
-        if (
-            self._issuance_policy is None
-            or not callable(getattr(self._issuance_policy, "authorize_issuance", None))
-            or not self._valid_mutation(
-                tenant_id, actor_id, profile_id, artifact_id, correlation_id
-            )
-            or analysis_allowed is not True
-            or type(style_use_allowed) is not bool
-            or not isinstance(expires_at, datetime)
-            or expires_at.tzinfo is None
-            or expires_at <= datetime.now(timezone.utc)
-        ):
-            return None
-        try:
-            permission = await self._issuance_policy.authorize_issuance(
-                tenant_id=tenant_id, actor_id=actor_id, profile_id=profile_id,
-                artifact_id=artifact_id, analysis_allowed=analysis_allowed,
-                style_use_allowed=style_use_allowed, expires_at=expires_at,
-                correlation_id=correlation_id,
-            )
-            if permission is not True:
-                return None
-            async with self._client_factory().get_async_session() as session:
-                await WritingStyleProfileRepository._scope(
-                    session, tenant_id, actor_id
-                )
-                digest = await self._read_source_digest(
-                    session, tenant_id=tenant_id, actor_id=actor_id,
-                    profile_id=profile_id, artifact_id=artifact_id,
-                )
-                if digest is None:
-                    return None
-                receipt_id = await self._insert_receipt(
-                    session, tenant_id=tenant_id, actor_id=actor_id,
-                    profile_id=profile_id, artifact_id=artifact_id,
-                    source_sha256=digest, style_use_allowed=style_use_allowed,
-                    expires_at=expires_at, correlation_id=correlation_id,
-                )
-            return receipt_id
-        except Exception as exc:
-            logger.warning(
-                "Document style consent issuance denied",
-                extra={"error_type": type(exc).__name__},
-            )
-            return None
+        return None
 
     async def issue_with_approved_scope(
         self, *,
         scope: DocumentConsentApprovalScope,
-        context: ChatExecutionContext,
+        request: Request,
         approval_id: str,
         correlation_id: str,
     ) -> str | None:
         """Atomically consume a document approval and create its consent receipt.
 
-        A fresh high-risk authenticated bearer context must be supplied by
-        runtime, not by a route parameter or model output. The currently
-        unregistered policy MUST independently authorize this exact action.
+        The canonical authentication middleware revalidates the supplied
+        HTTP bearer token at issuance time. A copied ChatExecutionContext is
+        never accepted as authentication. The currently unregistered host
+        policy MUST independently authorize this exact action.
         No approval is accepted without the canonical one-shot SQL CAS.
         """
         if (
             not isinstance(scope, DocumentConsentApprovalScope)
-            or not isinstance(context, ChatExecutionContext)
+            or not isinstance(request, Request)
             or scope.action != "issue"
             or self._issuance_policy is None
             or not callable(getattr(self._issuance_policy, "authorize_issuance", None))
@@ -236,6 +193,9 @@ class PostgresDocumentStyleConsentIssuer:
         ):
             return None
         try:
+            from ai_karen_engine.auth.session import get_document_style_consent_context
+
+            context = await get_document_style_consent_context(request)
             scope.require_matching_context(context)
             allowed = await self._issuance_policy.authorize_issuance(
                 tenant_id=scope.tenant_id,
