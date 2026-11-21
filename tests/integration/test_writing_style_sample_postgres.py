@@ -226,6 +226,51 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             profile_id=str(live_profile), grantee_actor_id=str(delegate),
             purpose="draft_email", correlation_id="consented-grant",
         )
+        # Direct SQL owners must not grant beyond the consent expiry,
+        # even when bypassing the repository's grant_use helper.
+        async with TestClient().get_async_session() as session:
+            await WritingStyleProfileRepository._scope(
+                session, str(tenant), str(owner)
+            )
+            await session.execute(
+                text(
+                    "UPDATE public.writing_style_grants SET expires_at=NULL "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) "
+                    "AND profile_id=CAST(:profile AS uuid) "
+                    "AND actor_id=CAST(:actor AS uuid)"
+                ),
+                {"tenant": str(tenant), "profile": str(live_profile),
+                 "actor": str(delegate)},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO public.writing_style_grants "
+                    "(tenant_id,profile_id,owner_actor_id,actor_id,purpose,"
+                    "granted_by,expires_at) VALUES "
+                    "(CAST(:tenant AS uuid),CAST(:profile AS uuid),"
+                    "CAST(:owner AS uuid),CAST(:delegate AS uuid),"
+                    "'draft_social',CAST(:owner AS uuid),NULL)"
+                ),
+                {"tenant": str(tenant), "profile": str(live_profile),
+                 "owner": str(owner), "delegate": str(delegate)},
+            )
+            result = await session.execute(
+                text(
+                    "SELECT purpose,expires_at FROM public.writing_style_grants "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) "
+                    "AND profile_id=CAST(:profile AS uuid) "
+                    "AND actor_id=CAST(:delegate AS uuid) "
+                    "ORDER BY purpose"
+                ),
+                {"tenant": str(tenant), "profile": str(live_profile),
+                 "delegate": str(delegate)},
+            )
+            capped = result.fetchall()
+            assert [row[0] for row in capped] == ["draft_email", "draft_social"]
+            assert all(
+                row[1] == authority.verify_analysis.return_value.consent_expires_at
+                for row in capped
+            )
         live_request = KariSignatureRequest(
             tenant_id=str(tenant), actor_id=str(delegate),
             profile_id=str(live_profile), purpose="draft_email",
