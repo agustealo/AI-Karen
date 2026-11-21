@@ -21,8 +21,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from ai_karen_engine.auth.models import UserData
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from fastapi import Request
+
+from ai_karen_engine.auth import auth_middleware, session as auth_session
 from ai_karen_engine.core.runtime.document_consent_approval import (
     DocumentConsentApprovalScope,
 )
@@ -40,7 +41,9 @@ from ai_karen_engine.services.writing_style_profile_repository import (
 pytestmark = pytest.mark.asyncio
 
 
-async def test_first_party_author_consent_postgres() -> None:
+async def test_first_party_author_consent_postgres(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dsn = os.getenv("WRITING_STYLE_TEST_DATABASE_URL")
     if not dsn:
         pytest.skip("Dedicated writing-style disposable PostgreSQL not configured")
@@ -357,10 +360,53 @@ async def test_first_party_author_consent_postgres() -> None:
             expires_at=expiry, correlation_id="denied-policy",
         ) is None
         policy.authorize_issuance.return_value = True
-        bound_session_id = uuid.uuid4().hex
+        # Even an affirmative host policy alone must never bypass the
+        # durable author-confirmed approval and one-shot atomic CAS.
+        assert await issuer.issue_first_party(
+            **scope, analysis_allowed=True, style_use_allowed=True,
+            expires_at=expiry, correlation_id="denied-legacy-policy-boolean",
+        ) is None
+        # Use the actual canonical active-session validator, not a
+        # synthetic ChatExecutionContext supplied to the issuer.
+        bearer = "test-bearer-for-disposable-postgresql"
+        claims = {
+            "sub": str(owner), "tenant_id": str(tenant),
+            "token_id": "verified-document-author-session",
+            "roles": ["user"], "permissions": [],
+        }
+        verifier = SimpleNamespace(
+            validate_token=AsyncMock(return_value={
+                "status": auth_middleware.TokenStatus.VALID,
+                "payload": claims,
+            }),
+            _get_user_from_payload=lambda payload: {
+                "user_id": payload["sub"],
+                "tenant_id": payload["tenant_id"],
+                "roles": payload["roles"],
+                "permissions": payload["permissions"],
+            },
+        )
+        monkeypatch.setattr(
+            auth_session.auth_config, "should_bypass_auth", lambda: False,
+        )
+        monkeypatch.setattr(
+            auth_session, "_get_auth_middleware", lambda: verifier,
+        )
+        bearer_request = Request({
+            "type": "http", "method": "POST",
+            "path": "/internal/document-style-consent",
+            "root_path": "", "scheme": "https",
+            "headers": [
+                (b"authorization", ("Bearer " + bearer).encode("ascii")),
+            ],
+            "query_string": b"", "server": ("localhost", 443),
+        })
+        verified_context = await auth_session.get_document_style_consent_context(
+            bearer_request,
+        )
         approval_scope = DocumentConsentApprovalScope(
             tenant_id=str(tenant), author_actor_id=str(owner),
-            session_id=bound_session_id, profile_id=str(profile),
+            session_id=verified_context.session_id, profile_id=str(profile),
             artifact_id=str(artifact), source_sha256=digest,
             action="issue", analysis_allowed=True,
             style_use_allowed=True, expires_at=expiry,
@@ -377,16 +423,8 @@ async def test_first_party_author_consent_postgres() -> None:
             bound_approval, tenant, owner, approval_scope.fingerprint(),
             json.dumps({"document_consent_scope": approval_scope.to_record()}),
         )
-        authenticated = ChatExecutionContext(
-            user_id=str(owner), tenant_id=str(tenant),
-            session_id=bound_session_id,
-            authenticated_user=UserData(
-                user_id=str(owner), tenant_id=str(tenant),
-                is_active=True, is_verified=True,
-            ),
-        )
         assert await issuer.issue_with_approved_scope(
-            scope=approval_scope, context=authenticated,
+            scope=approval_scope, request=bearer_request,
             approval_id=str(uuid.uuid4()),
             correlation_id="wrong-approval",
         ) is None
@@ -395,8 +433,27 @@ async def test_first_party_author_consent_postgres() -> None:
             "WHERE approval_id=$1", bound_approval,
         ) == "approved"
 
+        # A just-revoked bearer session cannot consume an otherwise
+        # valid and already human-confirmed approval.
+        verifier.validate_token.return_value = {
+            "status": auth_middleware.TokenStatus.REVOKED,
+            "payload": claims,
+        }
+        assert await issuer.issue_with_approved_scope(
+            scope=approval_scope, request=bearer_request,
+            approval_id=str(bound_approval),
+            correlation_id="revoked-session-denied",
+        ) is None
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests "
+            "WHERE approval_id=$1", bound_approval,
+        ) == "approved"
+        verifier.validate_token.return_value = {
+            "status": auth_middleware.TokenStatus.VALID,
+            "payload": claims,
+        }
         issued = await issuer.issue_with_approved_scope(
-            scope=approval_scope, context=authenticated,
+            scope=approval_scope, request=bearer_request,
             approval_id=str(bound_approval),
             correlation_id="author-affirmative",
         )
@@ -406,7 +463,7 @@ async def test_first_party_author_consent_postgres() -> None:
             "WHERE approval_id=$1", bound_approval,
         ) == "consumed"
         assert await issuer.issue_with_approved_scope(
-            scope=approval_scope, context=authenticated,
+            scope=approval_scope, request=bearer_request,
             approval_id=str(bound_approval),
             correlation_id="replay-denied",
         ) is None
@@ -426,7 +483,7 @@ async def test_first_party_author_consent_postgres() -> None:
             json.dumps({"document_consent_scope": approval_scope.to_record()}),
         )
         assert await issuer.issue_with_approved_scope(
-            scope=approval_scope, context=authenticated,
+            scope=approval_scope, request=bearer_request,
             approval_id=str(duplicate_approval),
             correlation_id="duplicate-document-denied",
         ) is None
