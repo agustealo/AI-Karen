@@ -249,18 +249,34 @@ class PostgresDocumentStyleConsentIssuer:
 
     async def revoke_first_party(
         self, *, tenant_id: str, actor_id: str, profile_id: str,
-        artifact_id: str, correlation_id: str,
+        artifact_id: str, correlation_id: str, request: Request,
     ) -> bool:
-        """Revoke only through the verified host policy and canonical trigger."""
+        """Revoke only on a fresh author bearer session and host policy.
+
+        A copied user/tenant identifier or a policy boolean is insufficient.
+        The trigger owns irreversible grant/profile revocation effects.
+        """
         if (
             self._issuance_policy is None
             or not callable(getattr(self._issuance_policy, "authorize_revocation", None))
+            or not isinstance(request, Request)
             or not self._valid_mutation(
                 tenant_id, actor_id, profile_id, artifact_id, correlation_id
             )
         ):
             return False
         try:
+            from ai_karen_engine.auth.session import get_document_style_consent_context
+
+            context = await get_document_style_consent_context(request)
+            principal = context.require_authenticated_user()
+            if (
+                context.user_id != actor_id
+                or context.tenant_id != tenant_id
+                or principal.user_id != actor_id
+                or principal.tenant_id != tenant_id
+            ):
+                return False
             permission = await self._issuance_policy.authorize_revocation(
                 tenant_id=tenant_id, actor_id=actor_id, profile_id=profile_id,
                 artifact_id=artifact_id, correlation_id=correlation_id,
