@@ -87,7 +87,7 @@ jobs:
               start = sql.find(marker)
               if start < 0:
                   raise RuntimeError(f"Canonical migration no longer defines {name}")
-              finish = sql.find("\\n);", start)
+              finish = sql.find(chr(10) + ");", start)
               if finish < 0:
                   raise RuntimeError(f"Canonical migration is malformed for {name}")
               return sql[start : finish + 3]
