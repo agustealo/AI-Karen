@@ -118,6 +118,39 @@ describe("Canonical backend proxy execution redirects", () => {
     expect(await response.text()).toBe("OK");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("preserves binary audio/wav response and request bytes without UTF-8 corruption", async () => {
+    // Bytes containing invalid UTF-8 sequences (0xff, 0xfe, 0x80) that .text() would mangle into U+FFFD
+    const wavBytes = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x24, 0x80, 0x00, 0x00,
+      0x57, 0x41, 0x56, 0x45, 0xff, 0xfe, 0x81, 0x90,
+    ]);
+    let forwardedBody: unknown;
+    const fetchSpy = vi.fn().mockImplementation(async (_url, init?: RequestInit) => {
+      forwardedBody = init?.body;
+      return new Response(wavBytes, {
+        status: 200,
+        headers: { "content-type": "audio/wav" },
+      });
+    });
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    const request = new NextRequest("http://localhost:3000/api/voice/engines/pocket-tts/synthesis", {
+      method: "POST",
+      headers: { "content-type": "audio/wav" },
+      body: wavBytes,
+    });
+    const response = await proxyToBackend(request, "/api/voice/engines/pocket-tts/synthesis", {
+      retryAttempts: 1,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("audio/wav");
+    const received = new Uint8Array(await response.arrayBuffer());
+    expect(Array.from(received)).toEqual(Array.from(wavBytes));
+    expect(forwardedBody).toBeInstanceOf(ArrayBuffer);
+    expect(Array.from(new Uint8Array(forwardedBody as ArrayBuffer))).toEqual(Array.from(wavBytes));
+  });
 });
 
 describe("Hosted backend target single-owner contract", () => {
