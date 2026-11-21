@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .context import get_log_context
-from .redaction import redact_data
+from .redaction import redact_data, redact_text
 
 class RuntimeJSONFormatter(logging.Formatter):
     """JSON formatter for Kari runtime logs including context and redaction."""
@@ -69,7 +69,7 @@ class RuntimeTextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ctx = get_log_context()
         cid = ctx.correlation_id or "-"
-        return f"[{record.levelname}] [{cid}] {record.name}: {record.getMessage()}"
+        return f"[{record.levelname}] [{cid}] {record.name}: {redact_text(record.getMessage())}"
 
 # Compatibility aliases
 StructuredFormatter = RuntimeJSONFormatter
