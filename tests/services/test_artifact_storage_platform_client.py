@@ -261,6 +261,8 @@ async def test_bounded_signed_range_rejects_bad_storage_responses(monkeypatch, r
     + _TENANT + "/" + _ARTIFACT + "/author.txt",
     "http://storage.example.test/storage/v1/object/sign/artifacts/"
     + _TENANT + "/" + _ARTIFACT + "/author.txt?token=secret",
+    "/storage/v1/object/sign/artifacts/"
+    + _TENANT + "/" + _ARTIFACT + "/author.txt?%74oken=eyJabc%2EeyJdef%2Eghi",
 ])
 async def test_bounded_signed_range_blocks_untrusted_urls(monkeypatch, bad_url):
     def forbidden(request):
