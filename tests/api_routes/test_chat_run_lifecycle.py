@@ -630,3 +630,83 @@ async def test_active_fast_presentation_retains_authorized_delivery(
     assert observed[0].metadata["presentation"]["data"]["code"] == "print('ok')"
     assert repo.heartbeat_count == 1
     assert repo.finalized == [("presentation-active", "completed", None)]
+
+
+@pytest.mark.asyncio
+async def test_legacy_journal_replay_withholds_code_in_extra_top_level_fields() -> None:
+    """Historical event JSON cannot move source outside value to defeat replay scrub."""
+    sensitive_source = "print('legacy top-level source must stay private')"
+    legacy_event = {
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": {"component_type": "data.table", "data": {"rows": []}},
+        "extension": {
+            "metadata": {
+                "component_type": "code.artifact",
+                "data": {"code": sensitive_source},
+            },
+        },
+    }
+
+    class LegacyJournal:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def read_projected_events(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append(kwargs)
+            return {
+                "threadId": THREAD,
+                "runId": "legacy-owned",
+                "owner_user_id": USER_A,
+                "owner_tenant_id": TENANT_A,
+                "events": [
+                    {"seq": 1, "event": {"type": "RUN_STARTED",
+                                         "threadId": THREAD, "runId": "legacy-owned"}},
+                    {"seq": 2, "event": legacy_event},
+                    {"seq": 3, "event": {"type": "RUN_ERROR", "message": "cancelled"}},
+                ],
+                "nextCursor": 3,
+                "hasMore": False,
+                "runStatus": "cancelled",
+                "terminalConfirmed": True,
+                "journalTerminalObserved": True,
+                "continuationAvailable": False,
+                "responseSource": "observed_event_journal",
+            }
+
+    journal = LegacyJournal()
+    observed = await ChatRunCoordinator(journal).read_observed_events(
+        context(), run_id="legacy-owned", after=0, limit=50,
+    )
+    assert observed is not None
+    assert [entry["seq"] for entry in observed["events"]] == [1, 2, 3]
+    assert observed["events"][1]["event"] == {
+        "type": "CUSTOM",
+        "name": "karen.presentation.withheld.v1",
+        "value": {"reason": "revocable_code_not_replayable"},
+    }
+    assert observed["events"][2]["event"]["type"] == "RUN_ERROR"
+    assert observed["nextCursor"] == 3
+    assert observed["runStatus"] == "cancelled"
+    assert observed["terminalConfirmed"] is True
+    assert sensitive_source not in repr(observed)
+    assert journal.calls == [{
+        "tenant_id": TENANT_A,
+        "user_id": USER_A,
+        "conversation_id": THREAD,
+        "transport_run_id": "legacy-owned",
+        "after": 0,
+        "limit": 50,
+    }]
+
+
+def test_whole_event_source_scrub_preserves_benign_presentation() -> None:
+    event = {
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": {
+            "component_type": "data.table",
+            "data": {"rows": [{"name": "harmless"}]},
+        },
+    }
+    assert ChatRunCoordinator._journal_safe_event(event) == event
