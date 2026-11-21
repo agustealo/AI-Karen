@@ -187,3 +187,23 @@ async def test_pending_admission_uses_canonical_source_check(monkeypatch):
             request=object(), scope=scope, correlation_id="reject-drift",
         )
     assert repo.create.await_count == 1
+
+
+async def test_generic_consumption_cannot_consume_document_approval():
+    scope, _ = evidence()
+    record = approval(scope, status="approved")
+    repo = SimpleNamespace(
+        get=AsyncMock(return_value=record),
+        consume_approved=AsyncMock(),
+    )
+    normal_chat_request = SimpleNamespace(
+        context=SimpleNamespace(
+            tenant_id=scope.tenant_id,
+            user_id=scope.author_actor_id,
+        )
+    )
+    with pytest.raises(ApprovalScopeError, match="atomic source-scoped"):
+        await service(repo).consume_for_request(
+            record["approval_id"], request=normal_chat_request,
+        )
+    repo.consume_approved.assert_not_awaited()
