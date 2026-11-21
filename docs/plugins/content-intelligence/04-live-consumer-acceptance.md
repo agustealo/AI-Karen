@@ -104,3 +104,34 @@ Run this scenario through the existing protected GitHub Actions workflow on
 an approved immutable `main` deployment, with the exact current source SHA.
 No route mocks or synthetic credentials qualify. An unavailable acceptance
 fixture is an incomplete release gate, not a passing test.
+
+## KCE-FREE-06: Revoked owner artifact, read-only acceptance
+
+The existing protected browser workflow includes the additional
+`content-intelligence-revocation` scenario. It uses one sanitized owner
+account and two separate artifacts: a valid currently active text source and
+an **independently attested** previously active, now deleted/archived source.
+The test first establishes successful Content Intelligence admission and
+analysis of the active source, then confirms that the retired source does not
+appear on the current owner-inventory page and receives HTTP 403 when its
+old revision is submitted. It does not mutate source records or storage.
+
+The approved acceptance environment must provide
+`KAREN_CONTENT_INTELLIGENCE_SOURCE_ID`,
+`KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID` and
+`KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION`. They must refer to distinct
+owner-controlled artifacts. Missing configuration fails the scenario.
+
+**Do not interpret 403 alone as proof of actual revocation.** Before a live
+run can count toward release approval, an authorized reviewer must use
+**real PostgreSQL/Storage** evidence to independently establish that the
+retired artifact belonged to the same user/tenant, was formerly eligible,
+and is now revoked/deleted or archived. Record a sanitized state transition
+receipt and actual workflow run URL, excluding raw file contents, credentials
+and private storage keys. An unknown source identifier can also yield 403,
+so an unverified fixture does not satisfy this gate.
+
+The source implementation and protected scenario may be merged without
+declaring consumer acceptance passed. File Explorer and Content Intelligence
+remain **Not shipped** until real results, independent revocation proof and
+release-mirror parity are all recorded and approved.
