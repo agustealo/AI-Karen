@@ -45,6 +45,10 @@ class Result:
     def all(self):
         return self._first if isinstance(self._first, list) else []
 
+    def scalar_one(self):
+        assert self._first is not None
+        return self._first
+
 
 class FakeSession:
     def __init__(self, outputs):
@@ -333,6 +337,72 @@ async def test_reorder_replayed_receipt_skips_all_row_updates(monkeypatch):
     assert replay.receipt_id == RECEIPT
     assert len(fake.queries) == 2
     assert state["committed"]
+
+
+@pytest.mark.asyncio
+async def test_owner_normalization_closes_unpin_hole_without_touching_other_owner(monkeypatch):
+    fake, state, _ = wire(monkeypatch, [
+        Result([
+            {"pin_id": SECOND_PIN, "position": 0, "revision": 2},
+            {"pin_id": THIRD_PIN, "position": 3, "revision": 7},
+        ]),
+        Result([{"pin_id": THIRD_PIN, "revision": 8}]),
+    ])
+    async with module.async_transaction_scope(TENANT, user_id=USER) as session:
+        result = await module._reposition_owner_pins(
+            session, {"tenant": TENANT, "user": USER},
+        )
+    assert result is None
+    assert state["committed"]
+    assert len(fake.queries) == 2
+    assert "FOR UPDATE" in fake.queries[0]
+    assert "p.tenant_id = :tenant AND p.user_id = :user" in fake.queries[1]
+    assert json.loads(fake.params[1]["move_rows"]) == [
+        {"pin_id": THIRD_PIN, "position": 1, "expected_revision": 7},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_owner_normalization_insert_at_occupied_ordinal_shifts_neighbors(monkeypatch):
+    inserted = THIRD_PIN
+    fake, state, _ = wire(monkeypatch, [
+        Result([
+            {"pin_id": PIN, "position": 0, "revision": 2},
+            {"pin_id": SECOND_PIN, "position": 1, "revision": 4},
+            {"pin_id": inserted, "position": 0, "revision": 1},
+        ]),
+        Result([
+            {"pin_id": SECOND_PIN, "revision": 5},
+            {"pin_id": inserted, "revision": 2},
+        ]),
+    ])
+    async with module.async_transaction_scope(TENANT, user_id=USER) as session:
+        result = await module._reposition_owner_pins(
+            session, {"tenant": TENANT, "user": USER},
+            selected_pin=inserted, destination=1,
+        )
+    assert result == 2
+    assert state["committed"]
+    moves = json.loads(fake.params[1]["move_rows"])
+    assert moves == [
+        {"pin_id": SECOND_PIN, "position": 2, "expected_revision": 4},
+        {"pin_id": inserted, "position": 1, "expected_revision": 1},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_normalization_update_cardinality_failure_rolls_back_unpin_and_receipt(monkeypatch):
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(), Result({"pin_id": PIN, "revision": 3}),
+        Result([
+            {"pin_id": SECOND_PIN, "position": 2, "revision": 1},
+        ]),
+        Result([]),
+    ])
+    with pytest.raises(PresentationPinConflict, match="revision"):
+        await PresentationPinRepository().mutate_with_receipt(**request())
+    assert len(fake.queries) == 5
+    assert state == {"committed": False, "rolled_back": True}
 
 
 @pytest.mark.asyncio
