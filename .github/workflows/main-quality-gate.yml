@@ -126,6 +126,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q src server scripts
 
+      - name: KariSignature consent-gated sample proposal contract
+        run: pytest tests/services/test_karisignature_sample_analysis.py -q
+
       - name: Voice Runtime STT and engine-neutral synthesis contracts
         run: pytest tests/core/voice -q
 
