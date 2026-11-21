@@ -34,9 +34,15 @@ describe("Kari OS stationary pinned workspace safety contract", () => {
     expect(dock).not.toContain("localStorage.");
     expect(dock).not.toContain("sessionStorage.");
     expect(dock).not.toContain("setItem(");
-    expect(dock).not.toContain("onClick=");
+    expect(dock).not.toContain("NEXT_PUBLIC_ENABLE_PIN_MUTATIONS");
+    expect(dock).toContain("mutationControlsEnabled = false");
+    expect(shell).toContain("<KarenCopilotPinnedDock />");
+    expect(dock).toContain("verifyCommittedPinMutation");
+    expect(dock).toContain("readGenerationRef");
     expect(dock).not.toContain("onSubmit=");
-    expect(dock).not.toContain("apiClient.post(");
+    expect(dock).toContain("apiClient.post<unknown>");
+    expect(dock).toContain("await refresh()");
+    expect(dock).toContain("mutatingRef.current");
     expect(dock).not.toContain("apiClient.put(");
     expect(dock).not.toContain("KarenPresentationRegistry");
     expect(dock).toContain('data-testid="karen-pinning-not-available"');
