@@ -279,3 +279,22 @@ describe('File Explorer to Content Intelligence handoff', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 });
+
+
+describe('Content Intelligence canonical lexical token compatibility', () => {
+  it('accepts valid long tokens but limits rendered content length', async () => {
+    const longTerm = 'x'.repeat(512);
+    mocks.get.mockResolvedValue(response(FILE_A));
+    mocks.post.mockResolvedValue({
+      ...analyzed(),
+      documents: [{ ...analyzed().documents[0], top_terms: [{ term: longTerm, count: 1 }] }],
+    });
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByText('x'.repeat(128) + '… (1)')).toBeTruthy());
+    expect(screen.queryByText(longTerm + ' (1)')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

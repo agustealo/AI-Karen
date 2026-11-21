@@ -80,7 +80,7 @@ function validateAnalysis(raw: unknown, selected: AnalyzableSource[]): AnalyzedR
       if (
         typeof term.term !== 'string' ||
         !term.term ||
-        term.term.length > 128 ||
+        // Canonical lexical terms may exceed 128 chars; bound presentation instead.
         typeof term.count !== 'number' ||
         !Number.isSafeInteger(term.count) ||
         term.count <= 0
@@ -182,7 +182,7 @@ export function ContentIntelligenceSelectionPanel({
                 <p className="text-xs text-muted-foreground">{doc.characters} characters</p>
                 <p className="mt-2 text-xs break-words">
                   {doc.top_terms.length
-                    ? doc.top_terms.map((term) => `${term.term} (${term.count})`).join(', ')
+                    ? doc.top_terms.map((term) => `${term.term.length > 128 ? term.term.slice(0, 128) + '…' : term.term} (${term.count})`).join(', ')
                     : 'No recurring terms identified.'}
                 </p>
               </li>

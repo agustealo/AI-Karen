@@ -14,6 +14,7 @@ export default defineConfig({
       'tests/**/*.test.{ts,tsx}',
       'src/realtime/tests/**/*.test.{ts,tsx}',
       'src/components/plugins/PluginOverviewPage.test.tsx',
+      'src/components/plugins/FileExplorerInventoryHost.test.tsx',
       'src/components/comms/CommsCenterPage.test.tsx',
     ],
     environment: 'jsdom',
