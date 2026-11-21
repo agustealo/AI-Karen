@@ -76,6 +76,8 @@ jobs:
           import asyncpg
 
           BASELINE = Path("supabase/migrations/20260827010000_01_core_persona_runtime.sql")
+          FINALIZATION = Path("supabase/migrations/20260827050000_05_schema_security_finalization.sql")
+          TENANT_AUTHORITY = Path("supabase/migrations/20260916010000_14_auth_tenant_authority.sql")
           ARCHIVE = Path("supabase/migrations/20261121010000_66_artifact_archive_state.sql")
           DB_NAME = "karen_code_artifact_test"
           ROOT_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
@@ -92,6 +94,22 @@ jobs:
               if finish < 0:
                   raise RuntimeError(f"Canonical migration is malformed for {name}")
               return sql[start : finish + 3]
+
+          def tenant_type_correction(sql: str, table: str) -> str:
+              # Run the actual migration-owned DO blocks, without running
+              # unrelated memory/vector migrations requiring other tables.
+              marker = f"ALTER TABLE {table}"
+              position = sql.find(marker)
+              if position < 0:
+                  raise RuntimeError(f"Missing canonical tenant conversion: {table}")
+              start = sql.rfind("DO $", 0, position)
+              finish = sql.find("END $;", position)
+              if start < 0 or finish < 0:
+                  raise RuntimeError(f"Malformed canonical tenant conversion: {table}")
+              block = sql[start : finish + len("END $;")]
+              if f"ALTER COLUMN tenant_id TYPE UUID" not in block:
+                  raise RuntimeError(f"Tenant type correction missing: {table}")
+              return block
 
           async def prove_schema() -> None:
               root = await asyncpg.connect(ROOT_DSN)
@@ -113,16 +131,36 @@ jobs:
                   # for the canonical files repository contract.
                   await db.execute(source_table(baseline, "auth_users"))
                   await db.execute(source_table(baseline, "files"))
+                  finalization = FINALIZATION.read_text(encoding="utf-8")
+                  await db.execute(tenant_type_correction(finalization, "auth_users"))
+                  await db.execute(tenant_type_correction(finalization, "files"))
+                  await db.execute(TENANT_AUTHORITY.read_text(encoding="utf-8"))
                   await db.execute(ARCHIVE.read_text(encoding="utf-8"))
+
+                  # Match migrated tenant FK and UUID column semantics.
+                  columns = await db.fetch(
+                      "SELECT table_name, data_type FROM information_schema.columns "
+                      "WHERE table_schema='public' AND column_name='tenant_id' "
+                      "AND table_name IN ('auth_users', 'files')"
+                  )
+                  if {row["table_name"]: row["data_type"] for row in columns} != {
+                      "auth_users": "uuid", "files": "uuid"
+                  }:
+                      raise RuntimeError("The canonical UUID tenant conversions did not apply")
+                  tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"])
+                  await db.execute(
+                      "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)",
+                      tenant, "CK-GEN Disposable Tenant", "ckgen-artifact-proof",
+                  )
                   for key, email in (
                       ("KAREN_TEST_ARTIFACT_OWNER_ID", "artifact-owner@ci.invalid"),
                       ("KAREN_TEST_ARTIFACT_OTHER_USER_ID", "artifact-other@ci.invalid"),
                   ):
                       await db.execute(
                           "INSERT INTO auth_users (user_id, tenant_id, email, roles) "
-                          "VALUES ($1::uuid, $2::text, $3::text, '[\"user\"]'::jsonb)",
+                          "VALUES ($1::uuid, $2::uuid, $3::text, '[\"user\"]'::jsonb)",
                           UUID(os.environ[key]),
-                          os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"],
+                          tenant,
                           email,
                       )
               finally:
