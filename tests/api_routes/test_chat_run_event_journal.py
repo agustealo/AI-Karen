@@ -218,6 +218,36 @@ async def test_repository_rejects_direct_revocable_code_before_any_sql(
 
 
 @pytest.mark.asyncio
+async def test_repository_rejects_top_level_legacy_source_extension_before_sql(
+    monkeypatch,
+):
+    """Direct writes must not hide a code artifact outside presentation value."""
+    tx = Transaction()
+    scoped(monkeypatch, tx)
+    event = {
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": {
+            "component_type": "data.table",
+            "data": {"rows": []},
+        },
+        "extension": {
+            "metadata": {
+                "component_type": "code.artifact",
+                "data": {"source": "print('secret')"},
+            },
+        },
+    }
+    with pytest.raises(
+        ValueError, match="chat_projection_revocable_code_not_durable",
+    ):
+        await repository.SqlChatRunRepository().append_projected_event(
+            lease(), event=event,
+        )
+    assert tx.queries == []
+
+
+@pytest.mark.asyncio
 async def test_repository_allows_non_code_presentation_from_direct_caller(
     monkeypatch,
 ):
