@@ -341,3 +341,50 @@ Tests: `tests/services/test_karisignature_sample_analysis.py` covers current
 authorization, revocation, scope isolation, SHA-256 and UTF-8 validation,
 inert injection samples, minimum evidence and fail-closed adapter behavior.
 Real source-ownership/consent database tests are a later separate gate.
+
+## WS-02B source-provenance implementation ledger (source candidate)
+
+**Target:** Sample-reference registration with *independently verified* authorship
+and consent, not document ingestion or model training. The WS-02B branch adds
+`supabase/migrations/20261121010000_61_writing_style_sample_evidence.sql`,
+`services/writing_style_sample_provenance.py`, unit and disposable PostgreSQL
+tests, and extends the existing KariSignature proof workflow rather than
+creating a new CI pipeline.
+
+**Owner and data classification:** Uploaded file/message/transcript bytes remain
+with the existing authorized source/media owner. Writing Studio persists only
+scoped source IDs, source-author IDs, host-verified consent receipt IDs, distinct
+analysis and style-use permission flags, expiration/revocation state, and
+value-free audit receipts. Sample evidence is owner-only under FORCE RLS:
+a delegated style consumer cannot enumerate source IDs or author details.
+
+**Host admission:** A trusted `WritingStyleSourceAuthority` implementation
+must independently verify the current source owner, actor, tenant, declared
+authorship and explicit analysis permission. A user-provided consent receipt or
+document ID is never trusted by itself. The backend service requires an
+injected verifier; missing/false/mismatched/expired claims fail closed before
+database writes. The input is untrusted evidence, not instructions.
+
+**Use and revocation:** A profile with referenced samples may only publish if
+all references have unrevoked style-use permission at publication. Each
+owner-issued delegate grant is capped at the earliest current sample-consent
+expiry, and runtime reads also check grant expiry. The sample revocation
+operation atomically revokes a published profile, disables its grants and
+writes audit receipts; future use fails closed. Direct edits to authorship,
+consent or source identity on registered evidence are forbidden.
+
+**Incomplete critical integration:** A concrete live source owner adapter,
+authenticated RuntimePolicy ingestion admission, external-source revocation
+subscription, revision-to-evidence lineage, user/third-party author consent
+collection, content extraction, analysis, and consumer UI remain unimplemented.
+A source may be revoked outside Writing Studio without a callback; this
+candidate must **not** be enabled for consumer use until live revocation and
+execution-time source reauthorization are proven. SQL source references are not
+proof of current source ownership. No raw sample text, unsanctioned TTS or
+new memory/vector store is introduced.
+
+**Proof:** `pytest tests/extensions/test_writing_style_source_consent.py -q`
+and the existing dedicated KariSignature workflow running both disposable
+PostgreSQL suites, current-head CI, independent security review, and source
+revocation adversarial acceptance. No green source test alone certifies sample
+ingestion or human consent.
