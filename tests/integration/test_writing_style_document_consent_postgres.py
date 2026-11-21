@@ -6,6 +6,7 @@ This does NOT verify authorship outside authenticated first-party attestation.
 """
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -217,19 +218,22 @@ async def test_first_party_author_consent_postgres() -> None:
         # A subsequent source INSERT error must roll consumption back.
         approval_id = uuid.uuid4()
         approval_fingerprint = "d" * 64
+        approval_payload = {"document_consent_scope": {"action": "issue"}}
         await raw.execute(
             "INSERT INTO public.runtime_approval_requests "
             "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
-            "risk_level,request_payload,status,decided_by,expires_at) "
+            "risk_level,request_payload,status,decided_by,decision_reason,expires_at) "
             "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
-            "'high','{}'::jsonb,'approved',$3,"
+            "'high',CAST($5 AS jsonb),'approved',$3,"
+            "'explicit_author_confirmation',"
             "clock_timestamp()+interval '1 hour')",
             approval_id, tenant, owner, approval_fingerprint,
+            json.dumps(approval_payload),
         )
         consume_args = dict(
             approval_id=str(approval_id), tenant_id=str(tenant),
             author_actor_id=str(owner), fingerprint=approval_fingerprint,
-            action="issue",
+            action="issue", scope_record=approval_payload["document_consent_scope"],
         )
 
         # Mismatched author is never permitted to consume the receipt.
@@ -319,11 +323,13 @@ async def test_first_party_author_consent_postgres() -> None:
         await raw.execute(
             "INSERT INTO public.runtime_approval_requests "
             "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
-            "risk_level,request_payload,status,decided_by,expires_at) "
+            "risk_level,request_payload,status,decided_by,decision_reason,expires_at) "
             "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
-            "'high','{}'::jsonb,'approved',$3,"
+            "'high',CAST($5 AS jsonb),'approved',$3,"
+            "'explicit_author_confirmation',"
             "clock_timestamp()+interval '1 hour')",
             bound_approval, tenant, owner, approval_scope.fingerprint(),
+            json.dumps({"document_consent_scope": approval_scope.to_record()}),
         )
         authenticated = ChatExecutionContext(
             user_id=str(owner), tenant_id=str(tenant),
@@ -365,11 +371,13 @@ async def test_first_party_author_consent_postgres() -> None:
         await raw.execute(
             "INSERT INTO public.runtime_approval_requests "
             "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
-            "risk_level,request_payload,status,decided_by,expires_at) "
+            "risk_level,request_payload,status,decided_by,decision_reason,expires_at) "
             "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
-            "'high','{}'::jsonb,'approved',$3,"
+            "'high',CAST($5 AS jsonb),'approved',$3,"
+            "'explicit_author_confirmation',"
             "clock_timestamp()+interval '1 hour')",
             duplicate_approval, tenant, owner, approval_scope.fingerprint(),
+            json.dumps({"document_consent_scope": approval_scope.to_record()}),
         )
         assert await issuer.issue_with_approved_scope(
             scope=approval_scope, context=authenticated,
