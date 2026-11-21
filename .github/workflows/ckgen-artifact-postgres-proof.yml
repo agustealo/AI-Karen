@@ -71,6 +71,7 @@ jobs:
           import asyncio
           import os
           from pathlib import Path
+          from uuid import UUID
 
           import asyncpg
 
@@ -120,7 +121,7 @@ jobs:
                       await db.execute(
                           "INSERT INTO auth_users (user_id, tenant_id, email, roles) "
                           "VALUES ($1::uuid, $2::text, $3::text, '[\"user\"]'::jsonb)",
-                          os.environ[key],
+                          UUID(os.environ[key]),
                           os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"],
                           email,
                       )
