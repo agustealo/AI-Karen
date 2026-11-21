@@ -13,7 +13,11 @@ def test_existing_protected_browser_workflow_owns_live_file_explorer_dispatch():
     assert "inputs.scenario == 'file-explorer'" in source
     assert "github.ref == 'refs/heads/main'" in source
     assert "KAREN_FILE_EXPLORER_ACCEPTANCE_URL" in source
-    assert "inputs.scenario != 'file-explorer' && inputs.scenario != 'content-intelligence'" in source
+    assert "inputs.scenario == 'file-explorer'" in source
+    assert "vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL" in source
+    assert "vars.KAREN_SETTINGS_ACCEPTANCE_URL" in source
+    assert "inputs.scenario == 'settings' || inputs.scenario == 'navigation'" in source
+    assert "|| '' }}" in source
     assert "KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}" in source
     assert "file-explorer-real-acceptance.spec.ts" in source
     assert "verify_vercel_deployment.py" in source
