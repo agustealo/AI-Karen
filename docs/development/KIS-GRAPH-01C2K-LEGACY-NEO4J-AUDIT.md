@@ -13,7 +13,7 @@ Source inspected against live `main` at `842ba6c4457364cce2bc3d1ddb16ebd4d5a9efe
 
 ## Classification and disposition
 
-**Dangerous legacy independent execution authority, active public import, runtime consumers not proven.** A full import reference scan was not available from the repository tree and source lookup alone; do not claim the client was unused or that all external callers were migrated.
+**Dangerous legacy independent execution authority, active public import, runtime consumers not proven.** A repository Python-source reference scan is now enforced by the targeted architecture test across `src`, `server`, `scripts`, `plugins`, and `free_plugins`, excluding only the compatibility implementation, its public package export and the test itself. This does not cover dynamic imports or non-Python and external consumers; do not claim all callers were migrated.
 
 Retire the legacy Neo4j implementation and retain the importable public class and historical exception names. Construction always raises a typed `KnowledgeGraphUnavailableError` before I/O, including when the caller passes a URI or credentials. The class exposes no callable query, mutation, raw traversal or destructive operation. This is a hard stop, not a synthetic success, shadow query, fallback database, or dynamic runtime discovery.
 
@@ -24,7 +24,7 @@ Existing integrations that attempt to instantiate this unsupported client will n
 - `pytest tests/architecture/test_legacy_neo4j_graph_boundary.py -q`
 - `python -m compileall -q src`
 - `ruff check --select E4,E7,E9,F src/ai_karen_engine/services/knowledge tests/architecture/test_legacy_neo4j_graph_boundary.py`
-- Main Quality executes the new regression.
+- Main Quality executes the new regression, including a repository-wide Python direct-reference audit. A new direct use will fail CI rather than invoking the retired class.
 - Review PR's exact-head checks and remaining comments before merging.
 
-**Residual risks:** external callers and import strings not yet inventoried may depend on the removed instance methods; the repository source listing cannot establish their absence. Follow-up work must inventory references in routes, plugins, scripts and deployments and adapt genuinely active consumers through the canonical runtime without granting direct memory-graph access. No migrations or historical persisted data have been deleted.
+**Residual risks:** external callers, dynamically computed imports and non-Python integrations may depend on the removed instance methods; the static Python scan does not establish their absence. Follow-up work must inventory references in routes, plugins, scripts and deployments and adapt genuinely active consumers through the canonical runtime without granting direct memory-graph access. No migrations or historical persisted data have been deleted.
