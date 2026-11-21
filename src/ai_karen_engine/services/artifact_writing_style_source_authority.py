@@ -7,6 +7,7 @@ No document bytes are fetched, persisted or passed to a model here.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Protocol
@@ -15,6 +16,9 @@ from ai_karen_engine.services.database.repositories.artifact_store import Artifa
 from ai_karen_engine.services.writing_style_sample_provenance import (
     VerifiedWritingStyleSource,
 )
+
+
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 class DocumentStyleConsentIssuer(Protocol):
@@ -27,6 +31,10 @@ class DocumentStyleConsentIssuer(Protocol):
         profile_id: str,
         artifact_id: str,
     ) -> VerifiedWritingStyleSource | None: ...
+
+
+def _valid_digest(value: object) -> bool:
+    return isinstance(value, str) and _SHA256.fullmatch(value) is not None
 
 
 def _canonical_uuid(value: str) -> str | None:
@@ -84,6 +92,7 @@ class ArtifactWritingStyleSourceAuthority:
                 or _canonical_uuid(artifact.user_id) != actor_id
                 or artifact.deleted_at is not None
                 or artifact.kind not in {"attachment", "document"}
+                or not _valid_digest(artifact.sha256)
             ):
                 return None
 
@@ -123,7 +132,16 @@ class ArtifactWritingStyleSourceAuthority:
                 or _canonical_uuid(current.user_id) != actor_id
                 or current.deleted_at is not None
                 or current.kind != artifact.kind
+                or not _valid_digest(current.sha256)
                 or current.sha256 != artifact.sha256
+            ):
+                return None
+
+            # An awaited metadata read can cross the consent expiry boundary.
+            # Verify time again after the final awaited operation.
+            if (
+                permission.consent_expires_at is not None
+                and permission.consent_expires_at <= datetime.now(timezone.utc)
             ):
                 return None
 
