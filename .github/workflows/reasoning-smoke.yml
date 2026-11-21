@@ -49,6 +49,9 @@ jobs:
             src/ai_karen_engine/core/cortex \
             src/ai_karen_engine/core/runtime
 
+      - name: Verify governed reasoning graph presentation boundary
+        run: pytest tests/core/reasoning/graph/test_reasoning_graph_authority.py -q
+
       - name: Smoke CORTEX reasoning activation
         run: pytest tests/core/reasoning/test_chat_runtime_reasoning_activation.py -q
 
