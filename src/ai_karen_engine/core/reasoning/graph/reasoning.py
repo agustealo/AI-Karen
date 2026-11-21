@@ -85,7 +85,6 @@ class ReasoningGraph:
         import asyncio
 
         trace = await asyncio.to_thread(self._run_internal, text, metadata, policy_overrides)
-        self._mirror_to_graph(text, trace)
         return trace
 
     @property
