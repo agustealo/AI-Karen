@@ -370,6 +370,7 @@ jobs:
           pytest tests/core/memory/test_memory_formation_service.py -q
           pytest tests/platform/memory/test_semantic_user_state_projection.py -q
           pytest tests/memory/test_stm_closure_1b.py -q
+          pytest tests/core/memory/test_stm_episode_source_revocation.py -q
           pytest tests/auth/test_tenant_scope_fail_closed.py -q
           pytest tests/architecture/test_identity_vault_tenant_contract.py -q
           pytest tests/services/identity_vault/test_identity_vault.py -q -k 'owned_credential or owned_model_credential or personal_model_credential_resolution or personal_model_key_release or mutating_credential_locks or credential_metadata_read or personal_model_credential_candidate or owned_model_chat_consent or owned_model_candidate_checks or generic_owned_credential_update'

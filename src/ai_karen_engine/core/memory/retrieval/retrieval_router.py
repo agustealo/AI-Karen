@@ -175,17 +175,29 @@ class HybridRetrievalRouter:
             content = self._stm_content(slot, data)
             if not content:
                 continue
-            # RECENT_CONTEXT is a projection of a committed event, not an
-            # independent memory authority. Rehydrate the current, consent-
-            # eligible ledger row before returning any projected content.
-            # Redis metadata cannot grant access or replace canonical text.
+            # RECENT_CONTEXT is always derived from a committed event. Other
+            # STM slots are ephemeral unless they make an origin claim. Redis
+            # never grants permission or replaces the canonical event.
+            slot_record = data.get("latest") if slot == STMSlot.RECENT_CONTEXT else data
+            if not isinstance(slot_record, dict):
+                continue
+            source_claim_keys = (
+                "event_id", "source_type", "source_ref",
+                "source_lineage", "derived_source_ids", "provenance",
+            )
+            source_marked = (
+                slot == STMSlot.RECENT_CONTEXT
+                or any(key in slot_record for key in source_claim_keys)
+            )
             canonical_event: dict[str, Any] | None = None
-            if slot == STMSlot.RECENT_CONTEXT:
-                latest = data.get("latest") if isinstance(data, dict) else None
-                if not isinstance(latest, dict):
+            if source_marked:
+                # Derived source sets need a canonical lineage receipt; raw
+                # session metadata cannot prove that every grant is still live.
+                if "source_lineage" in slot_record or "derived_source_ids" in slot_record:
                     continue
-                event_id = str(latest.get("event_id") or "").strip()
-                if not event_id:
+                event_id = str(slot_record.get("event_id") or "").strip()
+                raw_text = self._stm_raw_content(slot, data)
+                if not event_id or not isinstance(raw_text, str) or not raw_text.strip():
                     continue
                 try:
                     found = await self.event_source.fetch_many(
@@ -213,9 +225,9 @@ class HybridRetrievalRouter:
                 if (
                     not isinstance(canonical_text, str)
                     or not canonical_text.strip()
-                    or canonical_text != latest.get("content")
-                    or canonical_event.get("source_type") != latest.get("source_type")
-                    or canonical_event.get("source_ref") != latest.get("source_ref")
+                    or canonical_text != raw_text
+                    or canonical_event.get("source_type") != slot_record.get("source_type")
+                    or canonical_event.get("source_ref") != slot_record.get("source_ref")
                 ):
                     continue
             candidate_id = str(
@@ -474,26 +486,32 @@ class HybridRetrievalRouter:
         return weights.get(slot, 0.5)
 
     @staticmethod
-    def _stm_content(slot: STMSlot, data: dict[str, Any]) -> str:
+    def _stm_raw_content(slot: STMSlot, data: dict[str, Any]) -> str:
+        """Read displayable slot content without serializing untrusted metadata."""
+        if not isinstance(data, dict):
+            return ""
         if slot == STMSlot.RECENT_CONTEXT:
             latest = data.get("latest")
-            if isinstance(latest, dict):
-                for key in ("content", "summary", "text", "last_text"):
-                    value = latest.get(key)
-                    if isinstance(value, str) and value.strip():
-                        return value.strip()
+            if not isinstance(latest, dict):
+                return ""
+            for key in ("content", "summary", "text", "last_text"):
+                value = latest.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+            return ""
         if slot == STMSlot.ACTIVE_EPISODE:
             value = data.get("last_text")
             if isinstance(value, str) and value.strip():
-                return value.strip()
+                return value
         for key in ("content", "summary", "text", "name", "goal", "project", "value"):
             value = data.get(key)
             if isinstance(value, str) and value.strip():
-                return value.strip()
-        try:
-            return json.dumps(data, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            return ""
+                return value
+        return ""
+
+    @staticmethod
+    def _stm_content(slot: STMSlot, data: dict[str, Any]) -> str:
+        return HybridRetrievalRouter._stm_raw_content(slot, data).strip()
 
     @staticmethod
     def _payload_content(payload: Any) -> str:
