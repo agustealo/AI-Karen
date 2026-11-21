@@ -595,7 +595,7 @@ async def test_confirmed_author_approval_does_not_issue_without_separate_request
 
 
 @pytest.mark.parametrize("approval_status", ["pending", "approved", "consumed"])
-@pytest.mark.parametrize("evidence", ["valid", "missing", "purpose_drift", "expiry_drift"])
+@pytest.mark.parametrize("evidence", ["valid", "missing", "purpose_drift", "expiry_drift", "source_drift"])
 async def test_recover_document_receipt_requires_consumed_and_current_exact_source(
     monkeypatch, approval_status, evidence,
 ):
@@ -622,7 +622,10 @@ async def test_recover_document_receipt_requires_consumed_and_current_exact_sour
     issuer = SimpleNamespace(
         verify_current=AsyncMock(return_value=verified),
         read_current_source_summary=AsyncMock(
-            return_value={"name": "current.txt", "bytes": 100, "mime_type": "text/plain"},
+            return_value=(
+                None if evidence == "source_drift" else
+                {"name": "current.txt", "bytes": 100, "mime_type": "text/plain"}
+            ),
         ),
     )
     factory = MagicMock(return_value=issuer)
