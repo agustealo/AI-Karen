@@ -1,6 +1,7 @@
 """WS-04A2 regression: document ownership is necessary, never style consent."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -83,8 +84,7 @@ async def test_metadata_cannot_grant_consent_without_issuer():
     s = scope()
     authority, artifacts, issuer = adapter(s)
     assert await authority.verify_analysis(**s) is None
-    assert artifacts.get_metadata.await_count == 2
-    artifacts.get_metadata.assert_awaited_with(s["source_id"], s["tenant_id"])
+    artifacts.get_metadata.assert_awaited_once_with(s["source_id"], s["tenant_id"])
     issuer.verify_current.assert_awaited_once()
 
 
@@ -194,3 +194,34 @@ async def test_source_revision_drift_during_consent_check_denied():
     changed.data.sha256 = "b" * 64
     artifacts.get_metadata.side_effect = [artifact_result(s), changed]
     assert await authority.verify_analysis(**s) is None
+
+
+@pytest.mark.parametrize("digest", [None, "", "abc", "z" * 64, 123, "A" * 64])
+@pytest.mark.parametrize("stage", ["first", "second"])
+async def test_missing_or_invalid_digest_fails_closed(digest, stage):
+    s = scope()
+    authority, artifacts, _ = adapter(s, consent=decision(s, style_use=True))
+    invalid = artifact_result(s)
+    invalid.data.sha256 = digest
+    valid = artifact_result(s)
+    artifacts.get_metadata.side_effect = (
+        [invalid] if stage == "first" else [valid, invalid]
+    )
+    assert await authority.verify_use(**s) is False
+
+
+async def test_expiration_during_final_metadata_read_denies_use():
+    s = scope()
+    expiry = datetime.now(timezone.utc) + timedelta(milliseconds=80)
+    authority, artifacts, _ = adapter(
+        s, consent=decision(s, style_use=True, expiry=expiry)
+    )
+
+    async def read_metadata(artifact_id, tenant_id):
+        if artifacts.get_metadata.await_count == 2:
+            await asyncio.sleep(0.12)
+        return artifact_result(s)
+
+    artifacts.get_metadata.side_effect = read_metadata
+    assert await authority.verify_use(**s) is False
+    assert artifacts.get_metadata.await_count == 2
