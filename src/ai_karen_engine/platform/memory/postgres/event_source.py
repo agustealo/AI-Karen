@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Iterable, Mapping, Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
