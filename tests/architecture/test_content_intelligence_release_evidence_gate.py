@@ -98,3 +98,19 @@ def test_protected_revoked_artifact_scenario_requires_real_owner_control():
     assert "denied.status()" in spec
     assert "real PostgreSQL/Storage" in runbook
     assert "Not shipped" in LEDGER.read_text(encoding="utf-8")
+
+
+def test_file_explorer_dispatch_runs_only_its_real_browser_case():
+    """Do not report Content Intelligence opt-out skips in File Explorer proof."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    spec = SPEC.read_text(encoding="utf-8")
+    branch = re.search(
+        r'(?ms)^          elif \[\[ "\$\{\{ inputs\.scenario \}\}" == "file-explorer" \]\]; then\n'
+        r'(?P<body>.*?)(?=^          (?:elif |else\b))',
+        workflow,
+    )
+    assert branch is not None
+    assert "--grep='KFILE-LIVE'" in branch.group("body")
+    assert "KFILE-LIVE: authenticated owner files" in spec
+    for other in ("KCONTENT-LIVE", "KCONTENT-DENY-LIVE", "KCONTENT-REVOKED-LIVE"):
+        assert f"--grep='{other}'" not in branch.group("body")
