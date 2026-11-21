@@ -113,6 +113,14 @@ async def test_first_party_author_consent_postgres() -> None:
             f'GRANT SELECT ON public.files, public.writing_style_profiles '
             f'TO "{role}"'
         )
+        # PostgreSQL row-locking SELECT ... FOR SHARE requires the test
+        # principal to possess UPDATE privilege on the locked relation.
+        # This grant is restricted to the fresh disposable CI role/database;
+        # the migration does not grant file mutation rights to application
+        # clients or authenticated/anon roles.
+        await raw.execute(
+            f'GRANT UPDATE ON public.files TO "{role}"'
+        )
 
         insert = (
             "INSERT INTO public.writing_style_document_consents "
