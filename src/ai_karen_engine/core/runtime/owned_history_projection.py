@@ -20,7 +20,10 @@ from ai_karen_engine.core.runtime.attested_agent_activity import (
 )
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import ConversationSnapshot
-from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+from ai_karen_engine.core.runtime.presentation_contract import (
+    contains_revocable_code_artifact,
+    validate_presentation,
+)
 from ai_karen_engine.core.runtime.plugin_management_contract import (
     validate_plugin_management_preflight,
 )
@@ -362,6 +365,10 @@ def project_owned_history(
                 for candidate in verified:
                     valid = validate_presentation(candidate)
                     if valid is None or valid != candidate:
+                        raise UnreplayableHistory("invalid_persisted_presentation")
+                    # Attested history can outlive code-source authorization.
+                    # Never restore revocable code from legacy saved metadata.
+                    if contains_revocable_code_artifact(valid):
                         raise UnreplayableHistory("invalid_persisted_presentation")
                     for event in projector.project(ChatStreamChunk(
                         type="presentation",
