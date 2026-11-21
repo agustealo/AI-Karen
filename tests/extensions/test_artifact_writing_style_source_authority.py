@@ -51,6 +51,7 @@ def artifact_result(s, *, owner=None, tenant=None, kind="document", deleted=None
             tenant_id=tenant or s["tenant_id"],
             user_id=owner or s["actor_id"],
             kind=kind,
+            sha256="a" * 64,
             deleted_at=deleted,
             metadata={"consent_receipt_id": str(uuid.uuid4()), "style_use_allowed": True},
         ),
@@ -154,3 +155,41 @@ async def test_unknown_source_type_and_malformed_scope_never_query_database():
         assert await authority.verify_analysis(**(s | overrides)) is None
     artifacts.get_metadata.assert_not_awaited()
     issuer.verify_current.assert_not_awaited()
+
+
+async def test_live_use_requires_style_use_and_revocation_is_immediate():
+    s = scope()
+    granted = decision(s, style_use=True)
+    authority, artifacts, issuer = adapter(s, consent=granted)
+    assert await authority.verify_use(**s) is True
+    issuer.verify_current.return_value = decision(s, style_use=False)
+    assert await authority.verify_use(**s) is False
+    issuer.verify_current.return_value = None
+    assert await authority.verify_use(**s) is False
+    # A revoked source wins even when the issuer still returns a grant.
+    issuer.verify_current.return_value = granted
+    artifacts.get_metadata.return_value = artifact_result(
+        s, deleted=datetime.now(timezone.utc)
+    )
+    assert await authority.verify_use(**s) is False
+
+
+async def test_source_archive_racing_issuer_never_returns_allow():
+    s = scope()
+    authority, artifacts, issuer = adapter(s, consent=decision(s, style_use=True))
+    artifacts.get_metadata.side_effect = [
+        artifact_result(s),
+        artifact_result(s, deleted=datetime.now(timezone.utc)),
+    ]
+    assert await authority.verify_analysis(**s) is None
+    assert artifacts.get_metadata.await_count == 2
+    issuer.verify_current.assert_awaited_once()
+
+
+async def test_source_revision_drift_during_consent_check_denied():
+    s = scope()
+    authority, artifacts, _ = adapter(s, consent=decision(s, style_use=True))
+    changed = artifact_result(s)
+    changed.data.sha256 = "b" * 64
+    artifacts.get_metadata.side_effect = [artifact_result(s), changed]
+    assert await authority.verify_analysis(**s) is None
