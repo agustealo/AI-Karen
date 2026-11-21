@@ -13,6 +13,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from uuid import UUID, uuid4
 
 import pytest
@@ -33,7 +34,7 @@ def _disposable_database_url(dsn: str):
     """Reject ambiguous asyncpg connection targets before any SQL opens."""
     try:
         parsed = make_url(dsn)
-    except (ValueError, TypeError):
+    except (ArgumentError, ValueError, TypeError):
         pytest.fail("Invalid disposable PostgreSQL connection URL")
     if (
         parsed.drivername not in ("postgresql", "postgresql+asyncpg")
