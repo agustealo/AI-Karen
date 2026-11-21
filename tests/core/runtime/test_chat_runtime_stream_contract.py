@@ -2238,3 +2238,88 @@ def test_post_provider_and_finality_source_fences_are_runtime_owned():
         "await ChatRuntime._authorize_selected_memory_before_generation(",
         outer.index('if chunk.type == "content":'),
     )
+
+
+@pytest.mark.asyncio
+async def test_reasoning_wrapper_close_cancels_real_nested_provider_worker():
+    """Outer reasoning closure must not defer the inner provider task's finally."""
+    runtime, _ = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    cancelled = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def provider(*args, token_sink=None, **kwargs):
+        assert token_sink is not None
+        await token_sink("first")
+        try:
+            await blocked.wait()
+        finally:
+            cancelled.set()
+        return ("first", {})
+
+    with patch.object(
+        runtime, "_run_reasoning", new_callable=AsyncMock,
+        return_value=("reasoning", {"reasoning_status": "completed"}),
+    ):
+        with patch.object(
+            runtime, "_should_synthesize_after_reasoning", return_value=True,
+        ):
+            with patch.object(runtime, "_run_simple", side_effect=provider):
+                stream = runtime._run_reasoning_stream(
+                    request, decision, plan, meter,
+                )
+                first = await asyncio.wait_for(anext(stream), timeout=5)
+                assert first.content == "first"
+                await asyncio.wait_for(stream.aclose(), timeout=5)
+    await asyncio.wait_for(cancelled.wait(), timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_revocation_during_nonstream_memory_persistence_returns_denial():
+    """A late source change must not escape as an uncaught HTTP 500."""
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    plan = _make_plan()
+    revoked = False
+    persist_calls = 0
+
+    async def persist_then_revoke(*args, **kwargs):
+        nonlocal revoked, persist_calls
+        persist_calls += 1
+        revoked = True
+
+    async def check_source(*args, **kwargs):
+        if revoked:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_freeze_persona_snapshot", new_callable=AsyncMock):
+            with patch.object(runtime, "_prepare_conversation_continuation", new_callable=AsyncMock):
+                with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+                    with patch.object(runtime, "_record_user_behavior_observation", new_callable=AsyncMock):
+                        with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                            with patch.object(runtime, "_grounded_personal_response", return_value=None):
+                                with patch.object(runtime, "_is_explicit_save_turn", return_value=False):
+                                    with patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor") as direct:
+                                        direct.return_value.can_handle.return_value = False
+                                        with patch.object(
+                                            runtime, "_run_simple", new_callable=AsyncMock,
+                                            return_value=("generated", {"execution_spans": []}),
+                                        ):
+                                            with patch.object(runtime, "_persist_memory", side_effect=persist_then_revoke):
+                                                with patch.object(
+                                                    ChatRuntime, "_authorize_selected_memory_before_generation",
+                                                    side_effect=check_source,
+                                                ):
+                                                    result = await runtime.execute(request)
+    assert persist_calls == 1
+    assert result.status == ChatExecutionStatus.ERROR
+    assert result.answer == ""
+    assert result.metadata.extra["error_code"] == "CHAT_MEMORY_SOURCE_REVOKED"
+    assert not gateway.calls
