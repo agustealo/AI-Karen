@@ -1,0 +1,25 @@
+# Content Intelligence: owner-active text admission (KCE-FREE-02B)
+
+Internal host-only integration at `src/ai_karen_engine/extensions/content_intelligence_sources.py`.
+
+The runtime supplies a typed, scope-bound `AuthorizedExecutionPlan`,
+`ExtensionExecutionContext`, existing plugin kernel and canonical ArtifactStore.
+Owner-active inert source text is retrieved using
+`ArtifactStore.read_owner_active_code()`, whose repository implementation
+must verify current owner, active state, content digest and safe text type.
+The host first calls the kernel's admission-only path, which performs the
+canonical executor's lifecycle, permission, role, tenant, budget, action and
+trust checks **without invoking the plugin handler or reading source bytes**.
+The host then checks source revision and bound principal before forwarding
+bounded documents through the existing, fully validated execution gate.
+The runtime must supply authentic role and policy audit context. No admission
+receipt confers future access: actual execution is reauthorized.
+
+No new route, file storage owner, plugin runtime or commercial dependency is
+introduced. This does **not** support arbitrary PDF/DOCX files, authorize direct
+reads inside the plugin, or establish consumer-ready UI behavior. It does not
+publish a release copy to `free_plugins/`. Live authenticated first-boot/source
+revocation acceptance, independent review and CI remain separate gates.
+
+Proof: `pytest -q tests/extensions/test_content_intelligence_owner_sources.py`
+and the existing Content Intelligence / ArtifactStore tests.
