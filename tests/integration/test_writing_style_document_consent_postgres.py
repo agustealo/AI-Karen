@@ -537,6 +537,14 @@ async def test_first_party_author_consent_postgres(
             "WHERE tenant_id=$1 AND profile_id=$2 AND artifact_id=$3",
             tenant, profile, artifact,
         ) == receipt
+        summary = await runtime_issuer.read_current_source_summary(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(profile), artifact_id=str(artifact),
+            source_sha256=digest,
+        )
+        assert summary == {
+            "name": "author.txt", "bytes": 10, "mime_type": "text/plain",
+        }
         permission = await issuer.verify_current(**scope)
         assert permission is not None
         assert permission.consent_receipt_id == issued
@@ -564,6 +572,11 @@ async def test_first_party_author_consent_postgres(
             "b" * 64, str(artifact),
         )
         assert await issuer.verify_current(**scope) is None
+        assert await runtime_issuer.read_current_source_summary(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(profile), artifact_id=str(artifact),
+            source_sha256=digest,
+        ) is None
         await raw.execute(
             "UPDATE public.files SET sha256=$1, deleted_at=clock_timestamp() "
             "WHERE file_id=$2",
