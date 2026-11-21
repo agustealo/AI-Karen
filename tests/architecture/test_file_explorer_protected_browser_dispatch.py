@@ -13,8 +13,8 @@ def test_existing_protected_browser_workflow_owns_live_file_explorer_dispatch():
     assert "inputs.scenario == 'file-explorer'" in source
     assert "github.ref == 'refs/heads/main'" in source
     assert "KAREN_FILE_EXPLORER_ACCEPTANCE_URL" in source
-    assert "inputs.scenario != 'file-explorer' && vars.KAREN_SETTINGS_ACCEPTANCE_URL" in source
-    assert 'KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: "true"' in source
+    assert "inputs.scenario != 'file-explorer' && inputs.scenario != 'content-intelligence'" in source
+    assert "KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}" in source
     assert "file-explorer-real-acceptance.spec.ts" in source
     assert "verify_vercel_deployment.py" in source
     assert "verify_deployment_revision.py" in source
@@ -51,3 +51,16 @@ def test_live_file_explorer_acceptance_is_not_a_mock_or_skipped_proof():
     assert "page.waitForTimeout(" not in source
     for viewport in (390, 768, 1024, 1440):
         assert f"width: {viewport}" in source
+
+
+def test_content_intelligence_real_browser_scenario_is_not_permanently_skipped():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    spec = SPEC.read_text(encoding="utf-8")
+    assert "          - content-intelligence" in workflow
+    assert "KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE:" in workflow
+    assert "KAREN_CONTENT_INTELLIGENCE_SOURCE_ID:" in workflow
+    assert "--grep='KCONTENT-LIVE'" in workflow
+    assert "KCONTENT-LIVE:" in spec
+    assert "KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" in spec
+    assert "/api/plugins/content-intelligence/owner-sources" in spec
+    assert "route.fulfill(" not in spec
