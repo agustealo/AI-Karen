@@ -32,6 +32,7 @@ class PostgresKariSignatureAuthority:
         SELECT
             p.profile_id,
             p.tenant_id,
+            p.owner_user_id,
             p.current_revision_id,
             p.revision_counter,
             r.revision_id,
@@ -89,7 +90,10 @@ class PostgresKariSignatureAuthority:
             if row is None:
                 return None
             if (
-                row["revision_id"] != row["current_revision_id"]
+                str(row["profile_id"]) != request.profile_id
+                or str(row["tenant_id"]) != request.tenant_id
+                or str(row["owner_user_id"]) != request.actor_id
+                or row["revision_id"] != row["current_revision_id"]
                 or row["revision_number"] != row["revision_counter"]
             ):
                 return None
@@ -127,6 +131,7 @@ class PostgresKariSignatureAuthority:
                 and row["revision_counter"] == revision.revision_number
                 and str(row["profile_id"]) == revision.profile_id
                 and str(row["tenant_id"]) == revision.tenant_id
+                and str(row["owner_user_id"]) == request.actor_id
                 and row["state"] == "published"
                 and row["content_digest"] == revision.content_digest
                 and type(expression) is dict
