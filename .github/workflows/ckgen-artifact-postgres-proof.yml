@@ -156,6 +156,25 @@ jobs:
                   await db.execute(tenant_type_correction(finalization, "files"))
                   await db.execute(TENANT_AUTHORITY.read_text(encoding="utf-8"))
                   await db.execute(ARCHIVE.read_text(encoding="utf-8"))
+                  security = Path(
+                      "supabase/migrations/20260827040000_04_tenant_security.sql"
+                  ).read_text(encoding="utf-8")
+                  if "ALTER TABLE files ENABLE ROW LEVEL SECURITY;" not in security:
+                      raise RuntimeError("Canonical files RLS enablement missing")
+                  await db.execute("ALTER TABLE files ENABLE ROW LEVEL SECURITY")
+                  await db.execute(canonical_files_policy(finalization))
+                  await db.execute(
+                      "CREATE ROLE ckgen_artifact_rls_actor "
+                      "NOLOGIN NOSUPERUSER NOBYPASSRLS"
+                  )
+                  await db.execute(
+                      "GRANT USAGE ON SCHEMA public TO ckgen_artifact_rls_actor"
+                  )
+                  await db.execute(
+                      "GRANT SELECT, UPDATE ON public.files "
+                      "TO ckgen_artifact_rls_actor"
+                  )
+
 
                   # Match migrated tenant FK and UUID column semantics.
                   columns = await db.fetch(
