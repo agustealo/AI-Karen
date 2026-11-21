@@ -2371,7 +2371,7 @@ async def test_cancel_during_stream_final_source_check_records_terminal():
     async def source_check(*args, **kwargs):
         nonlocal checks
         checks += 1
-        if checks >= 2:
+        if checks >= 1:
             entered.set()
             await blocked.wait()
 
