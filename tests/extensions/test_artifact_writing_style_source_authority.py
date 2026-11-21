@@ -297,3 +297,23 @@ async def test_no_unbounded_document_content_reader_is_exposed():
 
     assert not hasattr(module, "ArtifactWritingStyleContentReader")
     assert "ArtifactWritingStyleContentReader" not in module.__all__
+
+
+async def test_source_authorization_never_downloads_storage_objects():
+    """Metadata consent checks cannot silently become full-buffer byte reads."""
+    s = scope()
+    issued = decision(s, style_use=True)
+    artifacts = SimpleNamespace(
+        get_metadata=AsyncMock(return_value=artifact_result(s)),
+        download=AsyncMock(side_effect=AssertionError(
+            "whole-object storage download forbidden during authorization"
+        )),
+    )
+    issuer = SimpleNamespace(verify_current=AsyncMock(return_value=issued))
+    authority = ArtifactWritingStyleSourceAuthority(
+        artifacts=artifacts, consent_issuer=issuer
+    )
+    assert await authority.verify_use(**s) is True
+    artifacts.download.assert_not_awaited()
+    assert artifacts.get_metadata.await_count == 2
+    assert issuer.verify_current.await_count == 2
