@@ -112,3 +112,12 @@ The targeted regression file covers trusted issuer requirements, refusal to read
 The inactive adapter now exposes `verify_use(...)->bool`, implemented by rechecking the same current source plus separately issued consent and requiring `style_use_allowed is True`. A source eligible only for analysis returns false for use. It also reloads canonical artifact metadata **after** the consent issuer decision and refuses archived/deleted, ownership-changed, kind-changed, or SHA-256-changed resources. Tests cover permission revoked between calls, source deletion between metadata reads, and content-revision drift.
 
 The second read reduces a permission race but **does not** establish atomic source/consent snapshot semantics, a current-use runtime hook, or a durable author grant. Publication and every delegated runtime use remain fail-closed until the canonical issuer, transaction/fencing strategy and runtime composition are implemented and proved. Do not treat `verify_use` as a substitute for runtime policy or KariSignature purpose grants.
+
+### WS-04A2 independent review repair, exact-head revalidation
+
+The latest source adapter revision applies three explicit fail-closed corrections identified in the independent review:
+1. A missing consent decision returns immediately after **one** metadata read; the regression assertion matches that short-circuit.
+2. Artifact SHA-256 values must be exactly lowercase hexadecimal, 64 characters, on **both** resource reads; missing, nullable, uppercase, malformed and non-string values all deny source use.
+3. Consent expiry is rechecked **after** the second awaited resource read, preventing a positive permission decision after the expiry passes while querying artifact metadata.
+
+The corresponding tests exercise both digest stages and a delayed second metadata read crossing the expiry boundary. **These are review-driven fixes, not a production consent issuer or an atomic source/consent transaction.** The latest commit's CI and review must pass before these tests count as evidence. External-source author grants, owner revocation propagation, authenticated publication/use integration and consumer UI remain disabled.
