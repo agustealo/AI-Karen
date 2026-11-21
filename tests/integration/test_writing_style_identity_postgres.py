@@ -111,7 +111,11 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
         )
         assert saved.revision_number == 1
         assert await repo.read_current_published(
-            tenant_id=str(tenant_b), profile_id=str(profile)
+            request=KariSignatureRequest(
+                tenant_id=str(tenant_b), actor_id=str(delegate),
+                profile_id=str(profile), purpose="draft_email",
+                correlation_id="deny-tenant-b",
+            )
         ) is None
 
         await repo.grant_use(
