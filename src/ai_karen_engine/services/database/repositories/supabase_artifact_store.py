@@ -407,7 +407,7 @@ class SupabaseArtifactStore(ArtifactStore):
                 body = chunks.decode("utf-8", errors="strict")
                 if (
                     not body.strip()
-                    or any(ord(char) < 32 and char not in "\\n\\r\\t" for char in body)
+                    or any(ord(char) < 32 and char not in "\n\r\t" for char in body)
                 ):
                     return RepositoryResult(success=False, error=unavailable)
                 return RepositoryResult(
