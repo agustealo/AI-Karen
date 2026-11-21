@@ -161,3 +161,70 @@ def test_client_evidence_label_uses_persisted_status_only():
     assert "Verified grounded answer" in component
     assert "Retrieved evidence only" in component
     assert "Live capability unavailable" in component
+
+
+def _revoked_artifact():
+    return {
+        "schema_version": 1, "presentation_id": "legacy-source",
+        "component_type": "code.artifact", "evidence_ref": "run:code",
+        "data": {"filename": "legacy.py", "language": "python",
+                 "code": "REVOKED_SOURCE_SENTINEL = 928341"},
+    }
+
+
+def test_legacy_conversation_readback_withholds_revoked_code_in_all_metadata_fields():
+    from ai_karen_engine.core.runtime.presentation_contract import (
+        redact_revocable_code_metadata,
+    )
+    artifact = _revoked_artifact()
+    metadata = {
+        "structured_content": {"presentation": artifact},
+        "verified_presentations_v1": [artifact],
+        "function_response": {"result": artifact},
+        "edit_history": [{"old": artifact}],
+        "actual_provider": "local",
+        "actual_model": "model-a",
+        "degraded_mode": False,
+    }
+    response = _canonical_message_to_response(message_with_metadata(metadata))
+    assert "REVOKED_SOURCE_SENTINEL" not in response.model_dump_json()
+    assert response.structured_content is None
+    assert response.function_response is None
+    assert response.edit_history == []
+    assert response.metadata == {
+        "actual_provider": "local", "actual_model": "model-a",
+        "degraded_mode": False,
+    }
+    assert "REVOKED_SOURCE_SENTINEL" in repr(metadata)  # Original stored bytes intact.
+    assert redact_revocable_code_metadata(artifact) == {}
+
+
+@pytest.mark.asyncio
+async def test_owned_conversation_response_fences_legacy_code_but_keeps_safe_provenance():
+    from ai_karen_engine.api_routes.chat.conversation import (
+        _canonical_snapshot_to_response,
+    )
+    artifact = _revoked_artifact()
+    now = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    conversation = SimpleNamespace(
+        id=str(uuid4()), user_id="owner", tenant_id="tenant-a",
+        session_id="s", title="Saved", summary=None, tags=[],
+        metadata={"historic": artifact, "priority": "normal"},
+        is_active=True, created_at=now, updated_at=now,
+    )
+    message = message_with_metadata({
+        "structured_content": {"presentation": artifact},
+        "verified_presentations_v1": [artifact],
+        "actual_provider": "local",
+    })
+    snapshot = ConversationSnapshot(conversation=conversation, messages=(message,))
+    projected = _canonical_snapshot_to_response(snapshot)
+    assert "REVOKED_SOURCE_SENTINEL" not in projected.model_dump_json()
+    assert projected.metadata == {"priority": "normal"}
+    assert projected.messages[0].metadata == {"actual_provider": "local"}
+    result = await get_conversation(
+        str(conversation.id), message_limit=100, message_offset=0,
+        conversation_gateway=_ScopedGateway(snapshot),
+        tenant_id="tenant-a", user_ctx={"user_id": "owner"},
+    )
+    assert "REVOKED_SOURCE_SENTINEL" not in result.model_dump_json()
