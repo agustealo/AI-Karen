@@ -2323,3 +2323,35 @@ async def test_revocation_during_nonstream_memory_persistence_returns_denial():
     assert result.answer == ""
     assert result.metadata.extra["error_code"] == "CHAT_MEMORY_SOURCE_REVOKED"
     assert not gateway.calls
+
+
+@pytest.mark.asyncio
+async def test_graph_wrapper_close_propagates_to_workflow_stream():
+    runtime, _ = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    closed = asyncio.Event()
+
+    async def workflow_stream(*args, **kwargs):
+        try:
+            yield ChatStreamChunk(
+                type="content", content="graph delta", correlation_id="corr-1",
+            )
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    with patch(
+        "ai_karen_engine.core.runtime.chat_runtime.get_workflow_runtime"
+    ) as workflow:
+        workflow.return_value.stream.side_effect = workflow_stream
+        stream = runtime._run_graph_stream(
+            request, decision, plan, meter,
+        )
+        first = await asyncio.wait_for(anext(stream), timeout=5)
+        assert first.content == "graph delta"
+        await asyncio.wait_for(stream.aclose(), timeout=5)
+    assert closed.is_set()
