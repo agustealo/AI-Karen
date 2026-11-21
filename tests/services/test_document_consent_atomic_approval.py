@@ -32,6 +32,7 @@ def _args():
         author_actor_id=str(uuid.uuid4()),
         fingerprint="a" * 64,
         action="issue",
+        scope_record={"source_sha256": "a" * 64, "action": "issue"},
     )
 
 
@@ -67,11 +68,14 @@ async def test_approval_consumption_requires_author_actor_intent_and_exact_finge
         "request_fingerprint=:fingerprint", "intent=:intent",
         "expires_at>clock_timestamp()", "RETURNING *",
         "SET status='consumed'", "request_payload='{}'::jsonb",
+        "decision_reason='explicit_author_confirmation'",
+        "CAST(:scope_record AS jsonb)", "risk_level='high'",
     ):
         assert condition in sql
     assert params["intent"] == "writing_style.document_consent.issue"
     assert params["fingerprint"] == args["fingerprint"]
     assert params["actor"] == args["author_actor_id"]
+    assert params["scope_record"] is not None
 
 
 async def test_approved_receipt_is_returned_only_from_database_row():
