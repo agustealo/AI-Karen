@@ -227,32 +227,9 @@ class WritingStyleSampleProvenance:
                 session, tenant=tenant, profile=profile, sample=sample,
                 actor=actor, action="revoke", correlation=correlation_id,
             )
-            # Conservatively fence a profile that might have been derived
-            # from this sample. No inference remains usable after revocation.
-            if row[1] == "published":
-                await session.execute(
-                    text(
-                        "UPDATE public.writing_style_profiles SET state='revoked',"
-                        "updated_at=clock_timestamp() "
-                        "WHERE tenant_id=CAST(:tenant AS uuid) "
-                        "AND profile_id=CAST(:profile AS uuid) "
-                        "AND owner_actor_id=CAST(:actor AS uuid)"
-                    ),
-                    {"tenant": tenant, "profile": profile, "actor": actor},
-                )
-                await session.execute(
-                    text(
-                        "UPDATE public.writing_style_grants SET revoked_at=clock_timestamp() "
-                        "WHERE tenant_id=CAST(:tenant AS uuid) "
-                        "AND profile_id=CAST(:profile AS uuid) AND revoked_at IS NULL"
-                    ),
-                    {"tenant": tenant, "profile": profile},
-                )
-                await WritingStyleProfileRepository._audit(
-                    session, tenant_id=tenant, profile_id=profile,
-                    actor_id=actor, action="revoke_profile",
-                    revision=int(row[0]), correlation_id=correlation_id,
-                )
+            # The AFTER UPDATE database trigger now fences a published parent,
+            # all active grants, and the value-free profile audit atomically.
+            # Do not duplicate the mutation or audit in this wrapper.
             return True
 
 
