@@ -59,6 +59,15 @@ async def test_first_party_author_consent_postgres() -> None:
             DROP TABLE IF EXISTS public.writing_style_revisions CASCADE;
             DROP TABLE IF EXISTS public.writing_style_profiles CASCADE;
             DROP TABLE IF EXISTS public.files CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_only() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_fence() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_bound_grant_to_source_consent() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_require_draft_sample() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_enforce_profile_lifecycle() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_require_source_use_consent() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_prevent_revision_mutation() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_consent_validate() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
