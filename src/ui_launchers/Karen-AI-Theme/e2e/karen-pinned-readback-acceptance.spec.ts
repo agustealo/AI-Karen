@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 
 /**
@@ -302,6 +302,18 @@ test("KPIN-MUTATION-LIVE: authenticated dual-account denial, revision CAS and co
     serviceWorkers: "block",
   });
   try {
+    // Share only independently attested first-party deployment protection,
+    // never the owner's application session or authentication cookie.
+    const deploymentCookies = (await page.context().cookies(approvedOrigin.origin))
+      .filter(cookie => cookie.name === "_vercel_jwt" && cookie.secure &&
+        cookie.domain.replace(/^\\./, "") === approvedOrigin.hostname);
+    if (approvedOrigin.hostname.endsWith(".vercel.app") &&
+        deploymentCookies.length !== 1) {
+      throw new Error("Approved isolated browser deployment access missing");
+    }
+    if (deploymentCookies.length) {
+      await otherContext.addCookies(deploymentCookies);
+    }
     const foreign = await otherContext.newPage();
     await signInApprovedKaren(foreign, foreignEmail, foreignPassword);
     await foreign.goto("/dashboard");
