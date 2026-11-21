@@ -64,7 +64,11 @@ def test_live_cross_principal_negative_acceptance_is_protected_and_not_skipped()
     workflow = WORKFLOW.read_text(encoding="utf-8")
     spec = SPEC.read_text(encoding="utf-8")
     assert "          - content-intelligence-denial" in workflow
-    assert "inputs.scenario == 'content-intelligence-denial') && github.ref == 'refs/heads/main'" in workflow
+    assert (
+        "inputs.scenario == 'content-intelligence-denial' || "
+        "inputs.scenario == 'content-intelligence-revocation') && "
+        "github.ref == 'refs/heads/main'"
+    ) in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE:" in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID:" in workflow
     assert "KAREN_UX_ISOLATION_EMAIL: ${{ secrets.KAREN_UX_ISOLATION_EMAIL }}" in workflow
