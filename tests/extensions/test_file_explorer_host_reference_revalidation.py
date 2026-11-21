@@ -48,11 +48,23 @@ class Source:
 class Kernel:
     def __init__(self, enabled=True):
         self.enabled = enabled
+        self.calls = []
 
     def get_record(self, plugin_id):
         assert plugin_id == "file-explorer"
         return {"status": "enabled" if self.enabled else "disabled",
                 "dependencies_resolved": True}
+
+    async def execute(self, request):
+        from types import SimpleNamespace
+
+        self.calls.append(request)
+        roles = request.context.audit_context.get("user_roles", ["user"])
+        if not any(role in {"user", "admin", "developer"} for role in roles):
+            return SimpleNamespace(status="denied", payload=None)
+        if request.context.resource_scope.get("file_explorer_entries") != []:
+            return SimpleNamespace(status="denied", payload=None)
+        return SimpleNamespace(status="success", payload={"operation": "list", "items": []})
 
 
 @pytest.mark.asyncio
@@ -207,3 +219,35 @@ async def test_real_artifact_adapter_rejects_cross_tenant_metadata():
             source_id=SOURCE_ID, expected_revision=REVISION,
         )
     assert repository.metadata_calls == [(SOURCE_ID, TENANT)]
+
+
+@pytest.mark.asyncio
+async def test_guest_role_denied_by_kernel_before_repository_access():
+    owner = Source()
+    kernel = Kernel()
+    host = FileExplorerInventoryHost(kernel=kernel, source=owner)
+    with pytest.raises(PermissionError, match="file_explorer_kernel_denied"):
+        await host.revalidate_owner_selection(
+            context=context(audit_context={"user_roles": ["guest"]}),
+            plan=plan(), source_id=SOURCE_ID, expected_revision=REVISION,
+        )
+    assert owner.calls == []
+    assert len(kernel.calls) == 1
+    assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
+
+
+@pytest.mark.asyncio
+async def test_canonical_admission_uses_empty_host_snapshot_and_plan():
+    owner = Source()
+    kernel = Kernel()
+    await FileExplorerInventoryHost(kernel=kernel, source=owner).revalidate_owner_selection(
+        context=context(), plan=plan(), source_id=SOURCE_ID,
+        expected_revision=REVISION,
+    )
+    assert len(kernel.calls) == 1
+    assert kernel.calls[0].authorized_plan.policy_decision_id == "policy"
+    assert kernel.calls[0].payload == {"operation": "list"}
+    assert kernel.calls[0].context.resource_scope == {
+        "file_explorer_grant": "host_verified",
+        "file_explorer_entries": [],
+    }
