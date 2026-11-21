@@ -239,19 +239,38 @@ class WritingStyleProfileRepository:
             row = result.first()
             if row is None:
                 raise WritingStyleAccessDenied("style_access_denied")
+            # A delegated grant must never outlive consent on any source
+            # sample backing this identity. The profile owner can inspect
+            # private sample metadata under RLS; delegates cannot.
+            sources = await session.execute(
+                text(
+                    "SELECT bool_and(style_use_allowed AND revoked_at IS NULL "
+                    "AND (consent_expires_at IS NULL "
+                    "OR consent_expires_at > clock_timestamp())) AS usable, "
+                    "min(consent_expires_at) AS expires_at "
+                    "FROM public.writing_style_sample_evidence "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) "
+                    "AND profile_id=CAST(:profile AS uuid)"
+                ),
+                dict(tenant=tenant, profile=profile),
+            )
+            consent = sources.mappings().one()
+            if consent["usable"] is False:
+                raise WritingStyleAccessDenied("style_source_unavailable")
+            expires_at = consent["expires_at"]
             await session.execute(
                 text(
                     "INSERT INTO public.writing_style_grants "
-                    "(tenant_id, profile_id, owner_actor_id, actor_id, purpose, granted_by) VALUES "
+                    "(tenant_id, profile_id, owner_actor_id, actor_id, purpose, granted_by, expires_at) VALUES "
                     "(CAST(:tenant AS uuid), CAST(:profile AS uuid), "
                     "CAST(:actor AS uuid), CAST(:grantee AS uuid), "
-                    ":purpose, CAST(:actor AS uuid)) "
+                    ":purpose, CAST(:actor AS uuid), :expires) "
                     "ON CONFLICT (tenant_id, profile_id, actor_id, purpose) "
                     "DO UPDATE SET granted_by = EXCLUDED.granted_by, revoked_at = NULL, "
-                    "expires_at = NULL"
+                    "expires_at = EXCLUDED.expires_at"
                 ),
                 dict(tenant=tenant, profile=profile, grantee=grantee,
-                     purpose=purpose, actor=actor),
+                     purpose=purpose, actor=actor, expires=expires_at),
             )
             await self._audit(
                 session, tenant_id=tenant, profile_id=profile, actor_id=actor,
@@ -358,6 +377,11 @@ class WritingStyleProfileRepository:
                     "ON g.tenant_id=p.tenant_id AND g.profile_id=p.profile_id "
                     "WHERE p.tenant_id=CAST(:tenant AS uuid) "
                     "AND p.profile_id=CAST(:profile AS uuid) AND p.state='published' "
+                    "AND NOT EXISTS (SELECT 1 FROM public.writing_style_sample_evidence s "
+                    "WHERE s.tenant_id=p.tenant_id AND s.profile_id=p.profile_id "
+                    "AND (s.revoked_at IS NOT NULL OR s.style_use_allowed IS NOT TRUE "
+                    "OR (s.consent_expires_at IS NOT NULL "
+                    "AND s.consent_expires_at <= clock_timestamp()))) "
                     "AND g.actor_id=CAST(:actor AS uuid) AND g.purpose=:purpose "
                     "AND g.revoked_at IS NULL "
                     "AND (g.expires_at IS NULL OR g.expires_at>clock_timestamp())"
@@ -397,6 +421,11 @@ class WritingStyleProfileRepository:
                     "WHERE p.tenant_id=CAST(:tenant AS uuid) "
                     "AND p.profile_id=CAST(:profile AS uuid) "
                     "AND p.state='published' "
+                    "AND NOT EXISTS (SELECT 1 FROM public.writing_style_sample_evidence s "
+                    "WHERE s.tenant_id=p.tenant_id AND s.profile_id=p.profile_id "
+                    "AND (s.revoked_at IS NOT NULL OR s.style_use_allowed IS NOT TRUE "
+                    "OR (s.consent_expires_at IS NOT NULL "
+                    "AND s.consent_expires_at <= clock_timestamp()))) "
                     "AND r.revision_id=CAST(:revision AS uuid) "
                     "AND r.revision_number=:number AND r.content_digest=:digest "
                     "AND g.actor_id=CAST(:actor AS uuid) AND g.purpose=:purpose "
