@@ -4908,14 +4908,22 @@ class ChatRuntime:
         meter: ExecutionBudgetMeter,
         _meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[ChatStreamChunk]:
-        async for chunk in get_workflow_runtime().stream(
+        workflow_stream = get_workflow_runtime().stream(
             request, decision, plan, budget_meter=meter,
-        ):
-            if chunk.type == ChatStreamEventType.COMPLETE:
-                continue
-            if _meta is not None:
-                self._accumulate_chunk_metadata(chunk, _meta)
-            yield chunk
+        )
+        try:
+            async for chunk in workflow_stream:
+                if chunk.type == ChatStreamEventType.COMPLETE:
+                    continue
+                if _meta is not None:
+                    self._accumulate_chunk_metadata(chunk, _meta)
+                yield chunk
+        finally:
+            # Outer revocation closes graph/workflow execution immediately,
+            # not just this forwarding generator.
+            close_stream = getattr(workflow_stream, "aclose", None)
+            if callable(close_stream):
+                await close_stream()
 
     @staticmethod
     def _should_execute_authorized_reasoning(
