@@ -306,7 +306,7 @@ test("KPIN-MUTATION-LIVE: authenticated dual-account denial, revision CAS and co
     // never the owner's application session or authentication cookie.
     const deploymentCookies = (await page.context().cookies(approvedOrigin.origin))
       .filter(cookie => cookie.name === "_vercel_jwt" && cookie.secure &&
-        cookie.domain.replace(/^\\./, "") === approvedOrigin.hostname);
+        cookie.domain.replace(/^\./, "") === approvedOrigin.hostname);
     if (approvedOrigin.hostname.endsWith(".vercel.app") &&
         deploymentCookies.length !== 1) {
       throw new Error("Approved isolated browser deployment access missing");
