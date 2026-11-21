@@ -238,6 +238,15 @@ export function DocumentAuthorConsentConfirmation({
                   Issue approved consent receipt
                 </button>
               )}
+              {preview.status === 'consumed' && !receiptId && (
+                <button
+                  type="button"
+                  onClick={() => { void recoverReceipt(preview.approval_id); }}
+                  className="rounded-md border border-border px-4 py-2"
+                >
+                  Recheck current consent receipt
+                </button>
+              )}
               {issuing && <p role="status">Issuing consent receipt…</p>}
               {receiptId && (
                 <p className="break-all text-sm">
