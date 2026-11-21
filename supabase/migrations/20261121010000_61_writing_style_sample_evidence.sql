@@ -171,11 +171,9 @@ DECLARE
     minimum_expiry timestamptz;
     all_usable boolean;
 BEGIN
-    -- Historical revoked grants cannot be reopened through direct SQL.
-    IF TG_OP = 'UPDATE' AND OLD.revoked_at IS NOT NULL
-       AND NEW.revoked_at IS NULL THEN
-        RAISE EXCEPTION 'writing style grant already revoked';
-    END IF;
+    -- Re-granting an owner-revoked purpose is allowed only while the parent
+    -- remains published and current source consent is valid. The checks below
+    -- apply to both new grants and reactivated existing rows.
 
     -- Revocation must be allowed when the profile was already revoked.
     IF NEW.revoked_at IS NOT NULL THEN
