@@ -16,6 +16,9 @@ const preview = {
   status: 'pending',
   profile_id: '11111111-2222-3333-4444-555555555555',
   artifact_id: '11111111-2222-3333-4444-666666666666',
+  source_name: 'author-original.txt',
+  source_bytes: 1024,
+  source_mime_type: 'text/plain',
   source_sha256: 'a'.repeat(64),
   analysis_allowed: true,
   style_use_allowed: false,
@@ -42,6 +45,8 @@ describe('first-party document author confirmation', () => {
     render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
     expect(await screen.findByText(preview.artifact_id)).toBeTruthy();
     expect(screen.getByText(preview.source_sha256)).toBeTruthy();
+    expect(screen.getByText('author-original.txt')).toBeTruthy();
+    expect(screen.getByText('1024 bytes (text/plain)')).toBeTruthy();
     expect(screen.getByText('Not allowed')).toBeTruthy();
 
     const submit = screen.getByRole('button', { name: 'Confirm author consent' });
@@ -121,6 +126,32 @@ describe('first-party document author confirmation', () => {
     expect(api.post).toHaveBeenCalledWith(
       '/api/approvals/document-consent/' + approvalId + '/issue',
     );
+  });
+
+  it('recovers a receipt from a consumed approval without issuing again', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.endsWith('/receipt')
+        ? {
+            approval_id: approvalId, status: 'issued',
+            receipt_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+          }
+        : { ...preview, status: 'consumed' },
+    ));
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    expect(await screen.findByText(/Verified receipt ID/)).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/receipt',
+    );
+    expect(api.post).not.toHaveBeenCalled();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('denies review when the server has no valid source identity', async () => {
+    api.get.mockResolvedValue({ ...preview, source_name: '' });
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
   });
 
   it('does not send an invalid approval id', async () => {
