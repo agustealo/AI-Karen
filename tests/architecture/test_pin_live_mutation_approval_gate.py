@@ -69,3 +69,25 @@ def test_real_pin_reorder_requires_one_winner_under_concurrent_distinct_keys():
     assert 'expect(stale.status, "Stale revision must not commit a second reorder").toBe(409)' in mutation_trial
     assert "await page.reload()" in mutation_trial
     assert 'await expect(dock.getByTestId("karen-pin-controls")).toHaveCount(0)' in mutation_trial
+
+
+def test_live_disposable_pin_trial_proves_durable_session_revocation():
+    """A deleted local token alone is not evidence of server revocation."""
+    spec = SPEC.read_text(encoding="utf-8")
+    trial = spec[spec.index('test("KPIN-MUTATION-LIVE:'):]
+    assert 'new URL("/api/auth/logout", origin)' in trial
+    assert 'body: JSON.stringify({ refresh_token: refreshToken })' in trial
+    assert 'Authorization: `Bearer ${token}`' in trial
+    assert 'new URL("/api/chat/ag-ui/pins", origin)' in trial
+    assert 'new URL("/api/chat/ag-ui/pins/capabilities", origin)' in trial
+    assert 'new URL("/api/chat/ag-ui/pins/mutations", origin)' in trial
+    assert 'credentials: "omit"' in trial
+    assert "readStatus: 401" in trial
+    assert "capabilityStatus: 401" in trial
+    assert "mutationStatus: 401" in trial
+    assert 'await page.reload()' in trial
+    assert 'await expect(page.getByTestId("karen-pins-authorized")).toHaveCount(0)' in trial
+    assert 'await expect(page.getByTestId("karen-pin-controls")).toHaveCount(0)' in trial
+    assert 'console.log(token)' not in trial
+    assert 'console.log(refreshToken)' not in trial
+    assert 'page.route(' not in trial
