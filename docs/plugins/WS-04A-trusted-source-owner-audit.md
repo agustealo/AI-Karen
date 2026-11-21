@@ -136,3 +136,11 @@ The existing `WritingStylePersistedSampleAuthority` already:
 **WS-04A2 is intentionally subordinate.** Its `ArtifactWritingStyleSourceAuthority` implements the *already established* source-authorizer interface for one possible document resource, but cannot be activated until an actual author-consent issuer exists. Do not duplicate or replace the WS-02C persisted sample authority. Before runtime integration, verify whether the canonical ArtifactStore can provide WS-02C's content-reader requirement with authenticated ownership and source-digest stability; never substitute requester-provided sample bytes for a trusted source read.
 
 Source-adapter positive decisions are not end-to-end publication or delegated use grants; those need their own current-permission, source-issuer and audit proof.
+
+## WS-04A2 permission-race refinement after reconciled green checks
+
+The live mainline schema audit confirmed `public.files` stores `file_id` as text, `owner_user_id` as a UUID and `sha256` as nullable text, while the source adapter intentionally accepts only canonical UUID string IDs and validated SHA-256 values. The `files` owner is a storage owner, **not** proof that this actor authored third-party document content. Existing channel-pairing or memory consent cannot be converted into author-signed style consent.
+
+The inactive artifact adapter now issues a **second current-consent call after its final artifact metadata read**. It rejects revocation, missing decisions, changed consent receipts, author/owner/scope changes, changed explicit use rights, changed expiration and verifier failures. Focused tests exercise revocation/receipt rotation/permission expiry changes between issuer reads and require two real source metadata reads on the positive path. The adapter remains fail closed with no production consent issuer.
+
+This is an intermediate consistency fence, **not** a serializable database transaction; consent may still change just after verification. A complete authenticated publication/use path must enforce a trusted persisted grant and transactional or monotonic revocation fence with real source-owner evidence. Reuse WS-02C's `WritingStylePersistedSampleAuthority` for analysis, not a duplicate analysis engine. Keep every source family disabled until this end-to-end proof exists.
