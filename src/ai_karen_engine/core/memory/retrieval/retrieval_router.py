@@ -175,6 +175,49 @@ class HybridRetrievalRouter:
             content = self._stm_content(slot, data)
             if not content:
                 continue
+            # RECENT_CONTEXT is a projection of a committed event, not an
+            # independent memory authority. Rehydrate the current, consent-
+            # eligible ledger row before returning any projected content.
+            # Redis metadata cannot grant access or replace canonical text.
+            canonical_event: dict[str, Any] | None = None
+            if slot == STMSlot.RECENT_CONTEXT:
+                latest = data.get("latest") if isinstance(data, dict) else None
+                if not isinstance(latest, dict):
+                    continue
+                event_id = str(latest.get("event_id") or "").strip()
+                if not event_id:
+                    continue
+                try:
+                    found = await self.event_source.fetch_many(
+                        tenant_id=str(query.tenant_id),
+                        user_id=str(query.user_id),
+                        event_ids=[event_id],
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "memory.stm_event_verification.failed",
+                        extra={
+                            "tenant_id": query.tenant_id,
+                            "user_id": query.user_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    continue
+                canonical_event = found.get(event_id)
+                if not isinstance(canonical_event, dict):
+                    continue
+                payload = canonical_event.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                canonical_text = payload.get("content")
+                if (
+                    not isinstance(canonical_text, str)
+                    or not canonical_text.strip()
+                    or canonical_text != latest.get("content")
+                    or canonical_event.get("source_type") != latest.get("source_type")
+                    or canonical_event.get("source_ref") != latest.get("source_ref")
+                ):
+                    continue
             candidate_id = str(
                 uuid.uuid5(
                     uuid.NAMESPACE_URL,
@@ -195,10 +238,17 @@ class HybridRetrievalRouter:
                         "session_id": session_id,
                         "stm_slot": slot.value,
                         "ephemeral": True,
+                        **({
+                            "record_type": "memory_event",
+                            "event_id": event_id,
+                            "source_type": canonical_event["source_type"],
+                            "source_ref": canonical_event.get("source_ref"),
+                        } if canonical_event is not None else {}),
                     },
                     custom={
                         "stm_slot": slot.value,
                         "ephemeral": True,
+                        **({"event_id": event_id} if canonical_event is not None else {}),
                         "current_goal_relevance": 1.0
                         if slot == STMSlot.ACTIVE_GOAL
                         else 0.0,
