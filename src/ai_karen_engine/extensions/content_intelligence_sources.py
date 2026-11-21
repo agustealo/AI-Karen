@@ -109,6 +109,30 @@ class ContentSourceHost:
             or record.get("dependencies_resolved") is not True
         ):
             raise PermissionError("content_source_plugin_disabled")
+        # The kernel owns RBAC, lifecycle, permission and action admission.
+        # Probe with the already-validated, non-content source identifier.
+        # Its result is discarded and never presented as document analysis.
+        admission = await self._kernel.execute(ExtensionExecutionRequest(
+            plugin_id=PLUGIN,
+            capability="execute",
+            payload={
+                "operation": "analyze",
+                "documents": [{
+                    "id": references[0]["source_id"],
+                    "name": "source-reference",
+                    "text": references[0]["source_id"],
+                }],
+            },
+            context=context,
+            authorized_plan=plan,
+        ))
+        admission_payload = getattr(admission, "payload", None)
+        if (
+            getattr(admission, "status", None) != "success"
+            or not isinstance(admission_payload, dict)
+            or admission_payload.get("operation") != "analyze"
+        ):
+            raise PermissionError("content_source_kernel_admission_denied")
         documents: list[dict[str, str]] = []
         total_chars = 0
         for ref in references:
