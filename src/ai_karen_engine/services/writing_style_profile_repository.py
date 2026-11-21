@@ -9,6 +9,7 @@ No source sample text or provider credentials are stored here.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from typing import Any, Callable
@@ -155,6 +156,7 @@ class WritingStyleProfileRepository:
         digest = KariSignatureRevision.digest(expression)
         async with self._client_factory().get_async_session() as session:
             await self._scope(session, tenant)
+            await session.execute(text("SET CONSTRAINTS writing_style_current_revision_fk DEFERRED"))
             result = await session.execute(
                 text(
                     "UPDATE public.writing_style_profiles SET "
@@ -174,11 +176,7 @@ class WritingStyleProfileRepository:
             if row is None:
                 raise WritingStyleRevisionConflict("style_publication_conflict")
             number = int(row[0])
-            # Current-revision FK is deferrable: publication and its immutable
-            # referenced revision are inserted atomically in this transaction.
-            await session.execute(
-                text("SET CONSTRAINTS writing_style_current_revision_fk DEFERRED")
-            )
+            # FK verification occurs at commit, after the immutable revision insert.
             await session.execute(
                 text(
                     "INSERT INTO public.writing_style_revisions "
@@ -189,7 +187,7 @@ class WritingStyleProfileRepository:
                     ":digest, CAST(:actor AS uuid))"
                 ),
                 dict(tenant=tenant, profile=profile, revision=revision,
-                     number=number, expression=__import__("json").dumps(expression),
+                     number=number, expression=json.dumps(expression, sort_keys=True, separators=(",", ":")),
                      digest=digest, actor=actor),
             )
             await self._audit(
