@@ -222,46 +222,23 @@ class MCPServiceFactory:
             return None
 
     def create_knowledge_graph_service(self):
-        """Create and configure knowledge graph service."""
+        """Do not register a raw, unscoped graph execution service.
+
+        Memory graph evidence is available only through the canonical runtime's
+        authorized recall path, not an MCP Cypher endpoint.
+        """
         if not self.config.enable_knowledge_graph_service:
-            logger.info("Knowledge graph service disabled by configuration")
+            logger.info("Legacy graph MCP endpoint disabled by configuration")
             return None
 
-        try:
-            from ai_karen_engine.mcp.services import KnowledgeGraphService
-            from ai_karen_engine.services.knowledge_graph_client import (
-                KnowledgeGraphClient,
-            )
-
-            # Get or create registry
-            registry = self.get_service("service_registry")
-            if not registry:
-                registry = self.create_service_registry()
-
-            if not registry:
-                logger.error(
-                    "Cannot create knowledge graph service: registry unavailable"
-                )
-                return None
-
-            # Create knowledge graph client
-            try:
-                kg_client = KnowledgeGraphClient()
-            except Exception as e:
-                logger.warning(f"KnowledgeGraphClient unavailable: {e}")
-                return None
-
-            service = KnowledgeGraphService(
-                kg_client=kg_client, registry=registry, name="knowledge_graph"
-            )
-
-            self._services["knowledge_graph_service"] = service
-            logger.info("Knowledge graph service created successfully")
-            return service
-
-        except Exception as e:
-            logger.error(f"Failed to create knowledge graph service: {e}")
-            return None
+        # This historical configuration flag does not grant authorization.
+        # Fail closed without constructing an independent database client or
+        # registering an MCP service with permissive default roles.
+        logger.warning(
+            "mcp.legacy_graph_service.disabled",
+            extra={"reason": "canonical_memory_authority_required"},
+        )
+        return None
 
     def create_llm_service(self):
         """Create and configure LLM service."""
