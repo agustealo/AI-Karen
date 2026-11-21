@@ -184,6 +184,66 @@ async def test_repository_accepts_source_free_withheld_code_marker_and_rejects_u
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"component_type": "code.artifact", "data": {"source": "print('secret')"}},
+        {"items": [
+            {"component_type": "chart.bar", "data": {"labels": ["safe"]}},
+            {"value": {"component_type": "code.artifact",
+                       "data": {"source": "print('secret')"}}},
+        ]},
+        {"items": [{"children": [{"component_type": "code.artifact",
+                                    "data": {"source": "print('secret')"}}]}]},
+    ],
+)
+async def test_repository_rejects_direct_revocable_code_before_any_sql(
+    monkeypatch, value,
+):
+    """A direct journal caller cannot bypass the coordinator's source scrub."""
+    tx = Transaction()
+    scoped(monkeypatch, tx)
+    event = {
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": value,
+    }
+    with pytest.raises(
+        ValueError, match="chat_projection_revocable_code_not_durable",
+    ):
+        await repository.SqlChatRunRepository().append_projected_event(
+            lease(), event=event,
+        )
+    assert tx.queries == []
+
+
+@pytest.mark.asyncio
+async def test_repository_allows_non_code_presentation_from_direct_caller(
+    monkeypatch,
+):
+    """The durable code fence must not block an ordinary safe presentation."""
+    tx = Transaction()
+    scoped(monkeypatch, tx)
+    event = {
+        "type": "CUSTOM",
+        "name": "karen.presentation.v1",
+        "value": {
+            "component_type": "data.table",
+            "data": {"rows": [{"name": "non-code observation"}]},
+        },
+    }
+    assert await repository.SqlChatRunRepository().append_projected_event(
+        lease(), event=event,
+    ) == 1
+    writes = [
+        params for sql, params in zip(tx.queries, tx.params)
+        if "INSERT INTO public.runtime_chat_run_events" in sql
+    ]
+    assert len(writes) == 1
+    assert json.loads(writes[0]["event_payload"]) == event
+
+
+@pytest.mark.asyncio
 async def test_stop_or_expired_fence_refuses_further_projected_tokens(monkeypatch):
     tx = Transaction(status="cancelling")
     scoped(monkeypatch, tx)
