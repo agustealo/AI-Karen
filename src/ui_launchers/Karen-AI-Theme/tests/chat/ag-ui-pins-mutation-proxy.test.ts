@@ -157,7 +157,7 @@ describe("KAREN single-shot authenticated presentation pin mutation ingress", ()
       headers: { "content-type": "application/json", Authorization: "Bearer signed-session" },
       body: streamed,
       duplex: "half",
-    } as RequestInit & { duplex: "half" });
+    } as NonNullable<ConstructorParameters<typeof NextRequest>[1]> & { duplex: "half" });
     expect(chunked.headers.get("content-length")).toBeNull();
     const response = await POST(chunked);
     expect(response.status).toBe(413);
@@ -180,7 +180,7 @@ describe("KAREN single-shot authenticated presentation pin mutation ingress", ()
       headers: { "content-type": "application/json" },
       body: streamed,
       duplex: "half",
-    } as RequestInit & { duplex: "half" });
+    } as NonNullable<ConstructorParameters<typeof NextRequest>[1]> & { duplex: "half" });
     const response = await POST(invalid);
     expect(response.status).toBe(400);
     expect(spy).not.toHaveBeenCalled();
