@@ -142,7 +142,6 @@ async def test_bearer_confirmed_scope_approves_only_matching_pending_receipt(
 
 
 async def test_pending_admission_uses_canonical_source_check(monkeypatch):
-    from ai_karen_engine.auth import session as auth_session
     from ai_karen_engine.persistence.postgres import transactions
     from ai_karen_engine.services.postgres_document_style_consent_issuer import (
         PostgresDocumentStyleConsentIssuer,
