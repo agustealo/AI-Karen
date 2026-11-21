@@ -123,3 +123,87 @@ async def test_repository_must_confirm_verified_owner():
             context=context(), plan=plan(),
             source_id=SOURCE_ID, expected_revision=REVISION,
         )
+
+
+class ArtifactRepository:
+    """Controlled repository exercising the real canonical artifact adapter."""
+
+    def __init__(self):
+        self.metadata_calls = []
+        self.artifact = {
+            "id": SOURCE_ID,
+            "tenant_id": TENANT,
+            "user_id": OWNER,
+            "filename": "notes.txt",
+            "size_bytes": 16,
+            "sha256": REVISION,
+            "deleted_at": None,
+        }
+
+    async def list_owner_artifacts_page(self, *args, **kwargs):
+        raise AssertionError("Reference revalidation must not use list results")
+
+    async def get_metadata(self, artifact_id, tenant_id):
+        from types import SimpleNamespace
+
+        self.metadata_calls.append((artifact_id, tenant_id))
+        return SimpleNamespace(
+            success=True,
+            data=SimpleNamespace(**self.artifact),
+        )
+
+
+@pytest.mark.asyncio
+async def test_real_artifact_adapter_denies_revision_change_and_owner_revocation():
+    from importlib import import_module
+
+    adapter_module = import_module(
+        "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
+    )
+    repository = ArtifactRepository()
+    host = FileExplorerInventoryHost(
+        kernel=Kernel(),
+        source=adapter_module.ArtifactSourceAdapter(repository),
+    )
+    kwargs = dict(
+        context=context(), plan=plan(), source_id=SOURCE_ID,
+        expected_revision=REVISION,
+    )
+    first = await host.revalidate_owner_selection(**kwargs)
+    assert first["source_id"] == SOURCE_ID
+    assert "storage_key" not in first
+    repository.artifact["sha256"] = "b" * 64
+    with pytest.raises(PermissionError, match="source_revision_changed"):
+        await host.revalidate_owner_selection(**kwargs)
+    repository.artifact["sha256"] = REVISION
+    repository.artifact["user_id"] = OTHER
+    with pytest.raises(PermissionError, match="source_unavailable"):
+        await host.revalidate_owner_selection(**kwargs)
+    repository.artifact["user_id"] = OWNER
+    from datetime import datetime, timezone
+
+    repository.artifact["deleted_at"] = datetime.now(timezone.utc)
+    with pytest.raises(PermissionError, match="source_unavailable"):
+        await host.revalidate_owner_selection(**kwargs)
+    assert repository.metadata_calls == [(SOURCE_ID, TENANT)] * 4
+
+
+@pytest.mark.asyncio
+async def test_real_artifact_adapter_rejects_cross_tenant_metadata():
+    from importlib import import_module
+
+    adapter_module = import_module(
+        "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
+    )
+    repository = ArtifactRepository()
+    repository.artifact["tenant_id"] = OTHER
+    host = FileExplorerInventoryHost(
+        kernel=Kernel(),
+        source=adapter_module.ArtifactSourceAdapter(repository),
+    )
+    with pytest.raises(PermissionError, match="source_unavailable"):
+        await host.revalidate_owner_selection(
+            context=context(), plan=plan(),
+            source_id=SOURCE_ID, expected_revision=REVISION,
+        )
+    assert repository.metadata_calls == [(SOURCE_ID, TENANT)]
