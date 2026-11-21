@@ -130,6 +130,7 @@ async def test_authenticated_ingress_delegates_only_valid_references(monkeypatch
     granted = []
     rbac = SimpleNamespace(
         has_permission=lambda user, permission: True,
+        get_user_permissions=lambda user: [ingress.Permission.DATA_READ],
         audit_access_attempt=lambda *args, **kwargs: granted.append(kwargs),
     )
     monkeypatch.setattr(ingress, "get_rbac_manager", lambda: rbac)
@@ -201,6 +202,7 @@ async def test_application_composes_real_source_host_and_uses_verified_text(monk
     import hashlib
 
     from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.integrations import supabase_client
     from ai_karen_engine.services.database.repositories import repository_factory
 
     kernel = Kernel()
@@ -211,10 +213,15 @@ async def test_application_composes_real_source_host_and_uses_verified_text(monk
         "get_database_client",
         lambda: SimpleNamespace(get_async_session=lambda: None),
     )
+    platform = SimpleNamespace(storage=SimpleNamespace(from_=lambda name: object()))
+
+    def configured_factory(*, session_factory, storage_client=None):
+        assert storage_client is platform
+        return SimpleNamespace(create_artifact_store=lambda: store)
+
+    monkeypatch.setattr(supabase_client, "get_supabase_platform", lambda: platform)
     monkeypatch.setattr(
-        repository_factory,
-        "RepositoryFactory",
-        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: store),
+        repository_factory, "RepositoryFactory", configured_factory,
     )
     # Stored metadata and text must agree on their SHA-256 revision.
     original_read = store.read_owner_active_code
@@ -237,3 +244,27 @@ async def test_application_composes_real_source_host_and_uses_verified_text(monk
     assert kernel.executions[0].payload["documents"] == [{
         "id": FILE, "name": "notes.txt", "text": "example",
     }]
+
+
+@pytest.mark.asyncio
+async def test_storage_unavailable_fails_closed_before_artifact_read(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.integrations import supabase_client
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    monkeypatch.setattr(
+        database_factory,
+        "get_database_client",
+        lambda: SimpleNamespace(get_async_session=lambda: None),
+    )
+    monkeypatch.setattr(
+        supabase_client, "get_supabase_platform",
+        lambda: SimpleNamespace(storage=None),
+    )
+
+    def forbidden_factory(**kwargs):
+        raise AssertionError("No repository may be created without Storage")
+
+    monkeypatch.setattr(repository_factory, "RepositoryFactory", forbidden_factory)
+    with pytest.raises(RuntimeError, match="content_source_storage_unavailable"):
+        await PluginService.analyze_content_owner_sources(_service(), **_args())
