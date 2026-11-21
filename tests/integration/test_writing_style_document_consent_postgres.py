@@ -20,6 +20,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.document_consent_approval import (
+    DocumentConsentApprovalScope,
+)
 from ai_karen_engine.persistence.repositories.approval_repository import (
     SqlApprovalRepository,
 )
@@ -302,11 +307,57 @@ async def test_first_party_author_consent_postgres() -> None:
             expires_at=expiry, correlation_id="denied-policy",
         ) is None
         policy.authorize_issuance.return_value = True
-        issued = await issuer.issue_first_party(
-            **scope, analysis_allowed=True, style_use_allowed=True,
-            expires_at=expiry, correlation_id="author-affirmative",
+        bound_session_id = uuid.uuid4().hex
+        approval_scope = DocumentConsentApprovalScope(
+            tenant_id=str(tenant), author_actor_id=str(owner),
+            session_id=bound_session_id, profile_id=str(profile),
+            artifact_id=str(artifact), source_sha256=digest,
+            action="issue", analysis_allowed=True,
+            style_use_allowed=True, expires_at=expiry,
+        )
+        bound_approval = uuid.uuid4()
+        await raw.execute(
+            "INSERT INTO public.runtime_approval_requests "
+            "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
+            "risk_level,request_payload,status,decided_by,expires_at) "
+            "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
+            "'high','{}'::jsonb,'approved',$3,"
+            "clock_timestamp()+interval '1 hour')",
+            bound_approval, tenant, owner, approval_scope.fingerprint(),
+        )
+        authenticated = ChatExecutionContext(
+            user_id=str(owner), tenant_id=str(tenant),
+            session_id=bound_session_id,
+            authenticated_user=UserData(
+                user_id=str(owner), tenant_id=str(tenant),
+                is_active=True, is_verified=True,
+            ),
+        )
+        assert await issuer.issue_with_approved_scope(
+            scope=approval_scope, context=authenticated,
+            approval_id=str(uuid.uuid4()),
+            correlation_id="wrong-approval",
+        ) is None
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests "
+            "WHERE approval_id=$1", bound_approval,
+        ) == "approved"
+
+        issued = await issuer.issue_with_approved_scope(
+            scope=approval_scope, context=authenticated,
+            approval_id=str(bound_approval),
+            correlation_id="author-affirmative",
         )
         assert issued is not None
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests "
+            "WHERE approval_id=$1", bound_approval,
+        ) == "consumed"
+        assert await issuer.issue_with_approved_scope(
+            scope=approval_scope, context=authenticated,
+            approval_id=str(bound_approval),
+            correlation_id="replay-denied",
+        ) is None
         receipt = uuid.UUID(issued)
         assert await raw.fetchval(
             "SELECT receipt_id FROM public.writing_style_document_consents "
