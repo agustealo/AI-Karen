@@ -117,6 +117,16 @@ def _require_lifecycle_scope(
     scope: Optional[PluginLifecycleApprovalScope],
 ) -> None:
     """Reject untrusted or unscoped lifecycle approvals before SQL writes."""
+    # WS-04A9E: general chat approvals must never issue a first-party
+    # document-style consent. They do not bind the independently verified
+    # source revision, fresh bearer session, or purpose-separated attestation.
+    if (
+        isinstance(decision.intent, str)
+        and decision.intent.startswith("writing_style.document_consent.")
+    ):
+        raise ApprovalScopeError(
+            "Document style consent requires source-scoped authenticated approval"
+        )
     if (
         isinstance(decision.intent, str)
         and decision.intent.startswith("plugin.lifecycle.")
@@ -304,6 +314,13 @@ class ApprovalService:
                 f"Approval cannot resume from status {record['status']}"
             )
 
+        if str(record.get("intent") or "").startswith(
+            "writing_style.document_consent."
+        ):
+            raise ApprovalStateError(
+                "Document style consent cannot resume through generic chat approval"
+            )
+
         if str(record.get("intent") or "").startswith("plugin.lifecycle."):
             # Generic resume cannot reconstruct an independently verified
             # current manifest/revision: never replay a stored lifecycle plan.
@@ -378,6 +395,20 @@ class ApprovalService:
         reason: Optional[str] = None,
     ) -> Dict[str, Any]:
         user_id, tenant_id = _identity(user)
+        # A generic chat approval decision is not a bearer-verified author
+        # confirmation and must never decide a document consent request.
+        current = await self._repository.get(
+            approval_id, tenant_id=tenant_id, user_id=user_id,
+        )
+        if (
+            current is not None
+            and str(current.get("intent") or "").startswith(
+                "writing_style.document_consent."
+            )
+        ):
+            raise ApprovalScopeError(
+                "Document author consent requires fresh bearer confirmation"
+            )
         normalized = str(decision or "").strip().lower()
         if normalized not in {"approved", "rejected"}:
             raise ApprovalStateError("Decision must be approved or rejected")
@@ -418,6 +449,440 @@ class ApprovalService:
         )
         return record
 
+    async def request_document_consent(
+        self,
+        *,
+        request: "Request",
+        scope: "DocumentConsentApprovalScope",
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Create a pending source-bound author approval, never the consent."""
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+        from ai_karen_engine.persistence.postgres.transactions import (
+            async_transaction_scope,
+        )
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+        )
+        from ai_karen_engine.services.writing_style_profile_repository import (
+            WritingStyleProfileRepository,
+        )
+
+        if not isinstance(scope, DocumentConsentApprovalScope):
+            raise ApprovalScopeError("Valid author consent scope required")
+        if scope.action != "issue":
+            raise ApprovalScopeError("Unsupported consent request action")
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+        runtime_policy = get_runtime_composition().runtime_policy
+
+        if not isinstance(runtime_policy, RuntimePolicyEnforcer):
+            raise ApprovalScopeError("Canonical runtime policy is required")
+        context = await get_document_style_consent_context(request)
+        scope.require_matching_context(context)
+        decision = await runtime_policy.authorize_document_consent_preflight(
+            context=context, scope=scope,
+        )
+        if (
+            decision.allowed is not True
+            or decision.requires_human_gate is not True
+            or decision.allowed_capabilities
+            or decision.runtime_constraints.get(
+                "document_consent_fingerprint"
+            ) != scope.fingerprint()
+            or decision.runtime_constraints.get(
+                "authorized_session_id"
+            ) != scope.session_id
+        ):
+            raise ApprovalScopeError("Runtime policy denied author consent")
+        if (
+            not isinstance(correlation_id, str)
+            or not 1 <= len(correlation_id) <= 128
+        ):
+            raise ApprovalScopeError("Invalid consent correlation")
+
+        # The issuer rechecks canonical SHA-256 and profile state in the
+        # final atomic transaction. Admission checks those facts first.
+        async with async_transaction_scope(scope.tenant_id) as session:
+            await WritingStyleProfileRepository._scope(
+                session, scope.tenant_id, scope.author_actor_id
+            )
+            digest = await PostgresDocumentStyleConsentIssuer._read_source_digest(
+                session,
+                tenant_id=scope.tenant_id,
+                actor_id=scope.author_actor_id,
+                profile_id=scope.profile_id,
+                artifact_id=scope.artifact_id,
+            )
+        if digest != scope.source_sha256:
+            raise ApprovalScopeError("Current document cannot be authorized")
+
+        record = await self._repository.create(
+            tenant_id=scope.tenant_id,
+            user_id=scope.author_actor_id,
+            conversation_id=None,
+            request_fingerprint=scope.fingerprint(),
+            policy_decision_id=decision.decision_id,
+            intent="writing_style.document_consent.issue",
+            risk_level="high",
+            reason_codes=["explicit_document_author_confirmation_required"],
+            request_payload={"document_consent_scope": scope.to_record()},
+            ttl_minutes=15,
+        )
+        self._audit.log_audit_event({
+            "event_type": AuditEventType.SECURITY_EVENT,
+            "severity": AuditSeverity.INFO,
+            "message": "document_author_consent_requested",
+            "user_id": scope.author_actor_id,
+            "tenant_id": scope.tenant_id,
+            "session_id": scope.session_id,
+            "correlation_id": correlation_id,
+            "metadata": {
+                "approval_id": record["approval_id"],
+                "profile_id": scope.profile_id,
+                "artifact_id": scope.artifact_id,
+            },
+        })
+        return record
+
+    async def decide_document_consent(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+        scope: "DocumentConsentApprovalScope",
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        """Approve only explicit author confirmation with fresh bearer scope."""
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+
+        if not isinstance(scope, DocumentConsentApprovalScope):
+            raise ApprovalScopeError("Valid author consent scope required")
+        if scope.action != "issue":
+            raise ApprovalScopeError("Unsupported consent decision action")
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+        runtime_policy = get_runtime_composition().runtime_policy
+
+        if not isinstance(runtime_policy, RuntimePolicyEnforcer):
+            raise ApprovalScopeError("Canonical runtime policy is required")
+        context = await get_document_style_consent_context(request)
+        scope.require_matching_context(context)
+        decision = await runtime_policy.authorize_document_consent_preflight(
+            context=context, scope=scope,
+        )
+        if (
+            decision.allowed is not True
+            or decision.requires_human_gate is not True
+            or decision.allowed_capabilities
+            or decision.runtime_constraints.get(
+                "document_consent_fingerprint"
+            ) != scope.fingerprint()
+            or decision.runtime_constraints.get(
+                "authorized_session_id"
+            ) != scope.session_id
+        ):
+            raise ApprovalScopeError("Runtime policy denied author consent")
+        if confirmed is not True:
+            raise ApprovalScopeError("Explicit author confirmation required")
+        try:
+            if str(uuid.UUID(approval_id)) != approval_id:
+                raise ValueError("Noncanonical approval ID")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ApprovalScopeError("Invalid author consent approval") from exc
+
+        current = await self._repository.get(
+            approval_id,
+            tenant_id=scope.tenant_id,
+            user_id=scope.author_actor_id,
+        )
+        if (
+            current is None
+            or current.get("status") != "pending"
+            or current.get("intent") != "writing_style.document_consent.issue"
+            or current.get("request_fingerprint") != scope.fingerprint()
+            or not isinstance(current.get("policy_decision_id"), str)
+            or not current["policy_decision_id"].startswith(
+                "policy-document-consent-preflight-"
+            )
+            or current.get("request_payload", {}).get(
+                "document_consent_scope"
+            ) != scope.to_record()
+        ):
+            raise ApprovalScopeError("Author consent confirmation scope mismatch")
+
+        record = await self._repository.decide(
+            approval_id,
+            tenant_id=scope.tenant_id,
+            user_id=scope.author_actor_id,
+            decision="approved",
+            reason="explicit_author_confirmation",
+            decided_by=scope.author_actor_id,
+        )
+        if record is None:
+            raise ApprovalStateError("Author consent approval already decided")
+        self._audit.log_audit_event({
+            "event_type": AuditEventType.SECURITY_EVENT,
+            "severity": AuditSeverity.INFO,
+            "message": "document_author_consent_confirmed",
+            "user_id": scope.author_actor_id,
+            "tenant_id": scope.tenant_id,
+            "session_id": scope.session_id,
+            "correlation_id": context.correlation_id,
+            "metadata": {
+                "approval_id": approval_id,
+                "profile_id": scope.profile_id,
+                "artifact_id": scope.artifact_id,
+            },
+        })
+        return record
+
+    async def get_document_consent_confirmation(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+    ) -> tuple[Dict[str, Any], "DocumentConsentApprovalScope"]:
+        """Load canonical author consent metadata from the existing SQL ledger.
+
+        Client text, buttons, model messages and a reconstructed request body
+        cannot choose consent source, permission, purpose, session or expiry.
+        """
+        from datetime import datetime
+
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+
+        try:
+            if str(uuid.UUID(approval_id)) != approval_id:
+                raise ValueError("Noncanonical approval ID")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ApprovalScopeError("Invalid document author approval") from exc
+
+        context = await get_document_style_consent_context(request)
+        principal = context.require_authenticated_user()
+        record = await self._repository.get(
+            approval_id,
+            tenant_id=str(principal.tenant_id),
+            user_id=str(principal.user_id),
+        )
+        if record is None:
+            raise ApprovalNotFoundError("Document approval not found")
+        payload = record.get("request_payload")
+        source = payload.get("document_consent_scope") if isinstance(payload, dict) else None
+        if (
+            record.get("intent") != "writing_style.document_consent.issue"
+            or record.get("status") not in {"pending", "approved"}
+            or not isinstance(record.get("policy_decision_id"), str)
+            or not record["policy_decision_id"].startswith(
+                "policy-document-consent-preflight-"
+            )
+            or not isinstance(source, dict)
+        ):
+            raise ApprovalScopeError("Document author approval unavailable")
+        try:
+            scope = DocumentConsentApprovalScope(
+                tenant_id=source["tenant_id"],
+                author_actor_id=source["author_actor_id"],
+                session_id=source["session_id"],
+                profile_id=source["profile_id"],
+                artifact_id=source["artifact_id"],
+                source_sha256=source["source_sha256"],
+                action=source["action"],
+                analysis_allowed=source["analysis_allowed"],
+                style_use_allowed=source["style_use_allowed"],
+                expires_at=datetime.fromisoformat(source["expires_at"]),
+            )
+            scope.require_matching_context(context)
+        except (KeyError, ValueError, TypeError, AttributeError, PermissionError) as exc:
+            raise ApprovalScopeError("Document author approval scope mismatch") from exc
+        if (
+            record.get("request_fingerprint") != scope.fingerprint()
+            or scope.to_record() != source
+        ):
+            raise ApprovalScopeError("Document author approval fingerprint mismatch")
+        return record, scope
+
+    async def confirm_stored_document_consent(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        """Confirm only the retrieved, immutable scope on a fresh author session."""
+        if confirmed is not True:
+            raise ApprovalScopeError("Explicit author confirmation required")
+        record, scope = await self.get_document_consent_confirmation(
+            approval_id, request=request,
+        )
+        if record.get("status") != "pending":
+            raise ApprovalStateError("Document consent approval is not pending")
+        return await self.decide_document_consent(
+            approval_id, request=request, scope=scope, confirmed=True,
+        )
+
+    async def issue_stored_document_consent(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+        correlation_id: str,
+    ) -> str:
+        """Issue the single receipt for a server-bound author-approved scope.
+
+        The first-party UI sends only the existing approval ID. No browser
+        field or model proposal can replace the immutable stored permission.
+        """
+        record, scope = await self.get_document_consent_confirmation(
+            approval_id, request=request,
+        )
+        if record.get("status") != "approved":
+            raise ApprovalStateError("Author consent has not been confirmed")
+        receipt = await self.issue_confirmed_document_consent(
+            request=request,
+            scope=scope,
+            approval_id=approval_id,
+            correlation_id=correlation_id,
+        )
+        if receipt is None:
+            raise ApprovalStateError("Document consent receipt not issued")
+        return receipt
+
+    async def issue_confirmed_document_consent(
+        self,
+        *,
+        request: "Request",
+        scope: "DocumentConsentApprovalScope",
+        approval_id: str,
+        correlation_id: str,
+    ) -> str | None:
+        """Host-only receipt execution through canonical policy and SQL owner.
+
+        No caller-supplied policy decisions, request metadata, approval
+        dictionaries or model output may substitute for the issuer's fresh
+        bearer validation, exact author-approved CAS, and source row lock.
+        This entry point is NOT registered with any HTTP or plugin route.
+        """
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+        runtime_policy = get_runtime_composition().runtime_policy
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+            RuntimeDocumentConsentPolicy,
+        )
+
+        if (
+            not isinstance(scope, DocumentConsentApprovalScope)
+            or not isinstance(runtime_policy, RuntimePolicyEnforcer)
+            or scope.action != "issue"
+        ):
+            raise ApprovalScopeError(
+                "Author consent issuance requires canonical runtime authority"
+            )
+        issuer = PostgresDocumentStyleConsentIssuer(
+            issuance_policy=RuntimeDocumentConsentPolicy(runtime_policy),
+        )
+        receipt_id = await issuer.issue_with_approved_scope(
+            request=request,
+            scope=scope,
+            approval_id=approval_id,
+            correlation_id=correlation_id,
+        )
+        if receipt_id is not None:
+            self._audit.log_audit_event({
+                "event_type": AuditEventType.SECURITY_EVENT,
+                "severity": AuditSeverity.INFO,
+                "message": "document_author_consent_issued",
+                "user_id": scope.author_actor_id,
+                "tenant_id": scope.tenant_id,
+                "session_id": scope.session_id,
+                "correlation_id": correlation_id,
+                "metadata": {
+                    "approval_id": approval_id,
+                    "receipt_id": receipt_id,
+                    "profile_id": scope.profile_id,
+                    "artifact_id": scope.artifact_id,
+                },
+            })
+        return receipt_id
+
+    async def revoke_document_consent(
+        self,
+        *,
+        request: "Request",
+        tenant_id: str,
+        actor_id: str,
+        profile_id: str,
+        artifact_id: str,
+        correlation_id: str,
+    ) -> bool:
+        """Host-only author revocation through the existing one-way SQL owner."""
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+        runtime_policy = get_runtime_composition().runtime_policy
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+            RuntimeDocumentConsentPolicy,
+        )
+
+        if not isinstance(runtime_policy, RuntimePolicyEnforcer):
+            raise ApprovalScopeError(
+                "Author revocation requires canonical runtime authority"
+            )
+        issuer = PostgresDocumentStyleConsentIssuer(
+            issuance_policy=RuntimeDocumentConsentPolicy(runtime_policy),
+        )
+        revoked = await issuer.revoke_first_party(
+            request=request,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            profile_id=profile_id,
+            artifact_id=artifact_id,
+            correlation_id=correlation_id,
+        )
+        if revoked:
+            self._audit.log_audit_event({
+                "event_type": AuditEventType.SECURITY_EVENT,
+                "severity": AuditSeverity.INFO,
+                "message": "document_author_consent_revoked",
+                "user_id": actor_id,
+                "tenant_id": tenant_id,
+                "correlation_id": correlation_id,
+                "metadata": {
+                    "profile_id": profile_id,
+                    "artifact_id": artifact_id,
+                },
+            })
+        return revoked
+
     async def consume_for_request(
         self,
         approval_id: str,
@@ -431,6 +896,17 @@ class ApprovalService:
             # method may not be mistaken for an executable approval grant.
             raise ApprovalStateError(
                 "Plugin lifecycle execution remains revision-fenced and unavailable"
+            )
+        current = await self._repository.get(
+            approval_id,
+            tenant_id=request.context.tenant_id,
+            user_id=request.context.user_id,
+        )
+        if current is not None and str(current.get("intent") or "").startswith(
+            "writing_style.document_consent."
+        ):
+            raise ApprovalScopeError(
+                "Document consent requires atomic source-scoped consumption"
             )
         record = await self._repository.consume_approved(
             approval_id,

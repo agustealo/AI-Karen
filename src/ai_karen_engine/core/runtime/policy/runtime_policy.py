@@ -448,6 +448,123 @@ class RuntimePolicyEnforcer:
             alternative_policy_version=alternative.policy_version,
         )
 
+    async def authorize_document_consent_preflight(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        scope: "DocumentConsentApprovalScope",
+    ) -> PolicyDecision:
+        """Host-only document author admission; NEVER an executable grant.
+
+        A generic PolicyEvaluationRequest remains categorically denied.
+        Runtime executes only after independently revalidating the bearer,
+        canonical source revision and an approved, one-shot PostgreSQL CAS.
+        """
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+
+        reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
+        valid_scope = isinstance(scope, DocumentConsentApprovalScope)
+        if self.config.default_level is not RuntimeLevel.FULL:
+            reason = PolicyReasonCode.RUNTIME_LEVEL_DENIED
+        elif not valid_scope:
+            reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
+        else:
+            try:
+                principal = context.require_authenticated_user()
+                scope.require_matching_context(context)
+                if (
+                    scope.action != "issue"
+                    or not principal.is_active
+                    or not principal.is_verified
+                    or scope.analysis_allowed is not True
+                    or type(scope.style_use_allowed) is not bool
+                    or scope.expires_at <= datetime.now(timezone.utc)
+                ):
+                    reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
+                else:
+                    reason = PolicyReasonCode.ALLOWED
+            except (AttributeError, PermissionError, TypeError, ValueError):
+                reason = PolicyReasonCode.MISSING_IDENTITY
+
+        allowed = reason is PolicyReasonCode.ALLOWED
+        action = "writing_style.document_consent.issue"
+        return PolicyDecision(
+            decision_id=f"policy-document-consent-preflight-{time.time_ns()}",
+            policy_version="v2-document-author-preflight",
+            allowed=allowed,
+            reason_codes=[reason],
+            # This policy permits proceeding to durable author evidence; it
+            # is not a right to mint a receipt without that evidence.
+            allowed_capabilities=[],
+            denied_capabilities=[] if allowed else [action],
+            requires_human_gate=True,
+            risk_level="high",
+            evaluated_at=time.time(),
+            runtime_constraints=(
+                {
+                    "authorized_user_id": scope.author_actor_id,
+                    "authorized_tenant_id": scope.tenant_id,
+                    "authorized_session_id": scope.session_id,
+                    "document_consent_approval_only": True,
+                    "document_consent_source_sha256": scope.source_sha256,
+                    "document_consent_fingerprint": scope.fingerprint(),
+                } if allowed else {}
+            ),
+        )
+
+    async def authorize_document_consent_revocation(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        tenant_id: str,
+        actor_id: str,
+    ) -> PolicyDecision:
+        """Host-only owner revocation preflight, not a consent mutation grant.
+
+        The issuer must revalidate the bearer and update only the author's
+        existing receipt under PostgreSQL RLS and the one-way revoke trigger.
+        """
+        reason = PolicyReasonCode.INSUFFICIENT_PERMISSION
+        if self.config.default_level is not RuntimeLevel.FULL:
+            reason = PolicyReasonCode.RUNTIME_LEVEL_DENIED
+        else:
+            try:
+                principal = context.require_authenticated_user()
+                if (
+                    context.tenant_id == tenant_id
+                    and context.user_id == actor_id
+                    and principal.tenant_id == tenant_id
+                    and principal.user_id == actor_id
+                    and principal.is_active
+                    and principal.is_verified
+                ):
+                    reason = PolicyReasonCode.ALLOWED
+            except (AttributeError, PermissionError, TypeError, ValueError):
+                reason = PolicyReasonCode.MISSING_IDENTITY
+        allowed = reason is PolicyReasonCode.ALLOWED
+        action = "writing_style.document_consent.revoke"
+        return PolicyDecision(
+            decision_id=f"policy-document-consent-revoke-{time.time_ns()}",
+            policy_version="v2-document-author-revoke",
+            allowed=allowed,
+            reason_codes=[reason],
+            allowed_capabilities=[],
+            denied_capabilities=[] if allowed else [action],
+            requires_human_gate=True,
+            risk_level="high",
+            evaluated_at=time.time(),
+            runtime_constraints=(
+                {
+                    "authorized_user_id": actor_id,
+                    "authorized_tenant_id": tenant_id,
+                    "authorized_session_id": context.session_id,
+                    "document_consent_revocation_only": True,
+                } if allowed else {}
+            ),
+        )
+
     def _plugin_lifecycle_preflight_reason(
         self,
         *,
@@ -889,6 +1006,38 @@ class RuntimePolicyEnforcer:
                     cap
                     for cap in request.requested_capabilities
                     if isinstance(cap, str) and cap.startswith("plugin.lifecycle.")
+                ] or [str(request.action)],
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
+                requires_human_gate=True,
+                risk_level="high",
+                evaluated_at=evaluated_at,
+            )
+
+        # WS-04A9E: An ordinary policy evaluation is not evidence of an
+        # author's explicit, source-scoped consent. RuntimePolicy must deny
+        # both mutations even when roles/permissions/capabilities from the
+        # request claim authorization. Only a future host-owned authenticated
+        # approval flow may bind a separate non-forgeable issuance decision.
+        document_consent_prefix = "writing_style.document_consent."
+        document_consent_requested = (
+            isinstance(request.action, str)
+            and request.action.startswith(document_consent_prefix)
+        ) or any(
+            isinstance(capability, str)
+            and capability.startswith(document_consent_prefix)
+            for capability in request.requested_capabilities
+        )
+        if document_consent_requested:
+            return PolicyDecision(
+                decision_id=decision_id,
+                policy_version=policy_version,
+                allowed=False,
+                reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                denied_capabilities=[
+                    capability
+                    for capability in request.requested_capabilities
+                    if isinstance(capability, str)
+                    and capability.startswith(document_consent_prefix)
                 ] or [str(request.action)],
                 denied_reasoning_modes=list(request.requested_reasoning_modes),
                 requires_human_gate=True,

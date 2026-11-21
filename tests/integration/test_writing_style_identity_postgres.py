@@ -46,6 +46,7 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
     profile, revision_id = uuid.uuid4(), uuid.uuid4()
     try:
         await raw.execute("""
+            DROP TABLE IF EXISTS public.writing_style_document_consents CASCADE;
             DROP TABLE IF EXISTS public.writing_style_sample_audit CASCADE;
             DROP TABLE IF EXISTS public.writing_style_sample_evidence CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_only() CASCADE;
@@ -59,7 +60,20 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             DROP TABLE IF EXISTS public.writing_style_revisions CASCADE;
             DROP TABLE IF EXISTS public.writing_style_profiles CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_prevent_revision_mutation() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_consent_validate() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
+            DROP TABLE IF EXISTS public.files CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
+            CREATE TABLE public.files (
+                file_id text PRIMARY KEY,
+                tenant_id uuid NOT NULL,
+                owner_user_id uuid NOT NULL,
+                name text NOT NULL,
+                mime_type text NOT NULL,
+                bytes bigint NOT NULL,
+                sha256 text,
+                deleted_at timestamptz
+            );
         """)
         migration = (
             Path(__file__).resolve().parents[2]
@@ -71,6 +85,10 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             / "supabase/migrations/20261122010001_61_writing_style_sample_evidence.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(sample_migration)
+        await raw.execute((
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261122010002_62_writing_style_document_author_consent.sql"
+        ).read_text(encoding="utf-8"))
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2) ON CONFLICT DO NOTHING",
             tenant_a, tenant_b,
@@ -85,7 +103,8 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             f'GRANT SELECT, INSERT ON public.writing_style_audit TO "{role}"'
         )
         await raw.execute(
-            f'GRANT SELECT ON public.writing_style_sample_evidence TO "{role}"'
+            f'GRANT SELECT ON public.writing_style_sample_evidence, '
+            f'public.writing_style_document_consents, public.files TO "{role}"'
         )
         await raw.execute(
             f'GRANT USAGE ON SEQUENCE public.writing_style_audit_id_seq TO "{role}"'

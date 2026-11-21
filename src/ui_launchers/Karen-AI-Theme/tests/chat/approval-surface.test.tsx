@@ -83,4 +83,58 @@ describe('durable approval surface', () => {
     expect(onActionClick).toHaveBeenCalledWith(message.actions?.[0]);
   });
 
+  it('routes source-specific document consent to separate authenticated review, never chat approval', () => {
+    const onActionClick = vi.fn();
+    const approvalId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const message: ChatMessage = {
+      id: 'document-consent-review',
+      role: 'assistant',
+      content: 'The document author must review and approve this exact source.',
+      timestamp: new Date('2026-11-21T18:00:00Z'),
+      status: 'completed',
+      metadata: {
+        mode: 'approval_required',
+        intent: 'writing_style.document_consent.issue',
+        approval_id: approvalId,
+        approval_status: 'pending',
+      },
+      actions: [
+        { type: 'approval.approve', description: 'Approve', params: { approval_id: approvalId } },
+        { type: 'approval.reject', description: 'Reject', params: { approval_id: approvalId } },
+      ],
+    };
+
+    render(<MessageBubble message={message} onActionClick={onActionClick} />);
+    const link = screen.getByRole('link', { name: 'Review document author consent' });
+    expect(link.getAttribute('href')).toBe(
+      '/approvals/document-consent/' + approvalId,
+    );
+    expect(screen.queryByRole('button', { name: /perform action: approve/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /perform action: reject/i })).toBeNull();
+    expect(onActionClick).not.toHaveBeenCalled();
+  });
+
+  it('does not invent an author-consent action from an invalid approval reference', () => {
+    const message: ChatMessage = {
+      id: 'document-consent-invalid',
+      role: 'assistant',
+      content: 'Author review required.',
+      timestamp: new Date('2026-11-21T18:05:00Z'),
+      status: 'completed',
+      metadata: {
+        mode: 'approval_required',
+        intent: 'writing_style.document_consent.issue',
+        approval_id: 'invalid',
+        approval_status: 'pending',
+      },
+      actions: [
+        { type: 'approval.approve', description: 'Approve', params: { approval_id: 'invalid' } },
+      ],
+    };
+    render(<MessageBubble message={message} />);
+    expect(screen.getByText('Verified author review link is unavailable.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Review document author consent' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /perform action: approve/i })).toBeNull();
+  });
+
 });

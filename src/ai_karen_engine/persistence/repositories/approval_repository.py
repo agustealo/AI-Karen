@@ -232,6 +232,77 @@ class SqlApprovalRepository:
             row = result.mappings().one_or_none()
             return _row(row) if row else None
 
+    @staticmethod
+    async def consume_document_consent_in_session(
+        session: Any,
+        *,
+        approval_id: str,
+        tenant_id: str,
+        author_actor_id: str,
+        fingerprint: str,
+        action: str,
+        scope_record: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """One-shot, scope-bound consume inside the caller's SQL transaction.
+
+        This is an approval repository primitive, not a policy bypass.
+        The runtime must independently validate a fresh bearer session,
+        original authorization and source revision before calling it.
+        Its caller MUST commit the source-bound consent INSERT in the same
+        transaction; an INSERT failure must roll back this consumption.
+        """
+        if (
+            action not in {"issue", "revoke"}
+            or not isinstance(scope_record, dict)
+            or not scope_record
+        ):
+            return None
+        try:
+            approval = str(uuid.UUID(approval_id))
+            tenant = str(uuid.UUID(tenant_id))
+            actor = str(uuid.UUID(author_actor_id))
+        except (TypeError, AttributeError, ValueError):
+            return None
+        if (
+            approval != approval_id
+            or tenant != tenant_id
+            or actor != author_actor_id
+            or not isinstance(fingerprint, str)
+            or len(fingerprint) != 64
+            or any(ch not in "0123456789abcdef" for ch in fingerprint)
+        ):
+            return None
+        result = await session.execute(
+            text(
+                "UPDATE public.runtime_approval_requests "
+                "SET status='consumed', consumed_at=clock_timestamp(), "
+                "request_payload='{}'::jsonb, updated_at=clock_timestamp() "
+                "WHERE approval_id=CAST(:approval AS uuid) "
+                "AND tenant_id=CAST(:tenant AS uuid) "
+                "AND user_id=CAST(:actor AS uuid) "
+                "AND decided_by=CAST(:actor AS uuid) "
+                "AND request_fingerprint=:fingerprint "
+                "AND request_payload -> 'document_consent_scope' = "
+                "CAST(:scope_record AS jsonb) "
+                "AND decision_reason='explicit_author_confirmation' "
+                "AND policy_decision_id LIKE 'policy-document-consent-preflight-%' "
+                "AND decided_at IS NOT NULL "
+                "AND risk_level='high' "
+                "AND intent=:intent "
+                "AND status='approved' "
+                "AND expires_at>clock_timestamp() "
+                "RETURNING *"
+            ),
+            {
+                "approval": approval, "tenant": tenant, "actor": actor,
+                "fingerprint": fingerprint,
+                "scope_record": json.dumps(scope_record, sort_keys=True),
+                "intent": "writing_style.document_consent." + action,
+            },
+        )
+        row = result.mappings().one_or_none()
+        return _row(row) if row is not None else None
+
     async def consume_approved(
         self,
         approval_id: str,
