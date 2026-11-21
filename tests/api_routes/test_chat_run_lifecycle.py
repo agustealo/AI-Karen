@@ -532,3 +532,101 @@ async def test_upstream_shutdown_failure_never_confirms_cancelled(
         async for _ in stream:
             pass
     assert repo.finalized == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loss_kind", ["stop", "stolen_lease"])
+async def test_fast_revocable_presentation_is_fenced_at_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+    loss_kind: str,
+) -> None:
+    """No queued source card may escape after a stop or lost worker lease."""
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    # The stream is too fast for the ordinary heartbeat check; this test
+    # specifically proves presentation-time reauthorization.
+    monkeypatch.setattr(chat_run_lifecycle, "_heartbeat_seconds", lambda: 3600)
+    repo = MemoryLedger()
+    reader = ChatRunCoordinator(repo)
+    stopper = ChatRunCoordinator(repo)
+    lease = await reader.admit(context(), f"presentation-{loss_kind}")
+    sensitive_code = "print('revocable source never delivered after stop')"
+
+    async def fast_source_stream():
+        yield content("authorized prefix")
+        yield ChatStreamChunk(
+            type=ChatStreamEventType.PRESENTATION,
+            content="",
+            correlation_id=CORRELATION_ID,
+            metadata={
+                "presentation_verified": True,
+                "presentation": {
+                    "schema_version": 1,
+                    "component_type": "code.artifact",
+                    "data": {"filename": "private.py", "code": sensitive_code},
+                },
+            },
+        )
+        yield completed()
+
+    stream = reader.stream(fast_source_stream(), lease=lease)
+    delivered = [await anext(stream)]
+    assert delivered[0].content == "authorized prefix"
+    if loss_kind == "stop":
+        assert await stopper.request_cancel(
+            context(), run_id=lease.transport_run_id,
+        ) == "cancelling"
+        expected_error = ChatRunCancellationRequested
+        expected_final = "cancelled"
+    else:
+        repo.allow_renew = False
+        expected_error = ChatRunLeaseLost
+        expected_final = "failed"
+
+    with pytest.raises(expected_error):
+        async for chunk in stream:
+            delivered.append(chunk)
+
+    assert [chunk.type for chunk in delivered] == [ChatStreamEventType.CONTENT]
+    assert sensitive_code not in repr(delivered)
+    assert repo.heartbeat_count == 1
+    assert repo.finalized == [(
+        lease.transport_run_id,
+        expected_final,
+        "CHAT_STREAM_CANCELLED" if loss_kind == "stop" else "CHAT_RUN_LEASE_LOST",
+    )]
+
+
+@pytest.mark.asyncio
+async def test_active_fast_presentation_retains_authorized_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extra source guard must not suppress an otherwise authorized card."""
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    monkeypatch.setattr(chat_run_lifecycle, "_heartbeat_seconds", lambda: 3600)
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "presentation-active")
+
+    async def allowed_source():
+        yield ChatStreamChunk(
+            type=ChatStreamEventType.PRESENTATION,
+            content="",
+            correlation_id=CORRELATION_ID,
+            metadata={"presentation_verified": True, "presentation": {
+                "component_type": "code.artifact",
+                "data": {"filename": "authorized.py", "code": "print('ok')"},
+            }},
+        )
+        yield completed()
+
+    observed = [chunk async for chunk in coordinator.stream(
+        allowed_source(), lease=lease,
+    )]
+    assert [c.type for c in observed] == [
+        ChatStreamEventType.PRESENTATION, ChatStreamEventType.COMPLETE,
+    ]
+    assert observed[0].metadata["presentation"]["data"]["code"] == "print('ok')"
+    assert repo.heartbeat_count == 1
+    assert repo.finalized == [("presentation-active", "completed", None)]
