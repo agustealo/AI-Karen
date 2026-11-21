@@ -69,3 +69,33 @@ def test_real_pin_reorder_requires_one_winner_under_concurrent_distinct_keys():
     assert 'expect(stale.status, "Stale revision must not commit a second reorder").toBe(409)' in mutation_trial
     assert "await page.reload()" in mutation_trial
     assert 'await expect(dock.getByTestId("karen-pin-controls")).toHaveCount(0)' in mutation_trial
+
+
+def test_live_disposable_pin_trial_proves_durable_session_revocation():
+    """Revoked access must be rejected by Karen, not Vercel protection."""
+    spec = SPEC.read_text(encoding="utf-8")
+    trial = spec[spec.index('test("KPIN-MUTATION-LIVE:'):]
+    assert 'window.fetch("/api/auth/logout"' in trial
+    assert 'body: JSON.stringify({ refresh_token: refreshToken })' in trial
+    assert 'Authorization: `Bearer ${token}`' in trial
+    assert 'expect(logoutStatus, "Canonical server logout must commit").toBe(200)' in trial
+    assert 'page.context().cookies(protectedOrigin.origin)' in trial
+    assert '"kari_session", "access_token", "refresh_token"' in trial
+    assert '"_vercel_jwt"' in trial
+    assert 'credentials: "same-origin" as const' in trial
+    assert 'credentials: "omit"' not in trial[trial.index('const logoutStatus ='):]
+    assert 'window.fetch("/api/chat/ag-ui/pins"' in trial
+    assert 'window.fetch("/api/chat/ag-ui/pins/capabilities"' in trial
+    assert 'window.fetch("/api/chat/ag-ui/pins/mutations"' in trial
+    assert '"content-type")?.includes("application/json")' in trial
+    assert '"detail" in body && typeof body.detail === "string"' in trial
+    assert "readStatus: 401" in trial
+    assert "capabilityStatus: 401" in trial
+    assert "mutationStatus: 401" in trial
+    assert "applicationDenials: [true, true, true]" in trial
+    assert 'await page.reload()' in trial
+    assert 'await expect(page.getByTestId("karen-pins-authorized")).toHaveCount(0)' in trial
+    assert 'await expect(page.getByTestId("karen-pin-controls")).toHaveCount(0)' in trial
+    assert 'console.log(token)' not in trial
+    assert 'console.log(refreshToken)' not in trial
+    assert 'page.route(' not in trial

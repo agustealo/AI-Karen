@@ -402,5 +402,115 @@ test("KPIN-MUTATION-LIVE: authenticated dual-account denial, revision CAS and co
     await livePinRequest(page, "GET", "/api/chat/ag-ui/pins"),
   );
   expect(restored.find(pin => pin.pin_id === moving.pin_id)?.position).toBe(intendedPosition);
+  // Revoke the same real PostgreSQL-backed session that committed the pin.
+  // Never return, log, retain in Node, or persist its bearer/refresh tokens.
+  // Follow the application logout wire contract, then reuse only the captured
+  // access token within the same browser evaluation to prove server denial.
+  const logoutStatus = await page.evaluate(async () => {
+    const token = window.localStorage.getItem("access_token");
+    const refreshToken = window.localStorage.getItem("refresh_token");
+    if (!token || !refreshToken) {
+      throw new Error("Active persisted session credentials required for revocation proof");
+    }
+    const logout = await window.fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    return logout.status;
+  });
+  expect(logoutStatus, "Canonical server logout must commit").toBe(200);
+
+  // Playwright reads only cookie names and scopes, never their values. The
+  // browser MUST retain the approved deployment cookie, but no app session
+  // cookie may accompany the stale Authorization bearer. Otherwise a 401
+  // from Vercel would be confused with Karen's own revocation denial.
+  const protectedOrigin = new URL(page.url());
+  const scopedCookies = await page.context().cookies(protectedOrigin.origin);
+  expect(scopedCookies.filter(cookie =>
+    ["kari_session", "access_token", "refresh_token"].includes(cookie.name)
+  )).toHaveLength(0);
+  if (protectedOrigin.hostname.endsWith(".vercel.app")) {
+    expect(scopedCookies.filter(cookie =>
+      cookie.name === "_vercel_jwt" && cookie.secure &&
+      cookie.domain.replace(/^\\./, "") === protectedOrigin.hostname
+    )).toHaveLength(1);
+  }
+
+  // Keep credentials available only inside the original browser. Requests
+  // carry deployment protection with same-origin credentials; the deleted
+  // application cookies above cannot grant a substitute active session.
+  const revoked = await page.evaluate(async ({ pinId, currentRevision, position }) => {
+    const token = window.localStorage.getItem("access_token");
+    if (!token) throw new Error("Revoked bearer no longer present for denial proof");
+    const headers = { Authorization: `Bearer ${token}` };
+    const options = { credentials: "same-origin" as const, cache: "no-store" as const,
+      redirect: "error" as const };
+    const staleRead = await window.fetch("/api/chat/ag-ui/pins", {
+      ...options, headers,
+    });
+    const staleCapability = await window.fetch("/api/chat/ag-ui/pins/capabilities", {
+      ...options, headers,
+    });
+    const staleMutation = await window.fetch("/api/chat/ag-ui/pins/mutations", {
+      ...options,
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "reorder",
+        idempotency_key: crypto.randomUUID(),
+        pin_id: pinId,
+        expected_revision: currentRevision,
+        position,
+      }),
+    });
+    const applicationDenial = async (response: Response): Promise<boolean> => {
+      if (!response.headers.get("content-type")?.includes("application/json")) {
+        return false;
+      }
+      try {
+        const body: unknown = await response.json();
+        return typeof body === "object" && body !== null &&
+          "detail" in body && typeof body.detail === "string" &&
+          body.detail.length > 0;
+      } catch {
+        return false;
+      }
+    };
+    const result = {
+      readStatus: staleRead.status,
+      capabilityStatus: staleCapability.status,
+      mutationStatus: staleMutation.status,
+      applicationDenials: await Promise.all([
+        applicationDenial(staleRead),
+        applicationDenial(staleCapability),
+        applicationDenial(staleMutation),
+      ]),
+    };
+    window.localStorage.removeItem("access_token");
+    window.localStorage.removeItem("refresh_token");
+    window.localStorage.removeItem("user_data");
+    // No authentication token, cookie value or user record leaves the page.
+    return result;
+  }, {
+    pinId: moving.pin_id,
+    currentRevision: restored.find(pin => pin.pin_id === moving.pin_id)!.revision,
+    position: moving.position,
+  });
+  expect(revoked).toEqual({
+    readStatus: 401,
+    capabilityStatus: 401,
+    mutationStatus: 401,
+    applicationDenials: [true, true, true],
+  });
+  await page.reload();
+  await expect(page.getByTestId("karen-pins-authorized")).toHaveCount(0);
+  await expect(page.getByTestId("karen-pin-controls")).toHaveCount(0);
   await expect(dock.getByTestId("karen-pin-controls")).toHaveCount(0);
 });
