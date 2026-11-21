@@ -33,14 +33,16 @@ def test_runbook_requires_real_protected_browser_proof():
     assert match is not None
     protected_job = match.group("body")
     assert (
-        "inputs.scenario == 'content-intelligence') && "
+        "inputs.scenario == 'content-intelligence' || "
+        "inputs.scenario == 'content-intelligence-denial') && "
         "github.ref == 'refs/heads/main'"
     ) in protected_job
     assert "environment: karen-sanitized-browser-acceptance" in protected_job
     assert (
         "KAREN_FILE_EXPLORER_ACCEPTANCE: "
         "${{ (inputs.scenario == 'file-explorer' || "
-        "inputs.scenario == 'content-intelligence') && 'true' || 'false' }}"
+        "inputs.scenario == 'content-intelligence' || "
+        "inputs.scenario == 'content-intelligence-denial') && 'true' || 'false' }}"
     ) in protected_job
     assert (
         "KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: "
@@ -54,3 +56,25 @@ def test_runbook_requires_real_protected_browser_proof():
     assert "route.fulfill(" not in spec
     assert "real PostgreSQL/Storage-backed" in text
     assert "Not shipped" in text
+
+
+def test_live_cross_principal_negative_acceptance_is_protected_and_not_skipped():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    spec = SPEC.read_text(encoding="utf-8")
+    assert "          - content-intelligence-denial" in workflow
+    assert "inputs.scenario == 'content-intelligence-denial') && github.ref == 'refs/heads/main'" in workflow
+    assert "KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE:" in workflow
+    assert "KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID:" in workflow
+    assert "KAREN_UX_ISOLATION_EMAIL: ${{ secrets.KAREN_UX_ISOLATION_EMAIL }}" in workflow
+    assert "KAREN_UX_ISOLATION_PASSWORD: ${{ secrets.KAREN_UX_ISOLATION_PASSWORD }}" in workflow
+    assert "--grep='KCONTENT-DENY-LIVE'" in workflow
+    assert "KCONTENT-DENY-LIVE:" in spec
+    assert "otherInventoryHttp.status()" in spec
+    assert "ownerBad.status()" in spec
+    assert "foreign.status()" in spec
+    assert "ownerGood.status()" in spec
+    assert "otherGood.status()" in spec
+    assert "isolated.addCookies(deploymentCookies)" in spec
+    assert "browser.newContext" in spec
+    assert "page.route(" not in spec
+    assert "route.fulfill(" not in spec

@@ -76,3 +76,31 @@ required fixture is absent or any gate is missing, record the status as
 **blocked/unverified**. Keep File Explorer and Content Intelligence in
 `free_plugins/RELEASE_ELIGIBILITY.md` as **Not shipped**. Do not create release
 mirror directories until signed-in acceptance and source parity are verified.
+
+## KCE-FREE-05: Read-only two-principal denial acceptance
+
+The protected `content-intelligence-denial` scenario adds a genuine,
+read-only browser proof. It requires two **distinct** sanitized authenticated
+accounts with working File Explorer and Content Intelligence permissions,
+plus distinct real `KAREN_CONTENT_INTELLIGENCE_SOURCE_ID` and
+`KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID` artifacts belonging to
+respective owners. Store the
+second account in GitHub environment secrets `KAREN_UX_ISOLATION_EMAIL`
+and `KAREN_UX_ISOLATION_PASSWORD`. No credentials are logged or uploaded.
+
+The test observes both owners' real inventories and SHA-256 evidence and
+requires successful Content Intelligence analysis for each owner before testing
+denials. Only the exact-host Vercel deployment bypass cookie is copied to the
+second isolated browser context, never the first user's application session.
+An analysis
+request using a forged digest must return HTTP 403. A separate browser context
+then signs in as the other account, independently proves that its File Explorer
+inventory is accessible, and checks that neither its inventory nor an attempted
+analysis can reveal the first owner's artifact. The latter must return HTTP
+403. This is **not** a substitute for a verified revoked/deleted source test,
+which still requires real PostgreSQL/Storage evidence of revocation.
+
+Run this scenario through the existing protected GitHub Actions workflow on
+an approved immutable `main` deployment, with the exact current source SHA.
+No route mocks or synthetic credentials qualify. An unavailable acceptance
+fixture is an incomplete release gate, not a passing test.
