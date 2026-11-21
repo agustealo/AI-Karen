@@ -2452,3 +2452,96 @@ async def test_cancel_during_nonstream_source_finality_records_terminal():
                                                         if not task.done():
                                                             task.cancel()
     observer.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revocation_after_provider_completion_uses_memory_denial_receipt():
+    """Exercise the actual _run_simple post-gateway check through execute."""
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    decision.memory_write_allowed = False
+    plan = _make_plan()
+    revoked = False
+    gateway_calls = 0
+
+    async def generation(task):
+        nonlocal revoked, gateway_calls
+        gateway_calls += 1
+        revoked = True
+        return object()
+
+    async def check_source(*args, **kwargs):
+        if revoked:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_freeze_persona_snapshot", new_callable=AsyncMock):
+            with patch.object(runtime, "_prepare_conversation_continuation", new_callable=AsyncMock):
+                with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+                    with patch.object(runtime, "_record_user_behavior_observation", new_callable=AsyncMock):
+                        with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                            with patch.object(runtime, "_grounded_personal_response", return_value=None):
+                                with patch.object(runtime, "_is_explicit_save_turn", return_value=False):
+                                    with patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor") as direct:
+                                        direct.return_value.can_handle.return_value = False
+                                        with patch.object(
+                                            runtime, "_assemble_prompt_with_telemetry",
+                                            new_callable=AsyncMock, return_value=([], {}),
+                                        ):
+                                            with patch.object(
+                                                runtime._composition.expression_gateway,
+                                                "generate", side_effect=generation,
+                                            ):
+                                                with patch.object(
+                                                    ChatRuntime,
+                                                    "_authorize_selected_memory_before_generation",
+                                                    side_effect=check_source,
+                                                ):
+                                                    result = await runtime.execute(request)
+    assert gateway_calls == 1
+    assert result.status == ChatExecutionStatus.ERROR
+    assert result.answer == ""
+    assert result.metadata.extra["error_code"] == "CHAT_MEMORY_SOURCE_REVOKED"
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_revocation_during_streamed_memory_persistence_emits_denial_not_save_error():
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    revoked = False
+
+    async def memory_persist(*args, **kwargs):
+        nonlocal revoked
+        revoked = True
+
+    async def check_source(*args, **kwargs):
+        if revoked:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    async def provider_stream(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="output", correlation_id="corr-1",
+        )
+
+    with patch.object(
+        ChatRuntime, "_authorize_selected_memory_before_generation",
+        side_effect=check_source,
+    ):
+        chunks = await _collect_stream(
+            runtime, request, decision, plan, provider_stream,
+            persist_memory=AsyncMock(side_effect=memory_persist),
+        )
+
+    errors = [chunk for chunk in chunks if chunk.type == ChatStreamEventType.ERROR]
+    assert len(errors) == 1
+    assert errors[0].metadata["error_code"] == "CHAT_MEMORY_SOURCE_REVOKED"
+    assert not gateway.calls
+    assert not any(
+        chunk.metadata.get("error_code") == "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+        for chunk in chunks if isinstance(chunk.metadata, dict)
+    )
