@@ -680,6 +680,101 @@ async def test_first_party_author_consent_postgres(
             "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
             tenant, profile, other_actor,
         ) is True
+        # P2 regression: an author can revoke consent while the profile is
+        # still draft, including after evidence has been registered. The
+        # database must prevent both later publication and direct SQL grants.
+        draft_profile = uuid.uuid4()
+        draft_artifact = uuid.uuid4()
+        draft_receipt = uuid.uuid4()
+        draft_sample = uuid.uuid4()
+        draft_revision = uuid.uuid4()
+        await raw.execute(
+            "INSERT INTO public.writing_style_profiles "
+            "(tenant_id,profile_id,owner_actor_id,kind,label) "
+            "VALUES ($1,$2,$3,'personal','Pending author document')",
+            tenant, draft_profile, owner,
+        )
+        await raw.execute(
+            "INSERT INTO public.files "
+            "(file_id,tenant_id,owner_user_id,name,mime_type,bytes,sha256) "
+            "VALUES ($1,$2,$3,'pending.txt','text/plain',10,$4)",
+            str(draft_artifact), tenant, owner, digest,
+        )
+        await scoped(
+            owner, tenant,
+            "INSERT INTO public.writing_style_document_consents "
+            "(tenant_id,profile_id,owner_actor_id,artifact_id,author_actor_id,"
+            "source_sha256,receipt_id,analysis_allowed,style_use_allowed,"
+            "author_attested,expires_at,correlation_id) "
+            "VALUES ($1,$2,$3,$4,$3,$5,$6,true,true,true,"
+            "clock_timestamp()+interval '1 day','draft-author-attested')",
+            tenant, draft_profile, owner, draft_artifact, digest, draft_receipt,
+        )
+        await raw.execute(
+            "INSERT INTO public.writing_style_sample_evidence "
+            "(tenant_id,profile_id,owner_actor_id,sample_id,source_type,"
+            "source_id,source_author_id,consent_receipt_id,analysis_allowed,"
+            "style_use_allowed,consent_expires_at) "
+            "VALUES ($1,$2,$3,$4,'document',$5,$3,$6,true,true,"
+            "clock_timestamp()+interval '1 day')",
+            tenant, draft_profile, owner, draft_sample,
+            draft_artifact, draft_receipt,
+        )
+        assert await raw.fetchval(
+            "SELECT state FROM public.writing_style_profiles "
+            "WHERE tenant_id=$1 AND profile_id=$2",
+            tenant, draft_profile,
+        ) == "draft"
+        await scoped(
+            owner, tenant,
+            "UPDATE public.writing_style_document_consents "
+            "SET revoked_at=clock_timestamp() "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND receipt_id=$3",
+            tenant, draft_profile, draft_receipt,
+        )
+        assert await raw.fetchval(
+            "SELECT state FROM public.writing_style_profiles "
+            "WHERE tenant_id=$1 AND profile_id=$2",
+            tenant, draft_profile,
+        ) == "revoked"
+        assert await raw.fetchval(
+            "SELECT revoked_at IS NOT NULL "
+            "FROM public.writing_style_document_consents "
+            "WHERE tenant_id=$1 AND receipt_id=$2",
+            tenant, draft_receipt,
+        ) is True
+        # The sample metadata may still contain old style_use_allowed=true:
+        # its authority was revoked by the profile lifecycle, not by a
+        # mutable or browser-owned evidence Boolean.
+        assert await raw.fetchval(
+            "SELECT style_use_allowed FROM public.writing_style_sample_evidence "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND sample_id=$3",
+            tenant, draft_profile, draft_sample,
+        ) is True
+        await raw.execute(
+            "INSERT INTO public.writing_style_revisions "
+            "(tenant_id,profile_id,revision_id,revision_number,"
+            "approved_expression,content_digest,approved_by) "
+            "VALUES ($1,$2,$3,1,'{}'::jsonb,$4,$5)",
+            tenant, draft_profile, draft_revision, "d" * 64, owner,
+        )
+        with pytest.raises(asyncpg.PostgresError):
+            await scoped(
+                owner, tenant,
+                "UPDATE public.writing_style_profiles "
+                "SET state='published',publication_revision=1,current_revision_id=$1 "
+                "WHERE tenant_id=$2 AND profile_id=$3",
+                draft_revision, tenant, draft_profile,
+            )
+        with pytest.raises(asyncpg.PostgresError):
+            await scoped(
+                owner, tenant,
+                "INSERT INTO public.writing_style_grants "
+                "(tenant_id,profile_id,owner_actor_id,actor_id,purpose,granted_by) "
+                "VALUES ($1,$2,$3,$4,'draft_email',$3)",
+                tenant, draft_profile, owner, other_actor,
+            )
+
     finally:
         if engine is not None:
             await engine.dispose()
