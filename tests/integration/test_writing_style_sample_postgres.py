@@ -274,6 +274,39 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
                 row[1] == authority.verify_analysis.return_value.consent_expires_at
                 for row in capped
             )
+        # A previous publication is irreversible, even when a SQL owner
+        # attempts to rewrite both lifecycle and revision counters at once.
+        for statement in (
+            "UPDATE public.writing_style_profiles SET state='draft' "
+            "WHERE tenant_id=CAST(:tenant AS uuid) "
+            "AND profile_id=CAST(:profile AS uuid)",
+            "UPDATE public.writing_style_profiles SET state='draft', "
+            "publication_revision=0, current_revision_id=NULL "
+            "WHERE tenant_id=CAST(:tenant AS uuid) "
+            "AND profile_id=CAST(:profile AS uuid)",
+        ):
+            with pytest.raises(Exception, match="lifecycle violation"):
+                async with TestClient().get_async_session() as session:
+                    await WritingStyleProfileRepository._scope(
+                        session, str(tenant), str(owner)
+                    )
+                    await session.execute(
+                        text(statement),
+                        {"tenant": str(tenant), "profile": str(live_profile)},
+                    )
+        async with TestClient().get_async_session() as session:
+            await WritingStyleProfileRepository._scope(
+                session, str(tenant), str(owner)
+            )
+            state = await session.execute(
+                text(
+                    "SELECT state,publication_revision "
+                    "FROM public.writing_style_profiles "
+                    "WHERE profile_id=CAST(:profile AS uuid)"
+                ),
+                {"profile": str(live_profile)},
+            )
+            assert state.one() == ("published", 1)
         # Direct SQL must not attach evidence after publication and thereby
         # invalidate existing delegate grant consent without recapping grants.
         with pytest.raises(Exception, match="requires a draft profile"):
