@@ -230,13 +230,65 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             correlation_id="consented-resolve",
         )
         assert (await KariSignatureResolver(identities).resolve(live_request)).presentation == expression
-        assert await provenance.revoke(
-            tenant_id=str(tenant), actor_id=str(owner),
-            profile_id=str(live_profile), sample_id=str(live_sample),
-            correlation_id="consented-source-revoked",
-        )
+        # Direct owner SQL must fence the published profile without calling
+        # the Python revoke wrapper. Delegates cannot read sample evidence,
+        # so a delegate-side NOT EXISTS predicate alone cannot be trusted.
+        async with TestClient().get_async_session() as session:
+            await WritingStyleProfileRepository._scope(
+                session, str(tenant), str(owner)
+            )
+            changed = await session.execute(
+                text(
+                    "UPDATE public.writing_style_sample_evidence "
+                    "SET revoked_at=clock_timestamp() "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) "
+                    "AND profile_id=CAST(:profile AS uuid) "
+                    "AND sample_id=CAST(:sample AS uuid) "
+                    "AND revoked_at IS NULL RETURNING sample_id"
+                ),
+                {
+                    "tenant": str(tenant), "profile": str(live_profile),
+                    "sample": str(live_sample),
+                },
+            )
+            assert changed.scalar_one() == live_sample
         with pytest.raises(PermissionError, match="style_unavailable"):
             await KariSignatureResolver(identities).resolve(live_request)
+        assert not await provenance.revoke(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(live_profile), sample_id=str(live_sample),
+            correlation_id="already-revoked-direct-sql",
+        )
+        async with TestClient().get_async_session() as session:
+            await WritingStyleProfileRepository._scope(
+                session, str(tenant), str(owner)
+            )
+            result = await session.execute(
+                text(
+                    "SELECT state FROM public.writing_style_profiles "
+                    "WHERE profile_id=CAST(:profile AS uuid)"
+                ),
+                {"profile": str(live_profile)},
+            )
+            assert result.scalar_one() == "revoked"
+            result = await session.execute(
+                text(
+                    "SELECT count(*) FROM public.writing_style_grants "
+                    "WHERE profile_id=CAST(:profile AS uuid) "
+                    "AND revoked_at IS NULL"
+                ),
+                {"profile": str(live_profile)},
+            )
+            assert result.scalar_one() == 0
+            result = await session.execute(
+                text(
+                    "SELECT count(*) FROM public.writing_style_audit "
+                    "WHERE profile_id=CAST(:profile AS uuid) "
+                    "AND action='revoke_profile'"
+                ),
+                {"profile": str(live_profile)},
+            )
+            assert result.scalar_one() == 1
 
         # A source-revoked profile is never a path to style application.
         with pytest.raises(PermissionError):
