@@ -362,6 +362,9 @@ class HybridRetrievalRouter:
             event_ids=graph_rows_by_event,
         )
 
+        # Raw traversal paths contain intermediate graph IDs that have not
+        # been rehydrated or authorized by the canonical event source. Only
+        # the selected event may enter NeuroRecall as a candidate.
         entries: list[MemoryEntry] = []
         for graph_row in graph_rows:
             event_id = str(graph_row.get("event_id") or "").strip()
@@ -394,7 +397,6 @@ class HybridRetrievalRouter:
                         "entity_resolution": graph_row.get("entity_resolution"),
                         "graph_relationship": graph_row.get("relationship"),
                         "graph_depth": depth,
-                        "graph_path": graph_row.get("path") or [],
                     },
                     custom={
                         "event_id": event_id,
@@ -405,7 +407,6 @@ class HybridRetrievalRouter:
                         "entity_resolution": graph_row.get("entity_resolution"),
                         "graph_depth": depth,
                         "graph_relationship": graph_row.get("relationship"),
-                        "graph_path": graph_row.get("path") or [],
                     },
                 )
             )
