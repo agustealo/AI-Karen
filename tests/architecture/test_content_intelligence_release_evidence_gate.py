@@ -24,7 +24,25 @@ def test_runbook_requires_real_protected_browser_proof():
     spec = SPEC.read_text(encoding="utf-8")
     assert "karen-sanitized-browser-acceptance" in workflow
     assert "          - content-intelligence" in workflow
-    assert "--grep='KCONTENT-LIVE'" in workflow
+    protected_job = workflow.split(
+        "  authenticated-settings-visual-acceptance:", 1,
+    )[1].split("\n  ", 1)[0]
+    assert (
+        "inputs.scenario == 'content-intelligence') && "
+        "github.ref == 'refs/heads/main'"
+    ) in protected_job
+    assert "environment: karen-sanitized-browser-acceptance" in protected_job
+    assert (
+        "KAREN_FILE_EXPLORER_ACCEPTANCE: "
+        "${{ (inputs.scenario == 'file-explorer' || "
+        "inputs.scenario == 'content-intelligence') && 'true' || 'false' }}"
+    ) in protected_job
+    assert (
+        "KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: "
+        "${{ inputs.scenario == 'content-intelligence' && 'true' || 'false' }}"
+    ) in protected_job
+    assert "KAREN_CONTENT_INTELLIGENCE_SOURCE_ID:" in protected_job
+    assert "--grep='KCONTENT-LIVE'" in protected_job
     assert "KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" in workflow
     assert "KCONTENT-LIVE:" in spec
     assert "page.route(" not in spec
