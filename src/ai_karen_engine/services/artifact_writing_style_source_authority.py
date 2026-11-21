@@ -109,6 +109,24 @@ class ArtifactWritingStyleSourceAuthority:
                 )
             ):
                 return None
+            # Recheck the resource after the issuer read. An archive/delete
+            # between the two checks must never yield an allowed decision.
+            # This is a consistency guard, not a substitute for the source
+            # owner's transactional revocation contract.
+            latest = await self._artifacts.get_metadata(source_id, tenant_id)
+            if not latest.success or latest.data is None:
+                return None
+            current = latest.data
+            if (
+                _canonical_uuid(current.id) != source_id
+                or _canonical_uuid(current.tenant_id) != tenant_id
+                or _canonical_uuid(current.user_id) != actor_id
+                or current.deleted_at is not None
+                or current.kind != artifact.kind
+                or current.sha256 != artifact.sha256
+            ):
+                return None
+
             # The issuer's independent style-use flag stays intact. Analysis
             # eligibility must never be silently promoted into style-use rights.
             return permission
@@ -116,6 +134,29 @@ class ArtifactWritingStyleSourceAuthority:
             # No exception text, artifact metadata, credentials or secret may
             # be exposed to the caller through an authorization failure.
             return None
+
+
+    async def verify_use(
+        self, *, tenant_id: str, actor_id: str, profile_id: str,
+        source_type: str, source_id: str,
+    ) -> bool:
+        """Recheck source and explicit style-use consent for one use.
+
+        This is a source eligibility primitive, not a runtime grant.
+        Canonical RuntimePolicy and KariSignature purpose grants must still
+        authorize execution. There is no implicit cached positive decision.
+        """
+        permission = await self.verify_analysis(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            profile_id=profile_id,
+            source_type=source_type,
+            source_id=source_id,
+        )
+        return (
+            isinstance(permission, VerifiedWritingStyleSource)
+            and permission.style_use_allowed is True
+        )
 
 
 __all__ = ["ArtifactWritingStyleSourceAuthority", "DocumentStyleConsentIssuer"]
