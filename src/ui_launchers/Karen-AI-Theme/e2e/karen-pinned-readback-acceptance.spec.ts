@@ -85,7 +85,7 @@ test.describe("real authenticated saved-pin reference readback", () => {
 
     const authorized = dock.getByTestId("karen-pins-authorized");
     await expect(authorized).toBeVisible();
-    await expect(authorized.getByText(pin.source.component_type.replace(/\\./g, " · "), { exact: true })).toBeVisible();
+    await expect(authorized.getByText(pin.source.component_type.split(".").join(" · "), { exact: true })).toBeVisible();
     await expect(authorized.getByText(
       `Saved reference ${pin.position + 1} · Revision ${pin.revision}`,
       { exact: true },
