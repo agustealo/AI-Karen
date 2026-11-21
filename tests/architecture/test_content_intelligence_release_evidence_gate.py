@@ -1,5 +1,6 @@
 """Protect source-merged versus consumer-certified release evidence boundaries."""
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 LEDGER = ROOT / "free_plugins/RELEASE_ELIGIBILITY.md"
@@ -24,9 +25,13 @@ def test_runbook_requires_real_protected_browser_proof():
     spec = SPEC.read_text(encoding="utf-8")
     assert "karen-sanitized-browser-acceptance" in workflow
     assert "          - content-intelligence" in workflow
-    protected_job = workflow.split(
-        "  authenticated-settings-visual-acceptance:", 1,
-    )[1].split("\n  ", 1)[0]
+    match = re.search(
+        r"(?ms)^  authenticated-settings-visual-acceptance:\n"
+        r"(?P<body>.*?)(?=^  [a-z][\\w-]*:\\s*$|\\Z)",
+        workflow,
+    )
+    assert match is not None
+    protected_job = match.group("body")
     assert (
         "inputs.scenario == 'content-intelligence') && "
         "github.ref == 'refs/heads/main'"
