@@ -150,3 +150,35 @@ async def test_emergency_model_fallback_preserves_authorized_prior_user_fact():
     assert result is not None
     assert result.answer == "You said you're Jamaican."
     assert result.metadata.degraded_mode is True
+
+
+@pytest.mark.asyncio
+async def test_fallback_provider_revocation_propagates_terminal_denial():
+    """The original recoverable provider failure must not mask new revocation."""
+    class RevokedRuntime:
+        async def _run_simple(self, request, decision, plan, meter, memory_meta=None):
+            # This is the canonical post-provider source check's contract.
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    request = SimpleNamespace(
+        context=SimpleNamespace(
+            request_id="fallback-revoked",
+            user_id="test-user",
+            tenant_id="test-tenant",
+        ),
+        metadata={"memory_context": {"recall": []}},
+        preferred_provider="ollama",
+        preferred_model="local-primary",
+    )
+    plan, meter = _authorized_recovery(request)
+    with pytest.raises(RuntimeError, match="^memory_source_revoked_or_unverifiable$"):
+        await build_runtime_fallback(
+            runtime=RevokedRuntime(),
+            request=request,
+            failure=RuntimeError("recoverable_primary_provider_failure"),
+            correlation_id="fallback-revoked",
+            conversation_id="fallback-revoked-conversation",
+            decision=ExecutionDecision(memory_recall_required=True, memory_top_k=1),
+            authorized_plan=plan,
+            meter=meter,
+        )
