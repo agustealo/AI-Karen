@@ -67,6 +67,52 @@ CREATE TRIGGER writing_style_sample_revoke_only
     BEFORE UPDATE ON public.writing_style_sample_evidence
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_sample_revoke_only();
 
+-- Every permitted evidence revocation MUST fence the published parent and
+-- delegated use in the same transaction, even for direct owner SQL that does
+-- not call the Python service. Delegate-visible parent/grant state is therefore
+-- authoritative; owner-only evidence RLS never hides revocation from use.
+CREATE FUNCTION public.writing_style_sample_revoke_fence()
+RETURNS trigger LANGUAGE plpgsql AS $writing_sample_revoke_fence$
+DECLARE
+    active_revision bigint;
+BEGIN
+    IF NEW.revoked_at IS NULL OR OLD.revoked_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
+    UPDATE public.writing_style_profiles AS p
+    SET state = 'revoked', updated_at = clock_timestamp()
+    WHERE p.tenant_id = NEW.tenant_id
+      AND p.profile_id = NEW.profile_id
+      AND p.owner_actor_id = NEW.owner_actor_id
+      AND p.state = 'published'
+    RETURNING p.publication_revision INTO active_revision;
+
+    IF FOUND THEN
+        UPDATE public.writing_style_grants AS g
+        SET revoked_at = clock_timestamp()
+        WHERE g.tenant_id = NEW.tenant_id
+          AND g.profile_id = NEW.profile_id
+          AND g.owner_actor_id = NEW.owner_actor_id
+          AND g.revoked_at IS NULL;
+
+        INSERT INTO public.writing_style_audit
+            (tenant_id, profile_id, actor_id, action,
+             publication_revision, correlation_id)
+        VALUES (
+            NEW.tenant_id, NEW.profile_id, NEW.owner_actor_id,
+            'revoke_profile', active_revision, 'sample-revocation-db'
+        );
+    END IF;
+    RETURN NEW;
+END
+$writing_sample_revoke_fence$;
+
+CREATE TRIGGER writing_style_sample_revocation_fences_profile
+    AFTER UPDATE OF revoked_at
+    ON public.writing_style_sample_evidence
+    FOR EACH ROW EXECUTE FUNCTION public.writing_style_sample_revoke_fence();
+
 -- Publishing an identity that contains reference evidence requires
 -- current style-use permission for every active source. This condition
 -- applies to direct SQL as well as approved repository mutations.
