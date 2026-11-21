@@ -143,8 +143,8 @@ class KariSignatureSampleAnalyzer:
             permitted = await self._authority.authorize_analysis(
                 request=request, sample=sample
             )
-        except Exception as exc:
-            raise PermissionError("style_sample_unavailable") from exc
+        except Exception:
+            raise PermissionError("style_sample_unavailable") from None
         if permitted is not True:
             raise PermissionError("style_sample_unavailable")
 
@@ -175,10 +175,10 @@ class KariSignatureSampleAnalyzer:
                 or not 0 <= verbosity <= 1
             ):
                 raise ValueError("invalid_style_analysis")
-        except Exception as exc:
-            # Never place sample content, analyzer response or backend details
-            # in errors, logging fields, telemetry labels or prompt contexts.
-            raise RuntimeError("style_sample_analysis_unavailable") from exc
+        except Exception:
+            # Do not chain private analyzer content or backend details into
+            # surfaced errors or ordinary telemetry.
+            raise RuntimeError("style_sample_analysis_unavailable") from None
 
         return KariSignatureStyleProposal(
             profile_id=sample.profile_id,
