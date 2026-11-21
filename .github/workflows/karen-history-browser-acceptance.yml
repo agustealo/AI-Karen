@@ -738,7 +738,7 @@ jobs:
       contents: read
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
-      KAREN_BASE_URL: ${{ ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || vars.KAREN_SETTINGS_ACCEPTANCE_URL || '' }}
+      KAREN_BASE_URL: ${{ ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario == 'settings' || inputs.scenario == 'navigation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
       KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && 'false' || 'true' }}
       KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && 'true' || 'false' }}
