@@ -246,6 +246,46 @@ class WritingStyleProfileRepository:
                 action="grant", revision=int(row[0]), correlation_id=correlation_id,
             )
 
+    async def revoke_grant(
+        self, *, tenant_id: str, actor_id: str, profile_id: str,
+        grantee_actor_id: str, purpose: str, correlation_id: str,
+    ) -> bool:
+        tenant, actor, profile, grantee = map(
+            _uuid, (tenant_id, actor_id, profile_id, grantee_actor_id)
+        )
+        _purpose(purpose)
+        _correlation(correlation_id)
+        async with self._client_factory().get_async_session() as session:
+            await self._scope(session, tenant)
+            owner = await session.execute(
+                text(
+                    "SELECT publication_revision FROM public.writing_style_profiles "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) AND profile_id=CAST(:profile AS uuid) "
+                    "AND owner_actor_id=CAST(:actor AS uuid) FOR UPDATE"
+                ),
+                dict(tenant=tenant, profile=profile, actor=actor),
+            )
+            row = owner.first()
+            if row is None:
+                raise WritingStyleAccessDenied("style_access_denied")
+            revoked = await session.execute(
+                text(
+                    "UPDATE public.writing_style_grants SET revoked_at=clock_timestamp() "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) AND profile_id=CAST(:profile AS uuid) "
+                    "AND actor_id=CAST(:grantee AS uuid) AND purpose=:purpose "
+                    "AND revoked_at IS NULL RETURNING actor_id"
+                ),
+                dict(tenant=tenant, profile=profile, grantee=grantee, purpose=purpose),
+            )
+            if revoked.first() is None:
+                return False
+            await self._audit(
+                session, tenant_id=tenant, profile_id=profile, actor_id=actor,
+                action="revoke_grant", revision=int(row[0]),
+                correlation_id=correlation_id,
+            )
+        return True
+
     async def revoke_profile(
         self, *, tenant_id: str, actor_id: str,
         profile_id: str, correlation_id: str,
