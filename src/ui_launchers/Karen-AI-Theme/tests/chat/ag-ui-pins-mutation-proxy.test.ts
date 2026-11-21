@@ -144,15 +144,11 @@ describe("KAREN single-shot authenticated presentation pin mutation ingress", ()
     let nextChunkRead = false;
     const streamed = new ReadableStream<Uint8Array>({
       pull(controller) {
-        if (nextChunkRead) {
-          controller.enqueue(new TextEncoder().encode(JSON.stringify({
-            operation: "unpin", idempotency_key: idempotencyKey, pin_id: pinId,
-          })));
-          controller.close();
-          return;
+        if (!nextChunkRead) {
+          nextChunkRead = true;
+          controller.enqueue(new Uint8Array(4097));
         }
-        nextChunkRead = true;
-        controller.enqueue(new Uint8Array(4097));
+        // Keep the stream open until the ingress cancels it.
       },
       cancel() { canceled = true; },
     });
