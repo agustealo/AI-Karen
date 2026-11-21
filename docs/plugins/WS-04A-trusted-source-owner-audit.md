@@ -96,3 +96,13 @@ This is a **confirmed functional dependency**, not merely a missing adapter clas
 - Required exact-head validation: targeted Python and PostgreSQL integration, import compilation, Ruff, Backend Quality, Main Quality, Production First-Boot, security review, and release/readiness audit.
 
 **Release decision:** WS-02B is merged; WS-04A is **NO-GO for consumer activation** until a genuine source owner, a current-permission adapter, live revocation and authenticated use-path proof exist.
+
+## WS-04A2 source adapter implementation (inactive)
+
+The draft branch now contains `src/ai_karen_engine/services/artifact_writing_style_source_authority.py` and `tests/extensions/test_artifact_writing_style_source_authority.py`.
+
+The adapter implements the existing `WritingStyleSourceAuthority.verify_analysis` contract for canonical `ArtifactStore` objects, but **requires an independently trusted `DocumentStyleConsentIssuer.verify_current`**. It supports only `document` source references and currently restricts source author, artifact owner and requesting actor to the same exact UUID. It checks current resource metadata, exact tenant and owner, permitted `kind`, active/deleted state, issuer receipt type/scope, current analysis permission, and expiry. It preserves `style_use_allowed` exactly as issued rather than inferring it from source metadata. Saved search articles and unknown source types are denied.
+
+**Status and limitation:** No production `DocumentStyleConsentIssuer` has been proven or registered in the runtime. The adapter is deliberately not composed into the application or exposed to users. Its presence in the tree does **not** establish a consumer-ready source authorization path. A future trusted issuer must independently prove actual author consent; passing a test stub or a user-supplied object is not authorization. Source-side revocation and publication/use rechecks remain WS-04A3/4 gates.
+
+The targeted regression file covers trusted issuer requirements, refusal to read metadata as consent, owner/tenant/author mismatch, deleted or foreign artifacts, search article denial, missing/expired/denied consent, unexpected exceptions, source type denial, and a permission changing between two calls. These cases need exact-head execution before any acceptance claim.
