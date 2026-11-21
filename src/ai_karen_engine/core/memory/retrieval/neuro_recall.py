@@ -366,6 +366,33 @@ class NeuroRecall:
             ).strip():
                 rejected_count += 1
                 continue
+            stm_episode_candidate = (
+                getattr(metadata, "source", None) == "stm"
+                and custom_metadata.get("stm_slot") == "recent_context"
+            )
+            if stm_episode_candidate and (
+                not isinstance(graph_provenance, dict)
+                or graph_provenance.get("store") != "stm"
+                or graph_provenance.get("record_type") != "memory_event"
+                or graph_provenance.get("stm_slot") != "recent_context"
+                or graph_provenance.get("event_id") != custom_metadata.get("event_id")
+                or not isinstance(graph_provenance.get("event_id"), str)
+                or not graph_provenance["event_id"].strip()
+                or not isinstance(graph_provenance.get("source_type"), str)
+                or not graph_provenance["source_type"].strip()
+            ):
+                rejected_count += 1
+                continue
+            stm_external_source = bool(
+                stm_episode_candidate
+                and graph_provenance["source_type"]
+                not in {"chat", "chat_user", "conversation"}
+            )
+            if stm_external_source and not str(
+                graph_provenance.get("source_ref") or ""
+            ).strip():
+                rejected_count += 1
+                continue
             graph_candidate = (
                 custom_metadata.get("source_store") == "postgres_graph"
                 or getattr(metadata, "source", None) == "postgres_graph"
@@ -397,6 +424,7 @@ class NeuroRecall:
                 or ledger_external_source
                 or profile_external_source
                 or projection_external_source
+                or stm_external_source
             ):
                 # A source authority must independently recheck the complete
                 # source set against current ACL/revocation state. Missing or
