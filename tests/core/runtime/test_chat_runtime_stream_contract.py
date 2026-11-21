@@ -2355,3 +2355,94 @@ async def test_graph_wrapper_close_propagates_to_workflow_stream():
         assert first.content == "graph delta"
         await asyncio.wait_for(stream.aclose(), timeout=5)
     assert closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_stream_final_source_check_records_terminal():
+    runtime, _ = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    entered = asyncio.Event()
+    blocked = asyncio.Event()
+    checks = 0
+
+    async def source_check(*args, **kwargs):
+        nonlocal checks
+        checks += 1
+        if checks >= 2:
+            entered.set()
+            await blocked.wait()
+
+    async def provider_stream(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="partial", correlation_id="corr-1",
+        )
+
+    with patch.object(
+        ChatRuntime, "_authorize_selected_memory_before_generation",
+        side_effect=source_check,
+    ):
+        with patch.object(
+            runtime, "_observe_request_cancellation", new_callable=AsyncMock,
+        ) as observer:
+            task = asyncio.create_task(_collect_stream(
+                runtime, request, decision, plan, provider_stream,
+            ))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=5)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            finally:
+                if not task.done():
+                    task.cancel()
+    observer.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_nonstream_source_finality_records_terminal():
+    runtime, _ = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    decision.memory_recall_required = False
+    plan = _make_plan()
+    entered = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def source_check(*args, **kwargs):
+        entered.set()
+        await blocked.wait()
+
+    with patch.object(runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None):
+        with patch.object(runtime, "_freeze_persona_snapshot", new_callable=AsyncMock):
+            with patch.object(runtime, "_prepare_conversation_continuation", new_callable=AsyncMock):
+                with patch.object(runtime, "_decide", new_callable=AsyncMock, return_value=decision):
+                    with patch.object(runtime, "_record_user_behavior_observation", new_callable=AsyncMock):
+                        with patch.object(runtime, "_build_authorized_plan", return_value=plan):
+                            with patch.object(runtime, "_grounded_personal_response", return_value=None):
+                                with patch.object(runtime, "_is_explicit_save_turn", return_value=False):
+                                    with patch("ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor") as direct:
+                                        direct.return_value.can_handle.return_value = False
+                                        with patch.object(
+                                            runtime, "_run_simple", new_callable=AsyncMock,
+                                            return_value=("generated", {"execution_spans": []}),
+                                        ):
+                                            with patch.object(
+                                                ChatRuntime, "_authorize_selected_memory_before_generation",
+                                                side_effect=source_check,
+                                            ):
+                                                with patch.object(
+                                                    runtime, "_observe_request_cancellation",
+                                                    new_callable=AsyncMock,
+                                                ) as observer:
+                                                    task = asyncio.create_task(runtime.execute(request))
+                                                    try:
+                                                        await asyncio.wait_for(entered.wait(), timeout=5)
+                                                        task.cancel()
+                                                        with pytest.raises(asyncio.CancelledError):
+                                                            await task
+                                                    finally:
+                                                        if not task.done():
+                                                            task.cancel()
+    observer.assert_awaited()
