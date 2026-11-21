@@ -183,11 +183,28 @@ export function DocumentAuthorConsentConfirmation({
               </button>
             </>
           ) : (
-            <p role="status">
-              {preview.status === 'approved'
-                ? 'This author decision is already approved.'
-                : 'This author confirmation has expired.'}
-            </p>
+            <div className="space-y-2">
+              <p role="status">
+                {preview.status === 'approved'
+                  ? 'This author decision is already approved.'
+                  : 'This author confirmation has expired.'}
+              </p>
+              {preview.status === 'approved' && !receiptId && !issuing && (
+                <button
+                  type="button"
+                  onClick={() => { void issueReceipt(preview.approval_id); }}
+                  className="rounded-md border border-border px-4 py-2"
+                >
+                  Issue approved consent receipt
+                </button>
+              )}
+              {issuing && <p role="status">Issuing consent receipt…</p>}
+              {receiptId && (
+                <p className="break-all text-sm">
+                  Verified receipt ID: {receiptId}. Document ingestion is not confirmed.
+                </p>
+              )}
+            </div>
           )}
         </>
       )}
