@@ -514,6 +514,57 @@ class RuntimePolicyEnforcer:
             ),
         )
 
+    async def authorize_document_consent_revocation(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        tenant_id: str,
+        actor_id: str,
+    ) -> PolicyDecision:
+        """Host-only owner revocation preflight, not a consent mutation grant.
+
+        The issuer must revalidate the bearer and update only the author's
+        existing receipt under PostgreSQL RLS and the one-way revoke trigger.
+        """
+        reason = PolicyReasonCode.INSUFFICIENT_PERMISSION
+        if self.config.default_level is not RuntimeLevel.FULL:
+            reason = PolicyReasonCode.RUNTIME_LEVEL_DENIED
+        else:
+            try:
+                principal = context.require_authenticated_user()
+                if (
+                    context.tenant_id == tenant_id
+                    and context.user_id == actor_id
+                    and principal.tenant_id == tenant_id
+                    and principal.user_id == actor_id
+                    and principal.is_active
+                    and principal.is_verified
+                ):
+                    reason = PolicyReasonCode.ALLOWED
+            except (AttributeError, PermissionError, TypeError, ValueError):
+                reason = PolicyReasonCode.MISSING_IDENTITY
+        allowed = reason is PolicyReasonCode.ALLOWED
+        action = "writing_style.document_consent.revoke"
+        return PolicyDecision(
+            decision_id=f"policy-document-consent-revoke-{time.time_ns()}",
+            policy_version="v2-document-author-revoke",
+            allowed=allowed,
+            reason_codes=[reason],
+            allowed_capabilities=[],
+            denied_capabilities=[] if allowed else [action],
+            requires_human_gate=True,
+            risk_level="high",
+            evaluated_at=time.time(),
+            runtime_constraints=(
+                {
+                    "authorized_user_id": actor_id,
+                    "authorized_tenant_id": tenant_id,
+                    "authorized_session_id": context.session_id,
+                    "document_consent_revocation_only": True,
+                } if allowed else {}
+            ),
+        )
+
     def _plugin_lifecycle_preflight_reason(
         self,
         *,
