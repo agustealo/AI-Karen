@@ -619,7 +619,12 @@ async def test_recover_document_receipt_requires_consumed_and_current_exact_sour
         verified.style_use_allowed = not scope.style_use_allowed
     elif evidence == "expiry_drift":
         verified.consent_expires_at = scope.expires_at + timedelta(minutes=1)
-    issuer = SimpleNamespace(verify_current=AsyncMock(return_value=verified))
+    issuer = SimpleNamespace(
+        verify_current=AsyncMock(return_value=verified),
+        read_current_source_summary=AsyncMock(
+            return_value={"name": "current.txt", "bytes": 100, "mime_type": "text/plain"},
+        ),
+    )
     factory = MagicMock(return_value=issuer)
     monkeypatch.setattr(
         issuer_module, "PostgresDocumentStyleConsentIssuer", factory,
@@ -629,6 +634,13 @@ async def test_recover_document_receipt_requires_consumed_and_current_exact_sour
     )
     if approval_status == "consumed" and evidence == "valid":
         assert recovered == verified.consent_receipt_id
+        issuer.read_current_source_summary.assert_awaited_once_with(
+            tenant_id=scope.tenant_id,
+            actor_id=scope.author_actor_id,
+            profile_id=scope.profile_id,
+            artifact_id=scope.artifact_id,
+            source_sha256=scope.source_sha256,
+        )
         issuer.verify_current.assert_awaited_once_with(
             tenant_id=scope.tenant_id,
             actor_id=scope.author_actor_id,
@@ -664,6 +676,9 @@ async def test_stored_issuance_replays_read_only_after_successful_consumption(
             style_use_allowed=scope.style_use_allowed,
             analysis_allowed=True,
         )),
+        read_current_source_summary=AsyncMock(
+            return_value={"name": "current.txt", "bytes": 100, "mime_type": "text/plain"},
+        ),
         issue_with_approved_scope=AsyncMock(),
     )
     factory = MagicMock(return_value=issuer)
