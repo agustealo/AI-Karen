@@ -51,6 +51,7 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_only() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_fence() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_bound_grant_to_source_consent() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_require_draft_sample() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_require_source_use_consent() CASCADE;
             DROP TABLE IF EXISTS public.writing_style_audit CASCADE;
             DROP TABLE IF EXISTS public.writing_style_grants CASCADE;
