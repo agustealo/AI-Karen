@@ -738,6 +738,33 @@ class ApprovalService:
             approval_id, request=request, scope=scope, confirmed=True,
         )
 
+    async def issue_stored_document_consent(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+        correlation_id: str,
+    ) -> str:
+        """Issue the single receipt for a server-bound author-approved scope.
+
+        The first-party UI sends only the existing approval ID. No browser
+        field or model proposal can replace the immutable stored permission.
+        """
+        record, scope = await self.get_document_consent_confirmation(
+            approval_id, request=request,
+        )
+        if record.get("status") != "approved":
+            raise ApprovalStateError("Author consent has not been confirmed")
+        receipt = await self.issue_confirmed_document_consent(
+            request=request,
+            scope=scope,
+            approval_id=approval_id,
+            correlation_id=correlation_id,
+        )
+        if receipt is None:
+            raise ApprovalStateError("Document consent receipt not issued")
+        return receipt
+
     async def issue_confirmed_document_consent(
         self,
         *,
