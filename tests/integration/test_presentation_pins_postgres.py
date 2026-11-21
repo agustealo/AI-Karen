@@ -689,10 +689,13 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 )
                 assert reordered.status_code == 200, reordered.text
                 assert reordered.json()["receipt"]["committed_revision"] == 2
-                assert await raw.fetchrow("""
+                ordered_row = await raw.fetchrow("""
                     SELECT position, revision FROM public.conversation_presentation_pins
                     WHERE pin_id=$1
-                """, reorder_pin) == {"position": 7, "revision": 2}
+                """, reorder_pin)
+                assert ordered_row is not None
+                assert ordered_row["position"] == 7
+                assert ordered_row["revision"] == 2
                 reordered_retry = await http.post(
                     mutation_url, json=reorder_body, headers=owner_headers
                 )
