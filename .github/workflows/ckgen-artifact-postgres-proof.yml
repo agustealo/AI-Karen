@@ -116,6 +116,21 @@ jobs:
                   raise RuntimeError(f"Tenant type correction missing: {table}")
               return block
 
+          def canonical_files_policy(sql: str) -> str:
+              marker = "CREATE POLICY files_tenant_isolation ON files"
+              start = sql.find(marker)
+              finish = sql.find(";", start)
+              if start < 0 or finish < 0:
+                  raise RuntimeError("Missing canonical files RLS policy")
+              policy = sql[start : finish + 1]
+              if (
+                  "current_setting('app.current_tenant_id', true)::uuid"
+                  not in policy
+                  or "WITH CHECK" not in policy
+              ):
+                  raise RuntimeError("Canonical files RLS policy contract changed")
+              return policy
+
           async def prove_schema() -> None:
               root = await asyncpg.connect(ROOT_DSN)
               try:
