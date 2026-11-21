@@ -1,12 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { ApiError } from "@/lib/api";
 import {
   KarenCopilotPinnedDock,
   parseAuthorizedPinReadback,
+  verifyCommittedPinMutation,
 } from "@/components/chat/copilotkit/KarenCopilotPinnedDock";
 
-const api = vi.hoisted(() => ({ get: vi.fn() }));
-vi.mock("@/lib/api", () => ({ apiClient: api }));
+const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock("@/lib/api", () => ({
+  apiClient: api,
+  ApiError: class ApiError extends Error {
+    constructor(public status: number, message = "Request failed") { super(message); }
+  },
+}));
 
 const authorizedPin = {
   pin_id: "88888888-8888-4888-8888-888888888888",
@@ -23,7 +30,7 @@ const authorizedPin = {
 };
 const snapshot = { schema_version: 1 as const, read_only: true as const, pins: [authorizedPin] };
 
-beforeEach(() => api.get.mockReset());
+beforeEach(() => { api.get.mockReset(); api.post.mockReset(); });
 afterEach(() => cleanup());
 
 describe("governed pinned workspace reference consumer", () => {
@@ -85,4 +92,87 @@ describe("governed pinned workspace reference consumer", () => {
     });
     expect(screen.queryByTestId("karen-pins-authorized")).toBeNull();
   });
+  it("keeps mutation controls absent in the actual consumer default", async () => {
+    api.get.mockResolvedValue(snapshot);
+    render(<KarenCopilotPinnedDock />);
+    await screen.findByTestId("karen-pins-authorized");
+    expect(screen.queryByTestId("karen-pin-controls")).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("requires matching backend receipt and fresh readback before removing a pin", async () => {
+    api.get.mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce({ schema_version: 1, read_only: true, pins: [] });
+    api.post.mockImplementation(async (_path, request) => ({
+      schema_version: 1, committed: true,
+      receipt: {
+        receipt_id: "committed-receipt",
+        idempotency_key: request.idempotency_key,
+        operation: request.operation,
+        pin_id: request.pin_id,
+      },
+    }));
+    render(<KarenCopilotPinnedDock mutationControlsEnabled />);
+    await screen.findByTestId("karen-pins-authorized");
+    fireEvent.click(screen.getByRole("button", { name: "Unpin reference 1" }));
+    expect(await screen.findByTestId("karen-pins-empty")).toBeTruthy();
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post.mock.calls[0][0]).toBe("/api/chat/ag-ui/pins/mutations");
+    expect(api.post.mock.calls[0][1]).toMatchObject({
+      operation: "unpin",
+      pin_id: authorizedPin.pin_id,
+    });
+    expect(api.get).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("karen-pins-mutation-notice")).toBeNull();
+  });
+
+  it("rejects mismatched receipts and never mutates local pinned state optimistically", async () => {
+    api.get.mockResolvedValue(snapshot);
+    api.post.mockResolvedValue({
+      schema_version: 1, committed: true,
+      receipt: {
+        receipt_id: "unrelated", operation: "unpin",
+        idempotency_key: "77777777-7777-4777-8777-777777777777",
+        pin_id: authorizedPin.pin_id,
+      },
+    });
+    expect(verifyCommittedPinMutation(null, "unpin", authorizedPin.pin_id,
+      "99999999-9999-4999-8999-999999999999")).toBe(false);
+    render(<KarenCopilotPinnedDock mutationControlsEnabled />);
+    await screen.findByTestId("karen-pins-authorized");
+    fireEvent.click(screen.getByRole("button", { name: "Unpin reference 1" }));
+    expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
+      .toContain("Pin change not confirmed");
+    expect(screen.getByText("Saved reference 1 · Revision 2")).toBeTruthy();
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("conflicting unpin refreshes authorized state without retry", async () => {
+    api.get.mockResolvedValue(snapshot);
+    api.post.mockRejectedValue(new ApiError(409, "Conflict"));
+    render(<KarenCopilotPinnedDock mutationControlsEnabled />);
+    await screen.findByTestId("karen-pins-authorized");
+    expect(screen.queryByRole("button", { name: /Move reference/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Unpin reference 1" }));
+    expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
+      .toContain("Saved references changed elsewhere");
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post.mock.calls[0][1]).toMatchObject({
+      operation: "unpin", pin_id: authorizedPin.pin_id,
+    });
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("hides stale references if authorized re-read is unavailable after uncertain mutation", async () => {
+    api.get.mockResolvedValueOnce(snapshot).mockRejectedValueOnce(new Error("backend unavailable"));
+    api.post.mockRejectedValue(new Error("unknown network failure"));
+    render(<KarenCopilotPinnedDock mutationControlsEnabled />);
+    await screen.findByTestId("karen-pins-authorized");
+    fireEvent.click(screen.getByRole("button", { name: "Unpin reference 1" }));
+    expect(await screen.findByTestId("karen-pinning-not-available")).toBeTruthy();
+    expect(screen.queryByText("Saved reference 1 · Revision 2")).toBeNull();
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
 });
