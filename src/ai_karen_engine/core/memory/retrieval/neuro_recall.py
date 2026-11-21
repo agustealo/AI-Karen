@@ -331,6 +331,41 @@ class NeuroRecall:
             ).strip():
                 rejected_count += 1
                 continue
+            projection_receipts = {
+                "postgres_procedure": ("memory_procedure", "procedure_id", "source_event_id"),
+                "postgres_user_goal": ("memory_user_goal", "goal_id", "event_id"),
+                "postgres_open_loop": ("memory_open_loop", "open_loop_id", "event_id"),
+                "postgres_prospective_memory": (
+                    "memory_prospective_item", "prospective_id", "event_id"
+                ),
+            }
+            projection_spec = projection_receipts.get(getattr(metadata, "source", None))
+            projection_candidate = projection_spec is not None
+            if projection_candidate:
+                record_type, identity_key, event_key = projection_spec
+                if (
+                    not isinstance(graph_provenance, dict)
+                    or graph_provenance.get("store") != "postgres"
+                    or graph_provenance.get("record_type") != record_type
+                    or graph_provenance.get(identity_key) != str(memory.id)
+                    or graph_provenance.get(event_key) != custom_metadata.get(event_key)
+                    or not isinstance(graph_provenance.get(event_key), str)
+                    or not graph_provenance[event_key].strip()
+                    or not isinstance(graph_provenance.get("source_type"), str)
+                    or not graph_provenance["source_type"].strip()
+                ):
+                    rejected_count += 1
+                    continue
+            projection_external_source = bool(
+                projection_candidate
+                and graph_provenance["source_type"]
+                not in {"chat", "chat_user", "conversation"}
+            )
+            if projection_external_source and not str(
+                graph_provenance.get("source_ref") or ""
+            ).strip():
+                rejected_count += 1
+                continue
             graph_candidate = (
                 custom_metadata.get("source_store") == "postgres_graph"
                 or getattr(metadata, "source", None) == "postgres_graph"
@@ -361,6 +396,7 @@ class NeuroRecall:
                 or graph_external_source
                 or ledger_external_source
                 or profile_external_source
+                or projection_external_source
             ):
                 # A source authority must independently recheck the complete
                 # source set against current ACL/revocation state. Missing or

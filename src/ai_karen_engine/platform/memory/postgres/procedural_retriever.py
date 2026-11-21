@@ -40,7 +40,7 @@ class PostgresProceduralRecallRetriever:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         async with async_transaction_scope(tenant_id=str(query.tenant_id)) as session:
             stmt = (
-                select(MemoryProcedure)
+                select(MemoryProcedure, MemoryEvent.source_type, MemoryEvent.source_ref)
                 .join(
                     MemoryEvent,
                     MemoryEvent.event_id == MemoryProcedure.source_event_id,
@@ -61,11 +61,18 @@ class PostgresProceduralRecallRetriever:
                 )
                 .limit(50)
             )
-            rows = (await session.execute(stmt)).scalars().all()
+            rows = (await session.execute(stmt)).all()
 
         query_text = str(query.text or "").casefold()
-        matched = [row for row in rows if self._matches(row, query_text)]
-        return [self._entry(row, query) for row in matched[: min(max(query.top_k, 1), 20)]]
+        matched = [
+            (row, source_type, source_ref)
+            for row, source_type, source_ref in rows
+            if self._matches(row, query_text)
+        ]
+        return [
+            self._entry(row, query, source_type, source_ref)
+            for row, source_type, source_ref in matched[: min(max(query.top_k, 1), 20)]
+        ]
 
     @staticmethod
     def _looks_procedural(text: str) -> bool:
@@ -92,7 +99,10 @@ class PostgresProceduralRecallRetriever:
         return any(str(pattern).casefold() in query_text for pattern in patterns if str(pattern).strip())
 
     @staticmethod
-    def _entry(row: MemoryProcedure, query: MemoryQuery) -> MemoryEntry:
+    def _entry(
+        row: MemoryProcedure, query: MemoryQuery,
+        source_type: str | None = None, source_ref: str | None = None,
+    ) -> MemoryEntry:
         sequence = row.tool_sequence if isinstance(row.tool_sequence, list) else []
         steps = " -> ".join(str(step) for step in sequence)
         content = row.name if not steps else f"{row.name}: {steps}"
@@ -127,6 +137,8 @@ class PostgresProceduralRecallRetriever:
                     "record_type": "memory_procedure",
                     "procedure_id": str(row.procedure_id),
                     "source_event_id": str(row.source_event_id),
+                    "source_type": source_type,
+                    "source_ref": source_ref,
                 },
             },
         )
