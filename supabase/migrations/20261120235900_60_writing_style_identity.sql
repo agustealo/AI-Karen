@@ -14,6 +14,7 @@ CREATE TABLE public.writing_style_profiles (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (tenant_id, profile_id),
+    UNIQUE (tenant_id, profile_id, owner_actor_id),
     CONSTRAINT writing_style_profile_published_revision CHECK (
        (state = 'published' AND publication_revision > 0 AND current_revision_id IS NOT NULL)
        OR (state <> 'published')
@@ -46,6 +47,7 @@ ALTER TABLE public.writing_style_profiles ADD CONSTRAINT writing_style_current_r
 CREATE TABLE public.writing_style_grants (
     tenant_id uuid NOT NULL,
     profile_id uuid NOT NULL,
+    owner_actor_id uuid NOT NULL,
     actor_id uuid NOT NULL,
     purpose varchar(48) NOT NULL CHECK (purpose ~ '^[a-z][a-z0-9_-]{0,47}$'),
     granted_by uuid NOT NULL,
@@ -53,8 +55,10 @@ CREATE TABLE public.writing_style_grants (
     revoked_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (tenant_id, profile_id, actor_id, purpose),
-    FOREIGN KEY (tenant_id, profile_id)
-      REFERENCES public.writing_style_profiles(tenant_id, profile_id) ON DELETE CASCADE
+    FOREIGN KEY (tenant_id, profile_id, owner_actor_id)
+      REFERENCES public.writing_style_profiles(
+          tenant_id, profile_id, owner_actor_id
+      ) ON DELETE CASCADE
 );
 
 CREATE TABLE public.writing_style_audit (
@@ -207,28 +211,19 @@ CREATE POLICY writing_style_grants_owner_insert
     WITH CHECK (
         tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
         AND granted_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
-        AND EXISTS (
-            SELECT 1 FROM public.writing_style_profiles p
-            WHERE p.tenant_id = writing_style_grants.tenant_id
-              AND p.profile_id = writing_style_grants.profile_id
-              AND p.owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
-        )
+        AND owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
     );
 
 CREATE POLICY writing_style_grants_owner_update
     ON public.writing_style_grants FOR UPDATE
     USING (
         tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
-        AND EXISTS (
-            SELECT 1 FROM public.writing_style_profiles p
-            WHERE p.tenant_id = writing_style_grants.tenant_id
-              AND p.profile_id = writing_style_grants.profile_id
-              AND p.owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
-        )
+        AND owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
     )
     WITH CHECK (
         tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
         AND granted_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        AND owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
     );
 
 CREATE POLICY writing_style_audit_owner_select
