@@ -77,7 +77,7 @@ describe("KAREN single-shot authenticated presentation pin mutation ingress", ()
     expect(headers.get("authorization")).toBe("Bearer signed-session");
     expect(headers.get("cookie")).toContain("kari_session=opaque-session");
     expect(headers.get("cookie")).not.toContain("_vercel_jwt");
-    expect(JSON.parse(new TextDecoder().decode(init.body as ArrayBuffer))).toEqual(body);
+    expect(JSON.parse(init.body as string)).toEqual(body);
   });
 
   it.each([401, 403, 404, 409, 422, 503])(
