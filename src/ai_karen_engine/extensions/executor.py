@@ -161,8 +161,15 @@ class ExtensionExecutionService:
             result.result_trust = getattr(capability, "result_trust", ResultTrust.UNTRUSTED_EXTERNAL)
             result.data_classification = getattr(capability, "data_classification", DataClassification.PUBLIC)
 
-    async def execute(self, request: ExtensionExecutionRequest) -> ExtensionExecutionResult:
-        """Execute an extension through the full governance gate chain."""
+    async def admit(self, request: ExtensionExecutionRequest) -> ExtensionExecutionResult:
+        """Run canonical authorization without executing the plugin handler."""
+        return await self.execute(request, admission_only=True)
+
+    async def execute(
+        self, request: ExtensionExecutionRequest, *,
+        admission_only: bool = False,
+    ) -> ExtensionExecutionResult:
+        """Execute or admit an extension through the same governance gates."""
         start = time.perf_counter()
         plugin_id = request.plugin_id
         capability = request.capability
@@ -351,7 +358,12 @@ class ExtensionExecutionService:
                 data_classification,
             )
 
-        input_errors = self._schema_validator.validate_input(manifest, request.payload, capability_obj)
+        # An admission request has no source bytes yet: validate the complete
+        # actual payload during the later, separately governed execution.
+        input_errors = (
+            [] if admission_only else
+            self._schema_validator.validate_input(manifest, request.payload, capability_obj)
+        )
         if input_errors:
             return self._fail_with_provenance(
                 request,
@@ -408,6 +420,43 @@ class ExtensionExecutionService:
                 trust_tier,
                 result_trust,
                 data_classification,
+            )
+
+        if admission_only:
+            latency_ms = (time.perf_counter() - start) * 1000.0
+            self._audit(
+                plugin_id=plugin_id,
+                plugin_version=manifest.version,
+                capability=capability,
+                status="admitted",
+                latency_ms=latency_ms,
+                error_code=None,
+                side_effects=[],
+                permission_set=self._get_required_permissions(manifest, capability_obj),
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                correlation_id=context.correlation_id,
+                policy_decision_id=context.policy_decision_id,
+                trust_tier=trust_tier,
+                result_trust=result_trust,
+                data_classification=data_classification,
+            )
+            return ExtensionExecutionResult(
+                request_id=context.request_id,
+                plugin_id=plugin_id,
+                plugin_version=manifest.version,
+                capability=capability,
+                source=ResponseSource.UNAVAILABLE,
+                payload=None,
+                latency_ms=latency_ms,
+                status="admitted",
+                permission_set=list(self._get_required_permissions(manifest, capability_obj)),
+                correlation_id=context.correlation_id,
+                policy_decision_id=context.policy_decision_id,
+                execution_id=execution_id,
+                trust_tier=trust_tier,
+                result_trust=result_trust,
+                data_classification=data_classification,
             )
 
         timeout_ms = self._get_timeout(request, manifest, capability_obj)
