@@ -336,6 +336,12 @@ class SupabaseArtifactStore(ArtifactStore):
                     or origin_parts.username is not None
                     or origin_parts.password is not None
                     or origin_parts.query or origin_parts.fragment
+                    or (
+                        origin_parts.scheme == "http"
+                        and origin_parts.hostname not in {
+                            "localhost", "127.0.0.1", "::1"
+                        }
+                    )
                 ):
                     return RepositoryResult(success=False, error=unavailable)
 
