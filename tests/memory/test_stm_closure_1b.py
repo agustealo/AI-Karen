@@ -107,7 +107,12 @@ async def test_stm_recall_is_slot_typed_and_excludes_tool_state() -> None:
     await stm.put_slot(
         scope=scope,
         slot=STMSlot.RECENT_CONTEXT,
-        value={"latest": {"content": "recent conversation"}},
+        value={"latest": {
+            "event_id": "event-1",
+            "content": "recent conversation",
+            "source_type": "chat_user",
+            "source_ref": "conversation-1",
+        }},
     )
     await stm.put_slot(
         scope=scope,
@@ -120,10 +125,23 @@ async def test_stm_recall_is_slot_typed_and_excludes_tool_state() -> None:
         value={"tool": "shell", "secret_state": "must not become recall"},
     )
 
+    class CanonicalEventSource:
+        async def fetch_many(self, *, tenant_id, user_id, event_ids):
+            assert (tenant_id, user_id) == ("tenant-a", "user-a")
+            assert event_ids == ["event-1"]
+            return {
+                "event-1": {
+                    "event_id": "event-1",
+                    "source_type": "chat_user",
+                    "source_ref": "conversation-1",
+                    "payload": {"content": "recent conversation"},
+                }
+            }
+
     router = HybridRetrievalRouter(
         stm=stm,
         graph=EmptyGraph(),
-        event_source=EmptyEventSource(),
+        event_source=CanonicalEventSource(),
         entity_resolver=EmptyResolver(),
     )
     results = await router._query_stm(

@@ -227,7 +227,7 @@ async function buildInit(
   request: NextRequest,
   backendBaseUrl: string,
   timeoutMs: number,
-  overrideBody?: string,
+  overrideBody?: string | ArrayBuffer,
 ): Promise<RequestInit> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -318,13 +318,19 @@ export async function proxyToBackend(
   const followRedirects = safeRead && (options?.followRedirects ?? true);
   const upstreamUrl = `${backendBaseUrl}${upstreamPath}${request.nextUrl.search}`;
 
-  // Read the body once to avoid "Body has already been read" error on retries/redirects.
-  // This is passed to buildInit to ensure it's reused.
-  const capturedBody =
-    options?.rawBody ??
-    (request.method === 'GET' || request.method === 'HEAD'
-      ? undefined
-      : await request.text());
+  // Read the body once as raw bytes to preserve binary payloads (e.g. audio/wav
+  // uploads) without UTF-8 corruption, while allowing reuse on safe retries.
+  let capturedBody: string | ArrayBuffer | undefined;
+  if (options?.rawBody !== undefined) {
+    capturedBody = options.rawBody;
+  } else if (request.method !== 'GET' && request.method !== 'HEAD') {
+    if (typeof request.arrayBuffer === 'function') {
+      const buffer = await request.arrayBuffer();
+      capturedBody = buffer.byteLength > 0 ? buffer : undefined;
+    } else {
+      capturedBody = await request.text();
+    }
+  }
 
   let init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody);
 
@@ -424,7 +430,12 @@ export async function proxyToBackend(
       );
     }
 
-    const responseBody = await upstream.text();
+    // Preserve raw binary response bytes (e.g. audio/wav synthesis output)
+    // without UTF-8 text decoding corruption.
+    const responseBody =
+      typeof upstream.arrayBuffer === 'function'
+        ? await upstream.arrayBuffer()
+        : await upstream.text();
     const headers = new Headers(upstream.headers);
     clearInitTimeout(init);
 

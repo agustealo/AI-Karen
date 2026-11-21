@@ -315,6 +315,32 @@ WS-01 resolution tests, exact-head CI, independent security review, migration
 and production first-boot evidence. Until all are verified, the feature
 remains disabled and should not appear as a ready consumer capability.
 
+## WS-03A: Consent-gated analysis proposal (source candidate)
+
+`src/ai_karen_engine/services/formatting/karisignature_sample_analysis.py`
+reuses the existing `NLPStyleAnalyzer` after an injected, live
+`KariSignatureSampleAuthority.authorize_analysis` decision. Inputs carry
+canonical tenant/actor/profile/sample identity, a bounded source reference,
+UTF-8 content and matched SHA-256 digest. Scope mismatch denies before
+analysis; errors expose only safe error types. The result is an unapproved,
+source-digest-linked heuristic proposal, never a published revision.
+
+**No consumer ingestion is enabled:** The production consent/provenance
+adapter, authenticated sample source read, sample store, retention/erasure,
+actual style-fidelity learning, analysis job queue, publishing approvals,
+runtime binding and consumer interface remain unimplemented. A supplied
+source_ref and digest are only request claims, not provenance or rights
+evidence; production callers must use a trusted source adapter and current
+consent before passing samples. The existing punctuation/word-count heuristic
+is explicitly insufficient to establish an individual's writing identity.
+Do not infer approved traits from model-generated instruction text. Never
+send raw samples to a model or persist them through this proposed analysis
+boundary.
+
+Tests: `tests/services/test_karisignature_sample_analysis.py` covers current
+authorization, revocation, scope isolation, SHA-256 and UTF-8 validation,
+inert injection samples, minimum evidence and fail-closed adapter behavior.
+Real source-ownership/consent database tests are a later separate gate.
 
 ## WS-02B source-provenance implementation ledger (source candidate)
 
