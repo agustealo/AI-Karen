@@ -220,20 +220,18 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             await raw.close()
 
 
-def test_writing_style_input_rejects_noncanonical_identity_and_unbounded_fields():
+async def test_writing_style_input_rejects_noncanonical_identity_and_unbounded_fields():
     repo = WritingStyleProfileRepository(lambda: None)
 
-    async def exercise():
-        with pytest.raises(ValueError, match="invalid_style_identifier"):
-            await repo.create_draft(
-                tenant_id="not-a-uuid", owner_actor_id=str(uuid.uuid4()),
-                profile_id=str(uuid.uuid4()), kind="personal",
-                label="Test", correlation_id="corr",
-            )
-        with pytest.raises(ValueError, match="invalid_style_profile"):
-            await repo.create_draft(
-                tenant_id=str(uuid.uuid4()), owner_actor_id=str(uuid.uuid4()),
-                profile_id=str(uuid.uuid4()), kind="system",
-                label="Test", correlation_id="corr",
-            )
-    asyncio.run(exercise())
+    with pytest.raises(ValueError, match="invalid_style_identifier"):
+        await repo.create_draft(
+            tenant_id="not-a-uuid", owner_actor_id=str(uuid.uuid4()),
+            profile_id=str(uuid.uuid4()), kind="personal",
+            label="Test", correlation_id="corr",
+        )
+    with pytest.raises(ValueError, match="invalid_style_profile"):
+        await repo.create_draft(
+            tenant_id=str(uuid.uuid4()), owner_actor_id=str(uuid.uuid4()),
+            profile_id=str(uuid.uuid4()), kind="system",
+            label="Test", correlation_id="corr",
+        )
