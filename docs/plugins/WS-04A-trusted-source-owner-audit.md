@@ -256,3 +256,11 @@ This correction is committed but cannot be considered independently accepted unt
 Independent review of `9ad1b3b0488f169ccdfad5c22b15ea91129d160f` identified an invalid negative-proof assumption: the `MockTransport` handler raised `AssertionError` if an invalid signed URL reached HTTP, but the repository intentionally catches `Exception` and returns denial. Consequently, the test still passed when an unwanted network request was attempted.
 
 The existing `test_bounded_signed_range_blocks_untrusted_urls` now **records every transport invocation** and asserts the list is empty after the repository call, including encoded query names and encoded route/filename paths. The handler returns an error response instead of relying on an exception to escape the repository. This distinguishes valid pre-request rejection from a failed request that occurred too late. No authenticated live storage acceptance or author consent has been proven.
+
+## WS-04A7 follow-up: HTTPX asynchronous stream fixture correction
+
+Independent review of `f4f3760694727bf3ae0f002e5c31daadaddd22b1` found that `httpx.Response(content=...)` eagerly consumes response bytes with the pinned HTTPX 0.28.1, even when returned from `MockTransport` to a caller using `AsyncClient.stream`. The repository then fails closed on `StreamConsumed`, so success tests and several intended integrity checks did not exercise their asserted behavior.
+
+The canonical test fixture now returns `httpx.Response(stream=UnconsumedStream(...))` with an actual `httpx.AsyncByteStream`. Positive owner and multiline UTF-8 cases, the signed-token HTTPX INFO logging case, and malicious storage response fixtures use unconsumed streams. The negative response matrix additionally asserts **zero body reads** for refused status/missing/malformed content-range headers and **one actual stream read** for oversize-body and wrong-digest rejections. The existing zero-outbound-request assertions for invalid signed links remain intact.
+
+This repairs test evidence, not production author consent or live Supabase acceptance. Fresh exact-head CI and independent review are required before the code can be merged as inactive infrastructure. Writing-style learning stays disabled.
