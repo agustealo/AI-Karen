@@ -592,3 +592,125 @@ async def test_confirmed_author_approval_does_not_issue_without_separate_request
     )
     assert result["status"] == "approved"
     construction.assert_not_called()
+
+
+@pytest.mark.parametrize("approval_status", ["pending", "approved", "consumed"])
+@pytest.mark.parametrize("evidence", ["valid", "missing", "purpose_drift", "expiry_drift"])
+async def test_recover_document_receipt_requires_consumed_and_current_exact_source(
+    monkeypatch, approval_status, evidence,
+):
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, context = evidence_fixture_for_recovery()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope, status=approval_status)
+    repo = SimpleNamespace(get=AsyncMock(return_value=record))
+    verified = SimpleNamespace(
+        consent_receipt_id=str(uuid.uuid4()),
+        consent_expires_at=scope.expires_at,
+        style_use_allowed=scope.style_use_allowed,
+        analysis_allowed=True,
+    )
+    if evidence == "missing":
+        verified = None
+    elif evidence == "purpose_drift":
+        verified.style_use_allowed = not scope.style_use_allowed
+    elif evidence == "expiry_drift":
+        verified.consent_expires_at = scope.expires_at + timedelta(minutes=1)
+    issuer = SimpleNamespace(verify_current=AsyncMock(return_value=verified))
+    factory = MagicMock(return_value=issuer)
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", factory,
+    )
+    recovered = await service(repo).recover_stored_document_consent_receipt(
+        record["approval_id"], request=object(),
+    )
+    if approval_status == "consumed" and evidence == "valid":
+        assert recovered == verified.consent_receipt_id
+        issuer.verify_current.assert_awaited_once_with(
+            tenant_id=scope.tenant_id,
+            actor_id=scope.author_actor_id,
+            profile_id=scope.profile_id,
+            artifact_id=scope.artifact_id,
+        )
+    else:
+        assert recovered is None
+    if approval_status != "consumed":
+        factory.assert_not_called()
+
+
+def evidence_fixture_for_recovery():
+    return evidence()
+
+
+async def test_stored_issuance_replays_read_only_after_successful_consumption(
+    monkeypatch,
+):
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope, status="consumed")
+    repo = SimpleNamespace(get=AsyncMock(return_value=record))
+    receipt_id = str(uuid.uuid4())
+    issuer = SimpleNamespace(
+        verify_current=AsyncMock(return_value=SimpleNamespace(
+            consent_receipt_id=receipt_id,
+            consent_expires_at=scope.expires_at,
+            style_use_allowed=scope.style_use_allowed,
+            analysis_allowed=True,
+        )),
+        issue_with_approved_scope=AsyncMock(),
+    )
+    factory = MagicMock(return_value=issuer)
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", factory,
+    )
+    current = await service(repo).issue_stored_document_consent(
+        record["approval_id"], request=object(), correlation_id="retry",
+    )
+    assert current == receipt_id
+    issuer.issue_with_approved_scope.assert_not_awaited()
+
+
+async def test_canonical_source_metadata_denies_missing_or_drifted_file(
+    monkeypatch,
+):
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope)
+    issuer = SimpleNamespace(
+        read_current_source_summary=AsyncMock(
+            return_value={"name": "original.txt", "bytes": 120, "mime_type": "text/plain"},
+        ),
+    )
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer",
+        MagicMock(return_value=issuer),
+    )
+    target = service(SimpleNamespace(get=AsyncMock(return_value=record)))
+    _, recovered, source = await target.get_document_consent_review(
+        record["approval_id"], request=object(),
+    )
+    assert recovered == scope
+    assert source["name"] == "original.txt"
+    issuer.read_current_source_summary.assert_awaited_once_with(
+        tenant_id=scope.tenant_id,
+        actor_id=scope.author_actor_id,
+        profile_id=scope.profile_id,
+        artifact_id=scope.artifact_id,
+        source_sha256=scope.source_sha256,
+    )
+    issuer.read_current_source_summary.return_value = None
+    with pytest.raises(ApprovalScopeError, match="source unavailable"):
+        await target.get_document_consent_review(
+            record["approval_id"], request=object(),
+        )
