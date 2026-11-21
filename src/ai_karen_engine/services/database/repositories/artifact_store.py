@@ -86,6 +86,22 @@ class ArtifactStore(Repository):
         Failure must never return source bytes or other tenants' metadata.
         """
 
+    async def read_owner_active_text_bounded(
+        self, artifact_id: str, tenant_id: str, user_id: str, *,
+        max_bytes: int = 65536,
+    ) -> RepositoryResult[VerifiedArtifactText]:
+        """Read current owner-authenticated inert UTF-8 text without buffering.
+
+        Implementations must enforce max_bytes during object transfer, before
+        storage bytes are materialized, while also verifying the live canonical
+        owner, active state, expected digest and actual digest. This base method
+        explicitly denies until the storage backend proves that capability.
+        Neither download() nor read_owner_active_code() satisfies the bound.
+        """
+        return RepositoryResult(
+            success=False, error="bounded_artifact_read_unavailable"
+        )
+
     @abstractmethod
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> RepositoryResult[Optional[Artifact]]:
         """Retrieve artifact metadata without downloading bytes."""
