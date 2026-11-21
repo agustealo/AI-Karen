@@ -110,6 +110,23 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
     inserted = False
 
     try:
+        # Verify the server's effective database and canonical migrated
+        # archive-column schema *after* connecting and *before* any writes.
+        # URL validation alone is not evidence of the actual server target.
+        async with sessions() as session:
+            database_name = (await session.execute(
+                text("SELECT current_database()")
+            )).scalar_one()
+            if database_name != _TEST_DB_NAME.lstrip("/"):
+                pytest.fail("Effective PostgreSQL database is not disposable")
+            archive_column = (await session.execute(text(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'files' "
+                "AND column_name = 'deleted_at'"
+            ))).scalar_one_or_none()
+            if archive_column != "timestamp without time zone":
+                pytest.fail("Canonical migrated files.deleted_at column is missing")
+
         # The fixture must already contain the real migrated files table and
         # authorized tenant/user rows. No schema or user creation happens here.
         async with sessions() as session:
