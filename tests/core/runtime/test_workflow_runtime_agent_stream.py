@@ -159,3 +159,69 @@ async def test_workflow_stream_propagates_failure_to_chat_runtime_fallback(
     with pytest.raises(RuntimeError, match="secret-provider-detail"):
         async for _chunk in runtime.stream(request):
             pytest.fail("workflow adapter must not translate runtime failures into SSE chunks")
+
+
+@pytest.mark.asyncio
+async def test_real_workflow_stream_close_finalizes_orchestrator_and_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise each real forwarding owner, not a substitute graph stream."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.langgraph_orchestrator.langgraph_orchestrator import (
+        LangGraphOrchestrator,
+    )
+
+    runtime = WorkflowRuntime()
+    graph_closed = asyncio.Event()
+    session_closed = asyncio.Event()
+
+    class Graph:
+        async def astream(self, *_args, **_kwargs):
+            try:
+                yield {"formatted_response": {"data": {"response": "graph-content"}}}
+                await asyncio.Event().wait()
+            finally:
+                graph_closed.set()
+
+    async def register_session(_session):
+        return None
+
+    async def finalize_session(_session, _duration, _error):
+        session_closed.set()
+
+    owner = SimpleNamespace(
+        graph=Graph(),
+        _register_session=register_session,
+        _finalize_session=finalize_session,
+    )
+
+    class RealOrchestrationAdapter:
+        def stream_process(self, **kwargs):
+            return LangGraphOrchestrator.stream_process(owner, **kwargs)
+
+    async def get_orchestrator():
+        return RealOrchestrationAdapter()
+
+    monkeypatch.setattr(runtime, "_get_orchestrator", get_orchestrator)
+    monkeypatch.setattr(runtime, "_use_deepagents", lambda *args: False)
+
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": "hello"}],
+        context=ChatExecutionContext(
+            user_id="00000000-0000-0000-0000-000000000001",
+            tenant_id="00000000-0000-0000-0000-000000000002",
+            session_id="session-1",
+            conversation_id="00000000-0000-0000-0000-000000000003",
+            request_id="request-1",
+            correlation_id="corr-1",
+        ),
+        stream=True,
+    )
+    stream = runtime.stream(request)
+    first = await asyncio.wait_for(anext(stream), timeout=5)
+    assert first.content == "graph-content"
+    await asyncio.wait_for(stream.aclose(), timeout=5)
+    assert graph_closed.is_set()
+    assert session_closed.is_set()
