@@ -27,7 +27,7 @@ def test_runbook_requires_real_protected_browser_proof():
     assert "          - content-intelligence" in workflow
     match = re.search(
         r"(?ms)^  authenticated-settings-visual-acceptance:\n"
-        r"(?P<body>.*?)(?=^  [a-z][\\w-]*:\\s*$|\\Z)",
+        r"(?P<body>.*?)(?=^  [a-z][\w-]*:\s*$|\Z)",
         workflow,
     )
     assert match is not None
