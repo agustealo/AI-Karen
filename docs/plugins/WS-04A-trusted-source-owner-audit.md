@@ -106,3 +106,9 @@ The adapter implements the existing `WritingStyleSourceAuthority.verify_analysis
 **Status and limitation:** No production `DocumentStyleConsentIssuer` has been proven or registered in the runtime. The adapter is deliberately not composed into the application or exposed to users. Its presence in the tree does **not** establish a consumer-ready source authorization path. A future trusted issuer must independently prove actual author consent; passing a test stub or a user-supplied object is not authorization. Source-side revocation and publication/use rechecks remain WS-04A3/4 gates.
 
 The targeted regression file covers trusted issuer requirements, refusal to read metadata as consent, owner/tenant/author mismatch, deleted or foreign artifacts, search article denial, missing/expired/denied consent, unexpected exceptions, source type denial, and a permission changing between two calls. These cases need exact-head execution before any acceptance claim.
+
+### WS-04A2 source/use recheck refinement
+
+The inactive adapter now exposes `verify_use(...)->bool`, implemented by rechecking the same current source plus separately issued consent and requiring `style_use_allowed is True`. A source eligible only for analysis returns false for use. It also reloads canonical artifact metadata **after** the consent issuer decision and refuses archived/deleted, ownership-changed, kind-changed, or SHA-256-changed resources. Tests cover permission revoked between calls, source deletion between metadata reads, and content-revision drift.
+
+The second read reduces a permission race but **does not** establish atomic source/consent snapshot semantics, a current-use runtime hook, or a durable author grant. Publication and every delegated runtime use remain fail-closed until the canonical issuer, transaction/fencing strategy and runtime composition are implemented and proved. Do not treat `verify_use` as a substitute for runtime policy or KariSignature purpose grants.
