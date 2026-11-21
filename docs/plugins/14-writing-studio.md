@@ -388,3 +388,44 @@ and the existing dedicated KariSignature workflow running both disposable
 PostgreSQL suites, current-head CI, independent security review, and source
 revocation adversarial acceptance. No green source test alone certifies sample
 ingestion or human consent.
+
+
+## WS-02C: Provenance-bound analysis admission (source candidate)
+
+`services/formatting/karisignature_persisted_sample_authority.py` is a
+strict adapter between **existing** WS-02B sample evidence, WS-03A's
+`KariSignatureSampleAuthority` contract and the canonical live
+`WritingStyleSourceAuthority`. It is not a source permission store, new
+analyzer, ingestion endpoint, or profile publication path.
+
+The adapter requires a trusted host-side document/channel content reader
+and a current source-owner authorizer, both injected from existing owners.
+For a draft, never-published profile, it checks owner-only PostgreSQL
+evidence with FORCE RLS; compares source ID, author identity, consent receipt,
+expiry and current analysis permission with the source owner's decision;
+reads current authorized source content, matches its SHA-256 against the
+bounded WS-03A sample, then checks evidence and live source consent again.
+Missing or mismatched source owner, bytes, receipt, purpose, tenant, actor,
+sample ID, or current consent fails closed. It does not use submitted
+source references, matching request digests or stored evidence as authority.
+
+A valid analysis decision authorizes only WS-03A's in-memory, unapproved
+heuristic proposal. It does not approve a communication identity, enable
+training, persist content, grant permissions, create a background job, or
+publish a style. Concurrent revocation *after* the final check remains an
+execution-time concern: a production caller must bind authorized content to
+execution and revalidate source rights at the actual analysis operation.
+No HTTP route, UI, provider selection or plugin permission is opened.
+
+**Not yet integrated:** The concrete production source-owner adapters for
+documents, email, messaging and transcripts, author-consent enrollment,
+source-revocation notifications, and revision-to-evidence lineage are still
+required. Until those are independently verified, keep consumer ingestion
+and analysis disabled. WS-02C's test adapters are only test fixtures.
+
+**Evidence:** `tests/services/test_karisignature_persisted_sample_authority.py`
+exercises current source bytes, receipt/author drift, denied owner, scoped
+purpose, and a source revoked between checks. The existing disposable
+PostgreSQL suite now exercises the adapter using real row-level security.
+The canonical KariSignature proof workflow runs both test groups. CI and
+security review on the exact PR head are required before merging.
