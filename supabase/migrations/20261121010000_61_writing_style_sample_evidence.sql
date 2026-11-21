@@ -139,6 +139,29 @@ CREATE TRIGGER writing_style_profile_publish_source_gate
     BEFORE UPDATE OF state, current_revision_id ON public.writing_style_profiles
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_require_source_use_consent();
 
+-- Profile publication is a monotonic lifecycle boundary. In particular,
+-- owner SQL cannot relabel a previously published profile as draft and
+-- silently attach new evidence behind already-issued delegate grants.
+CREATE FUNCTION public.writing_style_enforce_profile_lifecycle()
+RETURNS trigger LANGUAGE plpgsql AS $style_lifecycle$
+BEGIN
+    IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+       OR NEW.profile_id IS DISTINCT FROM OLD.profile_id
+       OR NEW.owner_actor_id IS DISTINCT FROM OLD.owner_actor_id
+       OR NEW.publication_revision < OLD.publication_revision
+       OR (OLD.state = 'revoked' AND NEW.state <> 'revoked')
+       OR (OLD.publication_revision > 0 AND NEW.state = 'draft')
+       OR (OLD.state = 'published' AND NEW.state = 'draft')
+    THEN
+        RAISE EXCEPTION 'writing style profile lifecycle violation';
+    END IF;
+    RETURN NEW;
+END
+$style_lifecycle$;
+CREATE TRIGGER writing_style_profile_lifecycle_fence
+    BEFORE UPDATE ON public.writing_style_profiles
+    FOR EACH ROW EXECUTE FUNCTION public.writing_style_enforce_profile_lifecycle();
+
 -- An owner can submit SQL without the repository helper. Serialize sample
 -- admission against publication on the same parent row; a published profile
 -- cannot gain new evidence behind existing grants.
@@ -150,6 +173,7 @@ BEGIN
       AND p.profile_id = NEW.profile_id
       AND p.owner_actor_id = NEW.owner_actor_id
       AND p.state = 'draft'
+      AND p.publication_revision = 0
     FOR UPDATE;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'writing style sample requires a draft profile';
