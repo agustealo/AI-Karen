@@ -33,6 +33,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
     RepositoryResult,
 )
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
+from ai_karen_engine.core.logging.redaction import install_signed_storage_httpx_log_filter
 
 logger = logging.getLogger(__name__)
 
@@ -369,6 +370,10 @@ class SupabaseArtifactStore(ArtifactStore):
                 ):
                     return RepositoryResult(success=False, error=unavailable)
 
+                # HTTPX logs request URLs at INFO. Install the canonical
+                # signed-token guard even when sink setup was skipped by a
+                # standalone worker or repository test.
+                install_signed_storage_httpx_log_filter()
                 chunks = bytearray()
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(10.0, connect=3.0),
