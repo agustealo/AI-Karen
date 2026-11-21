@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import hashlib
+import logging
 
 import httpx
 
@@ -342,3 +343,55 @@ async def test_bounded_signed_range_fails_closed_for_insecure_origin(monkeypatch
     assert not result.success
     assert result.data is None
     assert bucket.signatures == []
+
+
+@pytest.mark.asyncio
+async def test_bounded_signed_storage_httpx_logs_never_expose_token(
+    monkeypatch, caplog
+):
+    """The actual HTTPX INFO event is safe even in Karen's text log format."""
+    from ai_karen_engine.core.logging.formatters import RuntimeTextFormatter
+
+    secret = "private-signed-token-DoNotLog123"
+    def handle(request):
+        assert request.url.params["token"] == secret
+        return httpx.Response(
+            206, content=_BODY,
+            headers={
+                "Content-Range": f"bytes 0-{len(_BODY)-1}/{len(_BODY)}"
+            },
+        )
+
+    store, _, _ = bounded_store(
+        monkeypatch,
+        signed_url=(
+            f"/storage/v1/object/sign/artifacts/{_TENANT}/"
+            f"{_ARTIFACT}/author.txt?token={secret}"
+        ),
+        transport=httpx.MockTransport(handle),
+    )
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        result = await store.read_owner_active_text_bounded(
+            _ARTIFACT, _TENANT, _OWNER
+        )
+        # Ensure the filter does not suppress unrelated HTTPX log events.
+        logging.getLogger("httpx").info("HTTP Request: ordinary public URL")
+    assert result.success is True
+    formatted = [
+        RuntimeTextFormatter().format(record)
+        for record in caplog.records if record.name == "httpx"
+    ]
+    assert formatted
+    assert all(secret not in line for line in formatted)
+    assert any("ordinary public URL" in line for line in formatted)
+    assert all(secret not in record.getMessage() for record in caplog.records)
+
+
+def test_signed_url_redaction_covers_short_and_encoded_tokens():
+    from ai_karen_engine.core.logging.redaction import redact_text
+
+    for token in ("s", "private-signed-token", "foo%2Fbar%3D"):
+        raw = f"https://storage.example.test/object?token={token}"
+        result = redact_text(raw)
+        assert token not in result
+        assert "token=[REDACTED]" in result
