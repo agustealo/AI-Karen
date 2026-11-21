@@ -294,6 +294,19 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             "create", "publish", "grant", "revoke_grant", "grant",
             "publish", "revoke_profile",
         ]
+
+        # Governed tenant erasure must delete immutable child revisions and
+        # grants without allowing a direct revision edit or deletion.
+        await raw.execute("DELETE FROM public.tenants WHERE id=$1", tenant_a)
+        for table in (
+            "writing_style_profiles", "writing_style_revisions",
+            "writing_style_grants", "writing_style_audit",
+        ):
+            remaining = await raw.fetchval(
+                f"SELECT count(*) FROM public.{table} WHERE tenant_id=$1",
+                tenant_a,
+            )
+            assert remaining == 0, table
     finally:
         if engine is not None:
             await engine.dispose()
