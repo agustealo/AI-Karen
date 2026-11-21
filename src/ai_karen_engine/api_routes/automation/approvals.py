@@ -72,6 +72,9 @@ class DocumentAuthorConsentPreview(BaseModel):
     status: str
     profile_id: str
     artifact_id: str
+    source_name: str
+    source_bytes: int
+    source_mime_type: str
     source_sha256: str
     analysis_allowed: bool
     style_use_allowed: bool
@@ -89,7 +92,7 @@ async def get_document_author_confirmation(
 ):
     """Read only ledger-bound metadata after revalidating the author's bearer."""
     try:
-        record, scope = await get_approval_service().get_document_consent_confirmation(
+        record, scope, source = await get_approval_service().get_document_consent_review(
             str(approval_id), request=request,
         )
         return DocumentAuthorConsentPreview(
@@ -97,6 +100,9 @@ async def get_document_author_confirmation(
             status=record["status"],
             profile_id=scope.profile_id,
             artifact_id=scope.artifact_id,
+            source_name=str(source["name"]),
+            source_bytes=int(source["bytes"]),
+            source_mime_type=str(source["mime_type"]),
             source_sha256=scope.source_sha256,
             analysis_allowed=scope.analysis_allowed,
             style_use_allowed=scope.style_use_allowed,
