@@ -11,7 +11,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Protocol
 
 from sqlalchemy import text
 
@@ -36,19 +36,190 @@ def _canonical_uuid(value: str) -> bool:
         return False
 
 
-class PostgresDocumentStyleConsentIssuer:
-    """Verify current, independently recorded first-party author consent.
+class FirstPartyConsentPolicy(Protocol):
+    """Trusted host policy, never constructed from request metadata.
 
-    The name follows the existing DocumentStyleConsentIssuer protocol, but this
-    class cannot issue, approve, or restore receipts. Host RuntimePolicy and
-    a separate authenticated author-issued mutation are prerequisites.
+    The host must authenticate the principal and obtain the author's explicit
+    document-specific permission before returning True. A stale UI flag or
+    storage ownership cannot substitute for this decision.
+    """
+
+    async def authorize_issuance(
+        self, *, tenant_id: str, actor_id: str, profile_id: str,
+        artifact_id: str, analysis_allowed: bool, style_use_allowed: bool,
+        expires_at: datetime, correlation_id: str,
+    ) -> bool: ...
+
+    async def authorize_revocation(
+        self, *, tenant_id: str, actor_id: str, profile_id: str,
+        artifact_id: str, correlation_id: str,
+    ) -> bool: ...
+
+
+class PostgresDocumentStyleConsentIssuer:
+    """Verify current consent; mutations require a trusted host policy.
+
+    Unconfigured instances remain read-only and cannot mint or revoke grants.
+    No route or runtime composition currently registers the issuance policy.
     """
 
     def __init__(
         self,
         client_factory: Callable[[], MultiTenantPostgresClient] = MultiTenantPostgresClient,
+        issuance_policy: FirstPartyConsentPolicy | None = None,
     ) -> None:
         self._client_factory = client_factory
+        self._issuance_policy = issuance_policy
+
+    @staticmethod
+    def _valid_mutation(
+        tenant_id: str, actor_id: str, profile_id: str, artifact_id: str,
+        correlation_id: str,
+    ) -> bool:
+        return (
+            all(_canonical_uuid(v) for v in (
+                tenant_id, actor_id, profile_id, artifact_id,
+            ))
+            and isinstance(correlation_id, str)
+            and 1 <= len(correlation_id) <= 128
+            and correlation_id.strip() == correlation_id
+        )
+
+    async def issue_first_party(
+        self, *, tenant_id: str, actor_id: str, profile_id: str,
+        artifact_id: str, analysis_allowed: bool, style_use_allowed: bool,
+        expires_at: datetime, correlation_id: str,
+    ) -> str | None:
+        """Issue once, exclusively after trusted host first-party authorization.
+
+        No supplied digest, author ID, or receipt is accepted. The canonical
+        source record is locked and the digest is read inside the transaction.
+        A revoked grant is never reactivated; the author must use a new draft.
+        """
+        if (
+            self._issuance_policy is None
+            or not callable(getattr(self._issuance_policy, "authorize_issuance", None))
+            or not self._valid_mutation(
+                tenant_id, actor_id, profile_id, artifact_id, correlation_id
+            )
+            or analysis_allowed is not True
+            or type(style_use_allowed) is not bool
+            or not isinstance(expires_at, datetime)
+            or expires_at.tzinfo is None
+            or expires_at <= datetime.now(timezone.utc)
+        ):
+            return None
+        try:
+            permission = await self._issuance_policy.authorize_issuance(
+                tenant_id=tenant_id, actor_id=actor_id, profile_id=profile_id,
+                artifact_id=artifact_id, analysis_allowed=analysis_allowed,
+                style_use_allowed=style_use_allowed, expires_at=expires_at,
+                correlation_id=correlation_id,
+            )
+            if permission is not True:
+                return None
+            async with self._client_factory().get_async_session() as session:
+                await WritingStyleProfileRepository._scope(
+                    session, tenant_id, actor_id
+                )
+                result = await session.execute(
+                    text(
+                        "SELECT f.sha256 FROM public.files f "
+                        "JOIN public.writing_style_profiles p "
+                        "ON p.tenant_id=f.tenant_id "
+                        "AND p.owner_actor_id=f.owner_user_id "
+                        "WHERE f.file_id=:artifact "
+                        "AND f.tenant_id=CAST(:tenant AS uuid) "
+                        "AND f.owner_user_id=CAST(:actor AS uuid) "
+                        "AND p.profile_id=CAST(:profile AS uuid) "
+                        "AND p.state='draft' AND p.publication_revision=0 "
+                        "AND f.deleted_at IS NULL AND f.mime_type='text/plain' "
+                        "AND f.bytes BETWEEN 1 AND 65536 "
+                        "FOR SHARE OF f, p"
+                    ),
+                    dict(
+                        artifact=artifact_id, tenant=tenant_id, actor=actor_id,
+                        profile=profile_id,
+                    ),
+                )
+                row = result.first()
+                if row is None or not isinstance(row[0], str) or not _DIGEST.fullmatch(row[0]):
+                    return None
+                receipt_id = str(uuid.uuid4())
+                await session.execute(
+                    text(
+                        "INSERT INTO public.writing_style_document_consents "
+                        "(tenant_id,profile_id,owner_actor_id,artifact_id,"
+                        "author_actor_id,source_sha256,receipt_id,"
+                        "analysis_allowed,style_use_allowed,author_attested,"
+                        "expires_at,correlation_id) VALUES "
+                        "(CAST(:tenant AS uuid),CAST(:profile AS uuid),"
+                        "CAST(:actor AS uuid),CAST(:artifact AS uuid),"
+                        "CAST(:actor AS uuid),:digest,CAST(:receipt AS uuid),"
+                        "true,:style_use,true,:expiry,:correlation)"
+                    ),
+                    dict(
+                        tenant=tenant_id, profile=profile_id, actor=actor_id,
+                        artifact=artifact_id, digest=row[0], receipt=receipt_id,
+                        style_use=style_use_allowed, expiry=expires_at,
+                        correlation=correlation_id,
+                    ),
+                )
+            return receipt_id
+        except Exception as exc:
+            logger.warning(
+                "Document style consent issuance denied",
+                extra={"error_type": type(exc).__name__},
+            )
+            return None
+
+    async def revoke_first_party(
+        self, *, tenant_id: str, actor_id: str, profile_id: str,
+        artifact_id: str, correlation_id: str,
+    ) -> bool:
+        """Revoke only through the verified host policy and canonical trigger."""
+        if (
+            self._issuance_policy is None
+            or not callable(getattr(self._issuance_policy, "authorize_revocation", None))
+            or not self._valid_mutation(
+                tenant_id, actor_id, profile_id, artifact_id, correlation_id
+            )
+        ):
+            return False
+        try:
+            permission = await self._issuance_policy.authorize_revocation(
+                tenant_id=tenant_id, actor_id=actor_id, profile_id=profile_id,
+                artifact_id=artifact_id, correlation_id=correlation_id,
+            )
+            if permission is not True:
+                return False
+            async with self._client_factory().get_async_session() as session:
+                await WritingStyleProfileRepository._scope(
+                    session, tenant_id, actor_id
+                )
+                result = await session.execute(
+                    text(
+                        "UPDATE public.writing_style_document_consents "
+                        "SET revoked_at=clock_timestamp() "
+                        "WHERE tenant_id=CAST(:tenant AS uuid) "
+                        "AND profile_id=CAST(:profile AS uuid) "
+                        "AND owner_actor_id=CAST(:actor AS uuid) "
+                        "AND author_actor_id=CAST(:actor AS uuid) "
+                        "AND artifact_id=CAST(:artifact AS uuid) "
+                        "AND revoked_at IS NULL RETURNING receipt_id"
+                    ),
+                    dict(
+                        tenant=tenant_id, profile=profile_id, actor=actor_id,
+                        artifact=artifact_id,
+                    ),
+                )
+                return result.first() is not None
+        except Exception as exc:
+            logger.warning(
+                "Document style consent revocation denied",
+                extra={"error_type": type(exc).__name__},
+            )
+            return False
 
     async def verify_current(
         self,
@@ -153,4 +324,4 @@ class PostgresDocumentStyleConsentIssuer:
             return None
 
 
-__all__ = ["PostgresDocumentStyleConsentIssuer"]
+__all__ = ["PostgresDocumentStyleConsentIssuer", "FirstPartyConsentPolicy"]
