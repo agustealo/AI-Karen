@@ -174,6 +174,33 @@ async def test_first_party_author_consent_postgres() -> None:
                 receipt,
             )
 
+        # Exercise the actual published-profile and delegated-grant fence,
+        # not only a draft with no outstanding authorization to revoke.
+        revision = uuid.uuid4()
+        await raw.execute(
+            "INSERT INTO public.writing_style_revisions "
+            "(tenant_id,profile_id,revision_id,revision_number,"
+            "approved_expression,content_digest,approved_by) "
+            "VALUES ($1,$2,$3,1,'{\"tone\":\"direct\"}'::jsonb,$4,$5)",
+            tenant, profile, revision, "b" * 64, owner,
+        )
+        await raw.execute(
+            "UPDATE public.writing_style_profiles SET state='published',"
+            "publication_revision=1,current_revision_id=$1 "
+            "WHERE tenant_id=$2 AND profile_id=$3",
+            revision, tenant, profile,
+        )
+        await raw.execute(
+            "INSERT INTO public.writing_style_grants "
+            "(tenant_id,profile_id,owner_actor_id,actor_id,purpose,granted_by) "
+            "VALUES ($1,$2,$3,$4,'draft_email',$3)",
+            tenant, profile, owner, other_actor,
+        )
+        assert await raw.fetchval(
+            "SELECT state FROM public.writing_style_profiles "
+            "WHERE tenant_id=$1 AND profile_id=$2", tenant, profile,
+        ) == "published"
+
         # Only one-way revocation is permitted; cannot un-revoke or alter
         # scope/digest/permissions even as the authenticated author.
         await scoped(
@@ -194,5 +221,14 @@ async def test_first_party_author_consent_postgres() -> None:
             "FROM public.writing_style_document_consents WHERE receipt_id=$1",
             receipt,
         )
+        assert await raw.fetchval(
+            "SELECT state FROM public.writing_style_profiles "
+            "WHERE tenant_id=$1 AND profile_id=$2", tenant, profile,
+        ) == "revoked"
+        assert await raw.fetchval(
+            "SELECT revoked_at IS NOT NULL FROM public.writing_style_grants "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
+            tenant, profile, other_actor,
+        ) is True
     finally:
         await raw.close()
