@@ -414,6 +414,20 @@ async def test_bounded_signed_storage_httpx_logs_never_expose_token(
         for record in caplog.records if record.name == "httpx"
     ]
     assert formatted
+    signed_response_records = [
+        record for record in caplog.records
+        if record.name == "httpx"
+        and "HTTP Request: GET " in record.getMessage()
+        and "/storage/v1/object/sign/artifacts/" in record.getMessage()
+        and "206 Partial Content" in record.getMessage()
+    ]
+    # A synthetic unrelated HTTPX event cannot substitute for the real
+    # signed-object HTTP 206 response log record.
+    assert len(signed_response_records) == 1
+    signed_record = signed_response_records[0]
+    assert "token=[REDACTED]" in signed_record.getMessage()
+    assert secret not in signed_record.getMessage()
+    assert secret not in RuntimeTextFormatter().format(signed_record)
     assert all(secret not in line for line in formatted)
     assert any("ordinary public URL" in line for line in formatted)
     assert all(secret not in record.getMessage() for record in caplog.records)
