@@ -17,6 +17,7 @@ from sqlalchemy import and_, or_, select, text
 from ai_karen_engine.core.memory.graph.models import EntityNode, GraphEdge
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
+from .event_source import PostgresEventSource
 from .ledger_models import MemoryEntity, MemoryRelation
 
 
@@ -303,14 +304,30 @@ class PostgresGraphRepository:
                 )
             ).mappings().all()
 
+        if not rows:
+            return []
+
+        # This traversal is a candidate enumerator, not a recall permission
+        # authority. Its historical event-consent snapshot is insufficient
+        # after an operator/user revokes a current consent scope. Reuse the
+        # canonical scoped event source so raw graph readers also lose access
+        # to revoked, not-yet-valid and expired event identifiers. A database
+        # failure propagates rather than turning stale relations into evidence.
+        event_ids = [str(row["event_id"]) for row in rows]
+        recallable = await PostgresEventSource().fetch_many(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            event_ids=event_ids,
+        )
         return [
             {
-                "event_id": str(row["event_id"]),
+                "event_id": event_id,
                 "relationship": row["relationship"],
                 "depth": int(row["depth"]),
                 "source": "postgres_graph",
             }
             for row in rows
+            if (event_id := str(row["event_id"])) in recallable
         ]
 
     async def close(self) -> None:
