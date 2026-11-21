@@ -147,6 +147,23 @@ describe("CK-07E1 owner-scoped observed run cursor", () => {
       expect(error).not.toContain("secret");
       expect(error).not.toContain("print(");
     }
+    for (const injected of [
+      { code: "print('secret')" },
+      { source: { raw: "secret" } },
+      { threadId: thread, runId },
+    ]) {
+      setup(() => Response.json(observed({
+        events: [{ seq: 1, event: {
+          type: "CUSTOM", name: "karen.presentation.withheld.v1",
+          value: { reason: "revocable_code_not_replayable" },
+          ...injected,
+        } }],
+        nextCursor: 1,
+      })));
+      const response = await GET(request());
+      expect(response.status).toBe(409);
+      expect(JSON.stringify(await response.json())).not.toContain("secret");
+    }
     setup(() => Response.json(observed({
       events: [{ seq: 1, event: {
         type: "CUSTOM", name: "karen.presentation.withheld.v2",
