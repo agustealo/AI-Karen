@@ -268,6 +268,113 @@ class PluginService:
             cursor=cursor,
         )
 
+    async def analyze_content_owner_sources(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        roles: List[str],
+        permissions: List[str],
+        request_id: str,
+        correlation_id: str,
+        operation: str,
+        references: List[Dict[str, str]],
+        query: Optional[str] = None,
+        left_id: Optional[str] = None,
+        right_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Apply fresh RuntimePolicy before owner-source text and plugin execution."""
+        from ai_karen_engine.database.factory import get_database_client
+        from ai_karen_engine.integrations.supabase_client import get_supabase_platform
+        from ai_karen_engine.extensions.content_intelligence_sources import (
+            ContentSourceHost,
+        )
+        from ai_karen_engine.services.database.repositories.repository_factory import (
+            RepositoryFactory,
+        )
+
+        if (
+            not user_id or not tenant_id or not request_id or not correlation_id
+            or "data:read" not in permissions
+        ):
+            raise PermissionError("content_source_read_permission_required")
+        if not isinstance(references, list) or not 1 <= len(references) <= 12:
+            raise ValueError("content_source_reference_count_invalid")
+
+        await self._ensure_initialized()
+        kernel = self._get_kernel()
+        record = kernel.get_record("content-intelligence")
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "enabled"
+            or record.get("dependencies_resolved") is not True
+        ):
+            raise PermissionError("content_source_plugin_disabled")
+        decision = await self._policy_enforcer.evaluate(
+            PolicyEvaluationRequest(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                correlation_id=correlation_id,
+                roles=list(roles),
+                permissions=list(permissions),
+                action="plugin_execution",
+                plugin_id="content-intelligence",
+                requested_capabilities=["content-intelligence", "data:read"],
+            )
+        )
+        if not decision.allowed:
+            raise PermissionError("content_source_policy_denied")
+        plan = decision.to_authorized_plan()
+        if (
+            "content-intelligence" not in plan.allowed_plugins
+            or "content-intelligence" not in plan.allowed_capabilities
+            or "data:read" not in plan.allowed_capabilities
+            or not plan.matches_execution_scope(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                policy_decision_id=decision.decision_id,
+            )
+        ):
+            raise PermissionError("content_source_policy_scope_denied")
+        database = get_database_client()
+        if database is None or not callable(getattr(database, "get_async_session", None)):
+            raise RuntimeError("content_source_database_unavailable")
+        # Supply the canonical initialized Storage holder; the ArtifactStore
+        # expects a platform with .storage.from_("artifacts"), not the raw
+        # storage object. A missing capability must remain unavailable.
+        platform = get_supabase_platform()
+        if platform is None or getattr(platform, "storage", None) is None:
+            raise RuntimeError("content_source_storage_unavailable")
+        store = RepositoryFactory(
+            session_factory=database.get_async_session,
+            storage_client=platform,
+        ).create_artifact_store()
+        context = ExtensionExecutionContext(
+            request_id=request_id,
+            correlation_id=correlation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            policy_decision_id=decision.decision_id,
+            allowed_capabilities=list(plan.allowed_capabilities),
+            resource_scope={},
+            audit_context={
+                "origin": "authenticated_content_owner_sources",
+                "user_roles": list(roles),
+                "permissions": list(permissions),
+            },
+        )
+        return await ContentSourceHost(
+            store=store, kernel=kernel,
+        ).execute_owner_text(
+            context=context,
+            plan=plan,
+            operation=operation,
+            references=references,
+            query=query,
+            left_id=left_id,
+            right_id=right_id,
+        )
+
     async def discover_plugins(
         self, force_refresh: bool = False
     ) -> Dict[str, Dict[str, Any]]:
