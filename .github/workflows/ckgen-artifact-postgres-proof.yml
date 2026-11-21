@@ -1,0 +1,189 @@
+name: CK-GEN Artifact PostgreSQL Owner and Archive Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
+      - "supabase/migrations/*artifact_archive_state.sql"
+      - "tests/integration/test_live_code_artifact_revocation_postgres.py"
+      - ".github/workflows/ckgen-artifact-postgres-proof.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
+      - "supabase/migrations/*artifact_archive_state.sql"
+      - "tests/integration/test_live_code_artifact_revocation_postgres.py"
+      - ".github/workflows/ckgen-artifact-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ckgen-artifact-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  artifact-postgres:
+    name: artifact-postgres-owner-revocation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      KAREN_TEST_DISPOSABLE_DATABASE: "1"
+      KAREN_TEST_CODE_ARTIFACT_POSTGRES: "1"
+      KAREN_TEST_CODE_ARTIFACT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_code_artifact_test
+      KAREN_TEST_ARTIFACT_TENANT_ID: 10000000-0000-4000-8000-000000000001
+      KAREN_TEST_ARTIFACT_OWNER_ID: 10000000-0000-4000-8000-000000000002
+      KAREN_TEST_ARTIFACT_OTHER_USER_ID: 10000000-0000-4000-8000-000000000003
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert exact checked-out revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Start existing isolated PostgreSQL container
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install canonical runtime and PostgreSQL dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements/ci/chat.txt
+
+      - name: Create fresh disposable database and apply canonical artifact schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import asyncio
+          import os
+          from pathlib import Path
+          from uuid import UUID
+
+          import asyncpg
+
+          BASELINE = Path("supabase/migrations/20260827010000_01_core_persona_runtime.sql")
+          FINALIZATION = Path("supabase/migrations/20260827050000_05_schema_security_finalization.sql")
+          TENANT_AUTHORITY = Path("supabase/migrations/20260916010000_14_auth_tenant_authority.sql")
+          ARCHIVE = Path("supabase/migrations/20261121010000_66_artifact_archive_state.sql")
+          DB_NAME = "karen_code_artifact_test"
+          ROOT_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
+          DB_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/" + DB_NAME
+
+          def source_table(sql: str, name: str) -> str:
+              # The baseline owns the exact table definition. Do not
+              # silently invent a replacement schema if it moves.
+              marker = f"CREATE TABLE {name} ("
+              start = sql.find(marker)
+              if start < 0:
+                  raise RuntimeError(f"Canonical migration no longer defines {name}")
+              finish = sql.find(chr(10) + ");", start)
+              if finish < 0:
+                  raise RuntimeError(f"Canonical migration is malformed for {name}")
+              return sql[start : finish + 3]
+
+          def tenant_type_correction(sql: str, table: str) -> str:
+              # Run the actual migration-owned DO blocks, without running
+              # unrelated memory/vector migrations requiring other tables.
+              marker = f"ALTER TABLE {table}"
+              position = sql.find(marker)
+              if position < 0:
+                  raise RuntimeError(f"Missing canonical tenant conversion: {table}")
+              start = sql.rfind("DO " + chr(36) * 2, 0, position)
+              finish = sql.find("END " + chr(36) * 2 + ";", position)
+              if start < 0 or finish < 0:
+                  raise RuntimeError(f"Malformed canonical tenant conversion: {table}")
+              block = sql[start : finish + len("END " + chr(36) * 2 + ";")]
+              if f"ALTER COLUMN tenant_id TYPE UUID" not in block:
+                  raise RuntimeError(f"Tenant type correction missing: {table}")
+              return block
+
+          async def prove_schema() -> None:
+              root = await asyncpg.connect(ROOT_DSN)
+              try:
+                  exists = await root.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname = $1", DB_NAME
+                  )
+                  if exists:
+                      raise RuntimeError("Refusing to reuse existing artifact proof database")
+                  await root.execute("CREATE DATABASE karen_code_artifact_test")
+              finally:
+                  await root.close()
+
+              db = await asyncpg.connect(DB_DSN)
+              try:
+                  baseline = BASELINE.read_text(encoding="utf-8")
+                  # Use the exact checked-in table DDL, not a hand-written
+                  # lookalike. These two source tables are the dependencies
+                  # for the canonical files repository contract.
+                  await db.execute(source_table(baseline, "auth_users"))
+                  await db.execute(source_table(baseline, "files"))
+                  finalization = FINALIZATION.read_text(encoding="utf-8")
+                  await db.execute(tenant_type_correction(finalization, "auth_users"))
+                  await db.execute(tenant_type_correction(finalization, "files"))
+                  await db.execute(TENANT_AUTHORITY.read_text(encoding="utf-8"))
+                  await db.execute(ARCHIVE.read_text(encoding="utf-8"))
+
+                  # Match migrated tenant FK and UUID column semantics.
+                  columns = await db.fetch(
+                      "SELECT table_name, data_type FROM information_schema.columns "
+                      "WHERE table_schema='public' AND column_name='tenant_id' "
+                      "AND table_name IN ('auth_users', 'files')"
+                  )
+                  if {row["table_name"]: row["data_type"] for row in columns} != {
+                      "auth_users": "uuid", "files": "uuid"
+                  }:
+                      raise RuntimeError("The canonical UUID tenant conversions did not apply")
+                  tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"])
+                  await db.execute(
+                      "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)",
+                      tenant, "CK-GEN Disposable Tenant", "ckgen-artifact-proof",
+                  )
+                  for key, email in (
+                      ("KAREN_TEST_ARTIFACT_OWNER_ID", "artifact-owner@ci.invalid"),
+                      ("KAREN_TEST_ARTIFACT_OTHER_USER_ID", "artifact-other@ci.invalid"),
+                  ):
+                      await db.execute(
+                          "INSERT INTO auth_users (user_id, tenant_id, email, roles) "
+                          "VALUES ($1::uuid, $2::uuid, $3::text, '[\"user\"]'::jsonb)",
+                          UUID(os.environ[key]),
+                          tenant,
+                          email,
+                      )
+              finally:
+                  await db.close()
+
+          asyncio.run(prove_schema())
+          PY
+
+      - name: Prove actual PostgreSQL owner denial and committed archive revocation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py \
+            tests/integration/test_live_code_artifact_revocation_postgres.py
+          pytest tests/integration/test_live_code_artifact_revocation_postgres.py \
+            -q -rs --junitxml=ckgen-artifact-postgres-junit.xml
+
+      - name: Preserve PostgreSQL proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ckgen-artifact-postgres-exact-head
+          path: ckgen-artifact-postgres-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
