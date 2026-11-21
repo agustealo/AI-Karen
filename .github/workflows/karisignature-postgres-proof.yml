@@ -1,0 +1,91 @@
+name: KariSignature PostgreSQL Principal and Revocation Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/ai_karen_engine/services/writing_style_profile_repository.py"
+      - "src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py"
+      - "supabase/migrations/*writing_style*.sql"
+      - "tests/integration/test_writing_style_identity_postgres.py"
+      - "tests/core/runtime/test_karisignature_contract.py"
+      - ".github/workflows/karisignature-postgres-proof.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/ai_karen_engine/services/writing_style_profile_repository.py"
+      - "src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py"
+      - "supabase/migrations/*writing_style*.sql"
+      - "tests/integration/test_writing_style_identity_postgres.py"
+      - "tests/core/runtime/test_karisignature_contract.py"
+      - ".github/workflows/karisignature-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: karisignature-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  writing-style-owner-postgres:
+    name: writing-style-owner-postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: src
+      WRITING_STYLE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_writing_style_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start canonical isolated PostgreSQL service
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - name: Install canonical PostgreSQL proof dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/chat.txt
+      - name: Create new dedicated disposable style test database
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def create():
+              root = await asyncpg.connect(
+                  "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
+              )
+              try:
+                  exists = await root.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname='karen_writing_style_test'"
+                  )
+                  assert not exists, "Refuse to reuse a pre-existing test database"
+                  await root.execute("CREATE DATABASE karen_writing_style_test")
+              finally:
+                  await root.close()
+
+          asyncio.run(create())
+          PY
+      - name: Verify compiled WS-01 and WS-02 source
+        run: |
+          python -m py_compile             src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py             src/ai_karen_engine/services/writing_style_profile_repository.py             tests/core/runtime/test_karisignature_contract.py             tests/integration/test_writing_style_identity_postgres.py
+      - name: Prove authenticated owner, purpose, revocation and immutable erasure on PostgreSQL
+        run: |
+          pytest tests/core/runtime/test_karisignature_contract.py -q -rs
+          pytest tests/integration/test_writing_style_identity_postgres.py -q -rs --junitxml=karisignature-postgres-junit.xml
+      - name: Preserve PostgreSQL proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: karisignature-postgres-exact-head-proof
+          path: karisignature-postgres-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
