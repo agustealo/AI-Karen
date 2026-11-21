@@ -243,27 +243,28 @@ async def test_first_party_author_consent_postgres(
             action="issue", scope_record=approval_payload["document_consent_scope"],
         )
 
-        # A manually toggled 'approved' status is not sufficient if the
-        # original canonical RuntimePolicy decision provenance is missing.
-        await raw.execute(
-            "UPDATE public.runtime_approval_requests "
-            "SET policy_decision_id=NULL WHERE approval_id=$1",
-            approval_id,
-        )
-        async with sessions() as test_session:
-            async with test_session.begin():
-                await test_session.execute(text(f'SET LOCAL ROLE "{role}"'))
-                await test_session.execute(
-                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
-                    {"tenant": str(tenant)},
-                )
-                assert await SqlApprovalRepository.consume_document_consent_in_session(
-                    test_session, **consume_args
-                ) is None
-        assert await raw.fetchval(
-            "SELECT status FROM public.runtime_approval_requests "
-            "WHERE approval_id=$1", approval_id,
-        ) == "approved"
+        # Neither missing provenance nor an unrelated policy decision
+        # can authorize a document-consent CAS, even when approved is set.
+        for policy_id in (None, "policy-other-approved-action"):
+            await raw.execute(
+                "UPDATE public.runtime_approval_requests "
+                "SET policy_decision_id=$1 WHERE approval_id=$2",
+                policy_id, approval_id,
+            )
+            async with sessions() as test_session:
+                async with test_session.begin():
+                    await test_session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                    await test_session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        {"tenant": str(tenant)},
+                    )
+                    assert await SqlApprovalRepository.consume_document_consent_in_session(
+                        test_session, **consume_args
+                    ) is None
+            assert await raw.fetchval(
+                "SELECT status FROM public.runtime_approval_requests "
+                "WHERE approval_id=$1", approval_id,
+            ) == "approved"
         await raw.execute(
             "UPDATE public.runtime_approval_requests "
             "SET policy_decision_id='policy-document-consent-preflight-disposable-author' "
