@@ -336,29 +336,46 @@ test("KPIN-MUTATION-LIVE: authenticated dual-account denial, revision CAS and co
     await otherContext.close();
   }
 
+  // Two genuine simultaneous HTTP requests compete for the same scoped row
+  // and revision. Neither request is mocked, retried, or optimistically
+  // applied by the browser. Distinct keys prohibit replay conflation.
   const intendedPosition = neighbor.position;
-  const key = crypto.randomUUID();
+  const firstKey = crypto.randomUUID();
+  const secondKey = crypto.randomUUID();
   const request = {
     operation: "reorder",
-    idempotency_key: key,
+    idempotency_key: firstKey,
     pin_id: moving.pin_id,
     expected_revision: moving.revision,
     position: intendedPosition,
   };
-  const committed = await livePinRequest(page, "POST", "/api/chat/ag-ui/pins/mutations", request);
-  expect(committed.status, "Real owner reorder must commit").toBe(200);
+  const competing = { ...request, idempotency_key: secondKey };
+  const responses = await Promise.all([
+    livePinRequest(page, "POST", "/api/chat/ag-ui/pins/mutations", request),
+    livePinRequest(page, "POST", "/api/chat/ag-ui/pins/mutations", competing),
+  ]);
+  expect(responses.map(result => result.status).sort((a, b) => a - b))
+    .toEqual([200, 409]);
+  const winnerIndex = responses.findIndex(result => result.status === 200);
+  expect(winnerIndex).toBeGreaterThanOrEqual(0);
+  const winningKey = winnerIndex === 0 ? firstKey : secondKey;
+  const winningRequest = winnerIndex === 0 ? request : competing;
+  const committed = responses[winnerIndex];
   expect(committed.cache).toContain("no-store");
   expect(committed.body).toMatchObject({
     schema_version: 1,
     committed: true,
     receipt: {
-      idempotency_key: key,
+      idempotency_key: winningKey,
       operation: "reorder",
       pin_id: moving.pin_id,
     },
   });
-
-  const replay = await livePinRequest(page, "POST", "/api/chat/ag-ui/pins/mutations", request);
+  // The committed operation must be retry-safe even after the other
+  // concurrent transaction failed; a new key with an old revision must not.
+  const replay = await livePinRequest(
+    page, "POST", "/api/chat/ag-ui/pins/mutations", winningRequest,
+  );
   expect(replay.status).toBe(200);
   expect(replay.body).toEqual(committed.body);
 
