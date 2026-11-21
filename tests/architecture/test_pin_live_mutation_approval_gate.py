@@ -51,3 +51,21 @@ def test_pin_live_mutation_keeps_real_browser_and_disposable_only():
     assert "page.route(" not in spec
     assert "route.fulfill(" not in spec
     assert re.search(r"test\.skip\(!mutationEnabled", spec)
+
+
+def test_real_pin_reorder_requires_one_winner_under_concurrent_distinct_keys():
+    """Prevent the protected acceptance from regressing to sequential writes."""
+    spec = SPEC.read_text(encoding="utf-8")
+    start = spec.index('test("KPIN-MUTATION-LIVE:')
+    mutation_trial = spec[start:]
+    assert "const firstKey = crypto.randomUUID()" in mutation_trial
+    assert "const secondKey = crypto.randomUUID()" in mutation_trial
+    assert "const competing = { ...request, idempotency_key: secondKey }" in mutation_trial
+    assert "const responses = await Promise.all([" in mutation_trial
+    assert 'livePinRequest(page, "POST", "/api/chat/ag-ui/pins/mutations", request)' in mutation_trial
+    assert 'livePinRequest(page, "POST", "/api/chat/ag-ui/pins/mutations", competing)' in mutation_trial
+    assert ".toEqual([200, 409])" in mutation_trial
+    assert "expect(replay.body).toEqual(committed.body)" in mutation_trial
+    assert 'expect(stale.status, "Stale revision must not commit a second reorder").toBe(409)' in mutation_trial
+    assert "await page.reload()" in mutation_trial
+    assert 'await expect(dock.getByTestId("karen-pin-controls")).toHaveCount(0)' in mutation_trial
