@@ -117,6 +117,16 @@ def _require_lifecycle_scope(
     scope: Optional[PluginLifecycleApprovalScope],
 ) -> None:
     """Reject untrusted or unscoped lifecycle approvals before SQL writes."""
+    # WS-04A9E: general chat approvals must never issue a first-party
+    # document-style consent. They do not bind the independently verified
+    # source revision, fresh bearer session, or purpose-separated attestation.
+    if (
+        isinstance(decision.intent, str)
+        and decision.intent.startswith("writing_style.document_consent.")
+    ):
+        raise ApprovalScopeError(
+            "Document style consent requires source-scoped authenticated approval"
+        )
     if (
         isinstance(decision.intent, str)
         and decision.intent.startswith("plugin.lifecycle.")
@@ -302,6 +312,13 @@ class ApprovalService:
         if record["status"] != "approved":
             raise ApprovalStateError(
                 f"Approval cannot resume from status {record['status']}"
+            )
+
+        if str(record.get("intent") or "").startswith(
+            "writing_style.document_consent."
+        ):
+            raise ApprovalStateError(
+                "Document style consent cannot resume through generic chat approval"
             )
 
         if str(record.get("intent") or "").startswith("plugin.lifecycle."):
