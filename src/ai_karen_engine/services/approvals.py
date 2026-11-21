@@ -719,6 +719,31 @@ class ApprovalService:
             raise ApprovalScopeError("Document author approval fingerprint mismatch")
         return record, scope
 
+    async def get_document_consent_review(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+    ) -> tuple[Dict[str, Any], "DocumentConsentApprovalScope", dict[str, str | int]]:
+        """Obtain a live author-owned file identity before displaying consent."""
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+        )
+
+        record, scope = await self.get_document_consent_confirmation(
+            approval_id, request=request,
+        )
+        source = await PostgresDocumentStyleConsentIssuer().read_current_source_summary(
+            tenant_id=scope.tenant_id,
+            actor_id=scope.author_actor_id,
+            profile_id=scope.profile_id,
+            artifact_id=scope.artifact_id,
+            source_sha256=scope.source_sha256,
+        )
+        if source is None:
+            raise ApprovalScopeError("Current document source unavailable")
+        return record, scope, source
+
     async def confirm_stored_document_consent(
         self,
         approval_id: str,
