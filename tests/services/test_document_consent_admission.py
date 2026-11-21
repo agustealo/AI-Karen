@@ -276,3 +276,107 @@ async def test_document_confirmation_denied_after_runtime_degrades(
         )
     repo.get.assert_not_awaited()
     repo.decide.assert_not_awaited()
+
+
+async def test_canonical_runtime_composes_only_one_approved_issuer(monkeypatch):
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, _ = evidence()
+    policy = RuntimePolicyEnforcer()
+    receipt = str(uuid.uuid4())
+    issuer = SimpleNamespace(
+        issue_with_approved_scope=AsyncMock(return_value=receipt),
+        revoke_first_party=AsyncMock(return_value=True),
+    )
+    construction = MagicMock(return_value=issuer)
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
+    )
+    repo = SimpleNamespace()
+    target = service(repo)
+    approval_id = str(uuid.uuid4())
+    result = await target.issue_confirmed_document_consent(
+        request=object(), scope=scope, approval_id=approval_id,
+        correlation_id="runtime-verified", runtime_policy=policy,
+    )
+    assert result == receipt
+    kwargs = construction.call_args.kwargs
+    assert len(kwargs) == 1
+    assert kwargs["issuance_policy"]._enforcer is policy
+    issuer.issue_with_approved_scope.assert_awaited_once_with(
+        request=object(), scope=scope, approval_id=approval_id,
+        correlation_id="runtime-verified",
+    )
+    target._audit.log_audit_event.assert_called_once()
+    assert (
+        target._audit.log_audit_event.call_args.args[0]["metadata"]["receipt_id"]
+        == receipt
+    )
+
+
+@pytest.mark.parametrize("mode", ["none", "wrong"])
+async def test_execution_composition_denies_absent_runtime_policy(
+    monkeypatch, mode,
+):
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+    scope, _ = evidence()
+    create = MagicMock()
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", create,
+    )
+    target = service(SimpleNamespace())
+    policy = None if mode == "none" else object()
+    with pytest.raises(ApprovalScopeError, match="runtime authority"):
+        await target.issue_confirmed_document_consent(
+            request=object(), scope=scope, approval_id=str(uuid.uuid4()),
+            correlation_id="deny", runtime_policy=policy,
+        )
+    with pytest.raises(ApprovalScopeError, match="runtime authority"):
+        await target.revoke_document_consent(
+            request=object(), tenant_id=scope.tenant_id,
+            actor_id=scope.author_actor_id,
+            profile_id=scope.profile_id, artifact_id=scope.artifact_id,
+            correlation_id="deny", runtime_policy=policy,
+        )
+    create.assert_not_called()
+
+
+async def test_revoke_composition_uses_same_authority_and_one_way_issuer(
+    monkeypatch,
+):
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, _ = evidence()
+    policy = RuntimePolicyEnforcer()
+    issuer = SimpleNamespace(
+        revoke_first_party=AsyncMock(return_value=True),
+    )
+    construction = MagicMock(return_value=issuer)
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
+    )
+    target = service(SimpleNamespace())
+    result = await target.revoke_document_consent(
+        request=object(), tenant_id=scope.tenant_id,
+        actor_id=scope.author_actor_id,
+        profile_id=scope.profile_id,
+        artifact_id=scope.artifact_id,
+        correlation_id="confirmed-revoke",
+        runtime_policy=policy,
+    )
+    assert result is True
+    assert construction.call_args.kwargs["issuance_policy"]._enforcer is policy
+    issuer.revoke_first_party.assert_awaited_once_with(
+        request=object(), tenant_id=scope.tenant_id,
+        actor_id=scope.author_actor_id,
+        profile_id=scope.profile_id,
+        artifact_id=scope.artifact_id,
+        correlation_id="confirmed-revoke",
+    )
+    target._audit.log_audit_event.assert_called_once()
