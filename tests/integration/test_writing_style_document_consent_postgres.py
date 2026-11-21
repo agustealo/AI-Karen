@@ -145,7 +145,8 @@ async def test_first_party_author_consent_postgres() -> None:
             f'public.writing_style_grants TO "{role}"'
         )
         await raw.execute(
-            f'GRANT SELECT ON public.writing_style_grants TO "{role}"'
+            f'GRANT SELECT ON public.writing_style_grants, '
+            f'public.writing_style_sample_evidence TO "{role}"'
         )
         await raw.execute(
             f'GRANT INSERT ON public.writing_style_audit TO "{role}"'
