@@ -478,6 +478,66 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     **unpin_args(uuid.uuid4(), duplicate_key, "conflict")
                 )
 
+            # Two independently keyed concurrent moves of one pin with the
+            # same expected revision must serialize on the existing owner
+            # advisory lock. Exactly one commits; the other is a true CAS
+            # conflict, never a second receipt or duplicate position.
+            race_pin = await create_owned_pin("runtime-race-selected")
+            race_neighbor = await create_owned_pin("runtime-race-neighbor")
+            race_keys = [uuid.uuid4(), uuid.uuid4()]
+
+            def race_args(key):
+                return dict(
+                    authenticated_tenant_id=str(tenant_b),
+                    authenticated_user_id=str(owner_b),
+                    idempotency_key=str(key),
+                    request_id="race-request-" + str(key),
+                    correlation_id="race-reorder-postgres",
+                    operation="reorder",
+                    pin_id=str(race_pin),
+                    expected_revision=1,
+                    position=1,
+                )
+
+            raced = await asyncio.gather(
+                *(repository.mutate_with_receipt(**race_args(key))
+                  for key in race_keys),
+                return_exceptions=True,
+            )
+            assert sum(
+                getattr(result, "outcome", None) == "reordered"
+                for result in raced
+            ) == 1
+            assert sum(
+                isinstance(result, PresentationPinConflict)
+                for result in raced
+            ) == 1
+            race_rows = await raw.fetch("""
+                SELECT pin_id, position, revision
+                FROM public.conversation_presentation_pins
+                WHERE pin_id=ANY($1::uuid[])
+                ORDER BY position
+            """, [race_pin, race_neighbor])
+            assert [(row["pin_id"], row["position"]) for row in race_rows] == [
+                (race_neighbor, 0), (race_pin, 1),
+            ]
+            assert next(
+                row["revision"] for row in race_rows
+                if row["pin_id"] == race_pin
+            ) == 2
+            assert await raw.fetchval("""
+                SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                WHERE tenant_id=$1 AND user_id=$2
+                  AND idempotency_key=ANY($3::uuid[])
+            """, tenant_b, owner_b, race_keys) == 1
+
+            # Clean up through the same receipt-aware owner mutation, leaving
+            # the later signed-session test with no stray concurrent rows.
+            for race_id in (race_pin, race_neighbor):
+                await repository.mutate_with_receipt(
+                    **unpin_args(race_id, uuid.uuid4(), "race-cleanup")
+                )
+
             # Exercise the canonical signed-JWT -> durable AuthService session
             # -> FastAPI route -> runtime -> actual PostgreSQL receipt path.
             # Both the auth-session query and pin transaction use the same
@@ -673,29 +733,36 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 )
                 assert invalid.status_code == 422
 
-                # Compare-and-swap ordering is enforced through the same
-                # authenticated HTTP and durable receipt path.
+                # Actual signed session -> canonical runtime -> RLS SQL
+                # must move a pin atomically, even when two legacy positions
+                # are both zero. No UI array-index update is trusted.
                 reorder_pin = await create_owned_pin("runtime-http-reorder")
+                reorder_neighbor = await create_owned_pin("runtime-http-neighbor")
                 reorder_key = str(uuid.uuid4())
                 reorder_body = {
                     "operation": "reorder",
                     "idempotency_key": reorder_key,
                     "pin_id": str(reorder_pin),
                     "expected_revision": 1,
-                    "position": 7,
+                    "position": 1,
                 }
                 reordered = await http.post(
                     mutation_url, json=reorder_body, headers=owner_headers
                 )
                 assert reordered.status_code == 200, reordered.text
                 assert reordered.json()["receipt"]["committed_revision"] == 2
-                ordered_row = await raw.fetchrow("""
-                    SELECT position, revision FROM public.conversation_presentation_pins
-                    WHERE pin_id=$1
-                """, reorder_pin)
-                assert ordered_row is not None
-                assert ordered_row["position"] == 7
-                assert ordered_row["revision"] == 2
+                ordered_rows = await raw.fetch("""
+                    SELECT pin_id, position, revision
+                    FROM public.conversation_presentation_pins
+                    WHERE tenant_id=$1 AND user_id=$2
+                      AND pin_id=ANY($3::uuid[])
+                    ORDER BY position
+                """, tenant_b, owner_b, [reorder_pin, reorder_neighbor])
+                assert [(row["pin_id"], row["position"], row["revision"])
+                        for row in ordered_rows] == [
+                    (reorder_neighbor, 0, 1),
+                    (reorder_pin, 1, 2),
+                ]
                 reordered_retry = await http.post(
                     mutation_url, json=reorder_body, headers=owner_headers
                 )
@@ -711,6 +778,23 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     SELECT revision FROM public.conversation_presentation_pins
                     WHERE pin_id=$1
                 """, reorder_pin) == 2
+
+                out_of_range = await http.post(
+                    mutation_url,
+                    json={
+                        **reorder_body,
+                        "idempotency_key": str(uuid.uuid4()),
+                        "expected_revision": 2,
+                        "position": 99,
+                    },
+                    headers=owner_headers,
+                )
+                assert out_of_range.status_code == 409
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pins
+                    WHERE tenant_id=$1 AND user_id=$2
+                      AND pin_id=ANY($3::uuid[]) AND position IN (0,1)
+                """, tenant_b, owner_b, [reorder_pin, reorder_neighbor]) == 2
 
                 # Receipt insert failure must roll back the underlying DELETE
                 # through the real HTTP route; a 503 can never mean committed.
@@ -809,6 +893,14 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 """, revoked_pin) == 1
 
             rollback_pin = await create_owned_pin("runtime-receipt-rollback")
+            rollback_move = await create_owned_pin("runtime-reorder-receipt-rollback")
+            rollback_neighbor = await create_owned_pin("runtime-reorder-neighbor")
+            prior_positions = await raw.fetch("""
+                SELECT pin_id, position, revision
+                FROM public.conversation_presentation_pins
+                WHERE tenant_id=$1 AND user_id=$2
+                ORDER BY pin_id
+            """, tenant_b, owner_b)
             await raw.execute("""
                 CREATE FUNCTION public.reject_pin_receipt_test_insert()
                 RETURNS trigger LANGUAGE plpgsql AS $pin_reject$
@@ -831,6 +923,32 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     SELECT count(*) FROM public.conversation_presentation_pins
                     WHERE pin_id=$1
                 """, rollback_pin) == 1
+                with pytest.raises(PresentationPinUnavailable):
+                    await repository.mutate_with_receipt(
+                        authenticated_tenant_id=str(tenant_b),
+                        authenticated_user_id=str(owner_b),
+                        idempotency_key=str(uuid.uuid4()),
+                        request_id="reorder-receipt-failure",
+                        correlation_id="reorder-rollback-proof",
+                        operation="reorder",
+                        pin_id=str(rollback_move),
+                        expected_revision=1,
+                        position=1,
+                    )
+                after_positions = await raw.fetch("""
+                    SELECT pin_id, position, revision
+                    FROM public.conversation_presentation_pins
+                    WHERE tenant_id=$1 AND user_id=$2
+                    ORDER BY pin_id
+                """, tenant_b, owner_b)
+                assert after_positions == prior_positions
+                assert any(row["pin_id"] == rollback_neighbor
+                           for row in after_positions)
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                    WHERE tenant_id=$1 AND user_id=$2
+                      AND request_id='reorder-receipt-failure'
+                """, tenant_b, owner_b) == 0
             finally:
                 await raw.execute("""
                     DROP TRIGGER IF EXISTS reject_pin_receipt_test_insert

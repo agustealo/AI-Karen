@@ -42,6 +42,9 @@ class Result:
         assert self._first is not None
         return self._first
 
+    def all(self):
+        return self._first if isinstance(self._first, list) else []
+
 
 class FakeSession:
     def __init__(self, outputs):
@@ -185,13 +188,149 @@ async def test_missing_unpin_still_records_truthful_absent_receipt(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_stale_reorder_rejects_without_receipt(monkeypatch):
-    fake, state, _ = wire(monkeypatch, [Result(), Result(), Result()])
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(),
+        Result([{"pin_id": PIN, "position": 0, "revision": 3}]),
+    ])
     with pytest.raises(PresentationPinConflict, match="revision"):
         await PresentationPinRepository().mutate_with_receipt(**request(
-            operation="reorder", expected_revision=2, position=5,
+            operation="reorder", expected_revision=2, position=0,
         ))
     assert len(fake.queries) == 3
     assert state["rolled_back"]
+
+
+SECOND_PIN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+THIRD_PIN = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+
+def reorder_receipt(*, pin_id=PIN, expected_revision=2, position=1):
+    digest = module._mutation_digest(
+        operation="reorder", tenant=TENANT, user=USER,
+        pin_id=pin_id, expected_revision=expected_revision,
+        position=position, source=None,
+    )
+    return {
+        **receipt_row(digest=digest),
+        "operation": "reorder", "outcome": "reordered",
+        "pin_id": pin_id, "expected_revision": expected_revision,
+        "committed_revision": expected_revision + 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reorder_atomically_moves_two_pins_and_records_selected_receipt(monkeypatch):
+    rows = [
+        {"pin_id": PIN, "position": 0, "revision": 2},
+        {"pin_id": SECOND_PIN, "position": 1, "revision": 7},
+    ]
+    updated = [
+        {"pin_id": PIN, "revision": 3},
+        {"pin_id": SECOND_PIN, "revision": 8},
+    ]
+    fake, state, scopes = wire(monkeypatch, [
+        Result(), Result(), Result(rows), Result(updated),
+        Result(reorder_receipt()),
+    ])
+    receipt = await PresentationPinRepository().mutate_with_receipt(
+        **request(operation="reorder", expected_revision=2, position=1),
+    )
+    assert receipt.outcome == "reordered"
+    assert receipt.committed_revision == 3
+    assert state == {"committed": True, "rolled_back": False}
+    assert scopes == [(TENANT, USER)]
+    assert "pg_advisory_xact_lock" in fake.queries[0]
+    assert "FOR UPDATE" in fake.queries[2]
+    assert "jsonb_to_recordset" in fake.queries[3]
+    moves = json.loads(fake.params[3]["move_rows"])
+    assert moves == [
+        {"pin_id": SECOND_PIN, "position": 0, "expected_revision": 7},
+        {"pin_id": PIN, "position": 1, "expected_revision": 2},
+    ]
+    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[4]
+
+
+@pytest.mark.asyncio
+async def test_reorder_normalizes_legacy_gaps_and_duplicate_positions(monkeypatch):
+    rows = [
+        {"pin_id": PIN, "position": 0, "revision": 2},
+        {"pin_id": SECOND_PIN, "position": 0, "revision": 4},
+        {"pin_id": THIRD_PIN, "position": 9, "revision": 3},
+    ]
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(), Result(rows),
+        Result([{"pin_id": PIN, "revision": 3},
+                {"pin_id": THIRD_PIN, "revision": 4}]),
+        Result(reorder_receipt(position=2)),
+    ])
+    await PresentationPinRepository().mutate_with_receipt(
+        **request(operation="reorder", expected_revision=2, position=2),
+    )
+    assert state["committed"]
+    assert {
+        move["pin_id"]: move["position"]
+        for move in json.loads(fake.params[3]["move_rows"])
+    } == {THIRD_PIN: 1, PIN: 2}
+
+
+@pytest.mark.asyncio
+async def test_reorder_refuses_out_of_range_destination_before_update(monkeypatch):
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(),
+        Result([{"pin_id": PIN, "position": 0, "revision": 2}]),
+    ])
+    with pytest.raises(PresentationPinConflict, match="destination"):
+        await PresentationPinRepository().mutate_with_receipt(
+            **request(operation="reorder", expected_revision=2, position=1),
+        )
+    assert len(fake.queries) == 3
+    assert state["rolled_back"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_missing_bulk_cas_row_rolls_back_without_receipt(monkeypatch):
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(),
+        Result([{"pin_id": PIN, "position": 0, "revision": 2}]),
+        Result([]),
+    ])
+    with pytest.raises(PresentationPinConflict, match="revision"):
+        await PresentationPinRepository().mutate_with_receipt(
+            **request(operation="reorder", expected_revision=2, position=0),
+        )
+    assert len(fake.queries) == 4
+    assert state == {"committed": False, "rolled_back": True}
+
+
+@pytest.mark.asyncio
+async def test_reorder_receipt_insert_failure_rolls_back_all_moved_rows(monkeypatch):
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(),
+        Result([{"pin_id": PIN, "position": 0, "revision": 2}]),
+        Result([{"pin_id": PIN, "revision": 3}]),
+        RuntimeError("receipt insert failure"),
+    ])
+    with pytest.raises(PresentationPinUnavailable):
+        await PresentationPinRepository().mutate_with_receipt(
+            **request(operation="reorder", expected_revision=2, position=0),
+        )
+    assert state == {"committed": False, "rolled_back": True}
+    assert len(fake.queries) == 5
+
+
+@pytest.mark.asyncio
+async def test_reorder_replayed_receipt_skips_all_row_updates(monkeypatch):
+    first = reorder_receipt()
+    fake, state, _ = wire(monkeypatch, [Result(), Result(first)])
+    replay = await PresentationPinRepository().mutate_with_receipt(
+        **request(
+            operation="reorder", expected_revision=2, position=1,
+            request_id="later-request", correlation_id="later-trace",
+        ),
+    )
+    assert replay.receipt_id == RECEIPT
+    assert len(fake.queries) == 2
+    assert state["committed"]
 
 
 @pytest.mark.asyncio

@@ -257,6 +257,14 @@ class ChatRunCoordinator:
                 if chunk.correlation_id != lease.correlation_id:
                     raise ChatRunLeaseLost("chat_run_correlation_mismatch")
 
+                # Revocable rich presentations are emitted only after a fresh
+                # owner/lease check, even on streams faster than the heartbeat.
+                # A stop or stolen lease must not expose a queued source card.
+                # Leave the existing heartbeat and terminal authority intact.
+                if chunk.type == ChatStreamEventType.PRESENTATION:
+                    await require_active_lease()
+                    last_heartbeat = time.monotonic()
+
                 if chunk.type == ChatStreamEventType.ERROR:
                     if not await self._repository.finish(
                         lease, status="failed", error_code="CHAT_RUNTIME_ERROR"
