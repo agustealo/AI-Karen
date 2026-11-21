@@ -769,12 +769,26 @@ class RuntimeEvidenceResolver:
             return None
         if str(event_uuid) != event_id or str(record_uuid) != memory_id:
             return None
-        return {
+        origin = {
             "event_id": event_id,
             "record_id": memory_id,
             "record_type": record_type,
             "source": source,
         }
+        # This revision is copied from the retriever's MemoryEntry, not the
+        # stored custom metadata. Its absence prevents later live attestation.
+        revision = item.get("updated_at")
+        if isinstance(revision, str):
+            try:
+                parsed_revision = datetime.fromisoformat(revision)
+            except ValueError:
+                return None
+            if parsed_revision.tzinfo is None:
+                parsed_revision = parsed_revision.replace(tzinfo=timezone.utc)
+            origin["record_updated_at"] = parsed_revision.astimezone(
+                timezone.utc
+            ).isoformat()
+        return origin
 
     @classmethod
     def _memory_item_to_evidence(
