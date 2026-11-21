@@ -75,30 +75,31 @@ async def get_current_user(
     return user
 
 
-async def get_plugin_lifecycle_context(request: Request):
-    """Resolve a current, bearer-bound, high-risk plugin management context.
+async def _verified_high_risk_bearer_context(
+    request: Request, *, purpose: str,
+):
+    """Resolve a fresh bearer-bound identity through canonical session auth.
 
-    Only the canonical authentication middleware may validate the access
-    token and its backed active session. The verified token ID, not a client
-    session/conversation field or legacy synthetic identity, becomes the
-    immutable lifecycle session scope. Cookie-only requests and configured
-    developer auth bypass cannot create physical-mutation authority.
+    Only the canonical middleware validates token status and the active
+    database-backed session. Neither cookies, development bypass nor
+    request-supplied user/session fields may establish mutation authority.
     """
     from ai_karen_engine.auth.auth_middleware import TokenStatus
-    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
+    if purpose not in {"plugin-lifecycle", "writing-style-document-consent"}:
+        raise ValueError("unsupported_high_risk_auth_purpose")
     if auth_config.should_bypass_auth():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Verified production authentication is required for plugin lifecycle",
+            detail="Verified production authentication is required",
         )
 
     authorization = request.headers.get("Authorization", "")
     if not authorization.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Verified bearer session required for plugin lifecycle",
+            detail="Verified bearer session required",
         )
     token = authorization.removeprefix("Bearer ")
     if not token or token.strip() != token or any(ch.isspace() for ch in token):
@@ -118,7 +119,6 @@ async def get_plugin_lifecycle_context(request: Request):
             status_code=response_status,
             detail="Active authenticated session could not be verified",
         )
-
     payload = verified.get("payload")
     if not isinstance(payload, dict) or payload.get("type") == "refresh":
         raise HTTPException(
@@ -146,27 +146,12 @@ async def get_plugin_lifecycle_context(request: Request):
     except (ValueError, TypeError, AttributeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Canonical plugin lifecycle identity is required",
+            detail="Canonical high-risk identity is required",
         ) from exc
     if actor != principal.user_id or tenant != principal.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Canonical plugin lifecycle identity is required",
-        )
-    rbac = get_rbac_manager()
-    granted = rbac.has_permission(principal, Permission.ADMIN_PLUGINS_MANAGE)
-    rbac.audit_access_attempt(
-        principal,
-        Permission.ADMIN_PLUGINS_MANAGE,
-        resource=request.url.path,
-        granted=granted,
-        request=request,
-        additional_context={"action": "manage_plugin_lifecycle"},
-    )
-    if not granted:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Plugin lifecycle management permission required",
+            detail="Canonical high-risk identity is required",
         )
 
     def trace_id(value: object) -> str:
@@ -177,11 +162,10 @@ async def get_plugin_lifecycle_context(request: Request):
             return value
         return str(uuid.uuid4())
 
-    # Keep the signed token identifier out of audit events and durable
-    # approval rows. High-entropy token IDs remain uniquely bound to this
-    # user/tenant/session through a one-way deterministic digest.
+    # Hash the verified token identity to prevent secrets entering audit or
+    # durable approval records. Domain-separate lifecycle and document scopes.
     scoped_session_id = hashlib.sha256(
-        f"ai-karen:plugin-lifecycle:{tenant}:{actor}:{token_id}".encode("utf-8")
+        f"ai-karen:{purpose}:{tenant}:{actor}:{token_id}".encode("utf-8")
     ).hexdigest()
     return ChatExecutionContext(
         user_id=actor,
@@ -201,4 +185,42 @@ async def get_plugin_lifecycle_context(request: Request):
     )
 
 
-__all__ = ["get_current_user", "get_plugin_lifecycle_context"]
+async def get_plugin_lifecycle_context(request: Request):
+    """Resolve fresh bearer context with the plugin's existing RBAC gate."""
+    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+    context = await _verified_high_risk_bearer_context(
+        request, purpose="plugin-lifecycle"
+    )
+    principal = context.require_authenticated_user()
+    rbac = get_rbac_manager()
+    granted = rbac.has_permission(principal, Permission.ADMIN_PLUGINS_MANAGE)
+    rbac.audit_access_attempt(
+        principal,
+        Permission.ADMIN_PLUGINS_MANAGE,
+        resource=request.url.path,
+        granted=granted,
+        request=request,
+        additional_context={"action": "manage_plugin_lifecycle"},
+    )
+    if not granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Plugin lifecycle management permission required",
+        )
+    return context
+
+
+async def get_document_style_consent_context(request: Request):
+    """Read-only admission prerequisite for explicit document author consent.
+
+    This is NOT a grant to issue or revoke consent. The runtime must also
+    require fresh exact-source approval, RuntimePolicy and the atomic CAS.
+    There is deliberately no route or UI invoking this helper yet.
+    """
+    return await _verified_high_risk_bearer_context(
+        request, purpose="writing-style-document-consent"
+    )
+
+
+__all__ = ["get_current_user", "get_plugin_lifecycle_context", "get_document_style_consent_context"]
