@@ -455,7 +455,6 @@ class ApprovalService:
         request: "Request",
         scope: "DocumentConsentApprovalScope",
         correlation_id: str,
-        runtime_policy: "RuntimePolicyEnforcer",
     ) -> Dict[str, Any]:
         """Create a pending source-bound author approval, never the consent."""
         from ai_karen_engine.auth.session import get_document_style_consent_context
@@ -476,9 +475,13 @@ class ApprovalService:
             raise ApprovalScopeError("Valid author consent scope required")
         if scope.action != "issue":
             raise ApprovalScopeError("Unsupported consent request action")
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
         from ai_karen_engine.core.runtime.policy.runtime_policy import (
             RuntimePolicyEnforcer,
         )
+        runtime_policy = get_runtime_composition().runtime_policy
 
         if not isinstance(runtime_policy, RuntimePolicyEnforcer):
             raise ApprovalScopeError("Canonical runtime policy is required")
@@ -556,7 +559,6 @@ class ApprovalService:
         request: "Request",
         scope: "DocumentConsentApprovalScope",
         confirmed: bool,
-        runtime_policy: "RuntimePolicyEnforcer",
     ) -> Dict[str, Any]:
         """Approve only explicit author confirmation with fresh bearer scope."""
         from ai_karen_engine.auth.session import get_document_style_consent_context
@@ -568,9 +570,13 @@ class ApprovalService:
             raise ApprovalScopeError("Valid author consent scope required")
         if scope.action != "issue":
             raise ApprovalScopeError("Unsupported consent decision action")
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
         from ai_karen_engine.core.runtime.policy.runtime_policy import (
             RuntimePolicyEnforcer,
         )
+        runtime_policy = get_runtime_composition().runtime_policy
 
         if not isinstance(runtime_policy, RuntimePolicyEnforcer):
             raise ApprovalScopeError("Canonical runtime policy is required")
@@ -648,7 +654,6 @@ class ApprovalService:
         scope: "DocumentConsentApprovalScope",
         approval_id: str,
         correlation_id: str,
-        runtime_policy: "RuntimePolicyEnforcer",
     ) -> str | None:
         """Host-only receipt execution through canonical policy and SQL owner.
 
@@ -660,9 +665,13 @@ class ApprovalService:
         from ai_karen_engine.core.runtime.document_consent_approval import (
             DocumentConsentApprovalScope,
         )
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
         from ai_karen_engine.core.runtime.policy.runtime_policy import (
             RuntimePolicyEnforcer,
         )
+        runtime_policy = get_runtime_composition().runtime_policy
         from ai_karen_engine.services.postgres_document_style_consent_issuer import (
             PostgresDocumentStyleConsentIssuer,
             RuntimeDocumentConsentPolicy,
@@ -712,12 +721,15 @@ class ApprovalService:
         profile_id: str,
         artifact_id: str,
         correlation_id: str,
-        runtime_policy: "RuntimePolicyEnforcer",
     ) -> bool:
         """Host-only author revocation through the existing one-way SQL owner."""
+        from ai_karen_engine.core.runtime.composition import (
+            get_runtime_composition,
+        )
         from ai_karen_engine.core.runtime.policy.runtime_policy import (
             RuntimePolicyEnforcer,
         )
+        runtime_policy = get_runtime_composition().runtime_policy
         from ai_karen_engine.services.postgres_document_style_consent_issuer import (
             PostgresDocumentStyleConsentIssuer,
             RuntimeDocumentConsentPolicy,
