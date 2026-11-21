@@ -228,6 +228,21 @@ async def test_first_party_author_consent_postgres() -> None:
         assert permission.consent_receipt_id == issued
         assert permission.style_use_allowed is True
 
+        # A repeated affirmative host decision cannot silently replace
+        # the immutable receipt or elevate the already-issued permission.
+        # The primary-key/immutable-ledger fence owns this replay boundary.
+        replayed = await issuer.issue_first_party(
+            **scope, analysis_allowed=True, style_use_allowed=False,
+            expires_at=expiry, correlation_id="repeated-author-affirmative",
+        )
+        assert replayed is None
+        assert await raw.fetchval(
+            "SELECT receipt_id FROM public.writing_style_document_consents "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND artifact_id=$3",
+            tenant, profile, artifact,
+        ) == receipt
+        assert (await issuer.verify_current(**scope)).style_use_allowed is True
+
         # A once-issued receipt is not authorization to use altered or
         # archived bytes. Exercise the real SQL verifier, not a mocked row.
         await raw.execute(
