@@ -70,7 +70,6 @@ jobs:
           python - <<'PY'
           import asyncio
           import os
-          import re
           from pathlib import Path
 
           import asyncpg
@@ -82,14 +81,16 @@ jobs:
           DB_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/" + DB_NAME
 
           def source_table(sql: str, name: str) -> str:
-              match = re.search(
-                  rf"^CREATE TABLE {re.escape(name)} \\([\\s\\S]*?^\\);",
-                  sql,
-                  flags=re.MULTILINE,
-              )
-              if match is None:
+              # The baseline owns the exact table definition. Do not
+              # silently invent a replacement schema if it moves.
+              marker = f"CREATE TABLE {name} ("
+              start = sql.find(marker)
+              if start < 0:
                   raise RuntimeError(f"Canonical migration no longer defines {name}")
-              return match.group(0)
+              finish = sql.find("\\n);", start)
+              if finish < 0:
+                  raise RuntimeError(f"Canonical migration is malformed for {name}")
+              return sql[start : finish + 3]
 
           async def prove_schema() -> None:
               root = await asyncpg.connect(ROOT_DSN)
