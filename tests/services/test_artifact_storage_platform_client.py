@@ -14,6 +14,18 @@ from ai_karen_engine.services.database.repositories.supabase_artifact_store impo
 )
 
 
+class UnconsumedStream(httpx.AsyncByteStream):
+    """Feed HTTPX real async response bytes, without eager stream consumption."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+        self.reads = 0
+
+    async def __aiter__(self):
+        self.reads += 1
+        yield self._data
+
+
 class FakeBucket:
     def __init__(self):
         self.files = {}
@@ -169,7 +181,7 @@ def bounded_store(monkeypatch, *, body=_BODY, signed_url=None, row=None, transpo
                 f"/artifacts/{_TENANT}/{_ARTIFACT}/author.txt"
             )
             return httpx.Response(
-                206, content=body,
+                206, stream=UnconsumedStream(body),
                 headers={
                     "Content-Range": f"bytes 0-{len(body)-1}/{len(body)}",
                     "Content-Length": str(len(body)),
@@ -223,17 +235,17 @@ async def test_bounded_signed_range_rejects_bad_storage_responses(monkeypatch, r
     )
     def handler(request):
         if response == "full":
-            return httpx.Response(200, content=body * 100000)
+            return httpx.Response(200, stream=UnconsumedStream(body * 100000))
         if response == "missing_range":
-            return httpx.Response(206, content=body)
+            return httpx.Response(206, stream=UnconsumedStream(body))
         if response == "wrong_total":
             return httpx.Response(
-                206, content=body,
+                206, stream=UnconsumedStream(body),
                 headers={"Content-Range": f"bytes 0-{len(body)-1}/{len(body)+1}"},
             )
         if response == "oversend":
             return httpx.Response(
-                206, content=body + b"excess",
+                206, stream=UnconsumedStream(body + b"excess"),
                 headers={"Content-Range": f"bytes 0-{len(body)-1}/{len(body)}"},
             )
         return httpx.Response(
@@ -371,7 +383,7 @@ async def test_bounded_signed_storage_httpx_logs_never_expose_token(
     def handle(request):
         assert request.url.params["token"] == secret
         return httpx.Response(
-            206, content=_BODY,
+            206, stream=UnconsumedStream(_BODY),
             headers={
                 "Content-Range": f"bytes 0-{len(_BODY)-1}/{len(_BODY)}"
             },
