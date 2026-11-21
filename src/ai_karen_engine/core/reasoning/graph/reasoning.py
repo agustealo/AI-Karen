@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Any, Dict, Optional
 
@@ -20,17 +19,13 @@ from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
 logger = logging.getLogger("ai_karen.reasoning.graph")
 
 
-def _stable_node_id(prefix: str, value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
-    return f"{prefix}::{digest}"
-
-
 class ReasoningGraph:
-    """ICE facade with optional CapsuleGraph mirroring for explainability.
+    """ICE facade without an independent memory-graph presentation path.
 
-    Provider/model selection is a runtime responsibility. Callers must inject
-    the already-authorized generation client instead of allowing Core reasoning
-    to discover or select an active model.
+    Only NeuroRecall's selected, source-authorized evidence may be projected
+    through `project_selected_memory_graph`. Legacy CapsuleGraph mirroring
+    retained raw memory-match fingerprints across calls without tenant scope
+    or revocation checks, so it must not be enabled.
     """
 
     def __init__(
@@ -39,10 +34,15 @@ class ReasoningGraph:
         llm: LLMUtils,
         engine: Optional[SoftReasoningEngine] = None,
         policy: Optional[ICEWritebackPolicy] = None,
-        enable_graph_mirroring: bool = True,
+        enable_graph_mirroring: bool = False,
     ) -> None:
         if llm is None:
             raise ValueError("ReasoningGraph requires a runtime-injected generation client")
+        if enable_graph_mirroring:
+            raise ValueError(
+                "Legacy reasoning graph mirroring is disabled: use authorized "
+                "NeuroRecall selection and project_selected_memory_graph"
+            )
 
         self.engine = engine or SoftReasoningEngine(
             ttl_seconds=3600,
@@ -64,7 +64,6 @@ class ReasoningGraph:
         self.llm = llm
         self.policy = policy or ICEWritebackPolicy()
         self._ice = PremiumICEWrapper(sr=None, subengine=None, llm=self.llm, policy=self.policy)
-        self._capsule_graph = CapsuleGraph() if enable_graph_mirroring else None
 
     def run(
         self,
@@ -74,7 +73,6 @@ class ReasoningGraph:
         policy_overrides: Optional[Dict[str, Any]] = None,
     ) -> ReasoningTrace:
         trace = self._run_internal(text, metadata=metadata, policy_overrides=policy_overrides)
-        self._mirror_to_graph(text, trace)
         return trace
 
     async def arun(
@@ -92,17 +90,16 @@ class ReasoningGraph:
 
     @property
     def capsule_graph(self) -> Optional[CapsuleGraph]:
-        return self._capsule_graph
+        """Compatibility reader; never expose ungoverned memory evidence."""
+        return None
 
     def visualize_capsule_cli(self) -> Optional[str]:
-        if not self._capsule_graph:
-            return None
-        return self._capsule_graph.visualize_cli()
+        """Legacy graph display is disabled until canonical authorization."""
+        return None
 
     def capsule_dot(self) -> Optional[str]:
-        if not self._capsule_graph:
-            return None
-        return self._capsule_graph.to_dot()
+        """Legacy graph export is disabled until canonical authorization."""
+        return None
 
     def _run_internal(
         self,
@@ -116,28 +113,3 @@ class ReasoningGraph:
             return wrapper.process(text, metadata=metadata)
         return self._ice.process(text, metadata=metadata)
 
-    def _mirror_to_graph(self, text: str, trace: ReasoningTrace) -> None:
-        if not self._capsule_graph:
-            return
-
-        query_node = _stable_node_id("query", text)
-        self._capsule_graph.upsert_node(
-            query_node,
-            type="query",
-            entropy=trace.entropy,
-            top_score=trace.top_score,
-        )
-        for idx, match in enumerate(trace.memory_matches):
-            payload = match.get("payload", {})
-            memory_text = payload.get("text", "")
-            if not memory_text:
-                continue
-            memory_node = _stable_node_id("mem", memory_text)
-            self._capsule_graph.upsert_node(
-                memory_node,
-                type="memory",
-                ts=payload.get("timestamp"),
-                score=match.get("score", 0.0),
-            )
-            weight = max(0.001, 1.0 - float(match.get("score", 0.0)))
-            self._capsule_graph.upsert_edge(query_node, memory_node, weight=weight, rank=idx)
