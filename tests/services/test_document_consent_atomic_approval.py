@@ -70,6 +70,7 @@ async def test_approval_consumption_requires_author_actor_intent_and_exact_finge
         "SET status='consumed'", "request_payload='{}'::jsonb",
         "decision_reason='explicit_author_confirmation'",
         "CAST(:scope_record AS jsonb)", "risk_level='high'",
+        "decided_at IS NOT NULL",
     ):
         assert condition in sql
     assert params["intent"] == "writing_style.document_consent.issue"
