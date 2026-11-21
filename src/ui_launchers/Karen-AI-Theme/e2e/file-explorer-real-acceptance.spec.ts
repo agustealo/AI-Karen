@@ -341,8 +341,11 @@ test('KCONTENT-DENY-LIVE: foreign owner and stale revision fail closed', async (
   const otherEmail = process.env.KAREN_UX_ISOLATION_EMAIL;
   const otherPassword = process.env.KAREN_UX_ISOLATION_PASSWORD;
   const sourceId = process.env.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID;
+  const otherSourceId = process.env.KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID;
   if (!email || !password || !otherEmail || !otherPassword ||
       !sourceId || !/^[a-f0-9-]{36}$/.test(sourceId) ||
+      !otherSourceId || !/^[a-f0-9-]{36}$/.test(otherSourceId) ||
+      otherSourceId === sourceId ||
       otherEmail.trim().toLowerCase() === email.trim().toLowerCase()) {
     throw new Error('Two distinct sanitized users and an owned source UUID are required');
   }
@@ -369,6 +372,18 @@ test('KCONTENT-DENY-LIVE: foreign owner and stale revision fail closed', async (
     throw new Error('Unable to attest authenticated API transport');
   }
   const currentRevision = file.sha256;
+  const analysisUrl = new URL('/api/plugins/content-intelligence/owner-sources', origin).toString();
+  const ownerGood = await page.request.post(analysisUrl, {
+    headers: auth ? { authorization: auth } : undefined,
+    data: { operation: 'analyze', references: [{ source_id: sourceId, revision: currentRevision }] },
+  });
+  expect(ownerGood.status(), 'Owner must have successful Content Intelligence admission').toBe(200);
+  const ownerBody = await ownerGood.json();
+  expect(ownerBody.operation).toBe('analyze');
+  expect(ownerBody.documents).toHaveLength(1);
+  expect(ownerBody.documents[0].id).toBe(sourceId);
+  expect(ownerBody.documents[0].sha256).toBe(currentRevision);
+
   const forgedRevision = (currentRevision[0] === 'a' ? 'b' : 'a') + currentRevision.slice(1);
   const ownerBad = await page.request.post(
     new URL('/api/plugins/content-intelligence/owner-sources', origin).toString(),
@@ -391,6 +406,20 @@ test('KCONTENT-DENY-LIVE: foreign owner and stale revision fail closed', async (
     serviceWorkers: 'block',
   });
   try {
+    // Carry only the exact-host deployment protection cookie, never the
+    // owner application's session, credentials or other cookies.
+    const deploymentCookies = (await page.context().cookies(origin.origin))
+      .filter((cookie) =>
+        cookie.name === '_vercel_jwt' && cookie.secure &&
+        cookie.domain.replace(/^\\./, '') === origin.hostname,
+      );
+    if (origin.hostname.endsWith('.vercel.app') && deploymentCookies.length !== 1) {
+      throw new Error('Approved isolated deployment access cookie is missing');
+    }
+    if (deploymentCookies.length) {
+      await isolated.addCookies(deploymentCookies);
+    }
+
     const otherPage = await isolated.newPage();
     await signInApprovedKaren(otherPage, otherEmail, otherPassword, {
       allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1',
@@ -401,12 +430,28 @@ test('KCONTENT-DENY-LIVE: foreign owner and stale revision fail closed', async (
     expect(otherInventoryHttp.status(), 'Second account must have real inventory access').toBe(200);
     const otherInventory = inventoryResponse(await otherInventoryHttp.json());
     expect(otherInventory.items.some((item) => item.source_id === sourceId)).toBe(false);
+    const otherFile = otherInventory.items.find((item) => item.source_id === otherSourceId);
+    expect(otherFile, 'Second account must own a real supported text source').toBeDefined();
+    if (!otherFile) throw new Error('Second owner source not present');
 
     const otherHeaders = await otherInventoryHttp.request().allHeaders();
     const otherAuth = otherHeaders.authorization;
     if (!otherAuth && !otherHeaders.cookie) {
       throw new Error('Unable to attest second-user authenticated API transport');
     }
+    const otherGood = await otherPage.request.post(analysisUrl, {
+      headers: otherAuth ? { authorization: otherAuth } : undefined,
+      data: { operation: 'analyze', references: [{
+        source_id: otherSourceId, revision: otherFile.sha256,
+      }] },
+    });
+    expect(otherGood.status(), 'Second account must have successful Content Intelligence admission').toBe(200);
+    const otherBody = await otherGood.json();
+    expect(otherBody.operation).toBe('analyze');
+    expect(otherBody.documents).toHaveLength(1);
+    expect(otherBody.documents[0].id).toBe(otherSourceId);
+    expect(otherBody.documents[0].sha256).toBe(otherFile.sha256);
+
     const foreign = await otherPage.request.post(
       new URL('/api/plugins/content-intelligence/owner-sources', origin).toString(),
       {
