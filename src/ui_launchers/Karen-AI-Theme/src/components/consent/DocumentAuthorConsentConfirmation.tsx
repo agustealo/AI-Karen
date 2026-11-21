@@ -35,6 +35,8 @@ export function DocumentAuthorConsentConfirmation({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<ApprovalDecision | null>(null);
+  const [receiptId, setReceiptId] = useState<string | null>(null);
+  const [issuing, setIssuing] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -42,6 +44,7 @@ export function DocumentAuthorConsentConfirmation({
     setPreview(null);
     setConfirmed(false);
     setDecision(null);
+    setReceiptId(null);
     setError(null);
     if (!ID.test(approvalId)) {
       setError('Invalid approval reference.');
@@ -87,6 +90,33 @@ export function DocumentAuthorConsentConfirmation({
     confirmed &&
     expires > Date.now();
 
+  async function issueReceipt(id: string) {
+    if (issuing || receiptId) return;
+    setIssuing(true);
+    setError(null);
+    try {
+      const issued = await apiClient.post<{
+        approval_id: string;
+        receipt_id: string;
+        status: string;
+      }>('/api/approvals/document-consent/' + id + '/issue');
+      if (
+        issued.approval_id !== id ||
+        issued.status !== 'issued' ||
+        !ID.test(issued.receipt_id)
+      ) {
+        throw new Error('Receipt was not verified.');
+      }
+      setReceiptId(issued.receipt_id);
+    } catch {
+      setError(
+        'Your author decision was recorded, but the document-consent receipt was not issued. You may retry issuance.',
+      );
+    } finally {
+      setIssuing(false);
+    }
+  }
+
   async function handleConfirm() {
     if (!canConfirm || !preview) return;
     setSubmitting(true);
@@ -101,6 +131,7 @@ export function DocumentAuthorConsentConfirmation({
       }
       setDecision(result);
       setConfirmed(false);
+      await issueReceipt(result.approval_id);
     } catch {
       setError('Confirmation was not verified. No consent receipt is claimed.');
       setConfirmed(false);
@@ -161,10 +192,26 @@ export function DocumentAuthorConsentConfirmation({
         </>
       )}
       {decision && (
-        <p role="status">
-          Author approval recorded. This is not a document-consent receipt.
-          Document ingestion is not confirmed.
-        </p>
+        <div className="space-y-2">
+          <p role="status">
+            {receiptId
+              ? 'Document-consent receipt issued. Document ingestion is not confirmed.'
+              : 'Author approval recorded. No document-consent receipt has been verified.'}
+          </p>
+          {receiptId && (
+            <p className="break-all text-sm">Verified receipt ID: {receiptId}</p>
+          )}
+          {!receiptId && !issuing && (
+            <button
+              type="button"
+              onClick={() => { void issueReceipt(decision.approval_id); }}
+              className="rounded-md border border-border px-4 py-2"
+            >
+              Retry receipt issuance
+            </button>
+          )}
+          {issuing && <p role="status">Issuing consent receipt…</p>}
+        </div>
       )}
     </section>
   );
