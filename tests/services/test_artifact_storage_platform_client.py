@@ -271,8 +271,12 @@ async def test_bounded_signed_range_rejects_bad_storage_responses(monkeypatch, r
     + _TENANT + "/" + _ARTIFACT + "/author%2Etxt?token=secret",
 ])
 async def test_bounded_signed_range_blocks_untrusted_urls(monkeypatch, bad_url):
+    attempted_requests = []
+
     def forbidden(request):
-        raise AssertionError("HTTP must not run for untrusted URL")
+        attempted_requests.append(request)
+        return httpx.Response(500, content=b"forbidden-request-attempted")
+
     store, bucket, _ = bounded_store(
         monkeypatch, signed_url=bad_url,
         transport=httpx.MockTransport(forbidden),
@@ -283,6 +287,9 @@ async def test_bounded_signed_range_blocks_untrusted_urls(monkeypatch, bad_url):
     assert not result.success
     assert result.data is None
     assert len(bucket.signatures) == 1
+    # A fail-closed repository exception must not conceal that a network
+    # request was attempted. Count transport calls, not just result status.
+    assert attempted_requests == []
 
 
 @pytest.mark.asyncio
