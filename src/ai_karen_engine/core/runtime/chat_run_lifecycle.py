@@ -138,7 +138,7 @@ class ChatRunCoordinator:
         """Reauthorize an owner; read persisted observations without running AI."""
         context.require_authenticated_user()
         await get_conversation_runtime_gateway().require_owned_conversation(context)
-        return await self._repository.read_projected_events(
+        readback = await self._repository.read_projected_events(
             tenant_id=context.tenant_id,
             user_id=context.user_id,
             conversation_id=context.require_conversation_id(),
@@ -146,6 +146,24 @@ class ChatRunCoordinator:
             after=after,
             limit=limit,
         )
+        if readback is None:
+            return None
+        # Journal appends already replace revocable code with a source-free
+        # marker. Apply that *same* canonical rule on readback as well, so
+        # preexisting/legacy rows cannot resurrect archived source on cursor
+        # replay. Preserve sequence numbers and all terminal metadata.
+        events = readback.get("events")
+        if not isinstance(events, list):
+            raise RuntimeError("invalid_chat_projection_replay_events")
+        safe_events = []
+        for entry in events:
+            if not isinstance(entry, dict) or not isinstance(entry.get("event"), dict):
+                raise RuntimeError("invalid_chat_projection_replay_event")
+            safe_events.append({
+                **entry,
+                "event": self._journal_safe_event(entry["event"]),
+            })
+        return {**readback, "events": safe_events}
 
     async def fail_unstarted_event_journal(
         self, lease: ChatRunLease,
