@@ -385,8 +385,8 @@ async def test_owner_normalization_insert_at_occupied_ordinal_shifts_neighbors(m
     assert state["committed"]
     moves = json.loads(fake.params[1]["move_rows"])
     assert moves == [
-        {"pin_id": SECOND_PIN, "position": 2, "expected_revision": 4},
         {"pin_id": inserted, "position": 1, "expected_revision": 1},
+        {"pin_id": SECOND_PIN, "position": 2, "expected_revision": 4},
     ]
 
 
