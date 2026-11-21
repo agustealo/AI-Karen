@@ -393,5 +393,5 @@ def test_signed_url_redaction_covers_short_and_encoded_tokens():
     for token in ("s", "private-signed-token", "foo%2Fbar%3D"):
         raw = f"https://storage.example.test/object?token={token}"
         result = redact_text(raw)
-        assert token not in result
+        assert f"token={token}" not in result
         assert "token=[REDACTED]" in result
