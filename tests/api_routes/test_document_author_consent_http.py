@@ -50,6 +50,16 @@ def client_and_service(monkeypatch):
     }
     service = SimpleNamespace(
         get_document_consent_confirmation=AsyncMock(return_value=(record, scope)),
+        get_document_consent_review=AsyncMock(return_value=(
+            record, scope, {
+                "name": "my-author-source.txt",
+                "bytes": 120,
+                "mime_type": "text/plain",
+            },
+        )),
+        recover_stored_document_consent_receipt=AsyncMock(
+            return_value=str(uuid.uuid4()),
+        ),
         confirm_stored_document_consent=AsyncMock(
             return_value={**record, "status": "approved"},
         ),
@@ -74,10 +84,12 @@ async def test_preview_is_source_bound_and_does_not_accept_request_scopes(
     assert response.status_code == 200
     assert response.json()["source_sha256"] == scope.source_sha256
     assert response.json()["artifact_id"] == scope.artifact_id
-    assert "source_bytes" not in response.json()
-    kwargs = service.get_document_consent_confirmation.await_args.kwargs
+    assert response.json()["source_name"] == "my-author-source.txt"
+    assert response.json()["source_bytes"] == 120
+    assert response.json()["source_mime_type"] == "text/plain"
+    kwargs = service.get_document_consent_review.await_args.kwargs
     assert kwargs["request"].headers["authorization"] == "Bearer test-author"
-    assert service.get_document_consent_confirmation.await_args.args == (approval_id,)
+    assert service.get_document_consent_review.await_args.args == (approval_id,)
 
 
 async def test_confirmation_requires_strict_explicit_true(client_and_service):
@@ -130,7 +142,7 @@ async def test_receipt_route_only_sends_server_approval_identity(client_and_serv
 
 async def test_scope_and_state_failures_do_not_return_success(client_and_service):
     app, approval_id, _, service = client_and_service
-    service.get_document_consent_confirmation.side_effect = ApprovalScopeError("denied")
+    service.get_document_consent_review.side_effect = ApprovalScopeError("denied")
     service.confirm_stored_document_consent.side_effect = ApprovalScopeError("denied")
     service.issue_stored_document_consent.side_effect = ApprovalStateError("not issued")
     async with httpx.AsyncClient(
@@ -149,3 +161,32 @@ async def test_scope_and_state_failures_do_not_return_success(client_and_service
     assert confirm.status_code == 403
     assert receipt.status_code == 409
     assert receipt.json()["detail"] == "Document receipt not issued"
+
+
+async def test_receipt_recovery_never_mints_or_infers_receipt(client_and_service):
+    app, approval_id, _, service = client_and_service
+    receipt = service.recover_stored_document_consent_receipt.return_value
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        recovered = await client.get(
+            "/api/approvals/document-consent/" + approval_id + "/receipt",
+            headers={"Authorization": "Bearer test-author"},
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["receipt_id"] == receipt
+        kwargs = service.recover_stored_document_consent_receipt.await_args.kwargs
+        assert kwargs["request"].headers["authorization"] == "Bearer test-author"
+        service.recover_stored_document_consent_receipt.return_value = None
+        missing = await client.get(
+            "/api/approvals/document-consent/" + approval_id + "/receipt",
+        )
+        assert missing.status_code == 404
+        assert "receipt_id" not in missing.json()
+        service.recover_stored_document_consent_receipt.side_effect = ApprovalScopeError("denied")
+        denied = await client.get(
+            "/api/approvals/document-consent/" + approval_id + "/receipt",
+        )
+        assert denied.status_code == 403
+    service.issue_stored_document_consent.assert_not_awaited()
