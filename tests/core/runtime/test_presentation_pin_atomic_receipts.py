@@ -123,7 +123,8 @@ def request(**updates):
 async def test_unpin_receipt_and_delete_share_single_scoped_commit(monkeypatch):
     row = receipt_row()
     fake, state, scopes = wire(monkeypatch, [
-        Result(), Result(), Result({"pin_id": PIN, "revision": 4}), Result(row),
+        Result(), Result(), Result({"pin_id": PIN, "revision": 4}),
+        Result([]), Result(row),
     ])
     result = await PresentationPinRepository().mutate_with_receipt(**request())
     assert result.receipt_id == RECEIPT
@@ -134,7 +135,8 @@ async def test_unpin_receipt_and_delete_share_single_scoped_commit(monkeypatch):
     assert "pg_advisory_xact_lock" in fake.queries[0]
     assert "SELECT receipt_id" in fake.queries[1]
     assert "DELETE FROM public.conversation_presentation_pins" in fake.queries[2]
-    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[3]
+    assert "SELECT pin_id, position, revision" in fake.queries[3]
+    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[4]
 
 
 @pytest.mark.asyncio
@@ -165,19 +167,19 @@ async def test_different_request_with_same_key_conflicts_before_any_mutation(mon
 async def test_receipt_insert_failure_rolls_back_the_deleted_pin(monkeypatch):
     fake, state, _ = wire(monkeypatch, [
         Result(), Result(), Result({"pin_id": PIN, "revision": 4}),
-        RuntimeError("receipt insert unavailable"),
+        Result([]), RuntimeError("receipt insert unavailable"),
     ])
     with pytest.raises(PresentationPinUnavailable):
         await PresentationPinRepository().mutate_with_receipt(**request())
     assert state == {"committed": False, "rolled_back": True}
-    assert len(fake.queries) == 4
+    assert len(fake.queries) == 5
 
 
 @pytest.mark.asyncio
 async def test_missing_unpin_still_records_truthful_absent_receipt(monkeypatch):
     absent = receipt_row(outcome="already_absent")
     fake, state, _ = wire(monkeypatch, [
-        Result(), Result(), Result(), Result(absent),
+        Result(), Result(), Result(), Result([]), Result(absent),
     ])
     result = await PresentationPinRepository().mutate_with_receipt(**request())
     assert result.outcome == "already_absent"
@@ -387,7 +389,7 @@ async def test_pin_requires_source_admission_and_receipts_existing_pin(monkeypat
         "expected_revision": None, "committed_revision": 3,
     }
     fake, state, _ = wire(monkeypatch, [
-        Result(), Result(), Result(pin_row), Result(result_row),
+        Result(), Result(), Result(pin_row), Result([]), Result(result_row),
     ])
     receipt = await PresentationPinRepository().mutate_with_receipt(
         **request(
@@ -400,9 +402,9 @@ async def test_pin_requires_source_admission_and_receipts_existing_pin(monkeypat
     admission.assert_called_once()
     assert receipt.outcome == "pinned"
     assert state["committed"]
-    assert len(fake.queries) == 4
+    assert len(fake.queries) == 5
     assert "SELECT" in fake.queries[2]
-    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[3]
+    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[4]
 
 
 @pytest.mark.asyncio
