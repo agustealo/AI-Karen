@@ -190,6 +190,54 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             )
             assert [row[0] for row in recorded.fetchall()] == ["register", "revoke"]
 
+        # Consent-approved evidence may be used in a published style. Revoking
+        # that evidence must atomically revoke its parent profile and grants.
+        live_profile, live_source, live_sample = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        await identities.create_draft(
+            tenant_id=str(tenant), owner_actor_id=str(owner),
+            profile_id=str(live_profile), kind="client", label="Consented client style",
+            correlation_id="create-consented-profile",
+        )
+        authority.verify_analysis.return_value = VerifiedWritingStyleSource(
+            tenant_id=str(tenant), profile_id=str(live_profile),
+            owner_actor_id=str(owner), source_id=str(live_source),
+            source_type="document", author_actor_id=str(author),
+            consent_receipt_id=str(uuid.uuid4()), analysis_allowed=True,
+            style_use_allowed=True,
+            consent_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        await provenance.register(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(live_profile), sample_id=str(live_sample),
+            source_type="document", source_id=str(live_source),
+            correlation_id="consented-sample",
+        )
+        published = await identities.publish(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(live_profile), revision_id=str(uuid.uuid4()),
+            approved_expression=expression, expected_revision=0,
+            correlation_id="consented-publish",
+        )
+        assert published.revision_number == 1
+        await identities.grant_use(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(live_profile), grantee_actor_id=str(delegate),
+            purpose="draft_email", correlation_id="consented-grant",
+        )
+        live_request = KariSignatureRequest(
+            tenant_id=str(tenant), actor_id=str(delegate),
+            profile_id=str(live_profile), purpose="draft_email",
+            correlation_id="consented-resolve",
+        )
+        assert (await KariSignatureResolver(identities).resolve(live_request)).presentation == expression
+        assert await provenance.revoke(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(live_profile), sample_id=str(live_sample),
+            correlation_id="consented-source-revoked",
+        )
+        with pytest.raises(PermissionError, match="style_unavailable"):
+            await KariSignatureResolver(identities).resolve(live_request)
+
         # A source-revoked profile is never a path to style application.
         with pytest.raises(PermissionError):
             await KariSignatureResolver(identities).resolve(
