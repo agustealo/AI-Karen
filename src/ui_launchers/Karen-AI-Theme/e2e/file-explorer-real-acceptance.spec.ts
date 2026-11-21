@@ -1,4 +1,4 @@
-import { type Page, type TestInfo } from "@playwright/test";
+import { type Page, type TestInfo, type APIRequestContext } from "@playwright/test";
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 
@@ -319,4 +319,110 @@ test('KCONTENT-LIVE: selected owner text is analyzed by the authorized runtime',
   await expect(verifiedResult).toBeVisible();
   await expect(verifiedResult.getByText(selected.name)).toBeVisible();
   await expect(verifiedResult.getByText(/Lexical analysis of 1 authorized file/)).toBeVisible();
+});
+
+
+/**
+ * Real, read-only negative authorization proof.
+ *
+ * Uses two separately authenticated sanitized users. All credentials stay in
+ * GitHub environment secrets and never enter logs, snapshots or artifacts.
+ * Both actors require functional plugins and data:read, so an HTTP 403 cannot
+ * be mistaken for a missing/disabled plugin or unauthenticated request.
+ */
+test('KCONTENT-DENY-LIVE: foreign owner and stale revision fail closed', async (
+  { page, browser },
+) => {
+  test.skip(
+    !enabled || process.env.KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE !== 'true',
+    'Requires protected live Content Intelligence negative-authorization scenario',
+  );
+  test.setTimeout(6 * 60_000);
+  const otherEmail = process.env.KAREN_UX_ISOLATION_EMAIL;
+  const otherPassword = process.env.KAREN_UX_ISOLATION_PASSWORD;
+  const sourceId = process.env.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID;
+  if (!email || !password || !otherEmail || !otherPassword ||
+      !sourceId || !/^[a-f0-9-]{36}$/.test(sourceId) ||
+      otherEmail.trim().toLowerCase() === email.trim().toLowerCase()) {
+    throw new Error('Two distinct sanitized users and an owned source UUID are required');
+  }
+  const origin = trustedOrigin();
+
+  // Observed real owner inventory gives exact immutable source evidence.
+  await signInApprovedKaren(page, email, password, {
+    allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1',
+  });
+  const ownerInventoryPromise = nextRealPage(page, origin);
+  await enterWorkspace(page);
+  const ownerInventoryHttp = await ownerInventoryPromise;
+  expect(ownerInventoryHttp.status()).toBe(200);
+  const ownerInventory = inventoryResponse(await ownerInventoryHttp.json());
+  const file = ownerInventory.items.find((item) => item.source_id === sourceId);
+  expect(file, 'A real, active owned text/code source must be present').toBeDefined();
+  if (!file) throw new Error('Owner source not present');
+
+  // Reuse auth on a browser-origin request; do not manually read tokens.
+  // A malformed revision is a legitimate reference shape but may not be read.
+  const ownerHeaders = await ownerInventoryHttp.request().allHeaders();
+  const auth = ownerHeaders.authorization;
+  if (!auth && !ownerHeaders.cookie) {
+    throw new Error('Unable to attest authenticated API transport');
+  }
+  const currentRevision = file.sha256;
+  const forgedRevision = (currentRevision[0] === 'a' ? 'b' : 'a') + currentRevision.slice(1);
+  const ownerBad = await page.request.post(
+    new URL('/api/plugins/content-intelligence/owner-sources', origin).toString(),
+    {
+      headers: auth ? { authorization: auth } : undefined,
+      data: {
+        operation: 'analyze',
+        references: [{ source_id: sourceId, revision: forgedRevision }],
+      },
+    },
+  );
+  expect(ownerBad.status(), 'A forged owner revision must be denied').toBe(403);
+  const ownerDenial = await ownerBad.text();
+  expect(ownerDenial).not.toContain(file.name);
+  expect(ownerDenial).not.toContain(file.sha256);
+  expect(ownerDenial.length).toBeLessThan(2048);
+
+  const isolated = await browser.newContext({
+    baseURL: origin.toString(),
+    serviceWorkers: 'block',
+  });
+  try {
+    const otherPage = await isolated.newPage();
+    await signInApprovedKaren(otherPage, otherEmail, otherPassword, {
+      allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1',
+    });
+    const otherInventoryPromise = nextRealPage(otherPage, origin);
+    await enterWorkspace(otherPage);
+    const otherInventoryHttp = await otherInventoryPromise;
+    expect(otherInventoryHttp.status(), 'Second account must have real inventory access').toBe(200);
+    const otherInventory = inventoryResponse(await otherInventoryHttp.json());
+    expect(otherInventory.items.some((item) => item.source_id === sourceId)).toBe(false);
+
+    const otherHeaders = await otherInventoryHttp.request().allHeaders();
+    const otherAuth = otherHeaders.authorization;
+    if (!otherAuth && !otherHeaders.cookie) {
+      throw new Error('Unable to attest second-user authenticated API transport');
+    }
+    const foreign = await otherPage.request.post(
+      new URL('/api/plugins/content-intelligence/owner-sources', origin).toString(),
+      {
+        headers: otherAuth ? { authorization: otherAuth } : undefined,
+        data: {
+          operation: 'analyze',
+          references: [{ source_id: sourceId, revision: currentRevision }],
+        },
+      },
+    );
+    expect(foreign.status(), 'Other authenticated principal cannot read owner text').toBe(403);
+    const denial = await foreign.text();
+    expect(denial).not.toContain(file.name);
+    expect(denial).not.toContain(file.sha256);
+    expect(denial.length).toBeLessThan(2048);
+  } finally {
+    await isolated.close();
+  }
 });

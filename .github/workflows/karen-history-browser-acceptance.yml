@@ -23,6 +23,7 @@ on:
           - navigation
           - file-explorer
           - content-intelligence
+          - content-intelligence-denial
       target_sha:
         description: Exact reviewed 40-character main commit SHA for protected acceptance
         type: string
@@ -726,7 +727,7 @@ jobs:
   # KUI: protected settings, navigation, and file-explorer browser acceptance.
   # Reuse the approved main/deployment/credential boundary, not a second runner.
   authenticated-settings-visual-acceptance:
-    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: karen-sanitized-browser-acceptance
@@ -734,12 +735,13 @@ jobs:
       contents: read
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
-      KAREN_BASE_URL: ${{ ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario != 'file-explorer' && inputs.scenario != 'content-intelligence') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
+      KAREN_BASE_URL: ${{ ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario != 'file-explorer' && inputs.scenario != 'content-intelligence' && inputs.scenario != 'content-intelligence-denial') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
-      KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence') && 'false' || 'true' }}
-      KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence') && 'true' || 'false' }}
+      KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && 'false' || 'true' }}
+      KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence' && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID }}
+      KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence-denial' && 'true' || 'false' }}
       KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
       KAREN_NAV_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'navigation' && 'true' || 'false' }}
       KAREN_NAV_SANITIZED_CAPTURE: "false"
@@ -804,6 +806,8 @@ jobs:
         env:
           KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
           KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          KAREN_UX_ISOLATION_EMAIL: ${{ secrets.KAREN_UX_ISOLATION_EMAIL }}
+          KAREN_UX_ISOLATION_PASSWORD: ${{ secrets.KAREN_UX_ISOLATION_PASSWORD }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set -euo pipefail
@@ -813,6 +817,13 @@ jobs:
             npx playwright test e2e/ux-user-journeys.spec.ts \
               --config=e2e/playwright.config.ts \
               --project=chromium --grep="UX-16" --reporter=list --retries=0
+          elif [[ "${{ inputs.scenario }}" == "content-intelligence-denial" ]]; then
+            test -n "$KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" || { echo "::error::Missing genuine owner source ID"; exit 1; }
+            test -n "$KAREN_UX_ISOLATION_EMAIL" || { echo "::error::Missing second sanitized identity"; exit 1; }
+            test -n "$KAREN_UX_ISOLATION_PASSWORD" || { echo "::error::Missing second sanitized credential"; exit 1; }
+            npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
+              --config=e2e/playwright.config.ts \
+              --project=chromium --grep='KCONTENT-DENY-LIVE' --reporter=list --retries=0
           elif [[ "${{ inputs.scenario }}" == "content-intelligence" ]]; then
             test -n "$KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" || { echo "::error::Missing genuinely seeded owner text source ID"; exit 1; }
             npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
