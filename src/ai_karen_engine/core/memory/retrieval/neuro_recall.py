@@ -366,15 +366,23 @@ class NeuroRecall:
             ).strip():
                 rejected_count += 1
                 continue
-            stm_episode_candidate = (
-                getattr(metadata, "source", None) == "stm"
-                and custom_metadata.get("stm_slot") == "recent_context"
+            stm_candidate = getattr(metadata, "source", None) == "stm"
+            stm_provenance = graph_provenance if isinstance(graph_provenance, dict) else {}
+            stm_event_candidate = bool(
+                stm_candidate and (
+                    custom_metadata.get("stm_slot") == "recent_context"
+                    or "event_id" in custom_metadata
+                    or any(
+                        key in stm_provenance
+                        for key in ("event_id", "source_type", "source_ref", "record_type")
+                    )
+                )
             )
-            if stm_episode_candidate and (
+            if stm_event_candidate and (
                 not isinstance(graph_provenance, dict)
                 or graph_provenance.get("store") != "stm"
                 or graph_provenance.get("record_type") != "memory_event"
-                or graph_provenance.get("stm_slot") != "recent_context"
+                or graph_provenance.get("stm_slot") != custom_metadata.get("stm_slot")
                 or graph_provenance.get("event_id") != custom_metadata.get("event_id")
                 or not isinstance(graph_provenance.get("event_id"), str)
                 or not graph_provenance["event_id"].strip()
@@ -384,7 +392,7 @@ class NeuroRecall:
                 rejected_count += 1
                 continue
             stm_external_source = bool(
-                stm_episode_candidate
+                stm_event_candidate
                 and graph_provenance["source_type"]
                 not in {"chat", "chat_user", "conversation"}
             )
