@@ -121,6 +121,21 @@ async def test_first_party_author_consent_postgres() -> None:
         await raw.execute(
             f'GRANT UPDATE ON public.files TO "{role}"'
         )
+        # The consent revocation trigger enforces the existing published
+        # profile + delegate revocation in the same SQL transaction. Permit
+        # these mutations only on the disposable test role so we can prove
+        # that trigger; no privileges are altered in the migration.
+        await raw.execute(
+            f'GRANT UPDATE ON public.writing_style_profiles, '
+            f'public.writing_style_grants TO "{role}"'
+        )
+        await raw.execute(
+            f'GRANT INSERT ON public.writing_style_audit TO "{role}"'
+        )
+        await raw.execute(
+            f'GRANT USAGE ON SEQUENCE public.writing_style_audit_id_seq '
+            f'TO "{role}"'
+        )
 
         insert = (
             "INSERT INTO public.writing_style_document_consents "
