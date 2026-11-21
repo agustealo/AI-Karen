@@ -139,6 +139,28 @@ CREATE TRIGGER writing_style_profile_publish_source_gate
     BEFORE UPDATE OF state, current_revision_id ON public.writing_style_profiles
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_require_source_use_consent();
 
+-- An owner can submit SQL without the repository helper. Serialize sample
+-- admission against publication on the same parent row; a published profile
+-- cannot gain new evidence behind existing grants.
+CREATE FUNCTION public.writing_style_require_draft_sample()
+RETURNS trigger LANGUAGE plpgsql AS $style_sample_draft$
+BEGIN
+    PERFORM 1 FROM public.writing_style_profiles p
+    WHERE p.tenant_id = NEW.tenant_id
+      AND p.profile_id = NEW.profile_id
+      AND p.owner_actor_id = NEW.owner_actor_id
+      AND p.state = 'draft'
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'writing style sample requires a draft profile';
+    END IF;
+    RETURN NEW;
+END
+$style_sample_draft$;
+CREATE TRIGGER writing_style_sample_draft_admission
+    BEFORE INSERT ON public.writing_style_sample_evidence
+    FOR EACH ROW EXECUTE FUNCTION public.writing_style_require_draft_sample();
+
 -- A user who owns a profile can also write grants through SQL. Apply
 -- consent fences at that database boundary, not only in Python, because
 -- delegates cannot see owner-private evidence through FORCE RLS.
@@ -149,17 +171,37 @@ DECLARE
     minimum_expiry timestamptz;
     all_usable boolean;
 BEGIN
-    -- Revocation is always permitted; source-use checks apply to active grants.
+    -- Historical revoked grants cannot be reopened through direct SQL.
+    IF TG_OP = 'UPDATE' AND OLD.revoked_at IS NOT NULL
+       AND NEW.revoked_at IS NULL THEN
+        RAISE EXCEPTION 'writing style grant already revoked';
+    END IF;
+
+    -- Revocation must be allowed when the profile was already revoked.
     IF NEW.revoked_at IS NOT NULL THEN
         RETURN NEW;
     END IF;
 
-    PERFORM 1 FROM public.writing_style_profiles p
-    WHERE p.tenant_id = NEW.tenant_id
-      AND p.profile_id = NEW.profile_id
-      AND p.owner_actor_id = NEW.owner_actor_id
-      AND p.state = 'published'
-    FOR UPDATE;
+    -- Grant UPDATE has already locked its own row before BEFORE UPDATE runs.
+    -- Taking a profile FOR UPDATE here would invert the profile-then-grant
+    -- order used by revocation and create a deadlock. Active grant updates
+    -- only read the parent; parent revocation updates all grants and wins at
+    -- the grant-row serialization boundary. New INSERT acquires the parent
+    -- lock before any grant row exists.
+    IF TG_OP = 'INSERT' THEN
+        PERFORM 1 FROM public.writing_style_profiles p
+        WHERE p.tenant_id = NEW.tenant_id
+          AND p.profile_id = NEW.profile_id
+          AND p.owner_actor_id = NEW.owner_actor_id
+          AND p.state = 'published'
+        FOR UPDATE;
+    ELSE
+        PERFORM 1 FROM public.writing_style_profiles p
+        WHERE p.tenant_id = NEW.tenant_id
+          AND p.profile_id = NEW.profile_id
+          AND p.owner_actor_id = NEW.owner_actor_id
+          AND p.state = 'published';
+    END IF;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'writing style grant unavailable';
     END IF;
