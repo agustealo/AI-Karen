@@ -76,6 +76,7 @@ async def test_real_postgres_session_authority_blocks_revoked_and_drifted_http_m
         algorithm="HS256",
     )
 
+    created_by_test = False
     try:
         existing = await raw.fetchval("""
             SELECT count(*) FROM information_schema.tables
@@ -88,6 +89,7 @@ async def test_real_postgres_session_authority_blocks_revoked_and_drifted_http_m
             for table in tables:
                 await conn.run_sync(table.create, checkfirst=False)
 
+        created_by_test = True
         maker = async_sessionmaker(engine, expire_on_commit=False)
         async with maker.begin() as session:
             session.add_all([
@@ -229,10 +231,7 @@ async def test_real_postgres_session_authority_blocks_revoked_and_drifted_http_m
     finally:
         try:
             await engine.dispose()
-            if await raw.fetchval("""
-                SELECT count(*) FROM information_schema.tables
-                WHERE table_schema='public' AND table_name='auth_sessions'
-            """):
+            if created_by_test:
                 # Only the isolated disposable DB can be modified. The
                 # schema created above was checked absent before startup.
                 await raw.execute("DROP TABLE IF EXISTS public.auth_sessions CASCADE")
