@@ -1490,8 +1490,16 @@ class ChatRuntime:
                             content="Unable to complete the response.",
                             correlation_id=ctx.correlation_id,
                             metadata={
-                                "error_code": "CHAT_GENERATION_FAILED",
-                                "error_type": type(exc).__name__,
+                                "error_code": (
+                                    "CHAT_MEMORY_SOURCE_REVOKED"
+                                    if str(exc) == "memory_source_revoked_or_unverifiable"
+                                    else "CHAT_GENERATION_FAILED"
+                                ),
+                                "error_type": (
+                                    "MemorySourceRevoked"
+                                    if str(exc) == "memory_source_revoked_or_unverifiable"
+                                    else type(exc).__name__
+                                ),
                                 "correlation_id": ctx.correlation_id,
                                 "requested_provider": request.preferred_provider,
                                 "requested_model": request.preferred_model,
@@ -1540,6 +1548,17 @@ class ChatRuntime:
                         metadata={
                             "error_code": "CHAT_MEMORY_SOURCE_REVOKED",
                             "error_type": "MemorySourceRevoked",
+                            "correlation_id": ctx.correlation_id,
+                            "requested_provider": request.preferred_provider,
+                            "requested_model": request.preferred_model,
+                            "actual_provider": provider_meta.get("actual_provider"),
+                            "actual_model": provider_meta.get("actual_model"),
+                            "runtime_engine": provider_meta.get("runtime_engine"),
+                            "response_source": provider_meta.get("response_source"),
+                            "fallback_level": provider_meta.get("fallback_level", 0),
+                            "degraded_mode": True,
+                            "degradation_reason": "memory_source_revoked_or_unverifiable",
+                            "fallback_reason": None,
                         },
                     ),
                     sequence, request_id, response_id, conversation_id,
