@@ -68,7 +68,7 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
         await raw.execute(migration)
         sample_migration = (
             Path(__file__).resolve().parents[2]
-            / "supabase/migrations/20261121010000_61_writing_style_sample_evidence.sql"
+            / "supabase/migrations/20261122010001_61_writing_style_sample_evidence.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(sample_migration)
         await raw.execute(
