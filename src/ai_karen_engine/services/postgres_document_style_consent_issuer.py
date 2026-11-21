@@ -15,7 +15,14 @@ from typing import Callable, Protocol
 
 from sqlalchemy import text
 
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.document_consent_approval import (
+    DocumentConsentApprovalScope,
+)
 from ai_karen_engine.database.client import MultiTenantPostgresClient
+from ai_karen_engine.persistence.repositories.approval_repository import (
+    SqlApprovalRepository,
+)
 from ai_karen_engine.services.writing_style_profile_repository import (
     WritingStyleProfileRepository,
 )
@@ -85,6 +92,65 @@ class PostgresDocumentStyleConsentIssuer:
             and correlation_id.strip() == correlation_id
         )
 
+    @staticmethod
+    async def _read_source_digest(
+        session: object, *, tenant_id: str, actor_id: str,
+        profile_id: str, artifact_id: str,
+    ) -> str | None:
+        result = await session.execute(
+            text(
+                "SELECT f.sha256 FROM public.files f "
+                "JOIN public.writing_style_profiles p "
+                "ON p.tenant_id=f.tenant_id "
+                "AND p.owner_actor_id=f.owner_user_id "
+                "WHERE f.file_id=:artifact "
+                "AND f.tenant_id=CAST(:tenant AS uuid) "
+                "AND f.owner_user_id=CAST(:actor AS uuid) "
+                "AND p.profile_id=CAST(:profile AS uuid) "
+                "AND p.state='draft' AND p.publication_revision=0 "
+                "AND f.deleted_at IS NULL AND f.mime_type='text/plain' "
+                "AND f.bytes BETWEEN 1 AND 65536 "
+                "FOR SHARE OF f, p"
+            ),
+            dict(
+                artifact=artifact_id, tenant=tenant_id,
+                actor=actor_id, profile=profile_id,
+            ),
+        )
+        row = result.first()
+        digest = row[0] if row is not None else None
+        if not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
+            return None
+        return digest
+
+    @staticmethod
+    async def _insert_receipt(
+        session: object, *, tenant_id: str, actor_id: str,
+        profile_id: str, artifact_id: str, source_sha256: str,
+        style_use_allowed: bool, expires_at: datetime, correlation_id: str,
+    ) -> str:
+        receipt_id = str(uuid.uuid4())
+        await session.execute(
+            text(
+                "INSERT INTO public.writing_style_document_consents "
+                "(tenant_id,profile_id,owner_actor_id,artifact_id,"
+                "author_actor_id,source_sha256,receipt_id,"
+                "analysis_allowed,style_use_allowed,author_attested,"
+                "expires_at,correlation_id) VALUES "
+                "(CAST(:tenant AS uuid),CAST(:profile AS uuid),"
+                "CAST(:actor AS uuid),CAST(:artifact AS uuid),"
+                "CAST(:actor AS uuid),:digest,CAST(:receipt AS uuid),"
+                "true,:style_use,true,:expiry,:correlation)"
+            ),
+            dict(
+                tenant=tenant_id, profile=profile_id, actor=actor_id,
+                artifact=artifact_id, digest=source_sha256,
+                receipt=receipt_id, style_use=style_use_allowed,
+                expiry=expires_at, correlation=correlation_id,
+            ),
+        )
+        return receipt_id
+
     async def issue_first_party(
         self, *, tenant_id: str, actor_id: str, profile_id: str,
         artifact_id: str, analysis_allowed: bool, style_use_allowed: bool,
@@ -122,53 +188,100 @@ class PostgresDocumentStyleConsentIssuer:
                 await WritingStyleProfileRepository._scope(
                     session, tenant_id, actor_id
                 )
-                result = await session.execute(
-                    text(
-                        "SELECT f.sha256 FROM public.files f "
-                        "JOIN public.writing_style_profiles p "
-                        "ON p.tenant_id=f.tenant_id "
-                        "AND p.owner_actor_id=f.owner_user_id "
-                        "WHERE f.file_id=:artifact "
-                        "AND f.tenant_id=CAST(:tenant AS uuid) "
-                        "AND f.owner_user_id=CAST(:actor AS uuid) "
-                        "AND p.profile_id=CAST(:profile AS uuid) "
-                        "AND p.state='draft' AND p.publication_revision=0 "
-                        "AND f.deleted_at IS NULL AND f.mime_type='text/plain' "
-                        "AND f.bytes BETWEEN 1 AND 65536 "
-                        "FOR SHARE OF f, p"
-                    ),
-                    dict(
-                        artifact=artifact_id, tenant=tenant_id, actor=actor_id,
-                        profile=profile_id,
-                    ),
+                digest = await self._read_source_digest(
+                    session, tenant_id=tenant_id, actor_id=actor_id,
+                    profile_id=profile_id, artifact_id=artifact_id,
                 )
-                row = result.first()
-                if row is None or not isinstance(row[0], str) or not _DIGEST.fullmatch(row[0]):
+                if digest is None:
                     return None
-                receipt_id = str(uuid.uuid4())
-                await session.execute(
-                    text(
-                        "INSERT INTO public.writing_style_document_consents "
-                        "(tenant_id,profile_id,owner_actor_id,artifact_id,"
-                        "author_actor_id,source_sha256,receipt_id,"
-                        "analysis_allowed,style_use_allowed,author_attested,"
-                        "expires_at,correlation_id) VALUES "
-                        "(CAST(:tenant AS uuid),CAST(:profile AS uuid),"
-                        "CAST(:actor AS uuid),CAST(:artifact AS uuid),"
-                        "CAST(:actor AS uuid),:digest,CAST(:receipt AS uuid),"
-                        "true,:style_use,true,:expiry,:correlation)"
-                    ),
-                    dict(
-                        tenant=tenant_id, profile=profile_id, actor=actor_id,
-                        artifact=artifact_id, digest=row[0], receipt=receipt_id,
-                        style_use=style_use_allowed, expiry=expires_at,
-                        correlation=correlation_id,
-                    ),
+                receipt_id = await self._insert_receipt(
+                    session, tenant_id=tenant_id, actor_id=actor_id,
+                    profile_id=profile_id, artifact_id=artifact_id,
+                    source_sha256=digest, style_use_allowed=style_use_allowed,
+                    expires_at=expires_at, correlation_id=correlation_id,
                 )
             return receipt_id
         except Exception as exc:
             logger.warning(
                 "Document style consent issuance denied",
+                extra={"error_type": type(exc).__name__},
+            )
+            return None
+
+    async def issue_with_approved_scope(
+        self, *,
+        scope: DocumentConsentApprovalScope,
+        context: ChatExecutionContext,
+        approval_id: str,
+        correlation_id: str,
+    ) -> str | None:
+        """Atomically consume a document approval and create its consent receipt.
+
+        A fresh high-risk authenticated bearer context must be supplied by
+        runtime, not by a route parameter or model output. The currently
+        unregistered policy MUST independently authorize this exact action.
+        No approval is accepted without the canonical one-shot SQL CAS.
+        """
+        if (
+            not isinstance(scope, DocumentConsentApprovalScope)
+            or not isinstance(context, ChatExecutionContext)
+            or scope.action != "issue"
+            or self._issuance_policy is None
+            or not callable(getattr(self._issuance_policy, "authorize_issuance", None))
+            or not self._valid_mutation(
+                scope.tenant_id, scope.author_actor_id, scope.profile_id,
+                scope.artifact_id, correlation_id,
+            )
+            or not _canonical_uuid(approval_id)
+        ):
+            return None
+        try:
+            scope.require_matching_context(context)
+            allowed = await self._issuance_policy.authorize_issuance(
+                tenant_id=scope.tenant_id,
+                actor_id=scope.author_actor_id,
+                profile_id=scope.profile_id,
+                artifact_id=scope.artifact_id,
+                analysis_allowed=scope.analysis_allowed,
+                style_use_allowed=scope.style_use_allowed,
+                expires_at=scope.expires_at,
+                correlation_id=correlation_id,
+            )
+            if allowed is not True:
+                return None
+            async with self._client_factory().get_async_session() as session:
+                await WritingStyleProfileRepository._scope(
+                    session, scope.tenant_id, scope.author_actor_id,
+                )
+                digest = await self._read_source_digest(
+                    session, tenant_id=scope.tenant_id,
+                    actor_id=scope.author_actor_id,
+                    profile_id=scope.profile_id, artifact_id=scope.artifact_id,
+                )
+                if digest is None or digest != scope.source_sha256:
+                    return None
+                consumed = await SqlApprovalRepository.consume_document_consent_in_session(
+                    session,
+                    approval_id=approval_id,
+                    tenant_id=scope.tenant_id,
+                    author_actor_id=scope.author_actor_id,
+                    fingerprint=scope.fingerprint(),
+                    action="issue",
+                )
+                if consumed is None:
+                    return None
+                receipt_id = await self._insert_receipt(
+                    session, tenant_id=scope.tenant_id,
+                    actor_id=scope.author_actor_id,
+                    profile_id=scope.profile_id, artifact_id=scope.artifact_id,
+                    source_sha256=digest,
+                    style_use_allowed=scope.style_use_allowed,
+                    expires_at=scope.expires_at, correlation_id=correlation_id,
+                )
+            return receipt_id
+        except Exception as exc:
+            logger.warning(
+                "Document style scoped approval issuance denied",
                 extra={"error_type": type(exc).__name__},
             )
             return None
