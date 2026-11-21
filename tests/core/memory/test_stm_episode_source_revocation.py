@@ -158,3 +158,104 @@ async def test_stm_recent_episode_preserves_canonical_whitespace_before_normaliz
     selected = await NeuroRecall(_Retriever()).recall(_request())
     assert len(selected.memories) == 1
     assert selected.memories[0].content == raw_text.strip()
+
+
+_OTHER_SESSION_SLOTS = (
+    (STMSlot.ACTIVE_EPISODE, "last_text"),
+    (STMSlot.ACTIVE_GOAL, "goal"),
+    (STMSlot.ACTIVE_PROJECT, "project"),
+    (STMSlot.WORKING_STATE, "content"),
+)
+
+
+class _SlotSTM:
+    def __init__(self, slot, record):
+        self.slot = slot
+        self.record = record
+
+    async def get_slot(self, *, scope, slot):
+        assert (scope.tenant_id, scope.user_id, scope.session_id) == (
+            "tenant-1", "user-1", "session-1",
+        )
+        return self.record if slot == self.slot else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot,text_field", _OTHER_SESSION_SLOTS)
+async def test_event_backed_session_slot_checks_current_grant_and_revocation(
+    slot, text_field,
+):
+    router, events, _ = _router()
+    record = {
+        text_field: "remember this episode",
+        "event_id": "event-1",
+        "source_type": "web",
+        "source_ref": "document-1",
+    }
+    router.stm = _SlotSTM(slot, record)
+    candidates = await router._query_stm(_query())
+    assert len(candidates) == 1
+    receipt = candidates[0].metadata.custom["provenance"]
+    assert receipt["stm_slot"] == slot.value
+    assert receipt["source_ref"] == "document-1"
+
+    class _Retriever:
+        async def recall(self, query):
+            return await router._query_stm(query)
+
+    assert (await NeuroRecall(_Retriever()).recall(_request())).memories == ()
+    acl = _SourceACL()
+    recall = NeuroRecall(_Retriever(), source_authorizer=acl)
+    assert len((await recall.recall(_request())).memories) == 1
+    acl.allowed = False
+    assert (await recall.recall(_request())).memories == ()
+
+    acl.allowed = True
+    record["source_type"] = "chat_user"
+    assert (await recall.recall(_request())).memories == ()
+    record["source_type"] = "web"
+    record[text_field] = "forged message"
+    assert (await recall.recall(_request())).memories == ()
+    record[text_field] = "remember this episode"
+    events.current = None
+    assert (await recall.recall(_request())).memories == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot,text_field", _OTHER_SESSION_SLOTS)
+async def test_unverified_source_claim_and_lineage_never_fall_back_to_plain_session(
+    slot, text_field,
+):
+    router, _, _ = _router()
+    record = {text_field: "remember this episode", "source_type": "web"}
+    router.stm = _SlotSTM(slot, record)
+    assert await router._query_stm(_query()) == []
+    record.pop("source_type")
+    record["source_lineage"] = {"source_id": "revoked-1"}
+    assert await router._query_stm(_query()) == []
+    record.pop("source_lineage")
+    record["derived_source_ids"] = ["revoked-1"]
+    assert await router._query_stm(_query()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot,text_field", _OTHER_SESSION_SLOTS)
+async def test_untagged_session_state_remains_scoped_and_recallable(slot, text_field):
+    router, _, _ = _router()
+    router.stm = _SlotSTM(slot, {text_field: "remember this episode"})
+
+    class _Retriever:
+        async def recall(self, query):
+            return await router._query_stm(query)
+
+    result = await NeuroRecall(_Retriever()).recall(_request())
+    assert len(result.memories) == 1
+    assert result.memories[0].content == "remember this episode"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot", [STMSlot.ACTIVE_GOAL, STMSlot.WORKING_STATE])
+async def test_raw_metadata_is_not_exposed_as_memory_content(slot):
+    router, _, _ = _router()
+    router.stm = _SlotSTM(slot, {"debug_secret": "must-not-be-recalled"})
+    assert await router._query_stm(_query()) == []
