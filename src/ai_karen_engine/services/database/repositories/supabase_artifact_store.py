@@ -5,6 +5,7 @@ Stores artifact bytes in Supabase Storage and metadata in PostgreSQL.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import io
@@ -15,6 +16,9 @@ import re
 import uuid
 import logging
 import time
+from urllib.parse import unquote, urljoin, urlsplit, parse_qs
+
+import httpx
 from datetime import datetime
 from typing import Any, BinaryIO, Dict, Optional, Sequence
 
@@ -262,6 +266,165 @@ class SupabaseArtifactStore(ArtifactStore):
                 "error_type": type(exc).__name__,
             })
             return RepositoryResult(success=False, error=unavailable)
+
+    @instrument_repository(operation="read_owner_active_text_bounded", repository="SupabaseArtifactStore")
+    async def read_owner_active_text_bounded(
+        self, artifact_id: str, tenant_id: str, user_id: str, *,
+        max_bytes: int = 65536,
+    ) -> RepositoryResult[VerifiedArtifactText]:
+        """Read active owner text over a pinned, ranged, streaming storage request.
+
+        The repository checks owner and metadata under a PostgreSQL share lock.
+        The SDK's buffered download is NEVER called. A 206 response with an
+        exact Content-Range is mandatory; missing streaming capabilities deny.
+        """
+        unavailable = "bounded_artifact_read_unavailable"
+        if (
+            type(max_bytes) is not int or not 1 <= max_bytes <= 65536
+            or any(
+                not isinstance(value, str)
+                or not self._canonical_uuid_value(value)
+                for value in (artifact_id, tenant_id, user_id)
+            )
+        ):
+            return RepositoryResult(success=False, error=unavailable)
+        try:
+            async with await self._session() as session:
+                row_result = await session.execute(
+                    text(
+                        "SELECT file_id, tenant_id, owner_user_id, name, mime_type, "
+                        "bytes, storage_uri, sha256 FROM files "
+                        "WHERE file_id=:file_id AND tenant_id=:tenant_id "
+                        "AND owner_user_id=:owner_id AND deleted_at IS NULL FOR SHARE"
+                    ),
+                    {
+                        "file_id": artifact_id, "tenant_id": tenant_id,
+                        "owner_id": user_id,
+                    },
+                )
+                row = row_result.fetchone()
+                if row is None:
+                    return RepositoryResult(success=False, error=unavailable)
+                name, mime_type = row.name, row.mime_type
+                size, digest = row.bytes, row.sha256
+                if (
+                    not isinstance(name, str)
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", name)
+                    or name in {".", ".."}
+                    or not name.lower().endswith((".txt", ".md"))
+                    or mime_type != "text/plain"
+                    or type(size) is not int
+                    or not 1 <= size <= max_bytes
+                    or not isinstance(digest, str)
+                    or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+                    or row.storage_uri != (
+                        f"supabase://artifacts/{tenant_id}/{artifact_id}/{name}"
+                    )
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+
+                # The only outbound destination is the configured Supabase
+                # origin. Even a signed URL from a compromised storage client
+                # cannot redirect us to an arbitrary host.
+                origin = getattr(self._storage, "url", None)
+                if not isinstance(origin, str):
+                    return RepositoryResult(success=False, error=unavailable)
+                origin_parts = urlsplit(origin)
+                if (
+                    origin_parts.scheme not in {"http", "https"}
+                    or not origin_parts.hostname
+                    or origin_parts.username is not None
+                    or origin_parts.password is not None
+                    or origin_parts.query or origin_parts.fragment
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+
+                path = f"{tenant_id}/{artifact_id}/{name}"
+                bucket = self._bucket()
+                signed = await asyncio.to_thread(bucket.create_signed_url, path, 60)
+                if not isinstance(signed, dict):
+                    return RepositoryResult(success=False, error=unavailable)
+                signed_path = signed.get("signedURL") or signed.get("signed_url")
+                if not isinstance(signed_path, str):
+                    return RepositoryResult(success=False, error=unavailable)
+                url = urljoin(origin.rstrip("/") + "/", signed_path)
+                parts = urlsplit(url)
+                expected_path = f"/storage/v1/object/sign/artifacts/{path}"
+                params = parse_qs(parts.query, keep_blank_values=True)
+                if (
+                    parts.scheme != origin_parts.scheme
+                    or parts.netloc != origin_parts.netloc
+                    or parts.username is not None or parts.password is not None
+                    or parts.fragment
+                    or unquote(parts.path) != expected_path
+                    or set(params) != {"token"}
+                    or len(params["token"]) != 1
+                    or not params["token"][0]
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+
+                chunks = bytearray()
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(10.0, connect=3.0),
+                    trust_env=False, follow_redirects=False,
+                ) as client:
+                    async with client.stream(
+                        "GET", url,
+                        headers={
+                            "Range": f"bytes=0-{size - 1}",
+                            "Accept-Encoding": "identity",
+                            "Cache-Control": "no-store",
+                        },
+                    ) as response:
+                        if (
+                            response.status_code != 206
+                            or response.headers.get("Content-Range")
+                            != f"bytes 0-{size - 1}/{size}"
+                            or response.headers.get("Content-Encoding", "identity")
+                            != "identity"
+                            or (
+                                response.headers.get("Content-Length") is not None
+                                and response.headers["Content-Length"] != str(size)
+                            )
+                        ):
+                            return RepositoryResult(success=False, error=unavailable)
+                        async for chunk in response.aiter_raw(chunk_size=4096):
+                            if len(chunks) + len(chunk) > size:
+                                return RepositoryResult(success=False, error=unavailable)
+                            chunks.extend(chunk)
+
+                if (
+                    len(chunks) != size
+                    or not hmac.compare_digest(hashlib.sha256(chunks).hexdigest(), digest)
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+                body = chunks.decode("utf-8", errors="strict")
+                if (
+                    not body.strip()
+                    or any(ord(char) < 32 and char not in "\\n\\r\\t" for char in body)
+                ):
+                    return RepositoryResult(success=False, error=unavailable)
+                return RepositoryResult(
+                    success=True,
+                    data=VerifiedArtifactText(
+                        artifact_id=artifact_id, tenant_id=tenant_id,
+                        user_id=user_id, filename=name, mime_type=mime_type,
+                        sha256=digest, text=body,
+                    ),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Bounded artifact source read rejected",
+                extra={"error_type":type(exc).__name__},
+            )
+            return RepositoryResult(success=False, error=unavailable)
+
+    @staticmethod
+    def _canonical_uuid_value(value: str) -> bool:
+        try:
+            return str(uuid.UUID(value)) == value
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     @instrument_repository(operation="get_metadata", repository="SupabaseArtifactStore")
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> RepositoryResult[Optional[Artifact]]:
