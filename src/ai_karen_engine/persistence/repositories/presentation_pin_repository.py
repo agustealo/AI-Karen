@@ -401,18 +401,79 @@ class PresentationPinRepository:
                     outcome, result_pin = "pinned", final_pin.pin_id
                     committed_revision = final_pin.revision
                 elif operation == "reorder":
-                    updated = (await session.execute(text(f"""
-                        UPDATE public.conversation_presentation_pins
-                        SET position = :position, revision = revision + 1,
-                            updated_at = clock_timestamp()
+                    # Position in the v1 request is an ordinal destination,
+                    # NOT an unconstrained value for one SQL row. The
+                    # principal-wide advisory lock precedes this FOR UPDATE
+                    # read, so all canonical writers serialize with it.
+                    # Ordering ties deterministically repairs previously
+                    # persisted duplicate positions or holes.
+                    existing_rows = (await session.execute(text("""
+                        SELECT pin_id, position, revision
+                        FROM public.conversation_presentation_pins
                         WHERE tenant_id = :tenant AND user_id = :user
-                          AND pin_id = :pin AND revision = :expected_revision
-                        RETURNING {_SELECT_COLUMNS}
-                    """), params)).mappings().first()
-                    if updated is None:
+                        ORDER BY position, created_at, pin_id
+                        FOR UPDATE
+                    """), params)).mappings().all()
+                    if not existing_rows or len(existing_rows) > _MAX_PINS:
+                        raise PresentationPinConflict("Pin identity or capacity conflict")
+                    ordered = [dict(row) for row in existing_rows]
+                    selected_index = next(
+                        (index for index, row in enumerate(ordered)
+                         if str(row["pin_id"]) == requested_pin), None,
+                    )
+                    if selected_index is None or (
+                        int(ordered[selected_index]["revision"]) != revision
+                    ):
                         raise PresentationPinConflict("Pin revision or ownership conflict")
-                    result_pin = str(updated["pin_id"])
-                    committed_revision = int(updated["revision"])
+                    if pos is None or pos >= len(ordered):
+                        raise PresentationPinConflict("Pin reorder destination unavailable")
+
+                    moved = ordered.pop(selected_index)
+                    ordered.insert(pos, moved)
+                    changed = []
+                    for destination, row in enumerate(ordered):
+                        old_revision = int(row["revision"])
+                        if old_revision > _MAX_REVISION or old_revision < 1:
+                            raise PresentationPinConflict("Pin revision overflow")
+                        if str(row["pin_id"]) == requested_pin or (
+                            int(row["position"]) != destination
+                        ):
+                            changed.append({
+                                "pin_id": str(row["pin_id"]),
+                                "position": destination,
+                                "expected_revision": old_revision,
+                            })
+
+                    # One owner-scoped UPDATE rewrites every affected row in
+                    # the same transaction; intermediate duplicate positions
+                    # cannot leak to another transaction or to the dock.
+                    # Check the returned CAS cardinality before writing the
+                    # immutable receipt. A missing row rolls everything back.
+                    updated_rows = (await session.execute(text("""
+                        UPDATE public.conversation_presentation_pins AS p
+                        SET position = move.position,
+                            revision = p.revision + 1,
+                            updated_at = clock_timestamp()
+                        FROM jsonb_to_recordset(CAST(:move_rows AS jsonb))
+                            AS move(pin_id uuid, position smallint,
+                                    expected_revision bigint)
+                        WHERE p.tenant_id = :tenant AND p.user_id = :user
+                          AND p.pin_id = move.pin_id
+                          AND p.revision = move.expected_revision
+                        RETURNING p.pin_id, p.revision
+                    """), {
+                        **params, "move_rows": json.dumps(changed),
+                    })).mappings().all()
+                    if len(updated_rows) != len(changed):
+                        raise PresentationPinConflict("Pin revision or ownership conflict")
+                    committed = next(
+                        (row for row in updated_rows
+                         if str(row["pin_id"]) == requested_pin), None,
+                    )
+                    if committed is None or int(committed["revision"]) != revision + 1:
+                        raise PresentationPinConflict("Pin revision or ownership conflict")
+                    result_pin = requested_pin
+                    committed_revision = int(committed["revision"])
                     outcome = "reordered"
                 else:
                     deleted = (await session.execute(text("""
