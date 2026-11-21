@@ -1347,6 +1347,22 @@ class ChatRuntime:
             )
             raise
         except Exception as exc:
+            if str(exc) == "memory_source_revoked_or_unverifiable":
+                # A rejected public delta leaves its async producer suspended
+                # behind that yield. Close it now so its finally block cancels
+                # provider generation instead of awaiting eventual GC cleanup.
+                close_stream = getattr(gen, "aclose", None)
+                if callable(close_stream):
+                    try:
+                        await close_stream()
+                    except Exception as close_exc:
+                        logger.warning(
+                            "memory.revoked_stream_close_failed",
+                            extra={
+                                "correlation_id": ctx.correlation_id,
+                                "error_type": type(close_exc).__name__,
+                            },
+                        )
             recovered_error_type = type(exc).__name__
             logger.error(
                 "ChatRuntime stream execution failed; attempting canonical fallback",
