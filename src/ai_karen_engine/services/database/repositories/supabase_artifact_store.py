@@ -364,6 +364,7 @@ class SupabaseArtifactStore(ArtifactStore):
                     or parts.username is not None or parts.password is not None
                     or parts.fragment
                     or unquote(parts.path) != expected_path
+                    or parts.query.split("=", 1)[0] != "token"
                     or set(params) != {"token"}
                     or len(params["token"]) != 1
                     or not params["token"][0]
