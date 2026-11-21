@@ -69,7 +69,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         root = Path(__file__).resolve().parents[2] / "supabase/migrations"
         for file in (
             "20261120235900_60_writing_style_identity.sql",
-            "20261121010000_61_writing_style_sample_evidence.sql",
+            "20261122010001_61_writing_style_sample_evidence.sql",
         ):
             await raw.execute((root / file).read_text(encoding="utf-8"))
         await raw.execute(
