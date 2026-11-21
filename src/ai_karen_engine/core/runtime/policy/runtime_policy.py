@@ -448,6 +448,72 @@ class RuntimePolicyEnforcer:
             alternative_policy_version=alternative.policy_version,
         )
 
+    async def authorize_document_consent_preflight(
+        self,
+        *,
+        context: "ChatExecutionContext",
+        scope: "DocumentConsentApprovalScope",
+    ) -> PolicyDecision:
+        """Host-only document author admission; NEVER an executable grant.
+
+        A generic PolicyEvaluationRequest remains categorically denied.
+        Runtime executes only after independently revalidating the bearer,
+        canonical source revision and an approved, one-shot PostgreSQL CAS.
+        """
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+
+        reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
+        valid_scope = isinstance(scope, DocumentConsentApprovalScope)
+        if self.config.default_level is not RuntimeLevel.FULL:
+            reason = PolicyReasonCode.RUNTIME_LEVEL_DENIED
+        elif not valid_scope:
+            reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
+        else:
+            try:
+                principal = context.require_authenticated_user()
+                scope.require_matching_context(context)
+                if (
+                    scope.action != "issue"
+                    or not principal.is_active
+                    or not principal.is_verified
+                    or scope.analysis_allowed is not True
+                    or type(scope.style_use_allowed) is not bool
+                    or scope.expires_at <= datetime.now(timezone.utc)
+                ):
+                    reason = PolicyReasonCode.RESOURCE_SCOPE_DENIED
+                else:
+                    reason = PolicyReasonCode.ALLOWED
+            except (AttributeError, PermissionError, TypeError, ValueError):
+                reason = PolicyReasonCode.MISSING_IDENTITY
+
+        allowed = reason is PolicyReasonCode.ALLOWED
+        action = "writing_style.document_consent.issue"
+        return PolicyDecision(
+            decision_id=f"policy-document-consent-preflight-{time.time_ns()}",
+            policy_version="v2-document-author-preflight",
+            allowed=allowed,
+            reason_codes=[reason],
+            # This policy permits proceeding to durable author evidence; it
+            # is not a right to mint a receipt without that evidence.
+            allowed_capabilities=[],
+            denied_capabilities=[] if allowed else [action],
+            requires_human_gate=True,
+            risk_level="high",
+            evaluated_at=time.time(),
+            runtime_constraints=(
+                {
+                    "authorized_user_id": scope.author_actor_id,
+                    "authorized_tenant_id": scope.tenant_id,
+                    "authorized_session_id": scope.session_id,
+                    "document_consent_approval_only": True,
+                    "document_consent_source_sha256": scope.source_sha256,
+                    "document_consent_fingerprint": scope.fingerprint(),
+                } if allowed else {}
+            ),
+        )
+
     def _plugin_lifecycle_preflight_reason(
         self,
         *,
