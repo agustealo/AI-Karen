@@ -249,27 +249,37 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
         with pytest.raises(PermissionError, match="style_unavailable"):
             await resolver.resolve(request)
 
-        # A PostgreSQL statement failure must unwind the whole transaction.
-        # Catching inside the transaction would leave the session aborted.
+        # FORCE RLS prevents even an authenticated owner from directly
+        # editing a published revision. Ordinary UPDATE affects zero rows.
+        async with TestClient().get_async_session() as session:
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', :t, true)"),
+                {"t": str(tenant_a)},
+            )
+            await session.execute(
+                text("SELECT set_config('app.current_user_id', :u, true)"),
+                {"u": str(owner)},
+            )
+            untouched = await session.execute(
+                text(
+                    "UPDATE public.writing_style_revisions SET "
+                    "approved_expression='{}'::jsonb WHERE "
+                    "tenant_id=CAST(:tenant AS uuid) AND "
+                    "profile_id=CAST(:profile AS uuid) RETURNING revision_id"
+                ),
+                {"tenant": str(tenant_a), "profile": str(profile)},
+            )
+            assert untouched.first() is None
+
+        # A privileged direct UPDATE bypasses RLS but must still be blocked
+        # by the immutable-revision trigger. Run it in its own statement.
         with pytest.raises(Exception, match="immutable"):
-            async with TestClient().get_async_session() as session:
-                await session.execute(
-                    text("SELECT set_config('app.current_tenant_id', :t, true)"),
-                    {"t": str(tenant_a)},
-                )
-                await session.execute(
-                    text("SELECT set_config('app.current_user_id', :u, true)"),
-                    {"u": str(owner)},
-                )
-                await session.execute(
-                    text(
-                        "UPDATE public.writing_style_revisions SET "
-                        "approved_expression='{}'::jsonb WHERE "
-                        "tenant_id=CAST(:tenant AS uuid) AND "
-                        "profile_id=CAST(:profile AS uuid)"
-                    ),
-                    {"tenant": str(tenant_a), "profile": str(profile)},
-                )
+            await raw.execute(
+                "UPDATE public.writing_style_revisions SET "
+                "approved_expression='{}'::jsonb "
+                "WHERE tenant_id=$1 AND profile_id=$2",
+                tenant_a, profile,
+            )
         # Check that mutation and audit are committed together, not that
         # an audit-only record can be fabricated.
         async with TestClient().get_async_session() as session:
