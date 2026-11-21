@@ -10,6 +10,7 @@ on:
       - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
       - "src/ai_karen_engine/services/approvals.py"
       - "src/ai_karen_engine/persistence/repositories/approval_repository.py"
+      - "src/ai_karen_engine/auth/session.py"
       - "src/ai_karen_engine/core/runtime/document_consent_approval.py"
       - "src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py"
       - "tests/services/test_karisignature_persisted_sample_authority.py"
@@ -23,6 +24,7 @@ on:
       - "tests/core/runtime/test_writing_style_document_consent_policy.py"
       - "tests/services/test_writing_style_consent_approval_gate.py"
       - "tests/services/test_document_consent_atomic_approval.py"
+      - "tests/auth/test_document_style_consent_session.py"
       - "tests/core/runtime/test_document_consent_approval_scope.py"
       - "tests/core/runtime/test_karisignature_contract.py"
       - ".github/workflows/karisignature-postgres-proof.yml"
@@ -35,6 +37,7 @@ on:
       - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
       - "src/ai_karen_engine/services/approvals.py"
       - "src/ai_karen_engine/persistence/repositories/approval_repository.py"
+      - "src/ai_karen_engine/auth/session.py"
       - "src/ai_karen_engine/core/runtime/document_consent_approval.py"
       - "src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py"
       - "tests/services/test_karisignature_persisted_sample_authority.py"
@@ -48,6 +51,7 @@ on:
       - "tests/core/runtime/test_writing_style_document_consent_policy.py"
       - "tests/services/test_writing_style_consent_approval_gate.py"
       - "tests/services/test_document_consent_atomic_approval.py"
+      - "tests/auth/test_document_style_consent_session.py"
       - "tests/core/runtime/test_document_consent_approval_scope.py"
       - "tests/core/runtime/test_karisignature_contract.py"
       - ".github/workflows/karisignature-postgres-proof.yml"
@@ -111,7 +115,7 @@ jobs:
           python -m py_compile             src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py             src/ai_karen_engine/services/writing_style_profile_repository.py             src/ai_karen_engine/services/writing_style_sample_provenance.py             src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py             tests/services/test_karisignature_persisted_sample_authority.py             tests/extensions/test_writing_style_source_consent.py             tests/integration/test_writing_style_sample_postgres.py             tests/core/runtime/test_karisignature_contract.py             tests/integration/test_writing_style_identity_postgres.py             tests/integration/test_writing_style_document_consent_postgres.py             src/ai_karen_engine/services/postgres_document_style_consent_issuer.py             tests/services/test_postgres_document_style_consent_issuer.py
       - name: Prove authenticated owner, purpose, revocation and immutable erasure on PostgreSQL
         run: |
-          pytest tests/core/runtime/test_karisignature_contract.py tests/extensions/test_writing_style_source_consent.py tests/services/test_karisignature_persisted_sample_authority.py tests/services/test_postgres_document_style_consent_issuer.py tests/core/runtime/test_writing_style_document_consent_policy.py tests/services/test_writing_style_consent_approval_gate.py tests/core/runtime/test_document_consent_approval_scope.py tests/services/test_document_consent_atomic_approval.py -q -rs
+          pytest tests/core/runtime/test_karisignature_contract.py tests/extensions/test_writing_style_source_consent.py tests/services/test_karisignature_persisted_sample_authority.py tests/services/test_postgres_document_style_consent_issuer.py tests/core/runtime/test_writing_style_document_consent_policy.py tests/services/test_writing_style_consent_approval_gate.py tests/core/runtime/test_document_consent_approval_scope.py tests/services/test_document_consent_atomic_approval.py tests/auth/test_document_style_consent_session.py tests/auth/test_plugin_lifecycle_session.py -q -rs
           pytest tests/integration/test_writing_style_identity_postgres.py tests/integration/test_writing_style_sample_postgres.py tests/integration/test_writing_style_document_consent_postgres.py -q -rs --junitxml=karisignature-postgres-junit.xml
       - name: Preserve PostgreSQL proof
         if: always()
