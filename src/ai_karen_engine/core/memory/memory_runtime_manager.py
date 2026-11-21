@@ -334,6 +334,7 @@ class MemoryRuntimeManager:
                     "metadata": payload.get("metadata", {}),
                     "timestamp": item.timestamp.timestamp(),
                     "expires_at": payload.get("expires_at"),
+                    "updated_at": payload.get("updated_at"),
                     "similarity_score": item.relevance,
                     "memory_type": item.memory_type.value,
                     "result": item.content,

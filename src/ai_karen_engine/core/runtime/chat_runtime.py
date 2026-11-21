@@ -4426,6 +4426,76 @@ class ChatRuntime:
             raise ValueError("Direct-chat generation budget is disabled")
         return min(requested, ceiling)
 
+    @staticmethod
+    async def _authorize_selected_memory_before_generation(
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+    ) -> None:
+        """Fail closed for selected PostgreSQL memories before model dispatch.
+
+        The CognitiveContext remains the only source of model-eligible memory.
+        This guard checks the *same* selected records against the current
+        durable source, without accepting request metadata as authority.
+        """
+        from ai_karen_engine.core.context.contracts import EvidenceSource
+        from ai_karen_engine.platform.memory.postgres.event_source import (
+            PostgresEventSource,
+        )
+
+        selected = ChatRuntime._selected_memory_for_generation(request, decision)
+        if not selected:
+            return
+        context = getattr(decision, "cognitive_context", None)
+        if context is None:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+        selected_ids = {str(item["id"]) for item in selected}
+        origins: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for evidence in context.evidence:
+            if (
+                evidence.source is not EvidenceSource.MEMORY
+                or evidence.scope is None
+                or evidence.scope.tenant_id != request.context.tenant_id
+                or evidence.scope.user_id != request.context.user_id
+                or evidence.evidence_id not in selected_ids
+                or evidence.evidence_id in seen
+            ):
+                continue
+            seen.add(evidence.evidence_id)
+            metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
+            memory_metadata = metadata.get("memory_metadata")
+            memory_metadata = memory_metadata if isinstance(memory_metadata, dict) else {}
+            source = memory_metadata.get("source")
+            origin = metadata.get("canonical_event_origin")
+            if isinstance(source, str) and source.startswith("postgres"):
+                if not isinstance(origin, dict) or not origin.get("record_updated_at"):
+                    raise RuntimeError("memory_source_revoked_or_unverifiable")
+            if origin is not None:
+                if not isinstance(origin, dict) or not origin.get("record_updated_at"):
+                    raise RuntimeError("memory_source_revoked_or_unverifiable")
+                origins.append(origin)
+        if not origins:
+            return
+        try:
+            current = await PostgresEventSource().authorize_selected_records(
+                tenant_id=request.context.tenant_id,
+                user_id=request.context.user_id,
+                origins=origins,
+            )
+        except Exception as exc:
+            logger.warning(
+                "memory.generation_authorization_unavailable",
+                extra={
+                    "correlation_id": request.context.correlation_id,
+                    "tenant_id": request.context.tenant_id,
+                    "user_id": request.context.user_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise RuntimeError("memory_source_revoked_or_unverifiable") from None
+        if current is not True:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
     async def _run_simple(
         self,
         request: ChatExecutionRequest,
@@ -4448,6 +4518,9 @@ class ChatRuntime:
             decision,
             memory_recall_meta,
             reasoning_preflight=reasoning_preflight,
+        )
+        await ChatRuntime._authorize_selected_memory_before_generation(
+            request, decision
         )
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
@@ -4860,6 +4933,9 @@ class ChatRuntime:
         )
 
         ctx = request.context
+        await ChatRuntime._authorize_selected_memory_before_generation(
+            request, decision
+        )
         recall_items = self._selected_memory_for_generation(
             request, decision
         )[: decision.memory_top_k]

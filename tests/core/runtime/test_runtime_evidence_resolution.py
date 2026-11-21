@@ -498,3 +498,36 @@ def test_ephemeral_or_unknown_memory_origin_never_invents_ledger_identity() -> N
             item, request=request, retrieved_at=datetime.now(timezone.utc),
         )
         assert evidence.metadata["canonical_event_origin"] is None
+
+
+def test_canonical_event_origin_uses_selected_record_revision_not_custom_claim():
+    item = {
+        "id": "00000000-0000-4000-8000-000000000021",
+        "updated_at": "2026-11-21T07:30:00",
+        "metadata": {
+            "tenant_id": "tenant-1",
+            "user_id": "user-1",
+            "source": "postgres_memory_ledger",
+            "custom": {
+                "event_id": "00000000-0000-4000-8000-000000000022",
+                "updated_at": "1900-01-01T00:00:00",
+                "provenance": {
+                    "store": "postgres",
+                    "record_type": "memory_assertion",
+                    "assertion_id": "00000000-0000-4000-8000-000000000021",
+                    "event_id": "00000000-0000-4000-8000-000000000022",
+                    "source_type": "chat_user",
+                },
+            },
+        },
+    }
+    origin = RuntimeEvidenceResolver._canonical_memory_event_origin(
+        item, tenant_id="tenant-1", user_id="user-1",
+    )
+    assert origin is not None
+    assert origin["record_updated_at"] == "2026-11-21T07:30:00+00:00"
+    assert origin["record_updated_at"] != item["metadata"]["custom"]["updated_at"]
+    item["updated_at"] = "invalid-revision"
+    assert RuntimeEvidenceResolver._canonical_memory_event_origin(
+        item, tenant_id="tenant-1", user_id="user-1",
+    ) is None

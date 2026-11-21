@@ -387,6 +387,7 @@ class HybridRetrievalRouter:
                     relevance=graph_relevance,
                     confidence=float(source.get("confidence") or 0.0),
                     timestamp=source.get("created_at"),
+                    updated_at=source.get("updated_at"),
                     provenance={
                         "store": "postgres",
                         "record_type": "memory_event",
@@ -424,6 +425,7 @@ class HybridRetrievalRouter:
         confidence: float,
         provenance: dict[str, Any],
         timestamp: datetime | None = None,
+        updated_at: datetime | None = None,
         custom: dict[str, Any] | None = None,
     ) -> MemoryEntry:
         event_time = timestamp or datetime.utcnow()
@@ -462,7 +464,7 @@ class HybridRetrievalRouter:
             else MemoryNamespace.LONG_TERM,
             timestamp=event_time,
             created_at=event_time,
-            updated_at=event_time,
+            updated_at=updated_at or event_time,
             relevance=relevance,
             confidence=confidence,
             importance=5.0,
