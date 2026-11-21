@@ -478,6 +478,66 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     **unpin_args(uuid.uuid4(), duplicate_key, "conflict")
                 )
 
+            # Two independently keyed concurrent moves of one pin with the
+            # same expected revision must serialize on the existing owner
+            # advisory lock. Exactly one commits; the other is a true CAS
+            # conflict, never a second receipt or duplicate position.
+            race_pin = await create_owned_pin("runtime-race-selected")
+            race_neighbor = await create_owned_pin("runtime-race-neighbor")
+            race_keys = [uuid.uuid4(), uuid.uuid4()]
+
+            def race_args(key):
+                return dict(
+                    authenticated_tenant_id=str(tenant_b),
+                    authenticated_user_id=str(owner_b),
+                    idempotency_key=str(key),
+                    request_id="race-request-" + str(key),
+                    correlation_id="race-reorder-postgres",
+                    operation="reorder",
+                    pin_id=str(race_pin),
+                    expected_revision=1,
+                    position=1,
+                )
+
+            raced = await asyncio.gather(
+                *(repository.mutate_with_receipt(**race_args(key))
+                  for key in race_keys),
+                return_exceptions=True,
+            )
+            assert sum(
+                getattr(result, "outcome", None) == "reordered"
+                for result in raced
+            ) == 1
+            assert sum(
+                isinstance(result, PresentationPinConflict)
+                for result in raced
+            ) == 1
+            race_rows = await raw.fetch("""
+                SELECT pin_id, position, revision
+                FROM public.conversation_presentation_pins
+                WHERE pin_id=ANY($1::uuid[])
+                ORDER BY position
+            """, [race_pin, race_neighbor])
+            assert [(row["pin_id"], row["position"]) for row in race_rows] == [
+                (race_neighbor, 0), (race_pin, 1),
+            ]
+            assert next(
+                row["revision"] for row in race_rows
+                if row["pin_id"] == race_pin
+            ) == 2
+            assert await raw.fetchval("""
+                SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                WHERE tenant_id=$1 AND user_id=$2
+                  AND idempotency_key=ANY($3::uuid[])
+            """, tenant_b, owner_b, race_keys) == 1
+
+            # Clean up through the same receipt-aware owner mutation, leaving
+            # the later signed-session test with no stray concurrent rows.
+            for race_id in (race_pin, race_neighbor):
+                await repository.mutate_with_receipt(
+                    **unpin_args(race_id, uuid.uuid4(), "race-cleanup")
+                )
+
             # Exercise the canonical signed-JWT -> durable AuthService session
             # -> FastAPI route -> runtime -> actual PostgreSQL receipt path.
             # Both the auth-session query and pin transaction use the same
