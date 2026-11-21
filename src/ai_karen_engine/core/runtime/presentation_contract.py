@@ -49,6 +49,20 @@ def contains_revocable_code_artifact(value: Any, *, _depth: int = 0) -> bool:
     return False
 
 
+def redact_revocable_code_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Withhold revocable artifacts when exposing a saved conversation DTO.
+
+    Authorization for an owned transcript is not renewed authorization for
+    source-bearing code. Retain safe unrelated metadata, not persisted source.
+    """
+    if metadata.get("component_type") == "code.artifact":
+        return {}
+    return {
+        key: value for key, value in metadata.items()
+        if not contains_revocable_code_artifact(value)
+    }
+
+
 def validate_presentation(raw: Any) -> dict[str, Any] | None:
     """Allow only bounded, JSON-native, evidence-referenced UI envelopes.
 
