@@ -469,6 +469,104 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
                 )
             )
 
+        # Force the original deadlock interleaving: direct SQL locks the
+        # evidence row before its UPDATE trigger needs the profile, while
+        # the repository attempts revocation of the same sample. Repository
+        # must not hold the parent lock while waiting on that evidence row.
+        race_sample_profile = uuid.uuid4()
+        race_sample_id = uuid.uuid4()
+        race_source_id = uuid.uuid4()
+        await identities.create_draft(
+            tenant_id=str(tenant), owner_actor_id=str(owner),
+            profile_id=str(race_sample_profile), kind="client",
+            label="Concurrent sample revoke", correlation_id="sample-race-create",
+        )
+        authority.verify_analysis.return_value = VerifiedWritingStyleSource(
+            tenant_id=str(tenant), profile_id=str(race_sample_profile),
+            owner_actor_id=str(owner), source_id=str(race_source_id),
+            source_type="document", author_actor_id=str(author),
+            consent_receipt_id=str(uuid.uuid4()), analysis_allowed=True,
+            style_use_allowed=True,
+            consent_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        await provenance.register(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(race_sample_profile), sample_id=str(race_sample_id),
+            source_type="document", source_id=str(race_source_id),
+            correlation_id="sample-race-register",
+        )
+        await identities.publish(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(race_sample_profile), revision_id=str(uuid.uuid4()),
+            approved_expression=expression, expected_revision=0,
+            correlation_id="sample-race-publish",
+        )
+        await identities.grant_use(
+            tenant_id=str(tenant), actor_id=str(owner),
+            profile_id=str(race_sample_profile), grantee_actor_id=str(delegate),
+            purpose="draft_email", correlation_id="sample-race-grant",
+        )
+        sample_locked = asyncio.Event()
+        begin_sql_update = asyncio.Event()
+
+        async def direct_sample_revoke():
+            async with TestClient().get_async_session() as session:
+                await WritingStyleProfileRepository._scope(
+                    session, str(tenant), str(owner)
+                )
+                await session.execute(
+                    text(
+                        "SELECT sample_id FROM public.writing_style_sample_evidence "
+                        "WHERE profile_id=CAST(:profile AS uuid) "
+                        "AND sample_id=CAST(:sample AS uuid) FOR UPDATE"
+                    ),
+                    {"profile": str(race_sample_profile), "sample": str(race_sample_id)},
+                )
+                sample_locked.set()
+                await begin_sql_update.wait()
+                changed = await session.execute(
+                    text(
+                        "UPDATE public.writing_style_sample_evidence "
+                        "SET revoked_at=clock_timestamp() "
+                        "WHERE profile_id=CAST(:profile AS uuid) "
+                        "AND sample_id=CAST(:sample AS uuid) "
+                        "AND revoked_at IS NULL RETURNING sample_id"
+                    ),
+                    {"profile": str(race_sample_profile), "sample": str(race_sample_id)},
+                )
+                return changed.scalar_one() == race_sample_id
+
+        async def repository_revoke_concurrently():
+            await sample_locked.wait()
+            task = asyncio.create_task(provenance.revoke(
+                tenant_id=str(tenant), actor_id=str(owner),
+                profile_id=str(race_sample_profile), sample_id=str(race_sample_id),
+                correlation_id="sample-race-wrapper",
+            ))
+            await asyncio.sleep(0.15)
+            begin_sql_update.set()
+            return await task
+
+        try:
+            direct_changed, wrapper_changed = await asyncio.wait_for(
+                asyncio.gather(
+                    direct_sample_revoke(), repository_revoke_concurrently()
+                ),
+                timeout=8,
+            )
+        finally:
+            begin_sql_update.set()
+        assert direct_changed is True
+        assert wrapper_changed is False
+        with pytest.raises(PermissionError, match="style_unavailable"):
+            await KariSignatureResolver(identities).resolve(
+                KariSignatureRequest(
+                    tenant_id=str(tenant), actor_id=str(delegate),
+                    profile_id=str(race_sample_profile), purpose="draft_email",
+                    correlation_id="sample-race-denied",
+                )
+            )
+
         # A source-revoked profile is never a path to style application.
         with pytest.raises(PermissionError):
             await KariSignatureResolver(identities).resolve(
