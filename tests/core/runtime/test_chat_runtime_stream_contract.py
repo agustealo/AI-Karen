@@ -2134,3 +2134,101 @@ async def test_b2c2_leased_stream_postcommit_memory_cancellation_preserves_turn(
     assert gateway.reconciliation_calls == []
     memory.assert_awaited_once()
     outcome.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revoked_memory_between_stream_deltas_stops_publication_and_persistence():
+    """A queued second token cannot bypass the canonical outer stream guard."""
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    checks = 0
+    memory_persist = AsyncMock()
+
+    async def revoke_after_first_chunk(_request, _decision):
+        nonlocal checks
+        checks += 1
+        if checks >= 2:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    async def fake_stream(*args, **kwargs):
+        for chunk in _fake_stream_chunks():
+            yield chunk
+
+    with patch.object(
+        ChatRuntime,
+        "_authorize_selected_memory_before_generation",
+        side_effect=revoke_after_first_chunk,
+    ):
+        chunks = await _collect_stream(
+            runtime, request, decision, plan, fake_stream,
+            persist_memory=memory_persist,
+        )
+
+    published = [chunk.content for chunk in chunks if chunk.type == "content"]
+    assert published == ["Hello"]
+    assert any(chunk.type == "error" for chunk in chunks)
+    assert not gateway.calls
+    memory_persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revocation_after_final_stream_delta_blocks_transcript():
+    """No completed stream may turn into durable success after late revocation."""
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    checks = 0
+    memory_persist = AsyncMock()
+
+    async def revoke_at_finality(_request, _decision):
+        nonlocal checks
+        checks += 1
+        if checks >= 3:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    async def fake_stream(*args, **kwargs):
+        for chunk in _fake_stream_chunks():
+            yield chunk
+
+    with patch.object(
+        ChatRuntime,
+        "_authorize_selected_memory_before_generation",
+        side_effect=revoke_at_finality,
+    ):
+        chunks = await _collect_stream(
+            runtime, request, decision, plan, fake_stream,
+            persist_memory=memory_persist,
+        )
+
+    assert [chunk.content for chunk in chunks if chunk.type == "content"] == [
+        "Hello", " world",
+    ]
+    assert any(chunk.type == "error" for chunk in chunks)
+    assert not gateway.calls
+    memory_persist.assert_not_awaited()
+
+
+def test_post_provider_and_finality_source_fences_are_runtime_owned():
+    from pathlib import Path
+
+    runtime_source = (
+        Path(__file__).resolve().parents[3]
+        / "src/ai_karen_engine/core/runtime/chat_runtime.py"
+    ).read_text(encoding="utf-8")
+    direct = runtime_source.split("    async def _run_simple(", 1)[1].split(
+        "    async def _run_simple_stream(", 1
+    )[0]
+    assert direct.index("result = await gateway.generate(task)") < direct.index(
+        "await ChatRuntime._authorize_selected_memory_before_generation(",
+        direct.index("result = await gateway.generate(task)"),
+    )
+    outer = runtime_source.split("    async def execute_stream(", 1)[1].split(
+        "    async def ", 1
+    )[0]
+    assert outer.index('if chunk.type == "content":') < outer.index(
+        "await ChatRuntime._authorize_selected_memory_before_generation(",
+        outer.index('if chunk.type == "content":'),
+    )
