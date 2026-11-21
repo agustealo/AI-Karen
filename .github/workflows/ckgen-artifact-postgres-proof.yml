@@ -202,6 +202,21 @@ jobs:
                           tenant,
                           email,
                       )
+
+                  second_tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_B_ID"])
+                  second_owner = UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_B_ID"])
+                  if second_tenant == tenant:
+                      raise RuntimeError("RLS actor tenants cannot overlap")
+                  await db.execute(
+                      "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)",
+                      second_tenant, "CK-GEN Second Tenant", "ckgen-artifact-tenant-b",
+                  )
+                  await db.execute(
+                      "INSERT INTO auth_users (user_id, tenant_id, email, roles) "
+                      "VALUES ($1::uuid, $2::uuid, $3::text, "
+                      "'[" + chr(34) + "user" + chr(34) + "]'::jsonb)",
+                      second_owner, second_tenant, "artifact-tenant-b@ci.invalid",
+                  )
               finally:
                   await db.close()
 
