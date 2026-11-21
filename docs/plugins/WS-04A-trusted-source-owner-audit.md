@@ -145,17 +145,40 @@ The inactive artifact adapter now issues a **second current-consent call after i
 
 This is an intermediate consistency fence, **not** a serializable database transaction; consent may still change just after verification. A complete authenticated publication/use path must enforce a trusted persisted grant and transactional or monotonic revocation fence with real source-owner evidence. Reuse WS-02C's `WritingStylePersistedSampleAuthority` for analysis, not a duplicate analysis engine. Keep every source family disabled until this end-to-end proof exists.
 
-## WS-04A3: Bounded canonical document-content reader (inactive)
+## WS-04A4: Stop unsafe source-byte materialization before activation
 
-To support the existing mainline `WritingStylePersistedSampleAuthority` **without building a second analyzer**, `src/ai_karen_engine/services/artifact_writing_style_source_authority.py` now also exports `ArtifactWritingStyleContentReader`. This implements the exact existing `WritingStyleSourceContentReader.read_current_content` method and accepts a trusted `ArtifactStore` dependency.
+The independent review of head `04fdf2eec084bc1b9407b24d6efe3800de118d0e`
+identified a P2 security issue: `SupabaseArtifactStore.download` fully materializes
+the storage response before callers can perform a bounded `stream.read`.
+Thus the earlier `ArtifactWritingStyleContentReader` could not enforce a
+64 KiB **network or memory allocation** limit, despite rejecting oversized bytes
+after the download. That reader and its misleading test assumptions have been
+removed from the draft. Its export is explicitly prohibited by a regression
+test until a canonical bounded storage-read contract exists.
 
-The reader:
-- Rejects all source families except `document` and noncanonical tenant, actor or artifact UUID identities.
-- Requires the current canonical artifact metadata to show the same tenant, owner, active state and `document`/`attachment` kind; only `text/plain` UTF-8 documents are allowed. `search_article` and other external document kinds are excluded.
-- Bounds downloads to 64 KiB maximum; requires a valid SHA-256 digest and exact byte length, strictly decodes UTF-8, and rejects empty content.
-- Revalidates canonical metadata after downloading and rejects deletion, owner changes, content digest drift, MIME changes and kind changes.
-- Never accepts a client-supplied file path, source bytes or consent receipt and never logs/returns storage exceptions to the authorizer.
+### Required canonical owner implementation before restoring content access
 
-**Integration status:** This class is **not instantiated by production runtime** and does not claim to be an author-consent issuer. The source authority's independently issued current consent must still be verified by WS-02C both before and after reading bytes. The underlying `ArtifactStore.download` uses its canonical metadata and storage API; the two metadata checks reduce drift but do not make the entire download and source-consent verification serializable. The explicit content-reader test matrix is part of `tests/extensions/test_artifact_writing_style_source_authority.py`.
+1. Extend the existing `ArtifactStore` contract, not a WS-specific storage
+   client, with an owner-authenticated, transport-bounded source-text read.
+   The storage client must prove a maximum transfer/allocation boundary **before**
+   object bytes are buffered. A post-download `read(max_bytes + 1)` is insufficient.
+2. Bind explicit tenant/user identity to the canonical PostgreSQL source owner,
+   verify active/deleted state and immutable digest/size, and serialize source
+   revocation/archive as needed. Reject metadata/storage revision drift.
+3. Return only approved, bounded, digest-verified UTF-8 inert content; never
+   expose storage keys or raw external-source bytes to the request or UI.
+4. Reuse mainline WS-02C `WritingStylePersistedSampleAuthority` for exact
+   evidence/consent/source-content agreement and its existing
+   `WritingStyleSourceContentReader` contract.
+5. Separately establish a real author-issued consent issuer with current
+   revocation/expiry and signed or governed receipt lineage. `public.files`
+   ownership and document listing remain **not** author consent.
+6. Exercise oversized **actual storage objects** with deceptively small
+   metadata in integration tests. Verify bytes transferred and memory consumed,
+   not merely the length of a stream read after materialization.
 
-**Next required gate:** canonical PostgreSQL author-issued consent and source-revocation fencing, followed by authenticated runtime composition of the already-owned WS-02C authority, document source adapter, and content reader. No user-facing feature should be toggled on before these are proven.
+**Current release status: NO-GO.** The metadata-only
+`ArtifactWritingStyleSourceAuthority` remains inactive and requires a trusted
+issuer. No document bytes can flow through the removed adapter, and the
+consumer writing-style feature remains disabled. This is a defensive scope
+reduction, not completion of WS-04A3 or WS-04A4.
