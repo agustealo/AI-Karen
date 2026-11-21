@@ -90,6 +90,90 @@ describe("CK-07E1 owner-scoped observed run cursor", () => {
     expect(called).toEqual([AUTH, FLAGS, backend]);
   });
 
+  it("replays canonical code-withheld observations without exposing source or changing terminal truth", async () => {
+    const withheld = {
+      type: "CUSTOM",
+      name: "karen.presentation.withheld.v1",
+      value: { reason: "revocable_code_not_replayable" },
+    };
+    const called = setup(() => Response.json(observed({
+      events: [
+        { seq: 1, event: { type: "RUN_STARTED", threadId: thread, runId } },
+        { seq: 2, event: withheld },
+        { seq: 3, event: { type: "RUN_ERROR", threadId: thread, runId,
+                           message: "Execution cancelled" } },
+      ],
+      nextCursor: 3,
+      hasMore: false,
+      runStatus: "cancelled",
+      terminalConfirmed: true,
+      journalTerminalObserved: true,
+    })));
+    const response = await GET(request());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const body = await response.json();
+    expect(body.events.map((item: { seq: number }) => item.seq)).toEqual([1, 2, 3]);
+    expect(body.events[1].event).toEqual(withheld);
+    expect(body.runStatus).toBe("cancelled");
+    expect(body.terminalConfirmed).toBe(true);
+    expect(body.journalTerminalObserved).toBe(true);
+    expect(body.continuationAvailable).toBe(false);
+    expect(JSON.stringify(body)).not.toContain("print(");
+    expect(body).not.toHaveProperty("owner_user_id");
+    expect(called).toEqual([AUTH, FLAGS, backend]);
+  });
+
+  it("rejects forged code-withheld markers that embed source or alter the reason", async () => {
+    const forbidden = [
+      { reason: "revocable_code_not_replayable", code: "print('secret')" },
+      { reason: "revocable_code_not_replayable", data: { source: "secret" } },
+      { reason: "revocable_code_not_replayable", nested: [] },
+      { reason: "unknown" },
+      {},
+      ["revocable_code_not_replayable"],
+      null,
+    ];
+    for (const value of forbidden) {
+      setup(() => Response.json(observed({
+        events: [{ seq: 1, event: {
+          type: "CUSTOM", name: "karen.presentation.withheld.v1", value,
+        } }],
+        nextCursor: 1,
+      })));
+      const response = await GET(request());
+      expect(response.status).toBe(409);
+      const error = JSON.stringify(await response.json());
+      expect(error).not.toContain("secret");
+      expect(error).not.toContain("print(");
+    }
+    for (const injected of [
+      { code: "print('secret')" },
+      { source: { raw: "secret" } },
+      { threadId: thread, runId },
+    ]) {
+      setup(() => Response.json(observed({
+        events: [{ seq: 1, event: {
+          type: "CUSTOM", name: "karen.presentation.withheld.v1",
+          value: { reason: "revocable_code_not_replayable" },
+          ...injected,
+        } }],
+        nextCursor: 1,
+      })));
+      const response = await GET(request());
+      expect(response.status).toBe(409);
+      expect(JSON.stringify(await response.json())).not.toContain("secret");
+    }
+    setup(() => Response.json(observed({
+      events: [{ seq: 1, event: {
+        type: "CUSTOM", name: "karen.presentation.withheld.v2",
+        value: { reason: "revocable_code_not_replayable" },
+      } }],
+      nextCursor: 1,
+    })));
+    expect((await GET(request())).status).toBe(409);
+  });
+
   it("does not request event history when the canonical backend flag is off", async () => {
     const called = setup(() => { throw new Error("Must not query events"); }, false);
     const response = await GET(request());

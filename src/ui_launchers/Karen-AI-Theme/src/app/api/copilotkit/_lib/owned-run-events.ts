@@ -14,8 +14,8 @@ const REPLAYABLE_TYPES = new Set([
   "TEXT_MESSAGE_END", "CUSTOM", "RUN_ERROR", "RUN_FINISHED",
 ]);
 const REPLAYABLE_CUSTOM = new Set([
-  "karen.presentation.v1", "karen.execution_receipt.v1",
-  "karen.response_integrity.v1",
+  "karen.presentation.v1", "karen.presentation.withheld.v1",
+  "karen.execution_receipt.v1", "karen.response_integrity.v1",
 ]);
 const TERMINAL = new Set(["completed", "failed", "cancelled", "orphaned"]);
 
@@ -161,6 +161,19 @@ export async function readKarenOwnedRunEvents(
         (event.runId !== undefined && event.runId !== runId)) {
       // Do not silently discard tools, actions, private state, or unsupported UI.
       return refuse(409, "Observed event cannot be faithfully restored");
+    }
+    // The canonical journal substitutes this source-free marker for
+    // revocable code artifacts. Accept only its exact reason contract:
+    // a forged or legacy marker with embedded source bytes must fail closed.
+    if (event.type === "CUSTOM" &&
+        event.name === "karen.presentation.withheld.v1") {
+      const value = event.value;
+      if (Object.keys(event).length !== 3 ||
+          !value || typeof value !== "object" || Array.isArray(value) ||
+          Object.keys(value).length !== 1 ||
+          (value as Record<string, unknown>).reason !== "revocable_code_not_replayable") {
+        return refuse(409, "Observed event cannot be faithfully restored");
+      }
     }
     const bytes = new TextEncoder().encode(JSON.stringify(event)).byteLength;
     if (bytes > MAX_EVENT_BYTES) {
