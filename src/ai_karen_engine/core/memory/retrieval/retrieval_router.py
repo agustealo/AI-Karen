@@ -213,7 +213,7 @@ class HybridRetrievalRouter:
                 if (
                     not isinstance(canonical_text, str)
                     or not canonical_text.strip()
-                    or canonical_text != content
+                    or canonical_text != latest.get("content")
                     or canonical_event.get("source_type") != latest.get("source_type")
                     or canonical_event.get("source_ref") != latest.get("source_ref")
                 ):
