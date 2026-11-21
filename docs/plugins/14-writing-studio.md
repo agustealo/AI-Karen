@@ -284,7 +284,15 @@ builds on merged WS-01 (#1136), adding
 
 The draft schema stores bounded identity metadata, immutable published
 expression revisions, explicit actor/purpose use grants, and value-free audit
-receipts with PostgreSQL FORCE RLS. The host-side repository supports
+receipts with PostgreSQL FORCE RLS.
+The WS-02 security repair now binds the authenticated actor and intended
+purpose in every transaction, uses principal-aware PostgreSQL policies for
+profile/revision/grant visibility and owner-only writes, and tests direct SQL
+cross-user denial under a non-superuser role. Missing principal context fails
+closed. Immutable revision history cannot be changed directly, while the
+existing governed tenant erasure can cascade private child records; the
+integration test explicitly checks that cleanup. These are source and test
+contracts, not proof that the disposable test database was actually exercised. The host-side repository supports
 transactional draft creation, revision CAS publishing, grants, individual grant
 revocation, profile revocation, and current-grant resolution through the
 canonical KariSignatureAuthority protocol. The initial profile lookup and use
