@@ -752,6 +752,7 @@ jobs:
       KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
       KAREN_PIN_READBACK_ACCEPTANCE: ${{ (inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && '1' || '0' }}
       KAREN_PIN_MUTATION_ACCEPTANCE: ${{ inputs.scenario == 'pins-mutation' && '1' || '0' }}
+      KAREN_PIN_MUTATION_DISPOSABLE_APPROVED: ${{ vars.KAREN_PIN_MUTATION_DISPOSABLE_APPROVED }}
       KAREN_PIN_READBACK_PIN_ID: ${{ vars.KAREN_PIN_READBACK_PIN_ID }}
       KAREN_PIN_MUTATION_SECOND_PIN_ID: ${{ vars.KAREN_PIN_MUTATION_SECOND_PIN_ID }}
       KAREN_NAV_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'navigation' && 'true' || 'false' }}
@@ -783,6 +784,38 @@ jobs:
         with:
           ref: ${{ inputs.target_sha }}
           persist-credentials: false
+
+      # This trial writes a persistent PostgreSQL ordinal. Protected env approval
+      # and disposable fixtures must be explicit; never run it on production,
+      # even if deployment provenance and the code revision match.
+      - name: Deny destructive pin trial without preview-only disposable approval
+        if: inputs.scenario == 'pins-mutation'
+        working-directory: .
+        shell: bash
+        env:
+          SELECTED_TARGET: ${{ inputs.deployment_target }}
+        run: |
+          set -euo pipefail
+          test "$SELECTED_TARGET" = "preview" || {
+            echo "::error::Persistent pin mutation acceptance is preview-only"
+            exit 1
+          }
+          test "$KAREN_PIN_MUTATION_DISPOSABLE_APPROVED" = "true" || {
+            echo "::error::Explicit environment approval for disposable pin mutation is required"
+            exit 1
+          }
+          [[ "$KAREN_PIN_READBACK_PIN_ID" =~ ^[a-fA-F0-9-]{36}$ ]] || {
+            echo "::error::Valid disposable owner pin ID required"
+            exit 1
+          }
+          [[ "$KAREN_PIN_MUTATION_SECOND_PIN_ID" =~ ^[a-fA-F0-9-]{36}$ ]] || {
+            echo "::error::Valid second disposable pin ID required"
+            exit 1
+          }
+          test "$KAREN_PIN_READBACK_PIN_ID" != "$KAREN_PIN_MUTATION_SECOND_PIN_ID" || {
+            echo "::error::Two distinct disposable pins are required"
+            exit 1
+          }
 
       - name: Verify independent Vercel deployment and live revision
         working-directory: .
