@@ -1,18 +1,16 @@
 "use client";
 
 /**
- * KUI-002D3H: read-only by default. Optional guarded unpin operates only
- * on backend-admitted saved references. Mutation eligibility is NOT inferred
- * from a client flag or an accessible transport endpoint. The existing host
- * deliberately passes no eligibility until an authenticated runtime
- * capability contract is available.
+ * KUI-002D3L: presentation controls remain default-off in the actual host.
+ * Only fresh authenticated capability evidence can expose guarded actions
+ * when a future release boundary explicitly opts into presentation controls.
  *
- * Every mutation requires a matching committed backend receipt and then a
- * fresh authorized readback. No local pin cache, optimistic update, receipt
- * fabrication, card reconstruction, or POST retry. Reorder is withheld until\n * its backend contract guarantees an atomic collision-free move.
+ * The backend independently authorizes each mutation and commits immutable
+ * receipts. The dock performs no optimistic moves, POST retry, raw pointer
+ * reconstruction, local authority caching, or cross-session persistence.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bookmark, ShieldCheck, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Bookmark, ShieldCheck, X } from "lucide-react";
 import { z } from "zod";
 import { apiClient, ApiError } from "@/lib/api";
 
@@ -36,13 +34,31 @@ const pinReadback = z.object({
   pins: z.array(pinReference).max(100),
 }).strict();
 
+const pinCapability = z.object({
+  schema_version: z.literal(1),
+  mutation_enabled: z.boolean(),
+  allowed_operations: z.array(z.enum(["unpin", "reorder"])).max(2),
+  denial_reason: z.union([z.literal("mutations_disabled"), z.null()]),
+}).strict();
+
+type MutationAction = "unpin" | "reorder";
+
+export function parseAuthenticatedPinCapability(value: unknown): MutationAction[] {
+  const result = pinCapability.safeParse(value);
+  if (!result.success) return [];
+  const { mutation_enabled, allowed_operations, denial_reason } = result.data;
+  if (!mutation_enabled || denial_reason !== null ||
+      new Set(allowed_operations).size !== allowed_operations.length) return [];
+  return allowed_operations;
+}
+
 const committedReceipt = z.object({
   schema_version: z.literal(1),
   committed: z.literal(true),
   receipt: z.object({
     receipt_id: z.string().min(1),
     idempotency_key: z.string().uuid(),
-    operation: z.literal("unpin"),
+    operation: z.enum(["unpin", "reorder"]),
     pin_id: z.string().uuid(),
   }).passthrough(),
 }).passthrough();
@@ -53,7 +69,6 @@ type DockState =
   | { kind: "empty" }
   | { kind: "available"; pins: PinReference[] }
   | { kind: "unavailable" };
-type MutationAction = "unpin";
 
 export function parseAuthorizedPinReadback(value: unknown): PinReference[] | null {
   const parsed = pinReadback.safeParse(value);
@@ -96,6 +111,7 @@ export function KarenCopilotPinnedDock({
 }: KarenCopilotPinnedDockProps) {
   const [state, setState] = useState<DockState>({ kind: "loading" });
   const [pending, setPending] = useState(false);
+  const [allowedOps, setAllowedOps] = useState<MutationAction[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const mountedRef = useRef(false);
   const readGenerationRef = useRef(0);
@@ -104,19 +120,28 @@ export function KarenCopilotPinnedDock({
   const refresh = useCallback(async () => {
     const generation = ++readGenerationRef.current;
     setState({ kind: "loading" });
+    setAllowedOps([]);
     try {
-      const response = await apiClient.get<unknown>("/api/chat/ag-ui/pins");
+      const [referenceResponse, capabilityResponse] = await Promise.all([
+        apiClient.get<unknown>("/api/chat/ag-ui/pins"),
+        mutationControlsEnabled
+          ? apiClient.get<unknown>("/api/chat/ag-ui/pins/capabilities").catch(() => null)
+          : Promise.resolve(null),
+      ]);
       if (!mountedRef.current || generation !== readGenerationRef.current) return;
-      const pins = parseAuthorizedPinReadback(response);
+      const pins = parseAuthorizedPinReadback(referenceResponse);
+      setAllowedOps(mutationControlsEnabled && pins !== null
+        ? parseAuthenticatedPinCapability(capabilityResponse) : []);
       setState(pins === null
         ? { kind: "unavailable" }
         : pins.length === 0 ? { kind: "empty" } : { kind: "available", pins });
     } catch {
       if (mountedRef.current && generation === readGenerationRef.current) {
+        setAllowedOps([]);
         setState({ kind: "unavailable" });
       }
     }
-  }, []);
+  }, [mutationControlsEnabled]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -127,34 +152,50 @@ export function KarenCopilotPinnedDock({
     };
   }, [refresh]);
 
-  const mutate = useCallback(async (pin: PinReference) => {
-    if (!mutationControlsEnabled || mutatingRef.current || state.kind !== "available") return;
-    // No mutation can derive authority from the displayed reference alone.
-    // The authenticated runtime rechecks principal, revision and source.
+  const mutate = useCallback(async (
+    pin: PinReference, operation: MutationAction, destination?: number,
+  ) => {
+    if (!mutationControlsEnabled || !allowedOps.includes(operation) ||
+        mutatingRef.current || state.kind !== "available" ||
+        (operation === "reorder" && !state.pins.every((entry, i) => entry.position === i))) return;
     mutatingRef.current = true;
     setPending(true);
     setMessage(null);
-    const idempotencyKey = crypto.randomUUID();
-    const request = {
-      operation: "unpin" as const,
-      idempotency_key: idempotencyKey,
-      pin_id: pin.pin_id,
-    };
+    const generation = ++readGenerationRef.current;
     let verified = false;
     let conflict = false;
+    let attempted = false;
     try {
+      // A displayed control never grants execution; recheck the authenticated
+      // capability immediately before every single-shot mutation POST.
+      const freshOps = parseAuthenticatedPinCapability(
+        await apiClient.get<unknown>("/api/chat/ag-ui/pins/capabilities"),
+      );
+      if (!mountedRef.current || generation !== readGenerationRef.current ||
+          !freshOps.includes(operation)) {
+        setAllowedOps([]);
+        return;
+      }
+      const idempotencyKey = crypto.randomUUID();
+      const request = operation === "reorder" ? {
+        operation, idempotency_key: idempotencyKey, pin_id: pin.pin_id,
+        expected_revision: pin.revision, position: destination,
+      } : {
+        operation, idempotency_key: idempotencyKey, pin_id: pin.pin_id,
+      };
+      attempted = true;
       const answer = await apiClient.post<unknown>(
         "/api/chat/ag-ui/pins/mutations", request,
       );
-      verified = verifyCommittedPinMutation(answer, "unpin", pin.pin_id, idempotencyKey);
+      verified = verifyCommittedPinMutation(answer, operation, pin.pin_id, idempotencyKey);
     } catch (error) {
       conflict = error instanceof ApiError && error.status === 409;
     } finally {
-      // A transport failure is ambiguous. Re-read backend truth, but NEVER
-      // repeat the POST, move a row locally, or claim mutation success.
+      // Never optimistically alter pin state, replay a POST, or trust a
+      // receipt without fresh authorized readback.
       if (mountedRef.current) {
         await refresh();
-        if (mountedRef.current) {
+        if (mountedRef.current && attempted) {
           setMessage(verified
             ? null
             : conflict
@@ -165,7 +206,7 @@ export function KarenCopilotPinnedDock({
       mutatingRef.current = false;
       if (mountedRef.current) setPending(false);
     }
-  }, [mutationControlsEnabled, refresh, state]);
+  }, [allowedOps, mutationControlsEnabled, refresh, state]);
 
   return (
     <aside aria-label="Pinned workspace"
@@ -178,7 +219,7 @@ export function KarenCopilotPinnedDock({
           <h2 className="truncate font-semibold">Pinned workspace</h2>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          Authorized saved references{mutationControlsEnabled ? "" : ", read only"}
+          Authorized saved references{mutationControlsEnabled && allowedOps.length ? "" : ", read only"}
         </p>
       </header>
       {message && <p role="status" data-testid="karen-pins-mutation-notice"
@@ -220,21 +261,36 @@ export function KarenCopilotPinnedDock({
                 <p className="mt-1 text-xs text-muted-foreground">
                   Saved reference {pin.position + 1} · Revision {pin.revision}
                 </p>
-                {mutationControlsEnabled && (
+                {mutationControlsEnabled && allowedOps.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1" data-testid="karen-pin-controls">
-                    <button type="button" aria-label={`Unpin reference ${index + 1}`}
-                      disabled={pending}
-                      onClick={() => void mutate(pin)}
-                      className="rounded border border-border px-2 py-1 text-xs disabled:opacity-40">
-                      <X aria-hidden="true" className="mr-1 inline h-3 w-3" /> Unpin
-                    </button>
+                    {allowedOps.includes("reorder") && state.pins.every((entry, i) => entry.position === i) && index > 0 && (
+                      <button type="button" aria-label={`Move reference ${index + 1} up`}
+                        disabled={pending} onClick={() => void mutate(pin, "reorder", index - 1)}
+                        className="rounded border border-border px-2 py-1 text-xs disabled:opacity-40">
+                        <ArrowUp aria-hidden="true" className="mr-1 inline h-3 w-3" /> Move up
+                      </button>
+                    )}
+                    {allowedOps.includes("reorder") && state.pins.every((entry, i) => entry.position === i) && index < state.pins.length - 1 && (
+                      <button type="button" aria-label={`Move reference ${index + 1} down`}
+                        disabled={pending} onClick={() => void mutate(pin, "reorder", index + 1)}
+                        className="rounded border border-border px-2 py-1 text-xs disabled:opacity-40">
+                        <ArrowDown aria-hidden="true" className="mr-1 inline h-3 w-3" /> Move down
+                      </button>
+                    )}
+                    {allowedOps.includes("unpin") && (
+                      <button type="button" aria-label={`Unpin reference ${index + 1}`}
+                        disabled={pending} onClick={() => void mutate(pin, "unpin")}
+                        className="rounded border border-border px-2 py-1 text-xs disabled:opacity-40">
+                        <X aria-hidden="true" className="mr-1 inline h-3 w-3" /> Unpin
+                      </button>
+                    )}
                   </div>
                 )}
               </article>
             ))}
             <p className="text-xs text-muted-foreground">
               References were reauthorized by Karen. Full cards cannot be restored
-              from pointers alone. {mutationControlsEnabled
+              from pointers alone. {mutationControlsEnabled && allowedOps.length
                 ? "Changes require a committed server receipt and fresh readback."
                 : "Pin changes are not available here."}
             </p>
