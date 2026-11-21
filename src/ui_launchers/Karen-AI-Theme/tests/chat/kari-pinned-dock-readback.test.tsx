@@ -148,24 +148,18 @@ describe("governed pinned workspace reference consumer", () => {
     expect(api.get).toHaveBeenCalledTimes(2);
   });
 
-  it("reorder sends exact backend revision and target index; stale CAS refreshes without retry", async () => {
-    const secondPin = {
-      ...authorizedPin, pin_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      position: 1, revision: 3,
-    };
-    const ordered = { schema_version: 1, read_only: true, pins: [authorizedPin, secondPin] };
-    api.get.mockResolvedValue(ordered);
+  it("conflicting unpin refreshes authorized state without retry", async () => {
+    api.get.mockResolvedValue(snapshot);
     api.post.mockRejectedValue(new ApiError(409, "Conflict"));
     render(<KarenCopilotPinnedDock mutationControlsEnabled />);
     await screen.findByTestId("karen-pins-authorized");
-    expect(screen.getByRole("button", { name: "Move reference 1 up" }).hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Move reference 1 down" }));
+    expect(screen.queryByRole("button", { name: /Move reference/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Unpin reference 1" }));
     expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
       .toContain("Saved references changed elsewhere");
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.post.mock.calls[0][1]).toMatchObject({
-      operation: "reorder", pin_id: authorizedPin.pin_id,
-      expected_revision: 2, position: 1,
+      operation: "unpin", pin_id: authorizedPin.pin_id,
     });
     expect(api.get).toHaveBeenCalledTimes(2);
   });
