@@ -19,7 +19,9 @@ from ai_karen_engine.core.runtime.policy.runtime_policy import (
     RuntimePolicyConfig,
     RuntimePolicyEnforcer,
 )
-from ai_karen_engine.services.approvals import ApprovalScopeError, ApprovalService
+from ai_karen_engine.services.approvals import (
+    ApprovalNotFoundError, ApprovalScopeError, ApprovalService, ApprovalStateError,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -413,3 +415,82 @@ async def test_revoke_composition_uses_same_authority_and_one_way_issuer(
         correlation_id="confirmed-revoke",
     )
     target._audit.log_audit_event.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", [
+    "no_record", "foreign_session", "unrelated_policy",
+    "changed_digest", "not_document", "expired_scope",
+])
+async def test_stored_author_confirmation_never_trusts_client_scope(
+    monkeypatch, failure,
+):
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope)
+    if failure == "no_record":
+        record = None
+    elif failure == "foreign_session":
+        context.session_id = uuid.uuid4().hex
+    elif failure == "unrelated_policy":
+        record["policy_decision_id"] = "policy-unrelated"
+    elif failure == "changed_digest":
+        record["request_payload"]["document_consent_scope"]["source_sha256"] = "b" * 64
+    elif failure == "not_document":
+        record["intent"] = "general_assist"
+    elif failure == "expired_scope":
+        record["request_payload"]["document_consent_scope"]["expires_at"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).isoformat()
+    repo = SimpleNamespace(
+        get=AsyncMock(return_value=record), decide=AsyncMock(),
+    )
+    with pytest.raises((ApprovalScopeError, ApprovalNotFoundError)) as caught:
+        await service(repo).get_document_consent_confirmation(
+            str(uuid.uuid4()), request=object(),
+        )
+    assert caught.value is not None
+    repo.decide.assert_not_awaited()
+
+
+async def test_stored_author_confirmation_uses_immutable_sql_scope(
+    monkeypatch,
+):
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope)
+    record["expires_at"] = datetime.now(timezone.utc) + timedelta(minutes=15)
+    approved = {**record, "status": "approved"}
+    repo = SimpleNamespace(
+        get=AsyncMock(return_value=record),
+        decide=AsyncMock(return_value=approved),
+    )
+    target = service(repo)
+    current, restored = await target.get_document_consent_confirmation(
+        record["approval_id"], request=object(),
+    )
+    assert current is record
+    assert restored == scope
+    with pytest.raises(ApprovalScopeError, match="Explicit author"):
+        await target.confirm_stored_document_consent(
+            record["approval_id"], request=object(), confirmed=False,
+        )
+    repo.decide.assert_not_awaited()
+    result = await target.confirm_stored_document_consent(
+        record["approval_id"], request=object(), confirmed=True,
+    )
+    assert result["status"] == "approved"
+    repo.decide.assert_awaited_once()
+
+
+async def test_stored_document_confirmation_denies_approval_replay(
+    monkeypatch,
+):
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope, status="approved")
+    repo = SimpleNamespace(get=AsyncMock(return_value=record), decide=AsyncMock())
+    with pytest.raises(ApprovalStateError, match="not pending"):
+        await service(repo).confirm_stored_document_consent(
+            record["approval_id"], request=object(), confirmed=True,
+        )
+    repo.decide.assert_not_awaited()
