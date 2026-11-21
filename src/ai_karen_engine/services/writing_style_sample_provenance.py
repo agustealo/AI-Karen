@@ -197,18 +197,12 @@ class WritingStyleSampleProvenance:
             raise ValueError("invalid_style_correlation")
         async with self._client_factory().get_async_session() as session:
             await WritingStyleProfileRepository._scope(session, tenant, actor)
-            profile_row = await session.execute(
-                text(
-                    "SELECT publication_revision,state FROM public.writing_style_profiles "
-                    "WHERE tenant_id=CAST(:tenant AS uuid) "
-                    "AND profile_id=CAST(:profile AS uuid) "
-                    "AND owner_actor_id=CAST(:actor AS uuid) FOR UPDATE"
-                ),
-                {"tenant": tenant, "profile": profile, "actor": actor},
-            )
-            row = profile_row.first()
-            if row is None:
-                raise WritingStyleAccessDenied("style_source_unavailable")
+            # Evidence UPDATE locks the sample row first. Its AFTER UPDATE
+            # trigger then fences the published profile and grants atomically.
+            # Do not lock the profile ahead of evidence here: owner SQL may
+            # revoke the same sample directly, otherwise yielding a cycle.
+            # Authenticated owner/tenant scope is enforced by FORCE RLS and
+            # the row's owner_actor_id predicate in the UPDATE below.
             changed = await session.execute(
                 text(
                     "UPDATE public.writing_style_sample_evidence "
