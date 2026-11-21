@@ -376,6 +376,8 @@ jobs:
           pytest tests/core/runtime/test_graph_evidence_freshness_boundary.py -q
           pytest tests/core/runtime/test_graph_prompt_metadata_authority.py -q
           pytest tests/core/runtime/test_graph_live_reauthorization.py -q
+          pytest tests/core/runtime/test_workflow_runtime_agent_stream.py -k real_workflow_stream_close_finalizes_orchestrator_and_graph -q
+          pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k "revoked_memory_between_stream_deltas or revocation_after_final_stream_delta or post_provider_and_finality_source_fences or reasoning_wrapper_close_cancels_real_nested_provider_worker or revocation_during_nonstream_memory_persistence_returns_denial or graph_wrapper_close_propagates_to_workflow_stream or cancel_during_stream_final_source_check_records_terminal or cancel_during_nonstream_source_finality_records_terminal or revocation_after_provider_completion_uses_memory_denial_receipt or revocation_during_streamed_memory_persistence_emits_denial_not_save_error" -q
           pytest tests/core/memory/test_memory_formation_service.py -q
           pytest tests/platform/memory/test_semantic_user_state_projection.py -q
           pytest tests/memory/test_stm_closure_1b.py -q

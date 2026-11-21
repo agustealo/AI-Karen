@@ -858,9 +858,14 @@ class LangGraphOrchestrator:
         try:
             thread_config = {"configurable": {"thread_id": session_id}}
 
-            # Stream through the graph
-            async for chunk in self.graph.astream(initial_state, config=thread_config):
-                yield chunk
+            # Stream through the graph. Closing the outer stream must
+            # propagate to LangGraph before finalizing this session.
+            graph_stream = self.graph.astream(initial_state, config=thread_config)
+            try:
+                async for chunk in graph_stream:
+                    yield chunk
+            finally:
+                await graph_stream.aclose()
 
         except Exception as e:
             error_message = str(e)
