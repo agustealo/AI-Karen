@@ -13,11 +13,20 @@ Source inspected against live `main` at `842ba6c4457364cce2bc3d1ddb16ebd4d5a9efe
 
 ## Classification and disposition
 
-**Dangerous legacy independent execution authority, active public import, runtime consumers not proven.** A repository Python-source reference scan is now enforced by the targeted architecture test across `src`, `server`, `scripts`, `plugins`, and `free_plugins`, excluding only the compatibility implementation, its public package export and the test itself. This does not cover dynamic imports or non-Python and external consumers; do not claim all callers were migrated.
+**Dangerous legacy independent execution authority, active public import, runtime consumers not proven.** Main Quality first discovered and caused repair of the two MCP consumers above. A repository Python-source reference scan is now enforced by the targeted architecture test across `src`, `server`, `scripts`, `plugins`, and `free_plugins`, excluding only the compatibility implementation, its public package export and the test itself. This does not cover dynamic imports or non-Python and external consumers; do not claim all callers were migrated.
 
 Retire the legacy Neo4j implementation and retain the importable public class and historical exception names. Construction always raises a typed `KnowledgeGraphUnavailableError` before I/O, including when the caller passes a URI or credentials. The class exposes no callable query, mutation, raw traversal or destructive operation. This is a hard stop, not a synthetic success, shadow query, fallback database, or dynamic runtime discovery.
 
 Existing integrations that attempt to instantiate this unsupported client will now encounter an explicit unavailable error. This **intentional compatibility change** is safer than silently bypassing tenant/source authorization. Such integrations must use the canonical runtime-authorized graph path, not direct PostgreSQL adapter calls without NeuroRecall.
+
+
+## Discovered MCP runtime consumers and remediation
+
+Exact-head Main Quality found two previously missed direct references:
+- `src/ai_karen_engine/mcp/factory.py` offered a configured `create_knowledge_graph_service` that attempted to instantiate an unscoped client and register a generic MCP endpoint.
+- `src/ai_karen_engine/mcp/services.py` exposed unrestricted Cypher through `KnowledgeGraphService.execute_cypher` with only a broad `admin`/`user` role test.
+
+These were **actual compatibility consumers**, not proof the public Neo4j interface was unused. The factory now declines to create/register the obsolete graph service without contacting a registry or client; `KnowledgeGraphService` retains its import but raises a typed unavailable error before it can register or execute an injected client. The LLM service path remains untouched. Targeted tests verify default and disabled factory settings and an injected-client attack. A fresh reference audit remains in Main Quality and must pass before merge.
 
 ## Proof and residual risk
 
