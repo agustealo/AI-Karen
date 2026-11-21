@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
@@ -96,18 +97,11 @@ async def test_fail_closed_on_source_drift_or_revocation(failure):
     elif failure == "missing_content":
         reader.read_current_content.return_value = None
     elif failure == "wrong_author":
-        source.verify_analysis.return_value = VerifiedWritingStyleSource(
-            **{**verified.__dict__, "author_actor_id": str(uuid.uuid4())}
-        )
+        source.verify_analysis.return_value = replace(verified, author_actor_id=str(uuid.uuid4()))
     elif failure == "wrong_receipt":
-        source.verify_analysis.return_value = VerifiedWritingStyleSource(
-            **{**verified.__dict__, "consent_receipt_id": str(uuid.uuid4())}
-        )
+        source.verify_analysis.return_value = replace(verified, consent_receipt_id=str(uuid.uuid4()))
     elif failure == "expired":
-        source.verify_analysis.return_value = VerifiedWritingStyleSource(
-            **{**verified.__dict__, "consent_expires_at":
-               datetime.now(timezone.utc) - timedelta(seconds=1)}
-        )
+        source.verify_analysis.return_value = replace(verified, consent_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
     elif failure == "owner_denied":
         source.verify_analysis.return_value = None
     elif failure == "owner_error":
