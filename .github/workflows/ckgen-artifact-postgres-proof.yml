@@ -7,6 +7,7 @@ on:
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
+      - "tests/integration/test_artifact_rls_actor_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   push:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
+      - "tests/integration/test_artifact_rls_actor_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   workflow_dispatch:
 
@@ -33,10 +35,13 @@ jobs:
       PYTHONPATH: src
       KAREN_TEST_DISPOSABLE_DATABASE: "1"
       KAREN_TEST_CODE_ARTIFACT_POSTGRES: "1"
+      KAREN_TEST_CODE_ARTIFACT_RLS: "1"
       KAREN_TEST_CODE_ARTIFACT_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_code_artifact_test
       KAREN_TEST_ARTIFACT_TENANT_ID: 10000000-0000-4000-8000-000000000001
       KAREN_TEST_ARTIFACT_OWNER_ID: 10000000-0000-4000-8000-000000000002
       KAREN_TEST_ARTIFACT_OTHER_USER_ID: 10000000-0000-4000-8000-000000000003
+      KAREN_TEST_ARTIFACT_TENANT_B_ID: 20000000-0000-4000-8000-000000000001
+      KAREN_TEST_ARTIFACT_OWNER_B_ID: 20000000-0000-4000-8000-000000000002
     steps:
       - uses: actions/checkout@v4
 
@@ -111,6 +116,21 @@ jobs:
                   raise RuntimeError(f"Tenant type correction missing: {table}")
               return block
 
+          def canonical_files_policy(sql: str) -> str:
+              marker = "CREATE POLICY files_tenant_isolation ON files"
+              start = sql.find(marker)
+              finish = sql.find(";", start)
+              if start < 0 or finish < 0:
+                  raise RuntimeError("Missing canonical files RLS policy")
+              policy = sql[start : finish + 1]
+              if (
+                  "current_setting('app.current_tenant_id', true)::uuid"
+                  not in policy
+                  or "WITH CHECK" not in policy
+              ):
+                  raise RuntimeError("Canonical files RLS policy contract changed")
+              return policy
+
           async def prove_schema() -> None:
               root = await asyncpg.connect(ROOT_DSN)
               try:
@@ -136,6 +156,25 @@ jobs:
                   await db.execute(tenant_type_correction(finalization, "files"))
                   await db.execute(TENANT_AUTHORITY.read_text(encoding="utf-8"))
                   await db.execute(ARCHIVE.read_text(encoding="utf-8"))
+                  security = Path(
+                      "supabase/migrations/20260827040000_04_tenant_security.sql"
+                  ).read_text(encoding="utf-8")
+                  if "ALTER TABLE files ENABLE ROW LEVEL SECURITY;" not in security:
+                      raise RuntimeError("Canonical files RLS enablement missing")
+                  await db.execute("ALTER TABLE files ENABLE ROW LEVEL SECURITY")
+                  await db.execute(canonical_files_policy(finalization))
+                  await db.execute(
+                      "CREATE ROLE ckgen_artifact_rls_actor "
+                      "NOLOGIN NOSUPERUSER NOBYPASSRLS"
+                  )
+                  await db.execute(
+                      "GRANT USAGE ON SCHEMA public TO ckgen_artifact_rls_actor"
+                  )
+                  await db.execute(
+                      "GRANT SELECT, UPDATE ON public.files "
+                      "TO ckgen_artifact_rls_actor"
+                  )
+
 
                   # Match migrated tenant FK and UUID column semantics.
                   columns = await db.fetch(
@@ -163,6 +202,21 @@ jobs:
                           tenant,
                           email,
                       )
+
+                  second_tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_B_ID"])
+                  second_owner = UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_B_ID"])
+                  if second_tenant == tenant:
+                      raise RuntimeError("RLS actor tenants cannot overlap")
+                  await db.execute(
+                      "INSERT INTO tenants (id, name, slug) VALUES ($1, $2, $3)",
+                      second_tenant, "CK-GEN Second Tenant", "ckgen-artifact-tenant-b",
+                  )
+                  await db.execute(
+                      "INSERT INTO auth_users (user_id, tenant_id, email, roles) "
+                      "VALUES ($1::uuid, $2::uuid, $3::text, "
+                      "'[" + chr(34) + "user" + chr(34) + "]'::jsonb)",
+                      second_owner, second_tenant, "artifact-tenant-b@ci.invalid",
+                  )
               finally:
                   await db.close()
 
@@ -175,8 +229,10 @@ jobs:
           set -euo pipefail
           python -m compileall -q \
             src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py \
-            tests/integration/test_live_code_artifact_revocation_postgres.py
+            tests/integration/test_live_code_artifact_revocation_postgres.py \
+            tests/integration/test_artifact_rls_actor_postgres.py
           pytest tests/integration/test_live_code_artifact_revocation_postgres.py \
+            tests/integration/test_artifact_rls_actor_postgres.py \
             -q -rs --junitxml=ckgen-artifact-postgres-junit.xml
 
       - name: Preserve PostgreSQL proof evidence

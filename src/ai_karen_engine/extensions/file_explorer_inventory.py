@@ -28,6 +28,11 @@ class OwnerInventorySource(Protocol):
         self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None
     ) -> dict[str, Any]: ...
 
+    async def revalidate_owner_reference(
+        self, *, tenant_id: str, user_id: str, source_id: str,
+        expected_revision: str,
+    ) -> dict[str, Any]: ...
+
 
 class GovernedPluginKernel(Protocol):
     def get_record(self, plugin_id: str) -> dict[str, Any] | None: ...
@@ -57,14 +62,9 @@ class FileExplorerInventoryHost:
         self._kernel = kernel
         self._source = source
 
-    async def list_owner_page(
-        self,
-        *,
-        context: ExtensionExecutionContext,
-        plan: AuthorizedExecutionPlan,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> dict[str, Any]:
+    def _authorize_owner(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+    ) -> None:
         if not isinstance(context, ExtensionExecutionContext):
             raise PermissionError("file_explorer_context_required")
         if (
@@ -86,11 +86,6 @@ class FileExplorerInventoryHost:
             key in context.resource_scope for key in _RESERVED_SCOPE
         ):
             raise PermissionError("file_explorer_untrusted_inventory")
-        if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
-            raise ValueError("file_explorer_page_limit_invalid")
-        if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= 768):
-            raise ValueError("file_explorer_cursor_invalid")
-
         # Deny before any repository access when extension is inactive.
         record = self._kernel.get_record(PLUGIN_ID)
         if (
@@ -99,6 +94,90 @@ class FileExplorerInventoryHost:
             or record.get("dependencies_resolved") is not True
         ):
             raise PermissionError("file_explorer_disabled")
+
+
+    async def revalidate_owner_selection(
+        self, *, context: ExtensionExecutionContext,
+        plan: AuthorizedExecutionPlan, source_id: str, expected_revision: str,
+    ) -> dict[str, Any]:
+        """Recheck selected metadata without granting access to source bytes."""
+        self._authorize_owner(context=context, plan=plan)
+        if not _canonical_uuid(source_id):
+            raise PermissionError("file_explorer_source_id_invalid")
+        if (
+            not isinstance(expected_revision, str)
+            or len(expected_revision) != 64
+            or any(c not in "0123456789abcdefABCDEF" for c in expected_revision)
+        ):
+            raise PermissionError("file_explorer_revision_invalid")
+        # Run the full canonical execution gate before touching source metadata.
+        # An empty host-issued list has no source contents but triggers the same
+        # lifecycle, role, action and permission checks as inventory listing.
+        admission_context = replace(
+            context,
+            resource_scope={
+                **context.resource_scope,
+                "file_explorer_grant": "host_verified",
+                "file_explorer_entries": [],
+            },
+        )
+        admission = await self._kernel.execute(ExtensionExecutionRequest(
+            plugin_id=PLUGIN_ID,
+            capability="execute",
+            payload={"operation": "list"},
+            context=admission_context,
+            authorized_plan=plan,
+        ))
+        if (
+            getattr(admission, "status", None) != "success"
+            or not isinstance(getattr(admission, "payload", None), dict)
+            or admission.payload.get("operation") != "list"
+            or admission.payload.get("items") != []
+        ):
+            raise PermissionError("file_explorer_kernel_denied")
+        evidence = await self._source.revalidate_owner_reference(
+            tenant_id=context.tenant_id, user_id=context.user_id,
+            source_id=source_id, expected_revision=expected_revision,
+        )
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("source_id") != source_id
+            or evidence.get("revision") != expected_revision.lower()
+            or evidence.get("owner_scope_verified") is not True
+            or evidence.get("access_semantics")
+            != "owner_only_at_lookup_time_not_transferable_grant"
+        ):
+            raise PermissionError("file_explorer_revalidation_invalid")
+        logger.info("file_explorer_reference_revalidated", extra={
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id,
+            "user_id": context.user_id,
+            "source_id": source_id,
+            "status": "success",
+        })
+        return {
+            "source_id": source_id,
+            "revision": expected_revision.lower(),
+            "owner_scope_verified": True,
+            "access_semantics": "owner_only_at_lookup_time_not_transferable_grant",
+            "request_id": context.request_id,
+            "correlation_id": context.correlation_id,
+        }
+
+    async def list_owner_page(
+        self,
+        *,
+        context: ExtensionExecutionContext,
+        plan: AuthorizedExecutionPlan,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        self._authorize_owner(context=context, plan=plan)
+        if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
+            raise ValueError("file_explorer_page_limit_invalid")
+        if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= 768):
+            raise ValueError("file_explorer_cursor_invalid")
 
         page = await self._source.list_owner_sources_page(
             tenant_id=context.tenant_id,
