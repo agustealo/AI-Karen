@@ -99,8 +99,10 @@ CREATE TRIGGER writing_style_document_consent_revoke_only
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_document_consent_validate();
 
 -- Do not allow an owner to rewrite receipt identity, source revision, or purpose.
--- After revocation, the published profile and delegates are fenced in the same
--- transaction; the existing profile lifecycle remains authoritative.
+-- Revocation fences BOTH draft and published profiles in the same
+-- transaction. A draft with previously registered sample evidence must not
+-- remain publishable after its author's document consent is withdrawn.
+-- The canonical profile lifecycle blocks any transition out of 'revoked'.
 CREATE FUNCTION public.writing_style_document_consent_revoke_fence()
 RETURNS trigger LANGUAGE plpgsql AS $ws_document_consent_revoke$
 DECLARE
@@ -115,7 +117,7 @@ BEGIN
     WHERE p.tenant_id = NEW.tenant_id
       AND p.profile_id = NEW.profile_id
       AND p.owner_actor_id = NEW.owner_actor_id
-      AND p.state = 'published'
+      AND p.state IN ('draft', 'published')
     RETURNING p.publication_revision INTO active_revision;
 
     IF FOUND THEN
