@@ -589,16 +589,22 @@ class ChatRuntime:
             )
             conversation_id = ctx.require_conversation_id()
             try:
-                fallback = await build_runtime_fallback(
-                    runtime=self,
-                    request=request,
-                    failure=exc,
-                    correlation_id=ctx.correlation_id,
-                    conversation_id=conversation_id,
-                    start_time=start,
-                    decision=decision,
-                    authorized_plan=plan,
-                    meter=meter,
+                # Revocation is a hard authorization failure, never a reason
+                # to invoke a different model or persist a fallback answer.
+                fallback = (
+                    None
+                    if str(exc) == "memory_source_revoked_or_unverifiable"
+                    else await build_runtime_fallback(
+                        runtime=self,
+                        request=request,
+                        failure=exc,
+                        correlation_id=ctx.correlation_id,
+                        conversation_id=conversation_id,
+                        start_time=start,
+                        decision=decision,
+                        authorized_plan=plan,
+                        meter=meter,
+                    )
                 )
             except asyncio.CancelledError:
                 await self._observe_request_cancellation(
@@ -791,6 +797,34 @@ class ChatRuntime:
                         "actual_model": provider_meta.get("actual_model"),
                         "response_source": provider_meta.get("response_source"),
                     },
+                ),
+            )
+
+        # Finality fence: a source withdrawn after generation must not
+        # become a successful memory write or transcript receipt.
+        try:
+            await ChatRuntime._authorize_selected_memory_before_generation(
+                request, decision
+            )
+        except RuntimeError as exc:
+            if str(exc) != "memory_source_revoked_or_unverifiable":
+                raise
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                error_type="MemorySourceRevoked",
+                metadata={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    mode="emergency",
+                    degraded_mode=True,
+                    degradation_reason="memory_source_revoked_or_unverifiable",
+                    extra={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
                 ),
             )
 
@@ -1256,6 +1290,12 @@ class ChatRuntime:
                                 time.perf_counter() - ingress_started
                             ) * 1000.0
                 if chunk.type == "content":
+                    # The outer stream owns all public content from direct,
+                    # reasoning, graph and provider stream paths. Check before
+                    # each publication, not only when the provider queues it.
+                    await ChatRuntime._authorize_selected_memory_before_generation(
+                        request, decision
+                    )
                     if chunk.content and first_content_latency_ms is None:
                         first_content_latency_ms = (
                             time.perf_counter() - ingress_started
@@ -1323,7 +1363,10 @@ class ChatRuntime:
             try:
                 # Fallback can replace an empty stream, never content already
                 # delivered to the client by a different provider/model.
-                if _stream_fallback_allowed(streamed_text):
+                if (
+                    _stream_fallback_allowed(streamed_text)
+                    and str(exc) != "memory_source_revoked_or_unverifiable"
+                ):
                     fallback = await build_runtime_fallback(
                         runtime=self,
                         request=request,
@@ -1356,7 +1399,10 @@ class ChatRuntime:
                     metadata={"error_code": "CHAT_STREAM_FALLBACK_FAILED"},
                 )
 
-            if fallback is not None and fallback.answer and _stream_fallback_allowed(streamed_text):
+            if (fallback is not None and fallback.answer
+                and _stream_fallback_allowed(streamed_text)
+                and str(exc) != "memory_source_revoked_or_unverifiable"
+            ):
                 # A partial primary answer has already reached the client.
                 # Never append fallback text and attribute their mixture to one model.
                 fallback_meta = fallback.metadata.to_dict()
@@ -1443,6 +1489,34 @@ class ChatRuntime:
                         request_id=request_id, conversation_id=conversation_id,
                     )
                     raise
+                sequence += 1
+
+        # Recheck after the last published token and before durable effects.
+        # Error handling stays on this stream: do not promote a revoked output.
+        if generation_error is None:
+            try:
+                await ChatRuntime._authorize_selected_memory_before_generation(
+                    request, decision
+                )
+            except RuntimeError as exc:
+                if str(exc) != "memory_source_revoked_or_unverifiable":
+                    raise
+                generation_error = exc
+                provider_meta["generation_error"] = True
+                provider_meta["degraded_mode"] = True
+                provider_meta["degradation_reason"] = "memory_source_revoked_or_unverifiable"
+                yield self._enrich_chunk(
+                    ChatStreamChunk(
+                        type=ChatStreamEventType.ERROR,
+                        content="The response could not be authorized.",
+                        correlation_id=ctx.correlation_id,
+                        metadata={
+                            "error_code": "CHAT_MEMORY_SOURCE_REVOKED",
+                            "error_type": "MemorySourceRevoked",
+                        },
+                    ),
+                    sequence, request_id, response_id, conversation_id,
+                )
                 sequence += 1
 
         # A stream that emitted ERROR is failed even if partial text arrived.
@@ -4563,6 +4637,12 @@ class ChatRuntime:
         )
 
         result = await gateway.generate(task)
+
+        # A provider can outlive its pre-dispatch permission snapshot.
+        # Revalidate after generation before returning a successful answer.
+        await ChatRuntime._authorize_selected_memory_before_generation(
+            request, decision
+        )
 
         if not await meter.check_duration():
             raise RuntimeError("Execution budget exhausted: max_duration_ms")
