@@ -529,7 +529,7 @@ class ApprovalService:
             user_id=scope.author_actor_id,
             conversation_id=None,
             request_fingerprint=scope.fingerprint(),
-            policy_decision_id=None,
+            policy_decision_id=decision.decision_id,
             intent="writing_style.document_consent.issue",
             risk_level="high",
             reason_codes=["explicit_document_author_confirmation_required"],
