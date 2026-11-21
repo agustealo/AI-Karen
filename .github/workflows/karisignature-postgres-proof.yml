@@ -12,6 +12,7 @@ on:
       - "supabase/migrations/*writing_style*.sql"
       - "tests/integration/test_writing_style_identity_postgres.py"
       - "tests/integration/test_writing_style_sample_postgres.py"
+      - "tests/integration/test_writing_style_document_consent_postgres.py"
       - "tests/extensions/test_writing_style_source_consent.py"
       - "tests/core/runtime/test_karisignature_contract.py"
       - ".github/workflows/karisignature-postgres-proof.yml"
@@ -26,6 +27,7 @@ on:
       - "supabase/migrations/*writing_style*.sql"
       - "tests/integration/test_writing_style_identity_postgres.py"
       - "tests/integration/test_writing_style_sample_postgres.py"
+      - "tests/integration/test_writing_style_document_consent_postgres.py"
       - "tests/extensions/test_writing_style_source_consent.py"
       - "tests/core/runtime/test_karisignature_contract.py"
       - ".github/workflows/karisignature-postgres-proof.yml"
@@ -86,11 +88,11 @@ jobs:
           PY
       - name: Verify compiled WS-01 and WS-02 source
         run: |
-          python -m py_compile             src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py             src/ai_karen_engine/services/writing_style_profile_repository.py             src/ai_karen_engine/services/writing_style_sample_provenance.py             src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py             tests/services/test_karisignature_persisted_sample_authority.py             tests/extensions/test_writing_style_source_consent.py             tests/integration/test_writing_style_sample_postgres.py             tests/core/runtime/test_karisignature_contract.py             tests/integration/test_writing_style_identity_postgres.py
+          python -m py_compile             src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py             src/ai_karen_engine/services/writing_style_profile_repository.py             src/ai_karen_engine/services/writing_style_sample_provenance.py             src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py             tests/services/test_karisignature_persisted_sample_authority.py             tests/extensions/test_writing_style_source_consent.py             tests/integration/test_writing_style_sample_postgres.py             tests/core/runtime/test_karisignature_contract.py             tests/integration/test_writing_style_identity_postgres.py             tests/integration/test_writing_style_document_consent_postgres.py
       - name: Prove authenticated owner, purpose, revocation and immutable erasure on PostgreSQL
         run: |
           pytest tests/core/runtime/test_karisignature_contract.py tests/extensions/test_writing_style_source_consent.py tests/services/test_karisignature_persisted_sample_authority.py -q -rs
-          pytest tests/integration/test_writing_style_identity_postgres.py tests/integration/test_writing_style_sample_postgres.py -q -rs --junitxml=karisignature-postgres-junit.xml
+          pytest tests/integration/test_writing_style_identity_postgres.py tests/integration/test_writing_style_sample_postgres.py tests/integration/test_writing_style_document_consent_postgres.py -q -rs --junitxml=karisignature-postgres-junit.xml
       - name: Preserve PostgreSQL proof
         if: always()
         uses: actions/upload-artifact@v4
