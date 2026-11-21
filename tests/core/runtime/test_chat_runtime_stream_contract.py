@@ -2145,6 +2145,7 @@ async def test_revoked_memory_between_stream_deltas_stops_publication_and_persis
     plan = _make_plan()
     checks = 0
     memory_persist = AsyncMock()
+    generator_closed = False
 
     async def revoke_after_first_chunk(_request, _decision):
         nonlocal checks
@@ -2153,8 +2154,12 @@ async def test_revoked_memory_between_stream_deltas_stops_publication_and_persis
             raise RuntimeError("memory_source_revoked_or_unverifiable")
 
     async def fake_stream(*args, **kwargs):
-        for chunk in _fake_stream_chunks():
-            yield chunk
+        nonlocal generator_closed
+        try:
+            for chunk in _fake_stream_chunks():
+                yield chunk
+        finally:
+            generator_closed = True
 
     with patch.object(
         ChatRuntime,
@@ -2168,6 +2173,7 @@ async def test_revoked_memory_between_stream_deltas_stops_publication_and_persis
 
     published = [chunk.content for chunk in chunks if chunk.type == "content"]
     assert published == ["Hello"]
+    assert generator_closed is True
     assert any(chunk.type == "error" for chunk in chunks)
     assert not gateway.calls
     memory_persist.assert_not_awaited()
