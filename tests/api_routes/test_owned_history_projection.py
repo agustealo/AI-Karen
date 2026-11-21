@@ -79,6 +79,33 @@ def receipt():
     }
 
 
+@pytest.mark.parametrize("text_continuation", [False, True])
+def test_attested_legacy_code_source_is_never_replayed(text_continuation):
+    """A valid completed-run digest does not renew revocable source access."""
+    source = "print('private legacy source')"
+    code = {
+        "schema_version": 1,
+        "presentation_id": "legacy-code",
+        "component_type": "code.artifact",
+        "data": {"filename": "legacy.py", "language": "python", "code": source},
+        "evidence_ref": "historical-artifact",
+    }
+    original = saved([assistant({
+        **receipt(),
+        "verified_presentations_v1": [code],
+    })])
+    proof = attested(original)
+    if text_continuation:
+        restored = project_owned_history(
+            original, attestations=proof, text_continuation=True,
+        )
+        assert restored["replayEvents"] == []
+        assert source not in str(restored)
+    else:
+        with pytest.raises(UnreplayableHistory, match="invalid_persisted_presentation"):
+            project_owned_history(original, attestations=proof)
+
+
 def test_attested_saved_presentation_and_execution_receipt_replay_without_raw_metadata():
     messages = [
         Message(id="user-1", conversation_id=THREAD, tenant_id=TENANT,
