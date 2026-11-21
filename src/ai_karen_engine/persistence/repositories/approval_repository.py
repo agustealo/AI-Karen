@@ -285,7 +285,7 @@ class SqlApprovalRepository:
                 "AND request_payload -> 'document_consent_scope' = "
                 "CAST(:scope_record AS jsonb) "
                 "AND decision_reason='explicit_author_confirmation' "
-                "AND NULLIF(policy_decision_id, '') IS NOT NULL "
+                "AND policy_decision_id LIKE 'policy-document-consent-preflight-%' "
                 "AND decided_at IS NOT NULL "
                 "AND risk_level='high' "
                 "AND intent=:intent "
