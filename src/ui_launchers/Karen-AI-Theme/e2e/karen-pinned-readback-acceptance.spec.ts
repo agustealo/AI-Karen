@@ -126,22 +126,54 @@ test.describe("real authenticated saved-pin reference readback", () => {
       });
       return {
         status: response.status,
-        pins: response.ok
-          ? (await response.json() as { pins?: Array<{ pin_id: string }> }).pins
-          : null,
+        body: response.ok ? await response.json() as unknown : null,
       };
     });
     if (contents.status === 200) {
-      expect(Array.isArray(contents.pins)).toBe(true);
-      expect(contents.pins).not.toContainEqual(
+      const snapshot = contents.body as {
+        schema_version?: number;
+        read_only?: boolean;
+        pins?: Array<{
+          pin_id: string;
+          position: number;
+          revision: number;
+          source: { component_type: string };
+        }>;
+      };
+      expect(snapshot.schema_version).toBe(1);
+      expect(snapshot.read_only).toBe(true);
+      expect(Array.isArray(snapshot.pins)).toBe(true);
+      const pins = snapshot.pins!;
+      expect(pins).not.toContainEqual(
         expect.objectContaining({ pin_id: expectedPinId }),
       );
+      expect(new Set(pins.map(pin => pin.pin_id)).size).toBe(pins.length);
+      expect(new Set(pins.map(pin => pin.position)).size).toBe(pins.length);
+
+      if (pins.length === 0) {
+        await expect(dock.getByTestId("karen-pins-empty")).toBeVisible();
+        await expect(dock.getByTestId("karen-pins-authorized")).toHaveCount(0);
+      } else {
+        const authorized = dock.getByTestId("karen-pins-authorized");
+        await expect(authorized).toBeVisible();
+        const rows = authorized.locator("article");
+        await expect(rows).toHaveCount(pins.length);
+        const ordered = [...pins].sort((left, right) => left.position - right.position);
+        for (const [index, pin] of ordered.entries()) {
+          const row = rows.nth(index);
+          await expect(row).toContainText(pin.source.component_type.split(".").join(" · "));
+          await expect(row).toContainText(
+            `Saved reference ${pin.position + 1} · Revision ${pin.revision}`,
+          );
+        }
+        await expect(dock.getByTestId("karen-pins-empty")).toHaveCount(0);
+      }
+      await expect(dock.getByTestId("karen-pinning-not-available")).toHaveCount(0);
     } else {
       expect([401, 403, 404, 503]).toContain(contents.status);
       await expect(dock.getByTestId("karen-pinning-not-available")).toBeVisible();
+      await expect(dock.getByTestId("karen-pins-authorized")).toHaveCount(0);
     }
-    // The foreign API snapshot is authoritative. The dock may show the
-    // foreign user's own references, but cannot display the owner's pin.
     await expect(dock.getByTestId("karen-pins-loading")).toHaveCount(0);
   });
 });
