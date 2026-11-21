@@ -267,6 +267,7 @@ class PostgresDocumentStyleConsentIssuer:
                     author_actor_id=scope.author_actor_id,
                     fingerprint=scope.fingerprint(),
                     action="issue",
+                    scope_record=scope.to_record(),
                 )
                 if consumed is None:
                     return None
