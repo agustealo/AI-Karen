@@ -193,3 +193,47 @@ def test_untrusted_request_shapes_rejected(invalid):
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         ingress.ContentOwnerSourcesRequest.model_validate(invalid)
+
+
+@pytest.mark.asyncio
+async def test_application_composes_real_source_host_and_uses_verified_text(monkeypatch):
+    """Prove policy, repository, admission, and execution are connected."""
+    import hashlib
+
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    kernel = Kernel()
+    store = Store()
+    digest = hashlib.sha256(b"example").hexdigest()
+    monkeypatch.setattr(
+        database_factory,
+        "get_database_client",
+        lambda: SimpleNamespace(get_async_session=lambda: None),
+    )
+    monkeypatch.setattr(
+        repository_factory,
+        "RepositoryFactory",
+        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: store),
+    )
+    # Stored metadata and text must agree on their SHA-256 revision.
+    original_read = store.read_owner_active_code
+
+    async def read_verified(*args):
+        result = await original_read(*args)
+        result.data.sha256 = digest
+        return result
+
+    store.read_owner_active_code = read_verified
+    service = _service(kernel=kernel)
+    response = await PluginService.analyze_content_owner_sources(
+        service,
+        **_args(references=[{"source_id": FILE, "revision": digest}]),
+    )
+    assert response["operation"] == "analyze"
+    assert store.calls == [(FILE, TENANT, OWNER)]
+    assert len(kernel.admissions) == 1
+    assert len(kernel.executions) == 1
+    assert kernel.executions[0].payload["documents"] == [{
+        "id": FILE, "name": "notes.txt", "text": "example",
+    }]
