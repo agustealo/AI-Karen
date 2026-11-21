@@ -272,6 +272,32 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
                 row[1] == authority.verify_analysis.return_value.consent_expires_at
                 for row in capped
             )
+        # Direct SQL must not attach evidence after publication and thereby
+        # invalidate existing delegate grant consent without recapping grants.
+        with pytest.raises(Exception, match="requires a draft profile"):
+            async with TestClient().get_async_session() as session:
+                await WritingStyleProfileRepository._scope(
+                    session, str(tenant), str(owner)
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO public.writing_style_sample_evidence "
+                        "(tenant_id,profile_id,owner_actor_id,sample_id,source_type,"
+                        "source_id,source_author_id,consent_receipt_id,"
+                        "analysis_allowed,style_use_allowed,consent_expires_at) "
+                        "VALUES (CAST(:tenant AS uuid),CAST(:profile AS uuid),"
+                        "CAST(:owner AS uuid),CAST(:sample AS uuid),'document',"
+                        "CAST(:source AS uuid),CAST(:author AS uuid),"
+                        "CAST(:receipt AS uuid),true,true,"
+                        "clock_timestamp()+interval '10 seconds')"
+                    ),
+                    {
+                        "tenant": str(tenant), "profile": str(live_profile),
+                        "owner": str(owner), "sample": str(uuid.uuid4()),
+                        "source": str(uuid.uuid4()), "author": str(author),
+                        "receipt": str(uuid.uuid4()),
+                    },
+                )
         live_request = KariSignatureRequest(
             tenant_id=str(tenant), actor_id=str(delegate),
             profile_id=str(live_profile), purpose="draft_email",
