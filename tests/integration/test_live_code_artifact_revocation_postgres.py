@@ -207,3 +207,129 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
                 )
                 await session.commit()
         await engine.dispose()
+
+
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE") != "1",
+    reason="Requires explicit live Supabase Storage read-only acceptance opt-in",
+)
+async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() -> None:
+    """Read preseeded source bytes from real Storage without changing either service.
+
+    This is deliberately NOT a production RLS test. The platform's configured
+    credential may bypass Storage RLS; identity is always checked in the
+    canonical repository's PostgreSQL owner/tenant query.
+    """
+    import re
+
+    from ai_karen_engine.integrations.supabase_client import SupabasePlatformClient
+
+    if os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1":
+        pytest.fail("Live Storage acceptance requires disposable PostgreSQL opt-in")
+    if os.getenv("KAREN_TEST_SUPABASE_DISPOSABLE") != "1":
+        pytest.fail("Live Storage acceptance requires an explicitly disposable project")
+
+    project_ref = os.getenv("KAREN_TEST_SUPABASE_PROJECT_REF", "")
+    project_url = os.getenv("SUPABASE_PROJECT_URL", "")
+    if (
+        re.fullmatch(r"[a-z0-9]{20}", project_ref) is None
+        or project_url != f"https://{project_ref}.supabase.co"
+    ):
+        pytest.fail("Live Storage target must match the explicitly named test project")
+
+    dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
+    if not dsn:
+        pytest.fail("Missing disposable PostgreSQL connection URL")
+    parsed = _disposable_database_url(dsn)
+
+    def required_uuid(name: str) -> str:
+        raw = os.getenv(name, "")
+        try:
+            parsed_uuid = str(UUID(raw))
+        except (ValueError, TypeError, AttributeError):
+            pytest.fail(f"Invalid opt-in fixture identity: {name}")
+        if parsed_uuid != raw:
+            pytest.fail(f"Noncanonical opt-in fixture identity: {name}")
+        return parsed_uuid
+
+    tenant = required_uuid("KAREN_TEST_ARTIFACT_TENANT_ID")
+    owner = required_uuid("KAREN_TEST_ARTIFACT_OWNER_ID")
+    foreign_owner = required_uuid("KAREN_TEST_ARTIFACT_OTHER_USER_ID")
+    artifact = required_uuid("KAREN_TEST_LIVE_ARTIFACT_ID")
+    if len({tenant, owner, foreign_owner, artifact}) != 4:
+        pytest.fail("Live Storage proof requires distinct identities")
+
+    expected_sha = os.getenv("KAREN_TEST_LIVE_ARTIFACT_SHA256", "")
+    if re.fullmatch(r"[a-f0-9]{64}", expected_sha) is None:
+        pytest.fail("A canonical preseeded artifact SHA-256 is required")
+    if not any(
+        os.getenv(name)
+        for name in (
+            "SUPABASE_SECRET_KEY",
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "SUPABASE_PUBLISHABLE_KEY",
+            "SUPABASE_ANON_KEY",
+        )
+    ):
+        pytest.fail("Supabase test project credential is unavailable")
+
+    # No uploads, bucket creation, metadata writes or archive mutations.
+    # Confirm the fixture and expected digest before contacting Storage.
+    engine = create_async_engine(parsed, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    platform = SupabasePlatformClient()
+    try:
+        async with sessions() as session:
+            database_name = (
+                await session.execute(text("SELECT current_database()"))
+            ).scalar_one()
+            if database_name != "karen_code_artifact_test":
+                pytest.fail("Effective PostgreSQL database is not disposable")
+
+            record = (
+                await session.execute(
+                    text(
+                        "SELECT owner_user_id, tenant_id, name, storage_uri, "
+                        "sha256, deleted_at FROM files "
+                        "WHERE file_id = :artifact"
+                    ),
+                    {"artifact": artifact},
+                )
+            ).mappings().one_or_none()
+            if record is None:
+                pytest.fail("Expected preseeded artifact metadata is unavailable")
+            if (
+                str(record["tenant_id"]) != tenant
+                or str(record["owner_user_id"]) != owner
+                or record["deleted_at"] is not None
+                or record["sha256"] != expected_sha
+                or not isinstance(record["name"], str)
+                or record["storage_uri"] != (
+                    f"supabase://artifacts/{tenant}/{artifact}/{record['name']}"
+                )
+            ):
+                pytest.fail("Preseeded artifact metadata does not match test scope")
+
+        platform.initialize()
+        if platform.storage is None or platform.url != project_url:
+            pytest.fail("Canonical Supabase Storage client is unavailable")
+        store = SupabaseArtifactStore(sessions, platform)
+
+        foreign = await store.read_owner_active_code(artifact, tenant, foreign_owner)
+        wrong_tenant = await store.read_owner_active_code(
+            artifact, str(uuid4()), owner
+        )
+        assert not foreign.success and foreign.data is None
+        assert not wrong_tenant.success and wrong_tenant.data is None
+        assert foreign.error == wrong_tenant.error == "artifact_code_unavailable"
+
+        granted = await store.read_owner_active_code(artifact, tenant, owner)
+        assert granted.success and granted.data is not None
+        assert granted.data.sha256 == expected_sha
+        assert hashlib.sha256(granted.data.text.encode("utf-8")).hexdigest() == expected_sha
+        assert granted.data.artifact_id == artifact
+        assert granted.data.tenant_id == tenant
+        assert granted.data.user_id == owner
+    finally:
+        platform.reset()
+        await engine.dispose()
