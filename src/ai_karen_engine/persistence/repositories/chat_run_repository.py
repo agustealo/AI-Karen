@@ -15,6 +15,9 @@ from typing import Any, Optional
 
 from sqlalchemy import text
 
+from ai_karen_engine.core.runtime.presentation_contract import (
+    contains_revocable_code_artifact,
+)
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.config.runtime import get_runtime_settings
 
@@ -322,6 +325,16 @@ class SqlChatRunRepository:
             }
         ):
             raise ValueError("unsupported_chat_projection_custom_event")
+        # The coordinator sanitizes observed projections, but this repository
+        # is the final durable write boundary. Reuse the canonical detector to
+        # reject any source-bearing presentation from a future direct caller.
+        # A sanitized withheld marker is the only durable code-artifact proof.
+        if (
+            event_type == "CUSTOM"
+            and event.get("name") == "karen.presentation.v1"
+            and contains_revocable_code_artifact(event.get("value"))
+        ):
+            raise ValueError("chat_projection_revocable_code_not_durable")
         # A withheld presentation is a fixed source-free journal marker.
         # Reject any extra fields or caller-supplied payload under this name.
         if event_type == "CUSTOM" and event.get("name") == "karen.presentation.withheld.v1":
