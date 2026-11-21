@@ -12,7 +12,7 @@ import hashlib
 import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-from urllib.parse import urlparse
+from sqlalchemy.engine import make_url
 from uuid import UUID, uuid4
 
 import pytest
@@ -41,12 +41,20 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
     other_raw = os.getenv("KAREN_TEST_ARTIFACT_OTHER_USER_ID", "")
     if not dsn or not all((tenant_raw, owner_raw, other_raw)):
         pytest.fail("Explicit disposable database URL and seeded principals required")
-    parsed = urlparse(dsn)
+    # asyncpg accepts connection URL query arguments that can override the
+    # URL path's target database. Reject all connection-target overrides
+    # before creating an engine or issuing a single SQL command.
+    try:
+        parsed = make_url(dsn)
+    except (ValueError, TypeError):
+        pytest.fail("Invalid disposable PostgreSQL connection URL")
     if (
-        parsed.scheme not in ("postgresql", "postgresql+asyncpg")
-        or parsed.path != _TEST_DB_NAME
+        parsed.drivername not in ("postgresql", "postgresql+asyncpg")
+        or parsed.database != _TEST_DB_NAME.lstrip("/")
+        or not parsed.host
+        or parsed.query
     ):
-        pytest.fail("Refusing artifact proof outside /karen_code_artifact_test")
+        pytest.fail("Refusing artifact proof outside an unambiguous disposable database")
     tenant = str(UUID(tenant_raw))
     owner = str(UUID(owner_raw))
     foreign_owner = str(UUID(other_raw))
@@ -54,7 +62,7 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
         pytest.fail("Foreign owner fixture must differ from artifact owner")
 
     engine = create_async_engine(
-        dsn.replace("postgresql://", "postgresql+asyncpg://", 1),
+        parsed.set(drivername="postgresql+asyncpg"),
         pool_pre_ping=True,
     )
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -82,7 +90,7 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
                     "INSERT INTO files "
                     "(file_id, tenant_id, owner_user_id, name, mime_type, "
                     "bytes, storage_uri, sha256, metadata, created_at) "
-                    "VALUES (CAST(:file_id AS uuid), CAST(:tenant_id AS uuid), "
+                    "VALUES (:file_id, :tenant_id, "
                     "CAST(:owner_id AS uuid), :name, :mime_type, :size, "
                     ":storage_uri, :sha256, CAST(:metadata AS jsonb), NOW())"
                 ),
@@ -122,8 +130,8 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
             changed = await session.execute(
                 text(
                     "UPDATE files SET deleted_at = NOW() "
-                    "WHERE file_id = CAST(:file_id AS uuid) "
-                    "AND tenant_id = CAST(:tenant_id AS uuid) "
+                    "WHERE file_id = :file_id "
+                    "AND tenant_id = :tenant_id "
                     "AND owner_user_id = CAST(:owner_id AS uuid) "
                     "AND deleted_at IS NULL"
                 ),
@@ -147,8 +155,8 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
             async with sessions() as session:
                 await session.execute(
                     text(
-                        "DELETE FROM files WHERE file_id = CAST(:file_id AS uuid) "
-                        "AND tenant_id = CAST(:tenant_id AS uuid)"
+                        "DELETE FROM files WHERE file_id = :file_id "
+                        "AND tenant_id = :tenant_id"
                     ),
                     {"file_id": artifact, "tenant_id": tenant},
                 )
