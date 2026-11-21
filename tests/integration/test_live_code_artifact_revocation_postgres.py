@@ -333,3 +333,133 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
     finally:
         platform.reset()
         await engine.dispose()
+
+
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+    or os.getenv("KAREN_TEST_CODE_ARTIFACT_POSTGRES") != "1",
+    reason="Requires explicit disposable PostgreSQL artifact acceptance opt-in",
+)
+async def test_for_share_read_serializes_concurrent_archive_and_revokes_next_read() -> None:
+    """Exercise the canonical owner-read FOR SHARE/UPDATE conflict on real PG.
+
+    Two independent database connections prove that an archive update cannot
+    overtake an active owner source read. After commit, a fresh canonical
+    repository read refuses archived content without downloading object bytes.
+    """
+    from sqlalchemy.exc import DBAPIError
+
+    dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
+    tenant_raw = os.getenv("KAREN_TEST_ARTIFACT_TENANT_ID", "")
+    owner_raw = os.getenv("KAREN_TEST_ARTIFACT_OWNER_ID", "")
+    if not dsn or not tenant_raw or not owner_raw:
+        pytest.fail("Explicit disposable database and seeded owner required")
+    parsed = _disposable_database_url(dsn)
+    tenant = str(UUID(tenant_raw))
+    owner = str(UUID(owner_raw))
+
+    engine = create_async_engine(parsed, pool_pre_ping=True, pool_size=3)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    artifact = str(uuid4())
+    name = "concurrent_archive.py"
+    key = f"{tenant}/{artifact}/{name}"
+    digest = hashlib.sha256(_SOURCE).hexdigest()
+    bucket = MagicMock()
+    bucket.download.return_value = _SOURCE
+    platform = SimpleNamespace(
+        storage=SimpleNamespace(
+            from_=lambda bucket_name: bucket if bucket_name == "artifacts" else None
+        )
+    )
+    store = SupabaseArtifactStore(sessions, platform)
+    inserted = False
+
+    try:
+        async with sessions() as admin:
+            assert (
+                await admin.execute(text("SELECT current_database()"))
+            ).scalar_one() == "karen_code_artifact_test"
+            await admin.execute(
+                text(
+                    "INSERT INTO files "
+                    "(file_id, tenant_id, owner_user_id, name, mime_type, "
+                    "bytes, storage_uri, sha256, metadata, created_at) "
+                    "VALUES (:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
+                    ":name, :mime, :bytes, :uri, :digest, '{}'::jsonb, NOW())"
+                ),
+                {
+                    "id": artifact, "tenant": tenant, "owner": owner,
+                    "name": name, "mime": "text/x-python", "bytes": len(_SOURCE),
+                    "uri": f"supabase://artifacts/{key}", "digest": digest,
+                },
+            )
+            await admin.commit()
+            inserted = True
+
+        initial = await store.read_owner_active_code(artifact, tenant, owner)
+        assert initial.success and initial.data is not None
+        bucket.download.assert_called_once_with(key)
+
+        # Mirror the exact SQL lock and owner/active predicates used by
+        # SupabaseArtifactStore.read_owner_active_code. Hold the reader's
+        # transaction open while an independent writer attempts archive.
+        async with sessions() as reader:
+            selected = (
+                await reader.execute(
+                    text(
+                        "SELECT file_id FROM files WHERE file_id = :file_id "
+                        "AND tenant_id = :tenant_id "
+                        "AND owner_user_id = :user_id "
+                        "AND deleted_at IS NULL FOR SHARE"
+                    ),
+                    {
+                        "file_id": artifact,
+                        "tenant_id": tenant,
+                        "user_id": owner,
+                    },
+                )
+            ).scalar_one()
+            assert selected == artifact
+
+            async with sessions() as writer:
+                await writer.execute(text("SET LOCAL lock_timeout = '250ms'"))
+                with pytest.raises(DBAPIError) as blocked:
+                    await writer.execute(
+                        text(
+                            "UPDATE files SET deleted_at = NOW() "
+                            "WHERE file_id = :file_id AND tenant_id = :tenant_id "
+                            "AND deleted_at IS NULL"
+                        ),
+                        {"file_id": artifact, "tenant_id": tenant},
+                    )
+                assert "lock timeout" in str(blocked.value).lower()
+                await writer.rollback()
+
+            await reader.commit()
+
+        # Once the reader releases FOR SHARE, the archive is able to commit.
+        async with sessions() as writer:
+            changed = await writer.execute(
+                text(
+                    "UPDATE files SET deleted_at = NOW() "
+                    "WHERE file_id = :file_id AND tenant_id = :tenant_id "
+                    "AND deleted_at IS NULL"
+                ),
+                {"file_id": artifact, "tenant_id": tenant},
+            )
+            assert changed.rowcount == 1
+            await writer.commit()
+
+        revoked = await store.read_owner_active_code(artifact, tenant, owner)
+        assert not revoked.success and revoked.data is None
+        assert revoked.error == "artifact_code_unavailable"
+        assert bucket.download.call_count == 1
+    finally:
+        if inserted:
+            async with sessions() as admin:
+                await admin.execute(
+                    text("DELETE FROM files WHERE file_id = :file_id"),
+                    {"file_id": artifact},
+                )
+                await admin.commit()
+        await engine.dispose()
