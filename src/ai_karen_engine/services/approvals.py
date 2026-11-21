@@ -611,6 +611,17 @@ class ApprovalService:
             raise ApprovalStateError(
                 "Plugin lifecycle execution remains revision-fenced and unavailable"
             )
+        current = await self._repository.get(
+            approval_id,
+            tenant_id=request.context.tenant_id,
+            user_id=request.context.user_id,
+        )
+        if current is not None and str(current.get("intent") or "").startswith(
+            "writing_style.document_consent."
+        ):
+            raise ApprovalScopeError(
+                "Document consent requires atomic source-scoped consumption"
+            )
         record = await self._repository.consume_approved(
             approval_id,
             tenant_id=request.context.tenant_id,
