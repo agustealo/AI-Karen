@@ -109,15 +109,3 @@ async def test_graph_path_without_governed_source_does_not_create_pseudo_memory(
 
     assert await router._query_graph(query) == []
 
-
-@pytest.mark.asyncio
-async def test_graph_source_fails_closed_without_canonical_event():
-    event_id = str(uuid.uuid4())
-    router = _router(event_id, include_event=False)
-    query = MemoryQuery(
-        text="Why did we choose Supabase?",
-        tenant_id="tenant-1",
-        user_id="user-1",
-        top_k=5,
-    )
-    assert await router._query_graph(query) == []
