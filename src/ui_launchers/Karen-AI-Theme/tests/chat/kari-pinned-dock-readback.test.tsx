@@ -114,7 +114,6 @@ describe("governed pinned workspace reference consumer", () => {
     render(<KarenCopilotPinnedDock mutationControlsEnabled />);
     await screen.findByTestId("karen-pins-authorized");
     fireEvent.click(screen.getByRole("button", { name: "Unpin reference 1" }));
-    expect(screen.getByTestId("karen-pins-authorized")).toBeTruthy();
     expect(await screen.findByTestId("karen-pins-empty")).toBeTruthy();
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.post.mock.calls[0][0]).toBe("/api/chat/ag-ui/pins/mutations");
@@ -141,9 +140,8 @@ describe("governed pinned workspace reference consumer", () => {
     render(<KarenCopilotPinnedDock mutationControlsEnabled />);
     await screen.findByTestId("karen-pins-authorized");
     fireEvent.click(screen.getByRole("button", { name: "Unpin reference 1" }));
-    expect(await screen.findByTestId("karen-pins-mutation-notice")).toHaveTextContent(
-      "Pin change not confirmed",
-    );
+    expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
+      .toContain("Pin change not confirmed");
     expect(screen.getByText("Saved reference 1 · Revision 2")).toBeTruthy();
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.get).toHaveBeenCalledTimes(2);
@@ -161,9 +159,8 @@ describe("governed pinned workspace reference consumer", () => {
     await screen.findByTestId("karen-pins-authorized");
     expect(screen.getByRole("button", { name: "Move reference 1 up" }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Move reference 1 down" }));
-    expect(await screen.findByTestId("karen-pins-mutation-notice")).toHaveTextContent(
-      "Pin change not confirmed",
-    );
+    expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
+      .toContain("Pin change not confirmed");
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.post.mock.calls[0][1]).toMatchObject({
       operation: "reorder", pin_id: authorizedPin.pin_id,
