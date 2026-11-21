@@ -494,3 +494,101 @@ async def test_stored_document_confirmation_denies_approval_replay(
             record["approval_id"], request=object(), confirmed=True,
         )
     repo.decide.assert_not_awaited()
+
+
+async def test_receipt_endpoint_uses_durable_approved_scope_only(monkeypatch):
+    from ai_karen_engine.core.runtime import composition
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    policy = RuntimePolicyEnforcer()
+    monkeypatch.setattr(
+        composition, "get_runtime_composition",
+        lambda: SimpleNamespace(runtime_policy=policy),
+    )
+    record = approval(scope, status="approved")
+    repo = SimpleNamespace(get=AsyncMock(return_value=record))
+    receipt_id = str(uuid.uuid4())
+    issuer = SimpleNamespace(
+        issue_with_approved_scope=AsyncMock(return_value=receipt_id),
+    )
+    construction = MagicMock(return_value=issuer)
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
+    )
+    request = object()
+    result = await service(repo).issue_stored_document_consent(
+        record["approval_id"], request=request, correlation_id="verified",
+    )
+    assert result == receipt_id
+    assert construction.call_args.kwargs["issuance_policy"]._enforcer is policy
+    issuer.issue_with_approved_scope.assert_awaited_once_with(
+        request=request,
+        scope=scope,
+        approval_id=record["approval_id"],
+        correlation_id="verified",
+    )
+
+
+@pytest.mark.parametrize("status", ["pending", "approved"])
+async def test_receipt_endpoint_cannot_claim_unissued_consent(
+    monkeypatch, status,
+):
+    from ai_karen_engine.core.runtime import composition
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    policy = RuntimePolicyEnforcer()
+    monkeypatch.setattr(
+        composition, "get_runtime_composition",
+        lambda: SimpleNamespace(runtime_policy=policy),
+    )
+    record = approval(scope, status=status)
+    repo = SimpleNamespace(get=AsyncMock(return_value=record))
+    issuer = SimpleNamespace(
+        issue_with_approved_scope=AsyncMock(return_value=None),
+    )
+    construction = MagicMock(return_value=issuer)
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
+    )
+    with pytest.raises(ApprovalStateError):
+        await service(repo).issue_stored_document_consent(
+            record["approval_id"], request=object(), correlation_id="not-issued",
+        )
+    if status == "pending":
+        construction.assert_not_called()
+    else:
+        issuer.issue_with_approved_scope.assert_awaited_once()
+
+
+async def test_confirmed_author_approval_does_not_issue_without_separate_request(
+    monkeypatch,
+):
+    from ai_karen_engine.services import (
+        postgres_document_style_consent_issuer as issuer_module,
+    )
+
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope)
+    approved = {**record, "status": "approved"}
+    repo = SimpleNamespace(
+        get=AsyncMock(return_value=record),
+        decide=AsyncMock(return_value=approved),
+    )
+    construction = MagicMock()
+    monkeypatch.setattr(
+        issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
+    )
+    result = await service(repo).confirm_stored_document_consent(
+        record["approval_id"], request=object(), confirmed=True,
+    )
+    assert result["status"] == "approved"
+    construction.assert_not_called()
