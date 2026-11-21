@@ -143,6 +143,35 @@ class DocumentAuthorConsentReceipt(BaseModel):
     status: str
 
 
+@router.get(
+    "/document-consent/{approval_id}/receipt",
+    response_model=DocumentAuthorConsentReceipt,
+)
+async def recover_document_author_consent_receipt(
+    approval_id: UUID,
+    request: Request,
+):
+    """Recover a previously issued receipt using current PostgreSQL evidence."""
+    try:
+        receipt = await get_approval_service().recover_stored_document_consent_receipt(
+            str(approval_id), request=request,
+        )
+        if receipt is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Current document consent receipt not found",
+            )
+        return DocumentAuthorConsentReceipt(
+            approval_id=str(approval_id),
+            receipt_id=UUID(receipt),
+            status="issued",
+        )
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Document approval not found") from exc
+    except (ApprovalScopeError, PermissionError) as exc:
+        raise HTTPException(status_code=403, detail="Document receipt unavailable") from exc
+
+
 @router.post(
     "/document-consent/{approval_id}/issue",
     response_model=DocumentAuthorConsentReceipt,
