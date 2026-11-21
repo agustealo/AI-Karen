@@ -615,6 +615,10 @@ class ApprovalService:
             or current.get("status") != "pending"
             or current.get("intent") != "writing_style.document_consent.issue"
             or current.get("request_fingerprint") != scope.fingerprint()
+            or not isinstance(current.get("policy_decision_id"), str)
+            or not current["policy_decision_id"].startswith(
+                "policy-document-consent-preflight-"
+            )
             or current.get("request_payload", {}).get(
                 "document_consent_scope"
             ) != scope.to_record()
