@@ -62,8 +62,6 @@ describe('first-party document author confirmation', () => {
     expect(screen.getByText(/Verified receipt ID/)).toBeTruthy();
     expect(api.post).toHaveBeenCalledWith(
       '/api/approvals/document-consent/' + approvalId + '/issue',
-      undefined,
-      {},
     );
     expect(screen.queryByRole('button', { name: 'Confirm author consent' })).toBeNull();
   });
