@@ -228,6 +228,25 @@ async def test_first_party_author_consent_postgres() -> None:
         assert permission.consent_receipt_id == issued
         assert permission.style_use_allowed is True
 
+        # A once-issued receipt is not authorization to use altered or
+        # archived bytes. Exercise the real SQL verifier, not a mocked row.
+        await raw.execute(
+            "UPDATE public.files SET sha256=$1 WHERE file_id=$2",
+            "b" * 64, str(artifact),
+        )
+        assert await issuer.verify_current(**scope) is None
+        await raw.execute(
+            "UPDATE public.files SET sha256=$1, deleted_at=clock_timestamp() "
+            "WHERE file_id=$2",
+            digest, str(artifact),
+        )
+        assert await issuer.verify_current(**scope) is None
+        await raw.execute(
+            "UPDATE public.files SET deleted_at=NULL WHERE file_id=$1",
+            str(artifact),
+        )
+        assert await issuer.verify_current(**scope) is not None
+
         with pytest.raises(asyncpg.PostgresError):
             await scoped(
                 owner, tenant,
