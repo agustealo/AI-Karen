@@ -236,6 +236,52 @@ async def test_first_party_author_consent_postgres() -> None:
             action="issue", scope_record=approval_payload["document_consent_scope"],
         )
 
+        # Neither a copied approved status nor an altered durable scope
+        # can act as evidence of a deliberate author confirmation.
+        for update, args in (
+            (
+                "UPDATE public.runtime_approval_requests "
+                "SET decided_at=NULL WHERE approval_id=$1",
+                (approval_id,),
+            ),
+            (
+                "UPDATE public.runtime_approval_requests "
+                "SET request_payload='{}'::jsonb WHERE approval_id=$1",
+                (approval_id,),
+            ),
+        ):
+            if "decided_at" in update:
+                await raw.execute(update, *args)
+            else:
+                await raw.execute(
+                    "UPDATE public.runtime_approval_requests "
+                    "SET decided_at=clock_timestamp() WHERE approval_id=$1",
+                    approval_id,
+                )
+                await raw.execute(update, *args)
+            async with sessions() as test_session:
+                async with test_session.begin():
+                    await test_session.execute(
+                        text(f'SET LOCAL ROLE "{role}"')
+                    )
+                    await test_session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        {"tenant": str(tenant)},
+                    )
+                    assert await SqlApprovalRepository.consume_document_consent_in_session(
+                        test_session, **consume_args
+                    ) is None
+            assert await raw.fetchval(
+                "SELECT status FROM public.runtime_approval_requests "
+                "WHERE approval_id=$1", approval_id,
+            ) == "approved"
+        await raw.execute(
+            "UPDATE public.runtime_approval_requests "
+            "SET request_payload=CAST($1 AS jsonb), "
+            "decided_at=clock_timestamp() WHERE approval_id=$2",
+            json.dumps(approval_payload), approval_id,
+        )
+
         # Mismatched author is never permitted to consume the receipt.
         async with sessions() as test_session:
             async with test_session.begin():
