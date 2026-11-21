@@ -4860,12 +4860,9 @@ class ChatRuntime:
         )
 
         ctx = request.context
-        memory_items = []
-        if request.metadata:
-            memory_items = (
-                (request.metadata or {}).get("memory_context", {}).get("recall") or []
-            )
-        recall_items = memory_items[: decision.memory_top_k]
+        recall_items = self._selected_memory_for_generation(
+            request, decision
+        )[: decision.memory_top_k]
         continuity_items = (
             (request.metadata or {})
             .get("proactive_continuity", {})
@@ -5119,6 +5116,57 @@ class ChatRuntime:
         )
         return messages
 
+    @staticmethod
+    def _selected_memory_for_generation(
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+    ) -> List[Dict[str, Any]]:
+        """Use only the current CORTEX resolution, never request metadata.
+
+        RuntimeEvidenceResolver receives the NeuroRecall-selected source set.
+        The context is a snapshot for this turn; this adapter cannot grant
+        fresh source permission or extend a previously selected snapshot.
+        """
+        from ai_karen_engine.core.context.contracts import EvidenceSource
+
+        if not decision.memory_recall_required:
+            return []
+        resolved = decision.cognitive_context
+        ctx = request.context
+        if (
+            resolved is None
+            or resolved.tenant_id != ctx.tenant_id
+            or resolved.user_id != ctx.user_id
+            or EvidenceSource.MEMORY.value not in resolved.authorized_sources
+            or EvidenceSource.MEMORY.value in resolved.denied_sources
+            or EvidenceSource.MEMORY.value in resolved.unresolved_sources
+        ):
+            return []
+
+        items: List[Dict[str, Any]] = []
+        for evidence in resolved.evidence:
+            if (
+                evidence.source is not EvidenceSource.MEMORY
+                or evidence.scope is None
+                or evidence.scope.tenant_id != ctx.tenant_id
+                or evidence.scope.user_id != ctx.user_id
+            ):
+                continue
+            observed = evidence.temporal.observed_at
+            items.append(
+                {
+                    "id": evidence.evidence_id,
+                    "content": evidence.content,
+                    "timestamp": observed.timestamp() if observed else None,
+                    "relevance": evidence.relevance,
+                    "confidence": evidence.confidence,
+                    "source_ref": evidence.source_ref,
+                }
+            )
+            if len(items) >= decision.memory_top_k:
+                break
+        return items
+
     async def _assemble_prompt_with_telemetry(
         self,
         request: ChatExecutionRequest,
@@ -5133,19 +5181,15 @@ class ChatRuntime:
             get_prompt_runtime_service,
         )
 
-        recall_items = (
-            (memory_context or {}).get("recall", []) if memory_context else []
-        )
+        # Model-visible memories must originate from the resolved, scoped
+        # CognitiveContext. Request metadata and legacy memory_context inputs
+        # are presentation/telemetry copies, never evidence authority.
+        recall_items = self._selected_memory_for_generation(request, decision)
         continuity_items = (
             (request.metadata or {})
             .get("proactive_continuity", {})
             .get("candidates", [])
         )
-        if not recall_items and decision.memory_recall_required:
-            recall_items = (
-                (request.metadata or {}).get("memory_context", {}).get("recall") or []
-            )
-
         # Reuse the exact snapshot that governed CORTEX evidence resolution.
         # Never load a second active persona after a concurrent user switch.
         snapshot = await ChatRuntime._freeze_persona_snapshot(request)
