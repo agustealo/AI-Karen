@@ -8,7 +8,7 @@ from typing import Any
 _REDACTION_PATTERNS = [
     # Signed HTTP URLs carry bearer tokens in their query strings.
     # Redact short as well as long tokens, including percent-encoded values.
-    (re.compile(r"(?i)([?&]token=)[^&#\\s\\\"']+"), r"\\1[REDACTED]"),
+    (re.compile(r"(?i)([?&]token=)[^&#\s\"']+"), r"\1[REDACTED]"),
     # JWT (most specific)
     (re.compile(r"(?i)eyJ[a-z0-9_-]*\.eyJ[a-z0-9_-]*\.[a-z0-9_-]*"), "[JWT_REDACTED]"),
     # API Keys & Tokens with labels
