@@ -76,3 +76,62 @@ required fixture is absent or any gate is missing, record the status as
 **blocked/unverified**. Keep File Explorer and Content Intelligence in
 `free_plugins/RELEASE_ELIGIBILITY.md` as **Not shipped**. Do not create release
 mirror directories until signed-in acceptance and source parity are verified.
+
+## KCE-FREE-05: Read-only two-principal denial acceptance
+
+The protected `content-intelligence-denial` scenario adds a genuine,
+read-only browser proof. It requires two **distinct** sanitized authenticated
+accounts with working File Explorer and Content Intelligence permissions,
+plus distinct real `KAREN_CONTENT_INTELLIGENCE_SOURCE_ID` and
+`KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID` artifacts belonging to
+respective owners. Store the
+second account in GitHub environment secrets `KAREN_UX_ISOLATION_EMAIL`
+and `KAREN_UX_ISOLATION_PASSWORD`. No credentials are logged or uploaded.
+
+The test observes both owners' real inventories and SHA-256 evidence and
+requires successful Content Intelligence analysis for each owner before testing
+denials. Only the exact-host Vercel deployment bypass cookie is copied to the
+second isolated browser context, never the first user's application session.
+An analysis
+request using a forged digest must return HTTP 403. A separate browser context
+then signs in as the other account, independently proves that its File Explorer
+inventory is accessible, and checks that neither its inventory nor an attempted
+analysis can reveal the first owner's artifact. The latter must return HTTP
+403. This is **not** a substitute for a verified revoked/deleted source test,
+which still requires real PostgreSQL/Storage evidence of revocation.
+
+Run this scenario through the existing protected GitHub Actions workflow on
+an approved immutable `main` deployment, with the exact current source SHA.
+No route mocks or synthetic credentials qualify. An unavailable acceptance
+fixture is an incomplete release gate, not a passing test.
+
+## KCE-FREE-06: Revoked owner artifact, read-only acceptance
+
+The existing protected browser workflow includes the additional
+`content-intelligence-revocation` scenario. It uses one sanitized owner
+account and two separate artifacts: a valid currently active text source and
+an **independently attested** previously active, now deleted/archived source.
+The test first establishes successful Content Intelligence admission and
+analysis of the active source, then confirms that the retired source does not
+appear on the current owner-inventory page and receives HTTP 403 when its
+old revision is submitted. It does not mutate source records or storage.
+
+The approved acceptance environment must provide
+`KAREN_CONTENT_INTELLIGENCE_SOURCE_ID`,
+`KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID` and
+`KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION`. They must refer to distinct
+owner-controlled artifacts. Missing configuration fails the scenario.
+
+**Do not interpret 403 alone as proof of actual revocation.** Before a live
+run can count toward release approval, an authorized reviewer must use
+**real PostgreSQL/Storage** evidence to independently establish that the
+retired artifact belonged to the same user/tenant, was formerly eligible,
+and is now revoked/deleted or archived. Record a sanitized state transition
+receipt and actual workflow run URL, excluding raw file contents, credentials
+and private storage keys. An unknown source identifier can also yield 403,
+so an unverified fixture does not satisfy this gate.
+
+The source implementation and protected scenario may be merged without
+declaring consumer acceptance passed. File Explorer and Content Intelligence
+remain **Not shipped** until real results, independent revocation proof and
+release-mirror parity are all recorded and approved.

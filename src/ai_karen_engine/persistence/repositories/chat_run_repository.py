@@ -332,7 +332,7 @@ class SqlChatRunRepository:
         if (
             event_type == "CUSTOM"
             and event.get("name") == "karen.presentation.v1"
-            and contains_revocable_code_artifact(event.get("value"))
+            and contains_revocable_code_artifact(event)
         ):
             raise ValueError("chat_projection_revocable_code_not_durable")
         # A withheld presentation is a fixed source-free journal marker.

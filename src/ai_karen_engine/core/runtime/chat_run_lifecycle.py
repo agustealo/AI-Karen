@@ -114,7 +114,7 @@ class ChatRunCoordinator:
             isinstance(event, dict)
             and event.get("type") == "CUSTOM"
             and event.get("name") == "karen.presentation.v1"
-            and contains_revocable_code_artifact(event.get("value"))
+            and contains_revocable_code_artifact(event)
         ):
             return {
                 "type": "CUSTOM",

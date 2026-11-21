@@ -1013,6 +1013,13 @@ completion, content-size or presentation validation to silence the UI.
 - This reuses the single `contains_revocable_code_artifact` predicate from `presentation_contract.py`, keeps the coordinator as the projection/scrub owner, and preserves standard safe presentations plus exact marker validation, tenant/user RLS, lease fences, sequence and terminal truth. Regression tests cover direct, nested and composite code, zero SQL on refusal, and a safe non-code presentation append.
 - No new provider, runtime, store, helper, route, or consumer replay authority. Source-only validation is not proof of authenticated live Stop or backend deployment; the separately protected browser acceptance remains deferred.
 
+
+## CK-GEN-01D5E: Legacy full-envelope source-safety invariant
+
+- **KCON-770 readback evidence (CK-GEN-01D5E, SOURCE_CANDIDATE):** The established `ChatRunCoordinator.read_observed_events` remains the owner of authenticated legacy AG-UI readback, with the PostgreSQL repository providing scoped row/event evidence. The narrow audit found no alternate consumer-facing read owner; it did identify an old-envelope risk when a nested `code.artifact` sits outside a `karen.presentation.v1` event's `value` member.
+- Reuse the same `contains_revocable_code_artifact` predicate against the **entire event**, both in `ChatRunCoordinator._journal_safe_event` and in the final `SqlChatRunRepository.append_projected_event` durable write fence. No new scrubber, API route, store, registry, or replay service is introduced.
+- Regression proofs cover rejecting the malformed historical event before SQL on direct writes; transforming legacy readback into an exact source-free `karen.presentation.withheld.v1` marker; maintaining event sequence, cursor, owner/tenant query, terminal cancellation truth and non-code presentation compatibility. These are source-level proofs, **not** authenticated live Stop or deployment evidence. External acceptance remains deferred.
+
 ## KCON-770 / KIS-GRAPH-01C2Q: Model-visible memory context authority (2026-11-21)
 
 - **SOURCE HARDENING CANDIDATE, NOT consumer certified.** Audit of `ChatRuntime._assemble_prompt_with_telemetry` and `_run_reasoning` found that legacy `request.metadata.memory_context.recall` could be promoted to model-visible prompt/reasoning evidence without proving its match to scoped CORTEX-selected `CognitiveContext`. The canonical runtime now projects memory solely from resolved `decision.cognitive_context.evidence`, requiring authorized and resolved memory source, exact tenant/user scope, per-evidence scope and positive `memory_top_k`. Request metadata stays telemetry/compatibility data, not memory permission.
