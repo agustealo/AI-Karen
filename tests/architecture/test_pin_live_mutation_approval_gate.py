@@ -99,3 +99,28 @@ def test_live_disposable_pin_trial_proves_durable_session_revocation():
     assert 'console.log(token)' not in trial
     assert 'console.log(refreshToken)' not in trial
     assert 'page.route(' not in trial
+
+
+def test_lost_response_acceptance_observes_real_commit_without_post_retry():
+    """Do not replace an unknown mutation outcome with a simulated success."""
+    trial = SPEC.read_text(encoding="utf-8").split('test("KPIN-MUTATION-LIVE:', 1)[1]
+    interruption = trial.split("// KUI-002D3R:", 1)[1].split("// Revoke the same real", 1)[0]
+    assert 'page.context().newCDPSession(page)' in interruption
+    assert 'cdp.on("Fetch.requestPaused"' in interruption
+    assert 'event.responseStatusCode' in interruption
+    assert 'cdp.send("Fetch.failRequest"' in interruption
+    assert 'errorReason: "Aborted"' in interruption
+    assert 'requestStage: "Response"' in interruption
+    assert 'await window.fetch("/api/chat/ag-ui/pins/mutations"' in interruption
+    assert "expect(transportInterrupted).toBe(true)" in interruption
+    assert "expect(pausedCount" in interruption
+    assert ".toBe(1)" in interruption
+    assert "expect(backendResponseStatus" in interruption
+    assert ".toBe(200)" in interruption
+    assert "expect(recoveredPin?.revision).toBeGreaterThan(postRacePin.revision)" in interruption
+    assert 'await livePinRequest(page, "GET", "/api/chat/ag-ui/pins")' in interruption
+    assert 'await page.reload()' in interruption
+    assert 'route.fulfill(' not in interruption
+    assert 'page.route(' not in interruption
+    assert 'replay' not in interruption.lower()
+    assert 'await livePinRequest(page, "POST"' not in interruption
