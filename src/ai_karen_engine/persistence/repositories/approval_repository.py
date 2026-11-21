@@ -241,6 +241,7 @@ class SqlApprovalRepository:
         author_actor_id: str,
         fingerprint: str,
         action: str,
+        scope_record: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
         """One-shot, scope-bound consume inside the caller's SQL transaction.
 
@@ -250,7 +251,11 @@ class SqlApprovalRepository:
         Its caller MUST commit the source-bound consent INSERT in the same
         transaction; an INSERT failure must roll back this consumption.
         """
-        if action not in {"issue", "revoke"}:
+        if (
+            action not in {"issue", "revoke"}
+            or not isinstance(scope_record, dict)
+            or not scope_record
+        ):
             return None
         try:
             approval = str(uuid.UUID(approval_id))
@@ -277,6 +282,10 @@ class SqlApprovalRepository:
                 "AND user_id=CAST(:actor AS uuid) "
                 "AND decided_by=CAST(:actor AS uuid) "
                 "AND request_fingerprint=:fingerprint "
+                "AND request_payload -> 'document_consent_scope' = "
+                "CAST(:scope_record AS jsonb) "
+                "AND decision_reason='explicit_author_confirmation' "
+                "AND risk_level='high' "
                 "AND intent=:intent "
                 "AND status='approved' "
                 "AND expires_at>clock_timestamp() "
@@ -285,6 +294,7 @@ class SqlApprovalRepository:
             {
                 "approval": approval, "tenant": tenant, "actor": actor,
                 "fingerprint": fingerprint,
+                "scope_record": json.dumps(scope_record, sort_keys=True),
                 "intent": "writing_style.document_consent." + action,
             },
         )
