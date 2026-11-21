@@ -8,7 +8,10 @@ from ai_karen_engine.services.knowledge.index_hub import (
     KnowledgeResult,
     Team,
 )
-from ai_karen_engine.services.knowledge.knowledge_graph_client import KnowledgeGraphClient
+from ai_karen_engine.services.knowledge.knowledge_graph_client import (
+    KnowledgeGraphClient,
+    KnowledgeGraphUnavailableError,
+)
 from ai_karen_engine.services.knowledge.organizational_hierarchy import (
     IntentType,
     OrganizationalHierarchy,
@@ -23,6 +26,7 @@ __all__ = [
     "KnowledgeQuery",
     "KnowledgeResult",
     "KnowledgeGraphClient",
+    "KnowledgeGraphUnavailableError",
     "OrganizationalHierarchy",
     "RouteDecision",
     "Team",
