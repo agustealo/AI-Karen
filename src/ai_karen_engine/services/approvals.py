@@ -651,6 +651,93 @@ class ApprovalService:
         })
         return record
 
+    async def get_document_consent_confirmation(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+    ) -> tuple[Dict[str, Any], "DocumentConsentApprovalScope"]:
+        """Load canonical author consent metadata from the existing SQL ledger.
+
+        Client text, buttons, model messages and a reconstructed request body
+        cannot choose consent source, permission, purpose, session or expiry.
+        """
+        from datetime import datetime
+
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+
+        try:
+            if str(uuid.UUID(approval_id)) != approval_id:
+                raise ValueError("Noncanonical approval ID")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ApprovalScopeError("Invalid document author approval") from exc
+
+        context = await get_document_style_consent_context(request)
+        principal = context.require_authenticated_user()
+        record = await self._repository.get(
+            approval_id,
+            tenant_id=str(principal.tenant_id),
+            user_id=str(principal.user_id),
+        )
+        if record is None:
+            raise ApprovalNotFoundError("Document approval not found")
+        payload = record.get("request_payload")
+        source = payload.get("document_consent_scope") if isinstance(payload, dict) else None
+        if (
+            record.get("intent") != "writing_style.document_consent.issue"
+            or record.get("status") not in {"pending", "approved"}
+            or not isinstance(record.get("policy_decision_id"), str)
+            or not record["policy_decision_id"].startswith(
+                "policy-document-consent-preflight-"
+            )
+            or not isinstance(source, dict)
+        ):
+            raise ApprovalScopeError("Document author approval unavailable")
+        try:
+            scope = DocumentConsentApprovalScope(
+                tenant_id=source["tenant_id"],
+                author_actor_id=source["author_actor_id"],
+                session_id=source["session_id"],
+                profile_id=source["profile_id"],
+                artifact_id=source["artifact_id"],
+                source_sha256=source["source_sha256"],
+                action=source["action"],
+                analysis_allowed=source["analysis_allowed"],
+                style_use_allowed=source["style_use_allowed"],
+                expires_at=datetime.fromisoformat(source["expires_at"]),
+            )
+            scope.require_matching_context(context)
+        except (KeyError, ValueError, TypeError, AttributeError, PermissionError) as exc:
+            raise ApprovalScopeError("Document author approval scope mismatch") from exc
+        if (
+            record.get("request_fingerprint") != scope.fingerprint()
+            or scope.to_record() != source
+        ):
+            raise ApprovalScopeError("Document author approval fingerprint mismatch")
+        return record, scope
+
+    async def confirm_stored_document_consent(
+        self,
+        approval_id: str,
+        *,
+        request: "Request",
+        confirmed: bool,
+    ) -> Dict[str, Any]:
+        """Confirm only the retrieved, immutable scope on a fresh author session."""
+        if confirmed is not True:
+            raise ApprovalScopeError("Explicit author confirmation required")
+        record, scope = await self.get_document_consent_confirmation(
+            approval_id, request=request,
+        )
+        if record.get("status") != "pending":
+            raise ApprovalStateError("Document consent approval is not pending")
+        return await self.decide_document_consent(
+            approval_id, request=request, scope=scope, confirmed=True,
+        )
+
     async def issue_confirmed_document_consent(
         self,
         *,
