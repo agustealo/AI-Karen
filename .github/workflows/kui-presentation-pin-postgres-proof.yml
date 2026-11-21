@@ -16,6 +16,7 @@ on:
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"
       - "tests/integration/test_presentation_pins_postgres.py"
+      - "tests/integration/test_presentation_pin_session_postgres.py"
       - ".github/workflows/kui-presentation-pin-postgres-proof.yml"
   push:
     branches:
@@ -32,6 +33,7 @@ on:
       - "src/ai_karen_engine/persistence/repositories/presentation_pin_repository.py"
       - "tests/core/runtime/test_presentation_pin_*.py"
       - "tests/integration/test_presentation_pins_postgres.py"
+      - "tests/integration/test_presentation_pin_session_postgres.py"
       - ".github/workflows/kui-presentation-pin-postgres-proof.yml"
   workflow_dispatch:
 
@@ -128,6 +130,7 @@ jobs:
             tests/api_routes/test_presentation_pin_active_session_route.py \
             tests/api_routes/test_presentation_pin_readback_route.py -q -rs
           pytest tests/integration/test_presentation_pins_postgres.py -q -rs
+          pytest tests/integration/test_presentation_pin_session_postgres.py -q -rs
 
       - name: Record database acceptance boundary
         if: always()
