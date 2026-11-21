@@ -455,6 +455,7 @@ class ApprovalService:
         request: "Request",
         scope: "DocumentConsentApprovalScope",
         correlation_id: str,
+        runtime_policy: "RuntimePolicyEnforcer",
     ) -> Dict[str, Any]:
         """Create a pending source-bound author approval, never the consent."""
         from ai_karen_engine.auth.session import get_document_style_consent_context
@@ -475,8 +476,29 @@ class ApprovalService:
             raise ApprovalScopeError("Valid author consent scope required")
         if scope.action != "issue":
             raise ApprovalScopeError("Unsupported consent request action")
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+
+        if not isinstance(runtime_policy, RuntimePolicyEnforcer):
+            raise ApprovalScopeError("Canonical runtime policy is required")
         context = await get_document_style_consent_context(request)
         scope.require_matching_context(context)
+        decision = await runtime_policy.authorize_document_consent_preflight(
+            context=context, scope=scope,
+        )
+        if (
+            decision.allowed is not True
+            or decision.requires_human_gate is not True
+            or decision.allowed_capabilities
+            or decision.runtime_constraints.get(
+                "document_consent_fingerprint"
+            ) != scope.fingerprint()
+            or decision.runtime_constraints.get(
+                "authorized_session_id"
+            ) != scope.session_id
+        ):
+            raise ApprovalScopeError("Runtime policy denied author consent")
         if (
             not isinstance(correlation_id, str)
             or not 1 <= len(correlation_id) <= 128
@@ -534,6 +556,7 @@ class ApprovalService:
         request: "Request",
         scope: "DocumentConsentApprovalScope",
         confirmed: bool,
+        runtime_policy: "RuntimePolicyEnforcer",
     ) -> Dict[str, Any]:
         """Approve only explicit author confirmation with fresh bearer scope."""
         from ai_karen_engine.auth.session import get_document_style_consent_context
@@ -545,8 +568,29 @@ class ApprovalService:
             raise ApprovalScopeError("Valid author consent scope required")
         if scope.action != "issue":
             raise ApprovalScopeError("Unsupported consent decision action")
+        from ai_karen_engine.core.runtime.policy.runtime_policy import (
+            RuntimePolicyEnforcer,
+        )
+
+        if not isinstance(runtime_policy, RuntimePolicyEnforcer):
+            raise ApprovalScopeError("Canonical runtime policy is required")
         context = await get_document_style_consent_context(request)
         scope.require_matching_context(context)
+        decision = await runtime_policy.authorize_document_consent_preflight(
+            context=context, scope=scope,
+        )
+        if (
+            decision.allowed is not True
+            or decision.requires_human_gate is not True
+            or decision.allowed_capabilities
+            or decision.runtime_constraints.get(
+                "document_consent_fingerprint"
+            ) != scope.fingerprint()
+            or decision.runtime_constraints.get(
+                "authorized_session_id"
+            ) != scope.session_id
+        ):
+            raise ApprovalScopeError("Runtime policy denied author consent")
         if confirmed is not True:
             raise ApprovalScopeError("Explicit author confirmation required")
         try:
