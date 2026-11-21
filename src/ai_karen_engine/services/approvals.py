@@ -785,7 +785,8 @@ class ApprovalService:
         )
         if record.get("status") != "consumed":
             return None
-        verified = await PostgresDocumentStyleConsentIssuer().verify_current(
+        issuer = PostgresDocumentStyleConsentIssuer()
+        verified = await issuer.verify_current(
             tenant_id=scope.tenant_id,
             actor_id=scope.author_actor_id,
             profile_id=scope.profile_id,
@@ -797,6 +798,15 @@ class ApprovalService:
             or verified.style_use_allowed is not scope.style_use_allowed
             or verified.analysis_allowed is not True
         ):
+            return None
+        source = await issuer.read_current_source_summary(
+            tenant_id=scope.tenant_id,
+            actor_id=scope.author_actor_id,
+            profile_id=scope.profile_id,
+            artifact_id=scope.artifact_id,
+            source_sha256=scope.source_sha256,
+        )
+        if source is None:
             return None
         return verified.consent_receipt_id
 
