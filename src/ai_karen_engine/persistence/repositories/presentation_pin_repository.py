@@ -174,6 +174,7 @@ async def _reposition_owner_pins(
     selected_pin: str | None = None,
     destination: int | None = None,
     expected_revision: int | None = None,
+    observed_pin: str | None = None,
 ) -> int | None:
     """Normalize owner ordinals under the existing principal transaction lock.
 
@@ -239,11 +240,11 @@ async def _reposition_owner_pins(
     """), {**params, "move_rows": json.dumps(changed)})).mappings().all()
     if len(updated) != len(changed):
         raise PresentationPinConflict("Pin revision or ownership conflict")
-    if selected_pin is None:
+    if selected_pin is None and observed_pin is None:
         return None
     matched = next(
         (int(row["revision"]) for row in updated
-         if str(row["pin_id"]) == selected_pin),
+         if str(row["pin_id"]) == (selected_pin or observed_pin)),
         None,
     )
     if expected_revision is not None and matched != expected_revision + 1:
@@ -491,6 +492,7 @@ class PresentationPinRepository:
                         session, params,
                         selected_pin=final_pin.pin_id if existing is None else None,
                         destination=min(pos, count) if existing is None else None,
+                        observed_pin=final_pin.pin_id if existing is not None else None,
                     )
                     outcome, result_pin = "pinned", final_pin.pin_id
                     committed_revision = (
