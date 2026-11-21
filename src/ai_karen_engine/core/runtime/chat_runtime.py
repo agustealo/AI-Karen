@@ -5129,7 +5129,10 @@ class ChatRuntime:
         """
         from ai_karen_engine.core.context.contracts import EvidenceSource
 
-        if not decision.memory_recall_required or decision.memory_top_k <= 0:
+        if (
+            not getattr(decision, "memory_recall_required", False)
+            or getattr(decision, "memory_top_k", 0) <= 0
+        ):
             return []
         resolved = decision.cognitive_context
         ctx = request.context
