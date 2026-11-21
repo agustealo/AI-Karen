@@ -168,7 +168,8 @@ export async function readKarenOwnedRunEvents(
     if (event.type === "CUSTOM" &&
         event.name === "karen.presentation.withheld.v1") {
       const value = event.value;
-      if (!value || typeof value !== "object" || Array.isArray(value) ||
+      if (Object.keys(event).length !== 3 ||
+          !value || typeof value !== "object" || Array.isArray(value) ||
           Object.keys(value).length !== 1 ||
           (value as Record<string, unknown>).reason !== "revocable_code_not_replayable") {
         return refuse(409, "Observed event cannot be faithfully restored");
