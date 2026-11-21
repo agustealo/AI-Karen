@@ -81,3 +81,33 @@ def test_no_repository_python_runtime_directly_consumes_legacy_client() -> None:
         "Unexpected direct Neo4j compatibility consumers must migrate to "
         f"canonical runtime authorization: {sorted(references)}"
     )
+
+
+def test_mcp_factory_never_registers_unscoped_graph_service(monkeypatch) -> None:
+    from ai_karen_engine.mcp.factory import MCPServiceConfig, MCPServiceFactory
+
+    for enabled in (True, False):
+        factory = MCPServiceFactory(
+            MCPServiceConfig(enable_knowledge_graph_service=enabled)
+        )
+
+        def unexpectedly_called():
+            raise AssertionError("Legacy graph must not create a registry")
+
+        monkeypatch.setattr(factory, "create_service_registry", unexpectedly_called)
+        assert factory.create_knowledge_graph_service() is None
+        assert factory.get_service("knowledge_graph_service") is None
+
+
+def test_mcp_graph_wrapper_rejects_injected_client_before_registration() -> None:
+    from ai_karen_engine.mcp.services import KnowledgeGraphService
+    from ai_karen_engine.services.knowledge import KnowledgeGraphUnavailableError
+
+    class _Registry:
+        def register(self, *args, **kwargs):
+            raise AssertionError("Legacy graph tool must not be registered")
+
+    with pytest.raises(KnowledgeGraphUnavailableError):
+        KnowledgeGraphService(kg_client=object(), registry=_Registry())
+
+    assert not hasattr(KnowledgeGraphService, "execute_cypher")
