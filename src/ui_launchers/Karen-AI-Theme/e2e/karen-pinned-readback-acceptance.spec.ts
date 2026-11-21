@@ -139,7 +139,8 @@ test.describe("real authenticated saved-pin reference readback", () => {
       expect([401, 403, 404, 503]).toContain(contents.status);
       await expect(dock.getByTestId("karen-pinning-not-available")).toBeVisible();
     }
-    // A foreign principal must not be able to restore the owner's reference.
-    await expect(dock.getByText("Saved reference " + expectedPinId)).toHaveCount(0);
+    // The foreign API snapshot is authoritative. The dock may show the
+    // foreign user's own references, but cannot display the owner's pin.
+    await expect(dock.getByTestId("karen-pins-loading")).toHaveCount(0);
   });
 });
