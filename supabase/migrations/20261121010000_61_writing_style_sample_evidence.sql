@@ -149,6 +149,11 @@ DECLARE
     minimum_expiry timestamptz;
     all_usable boolean;
 BEGIN
+    -- Revocation is always permitted; source-use checks apply to active grants.
+    IF NEW.revoked_at IS NOT NULL THEN
+        RETURN NEW;
+    END IF;
+
     PERFORM 1 FROM public.writing_style_profiles p
     WHERE p.tenant_id = NEW.tenant_id
       AND p.profile_id = NEW.profile_id
