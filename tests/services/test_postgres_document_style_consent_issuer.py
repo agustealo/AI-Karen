@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from fastapi import Request
+
 import pytest
 
 from ai_karen_engine.services.postgres_document_style_consent_issuer import (
@@ -149,7 +151,9 @@ async def test_default_issuer_cannot_mint_or_revoke_a_receipt():
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
         correlation_id="no-policy",
     ) is None
-    assert await issuer.revoke_first_party(**scope, correlation_id="no-policy") is False
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="no-policy", request=None,
+    ) is False
     session.execute.assert_not_awaited()
 
 
@@ -212,8 +216,28 @@ async def test_legacy_policy_boolean_cannot_mint_document_consent():
     # transaction, including fresh bearer revalidation and source digest.
 
 
-async def test_revocation_requires_host_permission_and_scope():
+async def test_revocation_requires_host_permission_and_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from ai_karen_engine.auth import session as auth_session
     _, scope, session, _ = fixture()
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal/author-revoke",
+        "scheme": "https", "root_path": "",
+        "headers": [(b"authorization", b"Bearer verified-author-token")],
+        "query_string": b"", "server": ("localhost", 443),
+    })
+    actor = scope["actor_id"]
+    tenant = scope["tenant_id"]
+    principal = SimpleNamespace(user_id=actor, tenant_id=tenant)
+    context = SimpleNamespace(
+        user_id=actor, tenant_id=tenant,
+        require_authenticated_user=lambda: principal,
+    )
+    verify = AsyncMock(return_value=context)
+    monkeypatch.setattr(
+        auth_session, "get_document_style_consent_context", verify,
+    )
     policy = SimpleNamespace(
         authorize_issuance=AsyncMock(return_value=True),
         authorize_revocation=AsyncMock(return_value=False),
@@ -222,7 +246,9 @@ async def test_revocation_requires_host_permission_and_scope():
     issuer = PostgresDocumentStyleConsentIssuer(
         client_factory=lambda: client, issuance_policy=policy
     )
-    assert await issuer.revoke_first_party(**scope, correlation_id="deny-revoke") is False
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="deny-revoke", request=request,
+    ) is False
     session.execute.assert_not_awaited()
     policy.authorize_revocation.return_value = True
     class Changed:
@@ -231,8 +257,59 @@ async def test_revocation_requires_host_permission_and_scope():
     session.execute.side_effect = [
         FakeResult(None), FakeResult(None), FakeResult(None), Changed(),
     ]
-    assert await issuer.revoke_first_party(**scope, correlation_id="revoke") is True
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="revoke", request=request,
+    ) is True
     assert session.execute.await_count == 4
     assert "UPDATE public.writing_style_document_consents" in str(
         session.execute.await_args_list[-1].args[0]
     )
+    assert verify.await_count == 2
+
+
+@pytest.mark.parametrize("invalid", [
+    "foreign_actor", "foreign_tenant", "missing_request", "auth_denied",
+])
+async def test_revoke_fails_closed_on_unverified_or_foreign_author(
+    monkeypatch: pytest.MonkeyPatch, invalid: str,
+):
+    from ai_karen_engine.auth import session as auth_session
+    _, scope, session, _ = fixture()
+    context = SimpleNamespace(
+        user_id=scope["actor_id"],
+        tenant_id=scope["tenant_id"],
+        require_authenticated_user=lambda: SimpleNamespace(
+            user_id=scope["actor_id"],
+            tenant_id=scope["tenant_id"],
+        ),
+    )
+    if invalid == "foreign_actor":
+        context.user_id = str(uuid.uuid4())
+    if invalid == "foreign_tenant":
+        context.tenant_id = str(uuid.uuid4())
+    verify = AsyncMock(return_value=context)
+    if invalid == "auth_denied":
+        verify.side_effect = PermissionError("revoked_token")
+    monkeypatch.setattr(
+        auth_session, "get_document_style_consent_context", verify,
+    )
+    policy = SimpleNamespace(
+        authorize_revocation=AsyncMock(return_value=True),
+    )
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: SimpleNamespace(
+            get_async_session=lambda: FakeContext(session)
+        ),
+        issuance_policy=policy,
+    )
+    request = None if invalid == "missing_request" else Request({
+        "type": "http", "method": "POST", "path": "/internal/author-revoke",
+        "scheme": "https", "root_path": "",
+        "headers": [(b"authorization", b"Bearer verified-author-token")],
+        "query_string": b"", "server": ("localhost", 443),
+    })
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="reject", request=request,
+    ) is False
+    policy.authorize_revocation.assert_not_awaited()
+    session.execute.assert_not_awaited()
