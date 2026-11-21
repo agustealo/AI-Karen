@@ -61,7 +61,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   // validation, and is the sole authority on mutation execution.
   const declaredLength = request.headers.get("content-length");
   if (declaredLength !== null && (
-    !/^\\d+$/.test(declaredLength) || Number(declaredLength) > 4096
+    !/^\d+$/.test(declaredLength) || Number(declaredLength) > 4096
   )) {
     return rejection("Pin mutation request too large", 413);
   }
