@@ -128,18 +128,20 @@ export function KarenCopilotPinnedDock({
           ? apiClient.get<unknown>("/api/chat/ag-ui/pins/capabilities").catch(() => null)
           : Promise.resolve(null),
       ]);
-      if (!mountedRef.current || generation !== readGenerationRef.current) return;
+      if (!mountedRef.current || generation !== readGenerationRef.current) return null;
       const pins = parseAuthorizedPinReadback(referenceResponse);
       setAllowedOps(mutationControlsEnabled && pins !== null
         ? parseAuthenticatedPinCapability(capabilityResponse) : []);
       setState(pins === null
         ? { kind: "unavailable" }
         : pins.length === 0 ? { kind: "empty" } : { kind: "available", pins });
+      return pins;
     } catch {
       if (mountedRef.current && generation === readGenerationRef.current) {
         setAllowedOps([]);
         setState({ kind: "unavailable" });
       }
+      return null;
     }
   }, [mutationControlsEnabled]);
 
@@ -194,13 +196,33 @@ export function KarenCopilotPinnedDock({
       // Never optimistically alter pin state, replay a POST, or trust a
       // receipt without fresh authorized readback.
       if (mountedRef.current) {
-        await refresh();
+        const confirmedPins = await refresh();
         if (mountedRef.current && attempted) {
-          setMessage(verified
+          // A committed receipt is necessary but not sufficient. The scoped
+          // post-write read must reflect the requested removal or revisioned
+          // move before the UI can consider the mutation confirmed.
+          const readbackConfirmed = verified && confirmedPins !== null && (
+            operation === "unpin"
+              ? !confirmedPins.some(entry => entry.pin_id === pin.pin_id)
+              : confirmedPins.some(entry =>
+                  entry.pin_id === pin.pin_id &&
+                  entry.position === destination &&
+                  entry.revision > pin.revision)
+          );
+          if (verified && !readbackConfirmed) {
+            // Fail closed on stale, contradictory or unavailable evidence;
+            // never expose an apparently authoritative stale pin row.
+            readGenerationRef.current += 1;
+            setAllowedOps([]);
+            setState({ kind: "unavailable" });
+          }
+          setMessage(readbackConfirmed
             ? null
             : conflict
               ? "Saved references changed elsewhere. Review the refreshed list."
-              : "Pin change not confirmed. Review the refreshed list.");
+              : verified
+                ? "Pin change not confirmed by readback. Reload your workspace to verify."
+                : "Pin change not confirmed. Review the refreshed list.");
         }
       }
       mutatingRef.current = false;
