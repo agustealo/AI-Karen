@@ -272,3 +272,30 @@ tests/core/runtime/test_karisignature_contract.py`, canonical prompt/persona
 regressions, and exact-head CI. WS-02 must reuse the already-existing database
 and user-preference owners for scoped immutable revision storage and authority;
 it must not introduce a duplicate prompt assembler, model router or ACL store.
+
+## WS-02 read-only persistence candidate (not consumer enabled)
+
+The follow-on repository slice defines private, owner-scoped
+`karisignature_profiles` and `karisignature_revisions` PostgreSQL tables
+with tenant and authenticated-user RLS, granted-consent and published-revision
+admission, immutable revision payloads and a current revision foreign key.
+The `PostgresKariSignatureAuthority` adapter in the existing platform
+personalization boundary implements the WS-01 host protocol using
+`async_transaction_scope(tenant_id=..., user_id=...)`. Every live read must
+match the actor, tenant, purpose, profile, revision number and content digest;
+the resolver performs its own bounded expression and digest checks. Source
+samples remain absent from this read model.
+
+**Publication remains disabled.** The migration deliberately declares no RLS
+INSERT/UPDATE/DELETE policy. WS-02 does not create or populate profiles,
+accept consent, authorize organizational/client delegation, register a
+singleton runtime provider or expose HTTP/UI controls. Later publication must
+be a separate, audited compare-and-swap owner with independent permission and
+deletion/retention proof. Since reads and permission checks currently use
+distinct short transactions, they do not by themselves prove atomic revocation
+with concurrent live streaming. Consumer activation must resolve that race
+at the existing execution/persistence authority.
+
+Proof: `tests/core/runtime/test_karisignature_postgres_authority.py`,
+PostgreSQL migration/first-boot CI, RLS denial under mismatched actor/tenant,
+and fresh exact-head security review. Source merge is not deploy acceptance.
