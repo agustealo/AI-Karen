@@ -511,3 +511,130 @@ def test_deep_or_noncode_rich_metadata_keeps_safe_replay_behavior():
     assert "structured_content" not in ChatRuntime._durable_presentation_metadata(
         {"structured_content": {"presentation": nested}}
     )
+
+
+@pytest.mark.asyncio
+async def test_agui_cursor_readback_never_resurrects_legacy_code(monkeypatch):
+    """Existing journal rows are re-scrubbed without disturbing cursor truth."""
+    from ai_karen_engine.core.runtime import chat_run_lifecycle as lifecycle
+
+    request, decision, plan, result = _execution()
+    verified = ChatRuntime._verified_code_artifact_presentation(
+        request, decision, plan, result,
+    )
+    raw_code = {
+        "type": "CUSTOM", "name": "karen.presentation.v1", "value": verified,
+    }
+    safe_weather = {
+        "type": "CUSTOM", "name": "karen.presentation.v1",
+        "value": {"component_type": "weather.observation",
+                  "data": {"location": "Detroit"}},
+    }
+    terminal = {"type": "RUN_ERROR", "message": "cancelled"}
+    snapshots = [
+        {
+            "events": [
+                {"seq": 1, "event": raw_code},
+                {"seq": 2, "event": safe_weather},
+            ],
+            "nextCursor": 2, "hasMore": True,
+        },
+        {
+            "events": [{"seq": 3, "event": terminal}],
+            "nextCursor": 3, "hasMore": False,
+        },
+    ]
+    repository = SimpleNamespace(read_projected_events=AsyncMock(
+        side_effect=snapshots,
+    ))
+    gateway = SimpleNamespace(require_owned_conversation=AsyncMock())
+    monkeypatch.setattr(
+        lifecycle, "get_conversation_runtime_gateway", lambda: gateway,
+    )
+    context = SimpleNamespace(
+        tenant_id=TENANT, user_id=USER,
+        require_authenticated_user=lambda: None,
+        require_conversation_id=lambda: "10000000-0000-4000-8000-000000000012",
+    )
+    coordinator = lifecycle.ChatRunCoordinator(repository=repository)
+    first = await coordinator.read_observed_events(
+        context, run_id="owned-run", after=0, limit=2,
+    )
+    assert first["nextCursor"] == 2
+    assert first["hasMore"] is True
+    assert [e["seq"] for e in first["events"]] == [1, 2]
+    assert first["events"][0]["event"] == {
+        "type": "CUSTOM",
+        "name": "karen.presentation.withheld.v1",
+        "value": {"reason": "revocable_code_not_replayable"},
+    }
+    assert first["events"][1]["event"] is safe_weather
+    assert CODE not in repr(first)
+    assert ARTIFACT not in repr(first)
+    # Do not rewrite source-backed live event or persisted legacy fixtures.
+    assert raw_code["value"] is verified
+    assert CODE in repr(snapshots[0])
+    second = await coordinator.read_observed_events(
+        context, run_id="owned-run", after=2, limit=2,
+    )
+    assert second["events"] == [{"seq": 3, "event": terminal}]
+    assert second["nextCursor"] == 3
+    assert second["hasMore"] is False
+    assert repository.read_projected_events.await_args_list[0].kwargs == {
+        "tenant_id": TENANT, "user_id": USER,
+        "conversation_id": "10000000-0000-4000-8000-000000000012",
+        "transport_run_id": "owned-run", "after": 0, "limit": 2,
+    }
+    assert repository.read_projected_events.await_args_list[1].kwargs["after"] == 2
+    assert gateway.require_owned_conversation.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_agui_cursor_replay_fails_closed_for_invalid_event_rows(monkeypatch):
+    from ai_karen_engine.core.runtime import chat_run_lifecycle as lifecycle
+
+    gateway = SimpleNamespace(require_owned_conversation=AsyncMock())
+    monkeypatch.setattr(
+        lifecycle, "get_conversation_runtime_gateway", lambda: gateway,
+    )
+    context = SimpleNamespace(
+        tenant_id=TENANT, user_id=USER,
+        require_authenticated_user=lambda: None,
+        require_conversation_id=lambda: "10000000-0000-4000-8000-000000000012",
+    )
+    for payload in (
+        {"events": None},
+        {"events": [{"seq": 1, "event": "untrusted"}]},
+        {"events": [{"seq": 1}]},
+    ):
+        repository = SimpleNamespace(
+            read_projected_events=AsyncMock(return_value=payload),
+        )
+        with pytest.raises(RuntimeError, match="invalid_chat_projection_replay"):
+            await lifecycle.ChatRunCoordinator(
+                repository=repository,
+            ).read_observed_events(context, run_id="owned-run")
+    gateway.require_owned_conversation.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agui_cursor_replay_missing_scoped_run_does_not_synthesize_data(
+    monkeypatch,
+):
+    from ai_karen_engine.core.runtime import chat_run_lifecycle as lifecycle
+
+    gateway = SimpleNamespace(require_owned_conversation=AsyncMock())
+    monkeypatch.setattr(
+        lifecycle, "get_conversation_runtime_gateway", lambda: gateway,
+    )
+    repository = SimpleNamespace(
+        read_projected_events=AsyncMock(return_value=None),
+    )
+    context = SimpleNamespace(
+        tenant_id=TENANT, user_id=USER,
+        require_authenticated_user=lambda: None,
+        require_conversation_id=lambda: "10000000-0000-4000-8000-000000000012",
+    )
+    assert await lifecycle.ChatRunCoordinator(
+        repository=repository,
+    ).read_observed_events(context, run_id="other-run", after=5) is None

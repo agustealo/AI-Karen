@@ -1,5 +1,11 @@
-from .base import GraphAdapter
-from .kuzu_adapter import KuzuGraphAdapter
-# from .memgraph_adapter import MemgraphAdapter  # TODO: Remove when Memgraph is no longer used
+"""Canonical memory graph adapter contracts and legacy import compatibility."""
 
-__all__ = ["GraphAdapter", "KuzuGraphAdapter"]  # "MemgraphAdapter"
+from .base import GraphAdapter, GraphRepository
+from .kuzu_adapter import KuzuGraphAdapter, KuzuGraphUnavailableError
+
+__all__ = [
+    "GraphAdapter",
+    "GraphRepository",
+    "KuzuGraphAdapter",
+    "KuzuGraphUnavailableError",
+]
