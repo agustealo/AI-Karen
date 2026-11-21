@@ -411,7 +411,7 @@ test('KCONTENT-DENY-LIVE: foreign owner and stale revision fail closed', async (
     const deploymentCookies = (await page.context().cookies(origin.origin))
       .filter((cookie) =>
         cookie.name === '_vercel_jwt' && cookie.secure &&
-        cookie.domain.replace(/^\\./, '') === origin.hostname,
+        cookie.domain.replace(/^\./, '') === origin.hostname,
       );
     if (origin.hostname.endsWith('.vercel.app') && deploymentCookies.length !== 1) {
       throw new Error('Approved isolated deployment access cookie is missing');
