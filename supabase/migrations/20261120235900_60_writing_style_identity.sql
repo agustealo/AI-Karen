@@ -78,7 +78,7 @@ CREATE INDEX writing_style_audit_profile ON public.writing_style_audit(tenant_id
 
 -- Immutable published revision history, even for privileged backend callers.
 CREATE FUNCTION public.writing_style_prevent_revision_mutation()
-RETURNS trigger LANGUAGE plpgsql AS $
+RETURNS trigger LANGUAGE plpgsql AS $kari_revision_immutable$
 BEGIN
     -- A committed revision cannot be edited or deleted directly. Governed
     -- parent/tenant deletion must still erase dependent private revisions.
@@ -90,7 +90,7 @@ BEGIN
         RETURN OLD;
     END IF;
     RAISE EXCEPTION 'published style revisions are immutable';
-END $;
+END $kari_revision_immutable$;
 CREATE TRIGGER writing_style_no_revision_update
     BEFORE UPDATE OR DELETE ON public.writing_style_revisions
     FOR EACH ROW EXECUTE FUNCTION public.writing_style_prevent_revision_mutation();
