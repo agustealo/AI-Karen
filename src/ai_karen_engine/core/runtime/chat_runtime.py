@@ -850,6 +850,9 @@ class ChatRuntime:
         # Ordinary and streamed chat must both persist the accepted final
         # answer through the same authorized transcript owner. Episodic memory
         # projection above is a separate concern, not transcript storage.
+        await ChatRuntime._authorize_selected_memory_before_generation(
+            request, decision
+        )
         try:
             transcript_result = await self._persist_transcript(
                 request, text, provider_meta, trajectory_id=trajectory.trajectory_id
@@ -1657,6 +1660,20 @@ class ChatRuntime:
             conversation_id=conversation_id,
             reason="generation_incomplete",
         )
+        if streamed_text and generation_error is None:
+            # Keep nonleased and leased streams from treating a revoked
+            # source as completed at the last application-owned boundary.
+            try:
+                await ChatRuntime._authorize_selected_memory_before_generation(
+                    request, decision
+                )
+            except RuntimeError as exc:
+                if str(exc) != "memory_source_revoked_or_unverifiable":
+                    raise
+                generation_error = exc
+                provider_meta["generation_error"] = True
+                provider_meta["degraded_mode"] = True
+                provider_meta["degradation_reason"] = "memory_source_revoked_or_unverifiable"
         if streamed_text and generation_error is None:
             transcript_started = time.perf_counter()
             try:
