@@ -190,15 +190,9 @@ async def test_issue_denied_without_trusted_complete_authorization(case):
     session.execute.assert_not_awaited()
 
 
-async def test_server_generated_receipt_uses_canonical_file_digest():
+async def test_legacy_policy_boolean_cannot_mint_document_consent():
+    """A policy callback alone is not a durable author-confirmed approval."""
     _, scope, session, _ = fixture()
-    class DbRow:
-        def first(self):
-            return ("a" * 64,)
-    session.execute.side_effect = [
-        FakeResult(None), FakeResult(None), FakeResult(None),
-        DbRow(), FakeResult(None),
-    ]
     policy = SimpleNamespace(
         authorize_issuance=AsyncMock(return_value=True),
         authorize_revocation=AsyncMock(return_value=True),
@@ -207,18 +201,15 @@ async def test_server_generated_receipt_uses_canonical_file_digest():
     issuer = PostgresDocumentStyleConsentIssuer(
         client_factory=lambda: client, issuance_policy=policy
     )
-    receipt = await issuer.issue_first_party(
+    assert await issuer.issue_first_party(
         **scope, analysis_allowed=True, style_use_allowed=True,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
-        correlation_id="author-issued",
-    )
-    assert str(uuid.UUID(receipt)) == receipt
-    assert session.execute.await_count == 5
-    params = session.execute.await_args_list[-1].args[1]
-    assert params["digest"] == "a" * 64
-    assert params["receipt"] == receipt
-    assert params["actor"] == scope["actor_id"]
-    assert params["artifact"] == scope["artifact_id"]
+        correlation_id="legacy-policy-must-not-mint",
+    ) is None
+    policy.authorize_issuance.assert_not_awaited()
+    session.execute.assert_not_awaited()
+    # Approved receipt issuance is tested on a real disposable PostgreSQL
+    # transaction, including fresh bearer revalidation and source digest.
 
 
 async def test_revocation_requires_host_permission_and_scope():
