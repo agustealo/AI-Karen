@@ -109,18 +109,138 @@ ALTER TABLE public.writing_style_grants FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.writing_style_audit ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.writing_style_audit FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY writing_style_profiles_tenant ON public.writing_style_profiles
-    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
-CREATE POLICY writing_style_revisions_tenant ON public.writing_style_revisions
-    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
-CREATE POLICY writing_style_grants_tenant ON public.writing_style_grants
-    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
-CREATE POLICY writing_style_audit_tenant ON public.writing_style_audit
-    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
+-- Never grant a whole tenant visibility of confidential styles. The host
+-- binds app.current_user_id and app.current_style_purpose from authenticated
+-- execution context. Missing principal or purpose fails closed.
+-- Grant SELECT policies have no profile subquery, avoiding recursive RLS.
+CREATE POLICY writing_style_grants_principal_select
+    ON public.writing_style_grants FOR SELECT
+    USING (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND (
+            actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+            OR granted_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        )
+    );
+
+CREATE POLICY writing_style_profiles_principal_select
+    ON public.writing_style_profiles FOR SELECT
+    USING (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND (
+            owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+            OR EXISTS (
+                SELECT 1 FROM public.writing_style_grants g
+                WHERE g.tenant_id = writing_style_profiles.tenant_id
+                  AND g.profile_id = writing_style_profiles.profile_id
+                  AND g.actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+                  AND g.purpose = NULLIF(current_setting('app.current_style_purpose', true), '')
+                  AND g.revoked_at IS NULL
+                  AND (g.expires_at IS NULL OR g.expires_at > clock_timestamp())
+                  AND writing_style_profiles.state = 'published'
+            )
+        )
+    );
+
+CREATE POLICY writing_style_revisions_principal_select
+    ON public.writing_style_revisions FOR SELECT
+    USING (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND EXISTS (
+            SELECT 1 FROM public.writing_style_profiles p
+            WHERE p.tenant_id = writing_style_revisions.tenant_id
+              AND p.profile_id = writing_style_revisions.profile_id
+              AND (
+                  p.owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+                  OR (
+                      p.state = 'published'
+                      AND p.current_revision_id = writing_style_revisions.revision_id
+                  )
+              )
+        )
+    );
+
+-- Mutation policies additionally bind the owner to the authenticated
+-- principal; passing a forged actor UUID as an SQL argument cannot suffice.
+CREATE POLICY writing_style_profiles_owner_insert
+    ON public.writing_style_profiles FOR INSERT
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+CREATE POLICY writing_style_profiles_owner_update
+    ON public.writing_style_profiles FOR UPDATE
+    USING (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    )
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+CREATE POLICY writing_style_revisions_owner_insert
+    ON public.writing_style_revisions FOR INSERT
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND approved_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        AND EXISTS (
+            SELECT 1 FROM public.writing_style_profiles p
+            WHERE p.tenant_id = writing_style_revisions.tenant_id
+              AND p.profile_id = writing_style_revisions.profile_id
+              AND p.owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        )
+    );
+
+CREATE POLICY writing_style_grants_owner_insert
+    ON public.writing_style_grants FOR INSERT
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND granted_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        AND EXISTS (
+            SELECT 1 FROM public.writing_style_profiles p
+            WHERE p.tenant_id = writing_style_grants.tenant_id
+              AND p.profile_id = writing_style_grants.profile_id
+              AND p.owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        )
+    );
+
+CREATE POLICY writing_style_grants_owner_update
+    ON public.writing_style_grants FOR UPDATE
+    USING (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND EXISTS (
+            SELECT 1 FROM public.writing_style_profiles p
+            WHERE p.tenant_id = writing_style_grants.tenant_id
+              AND p.profile_id = writing_style_grants.profile_id
+              AND p.owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        )
+    )
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND granted_by = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+CREATE POLICY writing_style_audit_owner_select
+    ON public.writing_style_audit FOR SELECT
+    USING (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+    );
+
+CREATE POLICY writing_style_audit_owner_insert
+    ON public.writing_style_audit FOR INSERT
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid
+        AND actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        AND EXISTS (
+            SELECT 1 FROM public.writing_style_profiles p
+            WHERE p.tenant_id = writing_style_audit.tenant_id
+              AND p.profile_id = writing_style_audit.profile_id
+              AND p.owner_actor_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
+        )
+    );
 
 COMMENT ON TABLE public.writing_style_profiles IS 'Tenant-scoped communication identities; no private sample bodies.';
 COMMENT ON TABLE public.writing_style_revisions IS 'Immutable, bounded, expression-only published revision snapshots.';
