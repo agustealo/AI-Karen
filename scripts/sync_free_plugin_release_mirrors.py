@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Verify or refresh already-approved free plugin release mirrors.
 
-This tool cannot publish a new plugin: only existing release directories are
-eligible for synchronization. Canonical plugin implementations remain in src.
+The canonical implementation remains in src; distribution is storage only.
+This tool cannot approve or publish a new plugin package.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,19 +20,27 @@ CATEGORIES = ("essential", "community", "promotional", "premium")
 GENERATED = {"__pycache__", ".pytest_cache", ".mypy_cache"}
 
 
-def package_files(directory: Path) -> dict[str, Path]:
+def _generated(relative: Path) -> bool:
+    return any(part in GENERATED for part in relative.parts) or relative.suffix in {
+        ".pyc", ".pyo",
+    }
+
+
+def package_files(directory: Path, *, canonical: bool = False) -> dict[str, Path]:
+    """Inventory sources; ignore canonical bytecode but reject packaged bytecode."""
     if not directory.is_dir() or directory.is_symlink():
         raise ValueError(f"Invalid plugin package directory: {directory}")
     items: dict[str, Path] = {}
     for entry in sorted(directory.rglob("*")):
+        relative = entry.relative_to(directory)
         if entry.is_symlink():
-            raise ValueError(f"Plugin release symlink is forbidden: {entry}")
-        if any(part in GENERATED for part in entry.relative_to(directory).parts):
-            raise ValueError(f"Generated package content is forbidden: {entry}")
+            raise ValueError(f"Plugin package symlink is forbidden: {entry}")
+        if _generated(relative):
+            if not canonical:
+                raise ValueError(f"Generated release content is forbidden: {entry}")
+            continue
         if entry.is_file():
-            if entry.suffix in {".pyc", ".pyo"}:
-                raise ValueError(f"Bytecode in plugin package: {entry}")
-            items[entry.relative_to(directory).as_posix()] = entry
+            items[relative.as_posix()] = entry
     return items
 
 
@@ -69,7 +78,7 @@ def releases() -> list[tuple[str, Path, Path]]:
 def check() -> list[str]:
     failures: list[str] = []
     for plugin_id, canonical, mirror in releases():
-        original = package_files(canonical)
+        original = package_files(canonical, canonical=True)
         released = package_files(mirror)
         if original.keys() != released.keys():
             failures.append(f"{plugin_id}: file inventory differs")
@@ -81,14 +90,26 @@ def check() -> list[str]:
 
 
 def sync() -> None:
-    # Snapshot and validate all sources before modifying any released package.
+    """Stage approved mirrors from source-file inventories, excluding bytecode."""
     selected = releases()
+    inventories: list[tuple[Path, dict[str, Path]]] = []
     for _, original, mirror in selected:
-        package_files(original)
+        inventories.append((mirror, package_files(original, canonical=True)))
         package_files(mirror)
-    for _, original, mirror in selected:
-        shutil.rmtree(mirror)
-        shutil.copytree(original, mirror)
+
+    for mirror, originals in inventories:
+        with tempfile.TemporaryDirectory(prefix="karen-free-release-") as temp:
+            staged = Path(temp) / mirror.name
+            staged.mkdir()
+            for relpath, source in originals.items():
+                destination = staged / relpath
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+            package_files(staged)
+            # Replace only an already-approved release directory.
+            shutil.rmtree(mirror)
+            shutil.copytree(staged, mirror)
+
     failures = check()
     if failures:
         raise ValueError("; ".join(failures))
@@ -98,13 +119,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--sync", action="store_true",
-        help="Refresh already-published package mirrors; never adds a new release",
+        help="Refresh already-published package mirrors; never adds a release",
     )
     args = parser.parse_args()
     try:
         if args.sync:
             sync()
         failures = check()
+        count = len(releases())
     except (OSError, ValueError) as exc:
         print(f"Release verification failed: {exc}", file=sys.stderr)
         return 1
@@ -112,7 +134,7 @@ def main() -> int:
         for failure in failures:
             print(failure, file=sys.stderr)
         return 1
-    print(f"Verified {len(releases())} existing free plugin release mirrors")
+    print(f"Verified {count} existing free plugin release mirrors")
     return 0
 
 
