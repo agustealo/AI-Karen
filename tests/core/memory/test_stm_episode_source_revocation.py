@@ -136,3 +136,25 @@ async def test_stm_recent_episode_missing_canonical_event_or_refuses_on_error():
     latest["event_id"] = "event-1"
     events.current = {"source_type": "web", "source_ref": "document-1", "payload": {}}
     assert await router._query_stm(_query()) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_text", [
+    "  remember this episode", "remember this episode\n",
+    "\n remember this episode \n",
+])
+async def test_stm_recent_episode_preserves_canonical_whitespace_before_normalizing_output(raw_text):
+    router, events, latest = _router(source_type="chat_user", source_ref="conversation-1")
+    latest["content"] = raw_text
+    events.current["payload"]["content"] = raw_text
+    candidates = await router._query_stm(_query())
+    assert len(candidates) == 1
+    assert candidates[0].content == raw_text.strip()
+
+    class _Retriever:
+        async def recall(self, query):
+            return await router._query_stm(query)
+
+    selected = await NeuroRecall(_Retriever()).recall(_request())
+    assert len(selected.memories) == 1
+    assert selected.memories[0].content == raw_text.strip()
