@@ -396,12 +396,90 @@ test("KPIN-MUTATION-LIVE: authenticated dual-account denial, revision CAS and co
   });
   expect(stale.status, "Stale revision must not commit a second reorder").toBe(409);
 
+  // KUI-002D3R: the actual backend must commit before Chromium loses the
+  // response. CDP blocks a real HTTP response at Response stage; it neither
+  // stubs the request nor manufactures a success payload for the browser.
+  const postRacePin = after.find(pin => pin.pin_id === moving.pin_id);
+  if (!postRacePin) throw new Error("Committed pin disappeared before transport trial");
+  const interruptedRequest = {
+    operation: "reorder",
+    idempotency_key: crypto.randomUUID(),
+    pin_id: moving.pin_id,
+    expected_revision: postRacePin.revision,
+    position: moving.position,
+  };
+  const cdp = await page.context().newCDPSession(page);
+  let pausedCount = 0;
+  let backendResponseStatus: number | null = null;
+  let failRequestError: string | null = null;
+  try {
+    cdp.on("Fetch.requestPaused", event => {
+      pausedCount += 1;
+      backendResponseStatus = event.responseStatusCode ?? null;
+      // Suppress the server's actual response, not the request. Any failure
+      // to terminate this interception fails the acceptance test.
+      void cdp.send("Fetch.failRequest", {
+        requestId: event.requestId,
+        errorReason: "Aborted",
+      }).catch(error => {
+        failRequestError = error instanceof Error ? error.name : "CDP error";
+      });
+    });
+    await cdp.send("Fetch.enable", {
+      patterns: [{
+        urlPattern: "*/api/chat/ag-ui/pins/mutations",
+        requestStage: "Response",
+      }],
+    });
+    const transportInterrupted = await page.evaluate(async payload => {
+      const token = window.localStorage.getItem("access_token");
+      if (!token) throw new Error("Real authorized bearer missing");
+      try {
+        await window.fetch("/api/chat/ag-ui/pins/mutations", {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          redirect: "error",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        return false;
+      } catch {
+        // The browser never received a committed receipt.
+        return true;
+      }
+    }, interruptedRequest);
+    expect(transportInterrupted).toBe(true);
+  } finally {
+    await cdp.send("Fetch.disable");
+    await cdp.detach();
+  }
+  expect(failRequestError).toBeNull();
+  expect(pausedCount, "Exactly one real POST response must be interrupted").toBe(1);
+  expect(backendResponseStatus, "Backend must have committed before response loss").toBe(200);
+
+  // No automatic retry of the uncertain POST. Independently consult fresh,
+  // authenticated server truth, including the changed revision and ordinals.
+  const afterInterrupted = verifiedLivePins(
+    await livePinRequest(page, "GET", "/api/chat/ag-ui/pins"),
+  );
+  const recoveredPin = afterInterrupted.find(pin => pin.pin_id === moving.pin_id);
+  expect(recoveredPin?.position).toBe(moving.position);
+  expect(recoveredPin?.revision).toBeGreaterThan(postRacePin.revision);
+  expect(afterInterrupted.map(pin => pin.position).sort((a, b) => a - b))
+    .toEqual(afterInterrupted.map((_, i) => i));
+
   await page.reload();
   await expect(dock).toBeVisible();
   const restored = verifiedLivePins(
     await livePinRequest(page, "GET", "/api/chat/ag-ui/pins"),
   );
-  expect(restored.find(pin => pin.pin_id === moving.pin_id)?.position).toBe(intendedPosition);
+  expect(restored.find(pin => pin.pin_id === moving.pin_id)?.position).toBe(moving.position);
+  expect(restored.find(pin => pin.pin_id === moving.pin_id)?.revision)
+    .toBe(recoveredPin?.revision);
   // Revoke the same real PostgreSQL-backed session that committed the pin.
   // Never return, log, retain in Node, or persist its bearer/refresh tokens.
   // Follow the application logout wire contract, then reuse only the captured
