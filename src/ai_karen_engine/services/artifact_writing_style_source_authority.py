@@ -137,17 +137,32 @@ class ArtifactWritingStyleSourceAuthority:
             ):
                 return None
 
-            # An awaited metadata read can cross the consent expiry boundary.
-            # Verify time again after the final awaited operation.
+            # The canonical issuer may revoke consent while artifact metadata
+            # is awaited. Repeat the current-consent read after the final
+            # artifact read and reject any changed receipt, permissions or
+            # expiry. A cached earlier positive decision is never sufficient.
+            current_permission = await self._consent_issuer.verify_current(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                profile_id=profile_id,
+                artifact_id=source_id,
+            )
             if (
-                permission.consent_expires_at is not None
-                and permission.consent_expires_at <= datetime.now(timezone.utc)
+                not isinstance(current_permission, VerifiedWritingStyleSource)
+                or current_permission != permission
+                or current_permission.analysis_allowed is not True
+                or (
+                    current_permission.consent_expires_at is not None
+                    and current_permission.consent_expires_at
+                    <= datetime.now(timezone.utc)
+                )
             ):
                 return None
 
-            # The issuer's independent style-use flag stays intact. Analysis
-            # eligibility must never be silently promoted into style-use rights.
-            return permission
+            # Preserve the issuer's separate use permission. This check is
+            # still not an atomic source/consent snapshot and does not grant
+            # a runtime purpose or publication permission.
+            return current_permission
         except Exception:
             # No exception text, artifact metadata, credentials or secret may
             # be exposed to the caller through an authorization failure.
