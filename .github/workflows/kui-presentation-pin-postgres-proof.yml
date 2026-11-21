@@ -138,4 +138,4 @@ jobs:
         run: |
           echo "This workflow verifies the actual pin migration against an isolated PostgreSQL container and disposable karen_presentation_pin_test database." >> "$GITHUB_STEP_SUMMARY"
           echo "The production first-boot smoke separately verifies deployment without Supabase client roles." >> "$GITHUB_STEP_SUMMARY"
-          echo "Focused HTTP mutation/readback ingress tests run alongside the disposable PostgreSQL proof, but do not certify authenticated HTTP-to-database or browser acceptance." >> "$GITHUB_STEP_SUMMARY"
+          echo "The disposable PostgreSQL proof includes signed-token and canonical durable-session authorization through actual HTTP pin mutations, immutable receipts, rollback, retry and CAS. It does NOT certify hosted production login or real browser acceptance." >> "$GITHUB_STEP_SUMMARY"
