@@ -1490,10 +1490,11 @@ class ChatRuntime:
                             content="Unable to complete the response.",
                             correlation_id=ctx.correlation_id,
                             metadata={
-                                "error_code": (
-                                    "CHAT_MEMORY_SOURCE_REVOKED"
+                                "error_code": "CHAT_GENERATION_FAILED",
+                                **(
+                                    {"error_code": "CHAT_MEMORY_SOURCE_REVOKED"}
                                     if str(exc) == "memory_source_revoked_or_unverifiable"
-                                    else "CHAT_GENERATION_FAILED"
+                                    else {}
                                 ),
                                 "error_type": (
                                     "MemorySourceRevoked"
