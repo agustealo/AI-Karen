@@ -40,6 +40,39 @@ class PresentationPinMutation:
         self._gateway = gateway or get_conversation_runtime_gateway()
         self._runs = run_repository or SqlChatRunRepository()
 
+    @staticmethod
+    def mutations_enabled(features: object) -> bool:
+        """Canonical server-side feature decision, never a client grant."""
+        return bool(
+            getattr(features, "enable_ag_ui_bridge", False)
+            and getattr(features, "enable_ag_ui_durable_runs", False)
+            and getattr(features, "enable_presentation_pin_mutations", False)
+        )
+
+    @classmethod
+    def describe_capabilities(
+        cls, *, context: ChatExecutionContext, features: object
+    ) -> dict[str, object]:
+        """Describe server execution eligibility for a verified principal.
+
+        This is advisory presentation metadata, not a bearer capability.
+        The mutation executor must independently authenticate and recheck
+        the canonical server gate for every write.
+        """
+        context.require_authenticated_user()
+        if not (
+            context.tenant_id and context.user_id
+            and context.request_id and context.correlation_id
+        ):
+            raise PermissionError("Authenticated pin capability context required")
+        eligible = cls.mutations_enabled(features)
+        return {
+            "schema_version": 1,
+            "mutation_enabled": eligible,
+            "allowed_operations": ["unpin", "reorder"] if eligible else [],
+            "denial_reason": None if eligible else "mutations_disabled",
+        }
+
     async def execute(
         self,
         *,

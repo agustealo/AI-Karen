@@ -1007,6 +1007,47 @@ class PresentationPinMutationRequest(BaseModel):
         return self
 
 
+@router.get("/chat/ag-ui/pins/capabilities")
+async def get_ag_ui_pin_mutation_capabilities(
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Report authenticated server eligibility without granting execution.
+
+    No token or source reference is issued. The existing POST independently
+    rechecks authentication, runtime flags and canonical persistence guards.
+    """
+    from ai_karen_engine.core.runtime.presentation_pin_mutation import (
+        PresentationPinMutation,
+    )
+
+    correlation_id = str(uuid.uuid4())
+    try:
+        context = _execution_context(
+            user=user,
+            session_id=correlation_id,
+            conversation_id=None,
+            request_id=correlation_id,
+            correlation_id=correlation_id,
+        )
+        capabilities = PresentationPinMutation.describe_capabilities(
+            context=context,
+            features=get_runtime_settings().features,
+        )
+    except (PermissionError, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=401, detail="Authenticated pin capability required",
+        ) from exc
+
+    return JSONResponse(
+        status_code=200,
+        content=capabilities,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Correlation-Id": correlation_id,
+        },
+    )
+
+
 @router.post("/chat/ag-ui/pins/mutations")
 async def mutate_ag_ui_authorized_pin(
     mutation: PresentationPinMutationRequest,
@@ -1018,12 +1059,11 @@ async def mutate_ag_ui_authorized_pin(
     exists. Presentation restoration still requires fresh readback admission.
     No transport-supplied tenant, user, attestation, or receipt is authoritative.
     """
-    flags = get_runtime_settings().features
-    if not (
-        flags.enable_ag_ui_bridge
-        and flags.enable_ag_ui_durable_runs
-        and getattr(flags, "enable_presentation_pin_mutations", False)
-    ):
+    from ai_karen_engine.core.runtime.presentation_pin_mutation import (
+        PresentationPinMutation,
+    )
+
+    if not PresentationPinMutation.mutations_enabled(get_runtime_settings().features):
         raise HTTPException(status_code=404, detail="Pin mutations unavailable")
 
     correlation_id = str(uuid.uuid4())
