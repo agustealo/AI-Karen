@@ -896,6 +896,38 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # WS-04A9E: An ordinary policy evaluation is not evidence of an
+        # author's explicit, source-scoped consent. RuntimePolicy must deny
+        # both mutations even when roles/permissions/capabilities from the
+        # request claim authorization. Only a future host-owned authenticated
+        # approval flow may bind a separate non-forgeable issuance decision.
+        document_consent_prefix = "writing_style.document_consent."
+        document_consent_requested = (
+            isinstance(request.action, str)
+            and request.action.startswith(document_consent_prefix)
+        ) or any(
+            isinstance(capability, str)
+            and capability.startswith(document_consent_prefix)
+            for capability in request.requested_capabilities
+        )
+        if document_consent_requested:
+            return PolicyDecision(
+                decision_id=decision_id,
+                policy_version=policy_version,
+                allowed=False,
+                reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                denied_capabilities=[
+                    capability
+                    for capability in request.requested_capabilities
+                    if isinstance(capability, str)
+                    and capability.startswith(document_consent_prefix)
+                ] or [str(request.action)],
+                denied_reasoning_modes=list(request.requested_reasoning_modes),
+                requires_human_gate=True,
+                risk_level="high",
+                evaluated_at=evaluated_at,
+            )
+
         # The host-only Identity Vault resolver requires an exact personal
         # credential execution grant. A general PolicyEvaluationRequest is
         # intentionally NOT that trusted grant source: its capability list,
