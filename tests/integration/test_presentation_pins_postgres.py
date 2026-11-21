@@ -893,6 +893,14 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 """, revoked_pin) == 1
 
             rollback_pin = await create_owned_pin("runtime-receipt-rollback")
+            rollback_move = await create_owned_pin("runtime-reorder-receipt-rollback")
+            rollback_neighbor = await create_owned_pin("runtime-reorder-neighbor")
+            prior_positions = await raw.fetch("""
+                SELECT pin_id, position, revision
+                FROM public.conversation_presentation_pins
+                WHERE tenant_id=$1 AND user_id=$2
+                ORDER BY pin_id
+            """, tenant_b, owner_b)
             await raw.execute("""
                 CREATE FUNCTION public.reject_pin_receipt_test_insert()
                 RETURNS trigger LANGUAGE plpgsql AS $pin_reject$
@@ -915,6 +923,32 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     SELECT count(*) FROM public.conversation_presentation_pins
                     WHERE pin_id=$1
                 """, rollback_pin) == 1
+                with pytest.raises(PresentationPinUnavailable):
+                    await repository.mutate_with_receipt(
+                        authenticated_tenant_id=str(tenant_b),
+                        authenticated_user_id=str(owner_b),
+                        idempotency_key=str(uuid.uuid4()),
+                        request_id="reorder-receipt-failure",
+                        correlation_id="reorder-rollback-proof",
+                        operation="reorder",
+                        pin_id=str(rollback_move),
+                        expected_revision=1,
+                        position=1,
+                    )
+                after_positions = await raw.fetch("""
+                    SELECT pin_id, position, revision
+                    FROM public.conversation_presentation_pins
+                    WHERE tenant_id=$1 AND user_id=$2
+                    ORDER BY pin_id
+                """, tenant_b, owner_b)
+                assert after_positions == prior_positions
+                assert any(row["pin_id"] == rollback_neighbor
+                           for row in after_positions)
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pin_mutation_receipts
+                    WHERE tenant_id=$1 AND user_id=$2
+                      AND request_id='reorder-receipt-failure'
+                """, tenant_b, owner_b) == 0
             finally:
                 await raw.execute("""
                     DROP TRIGGER IF EXISTS reject_pin_receipt_test_insert
