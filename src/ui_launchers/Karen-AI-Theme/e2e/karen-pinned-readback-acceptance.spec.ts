@@ -286,12 +286,18 @@ test("KPIN-MUTATION-LIVE: authenticated dual-account denial, revision CAS and co
 
   // Browser.newContext does not inherit the Playwright project's baseURL.
   // Bind the second principal to the exact approved origin, never a mock host.
-  const approvedOrigin = process.env.KAREN_BASE_URL;
-  if (!approvedOrigin || !/^https:\/\/[^/?#]+\/$/.test(approvedOrigin)) {
+  const approvedOriginValue = process.env.KAREN_BASE_URL;
+  if (!approvedOriginValue) {
     throw new Error("Protected pin acceptance requires an approved HTTPS origin");
   }
+  const approvedOrigin = new URL(approvedOriginValue);
+  if (approvedOrigin.protocol !== "https:" || approvedOrigin.username ||
+      approvedOrigin.password || approvedOrigin.port ||
+      approvedOrigin.pathname !== "/" || approvedOrigin.search || approvedOrigin.hash) {
+    throw new Error("Protected pin acceptance requires a credential-free HTTPS origin");
+  }
   const otherContext = await browser.newContext({
-    baseURL: approvedOrigin,
+    baseURL: approvedOrigin.origin,
     viewport: { width: 1720, height: 980 },
     serviceWorkers: "block",
   });
