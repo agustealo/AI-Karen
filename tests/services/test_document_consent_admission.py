@@ -197,7 +197,6 @@ async def test_pending_admission_uses_canonical_source_check(monkeypatch):
     with pytest.raises(ApprovalScopeError, match="Current document"):
         await target.request_document_consent(
             request=object(), scope=scope, correlation_id="reject-drift",
-            runtime_policy=RuntimePolicyEnforcer(),
         )
     assert repo.create.await_count == 1
 
@@ -363,7 +362,7 @@ async def test_execution_composition_denies_absent_runtime_policy(
             request=object(), tenant_id=scope.tenant_id,
             actor_id=scope.author_actor_id,
             profile_id=scope.profile_id, artifact_id=scope.artifact_id,
-            correlation_id="deny", runtime_policy=policy,
+            correlation_id="deny",
         )
     create.assert_not_called()
 
