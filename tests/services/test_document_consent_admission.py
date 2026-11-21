@@ -59,6 +59,7 @@ def approval(scope, status="pending"):
         "status": status,
         "intent": "writing_style.document_consent.issue",
         "request_fingerprint": scope.fingerprint(),
+        "policy_decision_id": "policy-document-consent-preflight-test",
         "request_payload": {"document_consent_scope": scope.to_record()},
     }
 
@@ -100,7 +101,7 @@ async def test_generic_user_only_decision_cannot_approve_document_consent():
 
 @pytest.mark.parametrize("mismatch", [
     "not_confirmed", "foreign_session", "fingerprint", "intent",
-    "source_scope", "already_approved",
+    "source_scope", "already_approved", "unrelated_policy",
 ])
 async def test_approval_confirmation_denies_untrusted_scope(monkeypatch, mismatch):
     scope, context = evidence()
@@ -115,6 +116,8 @@ async def test_approval_confirmation_denies_untrusted_scope(monkeypatch, mismatc
         record["request_payload"] = {"document_consent_scope": {
             **scope.to_record(), "source_sha256": "b" * 64,
         }}
+    elif mismatch == "unrelated_policy":
+        record["policy_decision_id"] = "policy-other-action"
     elif mismatch == "already_approved":
         record["status"] = "approved"
     repo = SimpleNamespace(
