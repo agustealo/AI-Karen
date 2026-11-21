@@ -297,8 +297,9 @@ async def test_canonical_runtime_composes_only_one_approved_issuer(monkeypatch):
     repo = SimpleNamespace()
     target = service(repo)
     approval_id = str(uuid.uuid4())
+    request = object()
     result = await target.issue_confirmed_document_consent(
-        request=object(), scope=scope, approval_id=approval_id,
+        request=request, scope=scope, approval_id=approval_id,
         correlation_id="runtime-verified", runtime_policy=policy,
     )
     assert result == receipt
@@ -306,7 +307,7 @@ async def test_canonical_runtime_composes_only_one_approved_issuer(monkeypatch):
     assert len(kwargs) == 1
     assert kwargs["issuance_policy"]._enforcer is policy
     issuer.issue_with_approved_scope.assert_awaited_once_with(
-        request=object(), scope=scope, approval_id=approval_id,
+        request=request, scope=scope, approval_id=approval_id,
         correlation_id="runtime-verified",
     )
     target._audit.log_audit_event.assert_called_once()
@@ -362,8 +363,9 @@ async def test_revoke_composition_uses_same_authority_and_one_way_issuer(
         issuer_module, "PostgresDocumentStyleConsentIssuer", construction,
     )
     target = service(SimpleNamespace())
+    request = object()
     result = await target.revoke_document_consent(
-        request=object(), tenant_id=scope.tenant_id,
+        request=request, tenant_id=scope.tenant_id,
         actor_id=scope.author_actor_id,
         profile_id=scope.profile_id,
         artifact_id=scope.artifact_id,
@@ -373,7 +375,7 @@ async def test_revoke_composition_uses_same_authority_and_one_way_issuer(
     assert result is True
     assert construction.call_args.kwargs["issuance_policy"]._enforcer is policy
     issuer.revoke_first_party.assert_awaited_once_with(
-        request=object(), tenant_id=scope.tenant_id,
+        request=request, tenant_id=scope.tenant_id,
         actor_id=scope.author_actor_id,
         profile_id=scope.profile_id,
         artifact_id=scope.artifact_id,
