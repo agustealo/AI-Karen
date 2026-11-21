@@ -190,3 +190,25 @@ Inspection of the current storage infrastructure found that `SupabaseArtifactSto
 A new negative regression in `tests/extensions/test_artifact_writing_style_source_authority.py` proves the inactive metadata+issuer authorization path does not call `ArtifactStore.download` at all, including on a positive in-memory consent decision. It verifies the two metadata reads and two current issuer checks and provides a download dependency that raises if touched. This test does not establish a production consent issuer; it only fences off unsafe byte access from the current adapter.
 
 To unblock actual WS-02C content ingestion, extend the **canonical storage owner** with an explicit owner-scoped range/stream API whose response size is enforced at the transport layer; add a backend capability check that denies when streaming/range semantics are unavailable; then test a maliciously oversized object with a deceptively small metadata size and measure actual bytes transferred. Only after source-owner proof may a KariSignature adapter use that API, subject to independently issued durable author consent, transactional revocation and runtime RBAC.
+
+## WS-04A5: Canonical bounded-text read contract (fail-closed, not yet a backend)
+
+The canonical `ArtifactStore` interface now includes
+`read_owner_active_text_bounded(artifact_id, tenant_id, user_id, *, max_bytes=65536)`.
+This method is intentionally a concrete **denial default** returning
+`bounded_artifact_read_unavailable`, so all existing backends, including
+`SupabaseArtifactStore`, remain unsupported until they implement a
+transport-enforced byte cap. It is not a renamed `download` method and
+cannot silently fall back to full-object buffering. A future implementation
+must enforce owner/tenant/active checks, prohibit external-source consent
+inference, cap transferred bytes before allocation, and verify the original
+SHA-256 against exactly those bytes.
+
+`tests/services/test_artifact_storage_platform_client.py` now asserts that
+the inherited negative implementation returns no bytes and does not even
+initialize the Supabase storage bucket. A trap bucket raises if a whole-object
+download is invoked. This establishes a fail-closed contract but **does not**
+prove a working streamed read or positive capability. Those tests, backend
+transport support, PostgreSQL deletion fencing and author-issued consent
+remain separate release gates. The WS-04A document reader remains removed
+and consumer functionality disabled.
