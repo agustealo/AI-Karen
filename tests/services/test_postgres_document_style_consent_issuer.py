@@ -141,8 +141,107 @@ async def test_database_error_never_becomes_consent():
     assert await issuer.verify_current(**scope) is None
 
 
-async def test_no_public_mutation_or_runtime_installation():
-    issuer, _, _, _ = fixture()
-    assert not hasattr(issuer, "issue")
-    assert not hasattr(issuer, "grant")
-    assert not hasattr(issuer, "revoke")
+
+async def test_default_issuer_cannot_mint_or_revoke_a_receipt():
+    issuer, scope, session, _ = fixture()
+    assert await issuer.issue_first_party(
+        **scope, analysis_allowed=True, style_use_allowed=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        correlation_id="no-policy",
+    ) is None
+    assert await issuer.revoke_first_party(**scope, correlation_id="no-policy") is False
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("case", [
+    "policy_denied", "falsey_consent", "expired", "invalid_scope",
+    "invalid_correlation", "naive_expiry", "wrong_use_type",
+])
+async def test_issue_denied_without_trusted_complete_authorization(case):
+    _, scope, session, _ = fixture()
+    policy = SimpleNamespace(
+        authorize_issuance=AsyncMock(return_value=True),
+        authorize_revocation=AsyncMock(return_value=True),
+    )
+    client = SimpleNamespace(get_async_session=lambda: FakeContext(session))
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: client, issuance_policy=policy
+    )
+    request = dict(
+        **scope, analysis_allowed=True, style_use_allowed=False,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        correlation_id="consent-correlation",
+    )
+    if case == "policy_denied":
+        policy.authorize_issuance.return_value = False
+    elif case == "falsey_consent":
+        request["analysis_allowed"] = False
+    elif case == "expired":
+        request["expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    elif case == "invalid_scope":
+        request["artifact_id"] = "arbitrary-document-id"
+    elif case == "invalid_correlation":
+        request["correlation_id"] = " "
+    elif case == "naive_expiry":
+        request["expires_at"] = datetime.utcnow()
+    elif case == "wrong_use_type":
+        request["style_use_allowed"] = 1
+    assert await issuer.issue_first_party(**request) is None
+    session.execute.assert_not_awaited()
+
+
+async def test_server_generated_receipt_uses_canonical_file_digest():
+    _, scope, session, _ = fixture()
+    class DbRow:
+        def first(self):
+            return ("a" * 64,)
+    session.execute.side_effect = [
+        FakeResult(None), FakeResult(None), FakeResult(None),
+        DbRow(), FakeResult(None),
+    ]
+    policy = SimpleNamespace(
+        authorize_issuance=AsyncMock(return_value=True),
+        authorize_revocation=AsyncMock(return_value=True),
+    )
+    client = SimpleNamespace(get_async_session=lambda: FakeContext(session))
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: client, issuance_policy=policy
+    )
+    receipt = await issuer.issue_first_party(
+        **scope, analysis_allowed=True, style_use_allowed=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        correlation_id="author-issued",
+    )
+    assert str(uuid.UUID(receipt)) == receipt
+    assert session.execute.await_count == 5
+    params = session.execute.await_args_list[-1].args[1]
+    assert params["digest"] == "a" * 64
+    assert params["receipt"] == receipt
+    assert params["actor"] == scope["actor_id"]
+    assert params["artifact"] == scope["artifact_id"]
+
+
+async def test_revocation_requires_host_permission_and_scope():
+    _, scope, session, _ = fixture()
+    policy = SimpleNamespace(
+        authorize_issuance=AsyncMock(return_value=True),
+        authorize_revocation=AsyncMock(return_value=False),
+    )
+    client = SimpleNamespace(get_async_session=lambda: FakeContext(session))
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: client, issuance_policy=policy
+    )
+    assert await issuer.revoke_first_party(**scope, correlation_id="deny-revoke") is False
+    session.execute.assert_not_awaited()
+    policy.authorize_revocation.return_value = True
+    class Changed:
+        def first(self):
+            return (uuid.uuid4(),)
+    session.execute.side_effect = [
+        FakeResult(None), FakeResult(None), FakeResult(None), Changed(),
+    ]
+    assert await issuer.revoke_first_party(**scope, correlation_id="revoke") is True
+    assert session.execute.await_count == 4
+    assert "UPDATE public.writing_style_document_consents" in str(
+        session.execute.await_args_list[-1].args[0]
+    )
