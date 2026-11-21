@@ -224,3 +224,13 @@ The new regression matrix in `tests/services/test_artifact_storage_platform_clie
 ### WS-04A6 follow-up hardening
 
 The signed-range reader now disallows non-loopback plain HTTP to protect the short-lived signed token in transit. A hostile incremental response regression verifies that a server emitting arbitrarily many raw chunks cannot make the application allocate beyond the declared owner-size budget: the iterator is abandoned immediately on its first over-budget chunk. The existing code remains unavailable for KariSignature until author consent and WS-02C runtime composition are implemented and proved. Live Supabase integration has not yet been executed.
+
+## WS-04A7: Signed URL logging finding and defensive fix
+
+Independent security review of `a7568353ce2983046bd6c09c062c28d5724c52bb` found a **P2 bearer credential exposure**: HTTPX's INFO request logs can include the signed object URL `?token=...`. Karen's supported text formatter previously emitted `record.getMessage()` unredacted. The credential could otherwise be replayed while the signed link remains valid, bypassing subsequent owner/archive checks.
+
+This workstream now reuses the **canonical** logging redaction owner, `src/ai_karen_engine/core/logging/redaction.py`, for complete signed-URL query token removal (including short and encoded values). An idempotent `SignedStorageURLLogFilter` sanitizes HTTPX request log records **before** handlers run, preserving unrelated HTTPX INFO events. The filter is installed by both `setup_sinks()` and immediately before the signed object range read in the existing storage repository. `RuntimeTextFormatter` also invokes the same canonical redaction service, so text output does not rely solely on the transport filter. The JSON formatter already uses canonical `redact_data`.
+
+The regression in `tests/services/test_artifact_storage_platform_client.py` exercises a real HTTPX INFO request via mocked transport, formats captured records with `RuntimeTextFormatter`, and rejects the raw token in captured records or formatted text. Short and URL-encoded token values are separately verified.
+
+**No live Supabase storage acceptance, durable author-issued consent issuer or authenticated WS-02C runtime registration is claimed.** Treat the logging correction as unverified until new-head CI and independent review pass; keep consumer writing-style ingestion disabled.
