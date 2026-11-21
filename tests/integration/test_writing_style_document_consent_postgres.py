@@ -595,11 +595,28 @@ async def test_first_party_author_consent_postgres(
         # Only one-way revocation is permitted; cannot un-revoke or alter
         # scope/digest/permissions even as the authenticated author.
         assert await issuer.revoke_first_party(
-            **scope, correlation_id="deny-revoke",
+            **scope, correlation_id="deny-revoke", request=bearer_request,
         ) is False
         policy.authorize_revocation.return_value = True
+        verifier.validate_token.return_value = {
+            "status": auth_middleware.TokenStatus.REVOKED,
+            "payload": claims,
+        }
         assert await issuer.revoke_first_party(
-            **scope, correlation_id="author-revoke",
+            **scope, correlation_id="revoked-bearer-denied",
+            request=bearer_request,
+        ) is False
+        assert await raw.fetchval(
+            "SELECT revoked_at IS NULL "
+            "FROM public.writing_style_document_consents "
+            "WHERE receipt_id=$1", receipt,
+        ) is True
+        verifier.validate_token.return_value = {
+            "status": auth_middleware.TokenStatus.VALID,
+            "payload": claims,
+        }
+        assert await issuer.revoke_first_party(
+            **scope, correlation_id="author-revoke", request=bearer_request,
         ) is True
         assert await issuer.verify_current(**scope) is None
         with pytest.raises(asyncpg.PostgresError):
