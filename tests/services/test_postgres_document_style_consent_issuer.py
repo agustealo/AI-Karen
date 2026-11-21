@@ -73,6 +73,30 @@ async def test_valid_receipt_matches_scope_and_preserves_separate_use_permission
     assert decision.analysis_allowed is True
     assert decision.style_use_allowed is False
     assert session.execute.await_count == 4  # three RLS config calls + SELECT
+    # A fake row cannot establish database authorization: require the actual
+    # statement to retain every source/consent lifetime and owner fence.
+    statement, params = session.execute.await_args.args
+    sql = str(statement)
+    for mandatory in (
+        "FOR SHARE OF c, f, p",
+        "c.revoked_at IS NULL",
+        "c.expires_at>clock_timestamp()",
+        "c.author_attested IS TRUE",
+        "c.analysis_allowed IS TRUE",
+        "f.deleted_at IS NULL",
+        "f.sha256=c.source_sha256",
+        "f.owner_user_id=c.author_actor_id",
+        "p.owner_actor_id=c.owner_actor_id",
+        "f.bytes BETWEEN 1 AND 65536",
+        "p.state<>'revoked'",
+    ):
+        assert mandatory in sql
+    assert params == {
+        "tenant": scope["tenant_id"],
+        "profile": scope["profile_id"],
+        "actor": scope["actor_id"],
+        "artifact": scope["artifact_id"],
+    }
 
 
 @pytest.mark.parametrize("field", ["tenant_id", "actor_id", "profile_id", "artifact_id"])
