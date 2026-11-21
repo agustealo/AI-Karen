@@ -673,29 +673,36 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                 )
                 assert invalid.status_code == 422
 
-                # Compare-and-swap ordering is enforced through the same
-                # authenticated HTTP and durable receipt path.
+                # Actual signed session -> canonical runtime -> RLS SQL
+                # must move a pin atomically, even when two legacy positions
+                # are both zero. No UI array-index update is trusted.
                 reorder_pin = await create_owned_pin("runtime-http-reorder")
+                reorder_neighbor = await create_owned_pin("runtime-http-neighbor")
                 reorder_key = str(uuid.uuid4())
                 reorder_body = {
                     "operation": "reorder",
                     "idempotency_key": reorder_key,
                     "pin_id": str(reorder_pin),
                     "expected_revision": 1,
-                    "position": 7,
+                    "position": 1,
                 }
                 reordered = await http.post(
                     mutation_url, json=reorder_body, headers=owner_headers
                 )
                 assert reordered.status_code == 200, reordered.text
                 assert reordered.json()["receipt"]["committed_revision"] == 2
-                ordered_row = await raw.fetchrow("""
-                    SELECT position, revision FROM public.conversation_presentation_pins
-                    WHERE pin_id=$1
-                """, reorder_pin)
-                assert ordered_row is not None
-                assert ordered_row["position"] == 7
-                assert ordered_row["revision"] == 2
+                ordered_rows = await raw.fetch("""
+                    SELECT pin_id, position, revision
+                    FROM public.conversation_presentation_pins
+                    WHERE tenant_id=$1 AND user_id=$2
+                      AND pin_id=ANY($3::uuid[])
+                    ORDER BY position
+                """, tenant_b, owner_b, [reorder_pin, reorder_neighbor])
+                assert [(row["pin_id"], row["position"], row["revision"])
+                        for row in ordered_rows] == [
+                    (reorder_neighbor, 0, 1),
+                    (reorder_pin, 1, 2),
+                ]
                 reordered_retry = await http.post(
                     mutation_url, json=reorder_body, headers=owner_headers
                 )
@@ -711,6 +718,23 @@ async def test_pin_ledger_real_postgres_rls_fk_cas_rollback_and_deletion(monkeyp
                     SELECT revision FROM public.conversation_presentation_pins
                     WHERE pin_id=$1
                 """, reorder_pin) == 2
+
+                out_of_range = await http.post(
+                    mutation_url,
+                    json={
+                        **reorder_body,
+                        "idempotency_key": str(uuid.uuid4()),
+                        "expected_revision": 2,
+                        "position": 99,
+                    },
+                    headers=owner_headers,
+                )
+                assert out_of_range.status_code == 409
+                assert await raw.fetchval("""
+                    SELECT count(*) FROM public.conversation_presentation_pins
+                    WHERE tenant_id=$1 AND user_id=$2
+                      AND pin_id=ANY($3::uuid[]) AND position IN (0,1)
+                """, tenant_b, owner_b, [reorder_pin, reorder_neighbor]) == 2
 
                 # Receipt insert failure must roll back the underlying DELETE
                 # through the real HTTP route; a 503 can never mean committed.
