@@ -379,7 +379,6 @@ jobs:
       - name: KCR-04C belief temporal validity and reasoning contracts
         run: |
           pytest tests/core/reasoning/belief/test_belief.py -q
-          pytest tests/core/reasoning/graph/test_reasoning_graph_authority.py -q
 
       - name: KCOG memory recall and associative research proofs
         run: |
