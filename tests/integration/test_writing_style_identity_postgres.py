@@ -163,20 +163,67 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
         )
         assert (await resolver.resolve(request)).revision_number == 1
 
-        # FORCE RLS protects even direct SQL under a non-superuser backend role.
+        # Real FORCE RLS checks both tenant and principal, including direct
+        # SQL that bypasses the repository's WHERE clauses.
+        async def direct_visible(*, current_tenant, current_actor, purpose):
+            async with TestClient().get_async_session() as session:
+                for setting, value in (
+                    ("app.current_tenant_id", str(current_tenant)),
+                    ("app.current_user_id", str(current_actor)),
+                    ("app.current_style_purpose", purpose),
+                ):
+                    await session.execute(
+                        text("SELECT set_config(:setting, :value, true)"),
+                        {"setting": setting, "value": value},
+                    )
+                counts = []
+                for table in (
+                    "writing_style_profiles", "writing_style_revisions",
+                    "writing_style_grants", "writing_style_audit",
+                ):
+                    result = await session.execute(
+                        text(f"SELECT count(*) FROM public.{table}")
+                    )
+                    counts.append(int(result.scalar_one()))
+                return counts
+
+        assert await direct_visible(
+            current_tenant=tenant_b, current_actor=delegate,
+            purpose="draft_email",
+        ) == [0, 0, 0, 0]
+        assert await direct_visible(
+            current_tenant=tenant_a, current_actor=stranger,
+            purpose="draft_email",
+        ) == [0, 0, 0, 0]
+        assert await direct_visible(
+            current_tenant=tenant_a, current_actor=delegate,
+            purpose="publish_social",
+        ) == [0, 0, 1, 0]
+        assert (await direct_visible(
+            current_tenant=tenant_a, current_actor=delegate,
+            purpose="draft_email",
+        ))[:2] == [1, 1]
+
+        # A forged actor UUID supplied directly to a SQL mutation cannot
+        # bypass the authenticated principal's RLS context.
         async with TestClient().get_async_session() as session:
             await session.execute(
                 text("SELECT set_config('app.current_tenant_id', :t, true)"),
-                {"t": str(tenant_b)},
+                {"t": str(tenant_a)},
             )
-            invisible = await session.execute(
+            await session.execute(
+                text("SELECT set_config('app.current_user_id', :u, true)"),
+                {"u": str(stranger)},
+            )
+            changed = await session.execute(
                 text(
-                    "SELECT profile_id FROM public.writing_style_profiles "
-                    "WHERE tenant_id=CAST(:tenant AS uuid)"
+                    "UPDATE public.writing_style_profiles SET label='forged' "
+                    "WHERE profile_id=CAST(:profile AS uuid) "
+                    "AND owner_actor_id=CAST(:owner AS uuid) RETURNING profile_id"
                 ),
-                {"tenant": str(tenant_a)},
+                {"profile": str(profile), "owner": str(owner)},
             )
-            assert invisible.scalars().all() == []
+            assert changed.first() is None
 
         # Concurrent writes from revision 1 have exactly one winner.
         async def publish_again(index: int):
@@ -211,6 +258,10 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
                     {"t": str(tenant_a)},
                 )
                 await session.execute(
+                    text("SELECT set_config('app.current_user_id', :u, true)"),
+                    {"u": str(owner)},
+                )
+                await session.execute(
                     text(
                         "UPDATE public.writing_style_revisions SET "
                         "approved_expression='{}'::jsonb WHERE "
@@ -225,6 +276,10 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             await session.execute(
                 text("SELECT set_config('app.current_tenant_id', :t, true)"),
                 {"t": str(tenant_a)},
+            )
+            await session.execute(
+                text("SELECT set_config('app.current_user_id', :u, true)"),
+                {"u": str(owner)},
             )
             result = await session.execute(
                 text(
