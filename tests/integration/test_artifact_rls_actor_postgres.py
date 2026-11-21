@@ -123,7 +123,7 @@ async def test_non_bypass_actor_rls_owner_archive_and_transaction_isolation() ->
             policy = (
                 await admin.execute(
                     text(
-                        "SELECT rowsecurity, relforcerowsecurity FROM pg_class "
+                        "SELECT relrowsecurity AS rowsecurity, relforcerowsecurity FROM pg_class "
                         "WHERE oid = 'public.files'::regclass"
                     )
                 )
@@ -203,8 +203,11 @@ async def test_non_bypass_actor_rls_owner_archive_and_transaction_isolation() ->
 
         # The real repository is exercised under a non-bypass role for every
         # fresh transaction, not just an administrative query with a predicate.
+        async def owner_scoped_session():
+            return await actor_session(tenant_a, owner_a)
+
         store_a = SupabaseArtifactStore(
-            session_factory=lambda: actor_session(tenant_a, owner_a),
+            session_factory=owner_scoped_session,
             storage_client=platform,
         )
         granted = await store_a.read_owner_active_code(artifact_a, tenant_a, owner_a)
