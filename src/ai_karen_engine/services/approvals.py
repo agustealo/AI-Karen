@@ -395,6 +395,20 @@ class ApprovalService:
         reason: Optional[str] = None,
     ) -> Dict[str, Any]:
         user_id, tenant_id = _identity(user)
+        # A generic chat approval decision is not a bearer-verified author
+        # confirmation and must never decide a document consent request.
+        current = await self._repository.get(
+            approval_id, tenant_id=tenant_id, user_id=user_id,
+        )
+        if (
+            current is not None
+            and str(current.get("intent") or "").startswith(
+                "writing_style.document_consent."
+            )
+        ):
+            raise ApprovalScopeError(
+                "Document author consent requires fresh bearer confirmation"
+            )
         normalized = str(decision or "").strip().lower()
         if normalized not in {"approved", "rejected"}:
             raise ApprovalStateError("Decision must be approved or rejected")
