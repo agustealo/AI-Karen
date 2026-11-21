@@ -85,11 +85,13 @@ test.describe("real authenticated saved-pin reference readback", () => {
 
     const authorized = dock.getByTestId("karen-pins-authorized");
     await expect(authorized).toBeVisible();
-    await expect(authorized.getByText(pin.source.component_type.split(".").join(" · "), { exact: true })).toBeVisible();
-    await expect(authorized.getByText(
-      `Saved reference ${pin.position + 1} · Revision ${pin.revision}`,
-      { exact: true },
+    const savedLabel = `Saved reference ${pin.position + 1} · Revision ${pin.revision}`;
+    const savedRow = authorized.locator("article").filter({ hasText: savedLabel });
+    await expect(savedRow).toHaveCount(1);
+    await expect(savedRow.getByText(
+      pin.source.component_type.split(".").join(" · "), { exact: true },
     )).toBeVisible();
+    await expect(savedRow.getByText(savedLabel, { exact: true })).toBeVisible();
     await expect(dock.getByTestId("karen-pinning-not-available")).toHaveCount(0);
     await expect(dock.getByTestId("karen-pins-empty")).toHaveCount(0);
     // References are NOT renderable card data, even for a verified owner.
@@ -100,10 +102,9 @@ test.describe("real authenticated saved-pin reference readback", () => {
     await expect(shell).toBeVisible({ timeout: 30_000 });
     const restored = dock.getByTestId("karen-pins-authorized");
     await expect(restored).toBeVisible();
-    await expect(restored.getByText(
-      `Saved reference ${pin.position + 1} · Revision ${pin.revision}`,
-      { exact: true },
-    )).toBeVisible();
+    const restoredRow = restored.locator("article").filter({ hasText: savedLabel });
+    await expect(restoredRow).toHaveCount(1);
+    await expect(restoredRow.getByText(savedLabel, { exact: true })).toBeVisible();
     await expect(dock.getByTestId("karen-pinning-not-available")).toHaveCount(0);
   });
 
