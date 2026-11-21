@@ -471,3 +471,66 @@ test('KCONTENT-DENY-LIVE: foreign owner and stale revision fail closed', async (
     await isolated.close();
   }
 });
+
+/** Read-only live denial for an independently attested retired owner artifact. */
+test('KCONTENT-REVOKED-LIVE: retired owner source remains unavailable', async ({ page }) => {
+  test.skip(
+    !enabled || process.env.KAREN_CONTENT_INTELLIGENCE_REVOCATION_ACCEPTANCE !== 'true',
+    'Protected real revoked-source fixture required',
+  );
+  test.setTimeout(6 * 60_000);
+  if (!email || !password) throw new Error('Sanitized owner credentials required');
+  const activeId = process.env.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID;
+  const retiredId = process.env.KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID;
+  const retiredRevision = process.env.KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION;
+  if (!activeId || !retiredId || !/^[a-f0-9-]{36}$/.test(activeId) ||
+      !/^[a-f0-9-]{36}$/.test(retiredId) || activeId === retiredId ||
+      !retiredRevision || !/^[a-f0-9]{64}$/.test(retiredRevision)) {
+    throw new Error('Distinct active and independently attested retired source required');
+  }
+  const origin = trustedOrigin();
+  await signInApprovedKaren(page, email, password, {
+    allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1',
+  });
+  const inventoryWait = nextRealPage(page, origin);
+  await enterWorkspace(page);
+  const inventoryHttp = await inventoryWait;
+  expect(inventoryHttp.status()).toBe(200);
+  const inventory = inventoryResponse(await inventoryHttp.json());
+  const active = inventory.items.find((item) => item.source_id === activeId);
+  expect(active, 'Active owner source must be present').toBeDefined();
+  if (!active) throw new Error('Active source control unavailable');
+  expect(inventory.items.some((item) => item.source_id === retiredId)).toBe(false);
+  const observedHeaders = await inventoryHttp.request().allHeaders();
+  if (!observedHeaders.authorization && !observedHeaders.cookie) {
+    throw new Error('Owner API transport is not authenticated');
+  }
+  const url = new URL('/api/plugins/content-intelligence/owner-sources', origin).toString();
+  const headers = observedHeaders.authorization
+    ? { authorization: observedHeaders.authorization } : undefined;
+  const control = await page.request.post(url, {
+    headers,
+    data: { operation: 'analyze', references: [
+      { source_id: activeId, revision: active.sha256 },
+    ] },
+  });
+  expect(control.status(), 'Active owner analysis must succeed').toBe(200);
+  const result = await control.json();
+  expect(result.operation).toBe('analyze');
+  expect(result.persisted).toBe(false);
+  expect(result.documents).toHaveLength(1);
+  expect(result.documents[0].id).toBe(activeId);
+  expect(result.documents[0].sha256).toBe(active.sha256);
+
+  const denied = await page.request.post(url, {
+    headers,
+    data: { operation: 'analyze', references: [
+      { source_id: retiredId, revision: retiredRevision },
+    ] },
+  });
+  expect(denied.status(), 'Independently attested retired source must be denied').toBe(403);
+  const responseText = await denied.text();
+  expect(responseText.length).toBeLessThan(2048);
+  expect(responseText).not.toContain(retiredId);
+  expect(responseText).not.toContain(retiredRevision);
+});

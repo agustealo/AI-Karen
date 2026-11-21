@@ -24,6 +24,7 @@ on:
           - file-explorer
           - content-intelligence
           - content-intelligence-denial
+          - content-intelligence-revocation
       target_sha:
         description: Exact reviewed 40-character main commit SHA for protected acceptance
         type: string
@@ -727,7 +728,7 @@ jobs:
   # KUI: protected settings, navigation, and file-explorer browser acceptance.
   # Reuse the approved main/deployment/credential boundary, not a second runner.
   authenticated-settings-visual-acceptance:
-    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: karen-sanitized-browser-acceptance
@@ -735,14 +736,17 @@ jobs:
       contents: read
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
-      KAREN_BASE_URL: ${{ ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario != 'file-explorer' && inputs.scenario != 'content-intelligence' && inputs.scenario != 'content-intelligence-denial') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
+      KAREN_BASE_URL: ${{ ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario != 'file-explorer' && inputs.scenario != 'content-intelligence' && inputs.scenario != 'content-intelligence-denial' && inputs.scenario != 'content-intelligence-revocation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
-      KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && 'false' || 'true' }}
-      KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial') && 'true' || 'false' }}
+      KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && 'false' || 'true' }}
+      KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence' && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID }}
       KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID }}
       KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence-denial' && 'true' || 'false' }}
+      KAREN_CONTENT_INTELLIGENCE_REVOCATION_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence-revocation' && 'true' || 'false' }}
+      KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID }}
+      KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION: ${{ vars.KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION }}
       KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
       KAREN_NAV_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'navigation' && 'true' || 'false' }}
       KAREN_NAV_SANITIZED_CAPTURE: "false"
@@ -818,6 +822,13 @@ jobs:
             npx playwright test e2e/ux-user-journeys.spec.ts \
               --config=e2e/playwright.config.ts \
               --project=chromium --grep="UX-16" --reporter=list --retries=0
+          elif [[ "${{ inputs.scenario }}" == "content-intelligence-revocation" ]]; then
+            test -n "$KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" || { echo "::error::Missing active owner source"; exit 1; }
+            test -n "$KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID" || { echo "::error::Missing attested retired source"; exit 1; }
+            test -n "$KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION" || { echo "::error::Missing attested retired revision"; exit 1; }
+            npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
+              --config=e2e/playwright.config.ts \
+              --project=chromium --grep='KCONTENT-REVOKED-LIVE' --reporter=list --retries=0
           elif [[ "${{ inputs.scenario }}" == "content-intelligence-denial" ]]; then
             test -n "$KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" || { echo "::error::Missing genuine owner source ID"; exit 1; }
             test -n "$KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID" || { echo "::error::Missing genuine second-owner source ID"; exit 1; }
