@@ -636,6 +636,10 @@ class ChatRuntime:
                     trajectory, decision, request, plan, meter, start,
                 )
                 raise
+            except RuntimeError as recovery_exc:
+                if str(recovery_exc) != "memory_source_revoked_or_unverifiable":
+                    raise
+                return revoked_memory_result()
             if fallback is not None and fallback.answer:
                 # A recovered model answer is not a completed conversation
                 # until the same transcript owner used by ordinary chat has
@@ -1432,8 +1436,24 @@ class ChatRuntime:
                 )
                 raise
             except Exception as fallback_exc:
-                logger.error(
-                    "ChatRuntime stream fallback failed",
+                if str(fallback_exc) == "memory_source_revoked_or_unverifiable":
+                    # A fallback can lose consent while its provider is
+                    # running. Preserve this as authorization denial rather
+                    # than the original recoverable primary failure.
+                    exc = fallback_exc
+                    provider_meta["error_code"] = "CHAT_MEMORY_SOURCE_REVOKED"
+                    provider_meta["degradation_reason"] = (
+                        "memory_source_revoked_or_unverifiable"
+                    )
+                    self._emitter.emit(
+                        RuntimeEventType.REQUEST_FAILED,
+                        status="denied",
+                        error_type="MemorySourceRevoked",
+                        metadata={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
+                    )
+                else:
+                    logger.error(
+                        "ChatRuntime stream fallback failed",
                     extra={
                         "correlation_id": ctx.correlation_id,
                         "error_type": type(fallback_exc).__name__,
