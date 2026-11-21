@@ -137,6 +137,59 @@ describe("KAREN single-shot authenticated presentation pin mutation ingress", ()
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it("cancels an oversized chunked body without a content-length or upstream call", async () => {
+    const spy = vi.fn();
+    vi.stubGlobal("fetch", spy);
+    let canceled = false;
+    let nextChunkRead = false;
+    const streamed = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (nextChunkRead) {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({
+            operation: "unpin", idempotency_key: idempotencyKey, pin_id: pinId,
+          })));
+          controller.close();
+          return;
+        }
+        nextChunkRead = true;
+        controller.enqueue(new Uint8Array(4097));
+      },
+      cancel() { canceled = true; },
+    });
+    const chunked = new NextRequest("http://localhost:3000/api/chat/ag-ui/pins/mutations", {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: "Bearer signed-session" },
+      body: streamed,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    expect(chunked.headers.get("content-length")).toBeNull();
+    const response = await POST(chunked);
+    expect(response.status).toBe(413);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(canceled).toBe(true);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid streamed UTF-8 before any backend mutation", async () => {
+    const spy = vi.fn();
+    vi.stubGlobal("fetch", spy);
+    const streamed = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0xc3, 0x28]));
+        controller.close();
+      },
+    });
+    const invalid = new NextRequest("http://localhost:3000/api/chat/ag-ui/pins/mutations", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: streamed,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await POST(invalid);
+    expect(response.status).toBe(400);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("rejects query, non-JSON, malformed JSON and oversized payloads before forwarding", async () => {
     const spy = vi.fn();
     vi.stubGlobal("fetch", spy);
