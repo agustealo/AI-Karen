@@ -1356,13 +1356,19 @@ class ChatRuntime:
                 )
                 sequence += 1
         except (asyncio.CancelledError, GeneratorExit):
-            # A client close or a cancelled task cannot claim completed
-            # provider output. The canonical cancellation event is emitted
-            # before the best-effort persistence await.
-            await self._observe_request_cancellation(
-                trajectory, decision, request, plan, meter, stream_start,
-                request_id=request_id, conversation_id=conversation_id,
-            )
+            # A cancelled publication authorization leaves the producer
+            # suspended at its previous yield. Close it deterministically;
+            # otherwise the model or graph may continue running after the
+            # canonical request cancellation has been observed.
+            try:
+                close_stream = getattr(gen, "aclose", None)
+                if callable(close_stream):
+                    await close_stream()
+            finally:
+                await self._observe_request_cancellation(
+                    trajectory, decision, request, plan, meter, stream_start,
+                    request_id=request_id, conversation_id=conversation_id,
+                )
             raise
         except Exception as exc:
             if str(exc) == "memory_source_revoked_or_unverifiable":
