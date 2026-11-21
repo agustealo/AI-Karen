@@ -27,10 +27,15 @@ describe('first-party document author confirmation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.get.mockResolvedValue({ ...preview });
-    api.post.mockResolvedValue({
-      approval_id: approvalId,
-      status: 'approved',
-    });
+    api.post.mockImplementation((url: string) => Promise.resolve(
+      url.endsWith('/issue')
+        ? {
+            approval_id: approvalId,
+            status: 'issued',
+            receipt_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          }
+        : { approval_id: approvalId, status: 'approved' },
+    ));
   });
 
   it('requires author review and explicit checkbox before confirmation', async () => {
@@ -53,8 +58,13 @@ describe('first-party document author confirmation', () => {
         { confirmed: true },
       );
     });
-    expect(await screen.findByText(/Author approval recorded/)).toBeTruthy();
-    expect(screen.getByText(/not a document-consent receipt/)).toBeTruthy();
+    expect(await screen.findByText(/Document-consent receipt issued/)).toBeTruthy();
+    expect(screen.getByText(/Verified receipt ID/)).toBeTruthy();
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/issue',
+      undefined,
+      {},
+    );
     expect(screen.queryByRole('button', { name: 'Confirm author consent' })).toBeNull();
   });
 
@@ -75,6 +85,31 @@ describe('first-party document author confirmation', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByText(/Author approval recorded/)).toBeNull();
     expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps approval truthful when receipt issuance fails and supports retry', async () => {
+    let issues = 0;
+    api.post.mockImplementation((url: string) => {
+      if (url.endsWith('/confirm')) {
+        return Promise.resolve({ approval_id: approvalId, status: 'approved' });
+      }
+      issues += 1;
+      if (issues === 1) return Promise.reject(new Error('database unavailable'));
+      return Promise.resolve({
+        approval_id: approvalId,
+        status: 'issued',
+        receipt_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      });
+    });
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    await screen.findByText(preview.artifact_id);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm author consent' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByText(/No document-consent receipt has been verified/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry receipt issuance' }));
+    expect(await screen.findByText(/Verified receipt ID/)).toBeTruthy();
+    expect(api.post).toHaveBeenCalledTimes(3);
   });
 
   it('does not display pending confirmation for a decided approval', async () => {
