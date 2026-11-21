@@ -233,23 +233,23 @@ async def test_bounded_signed_range_rejects_bad_storage_responses(monkeypatch, r
                 else hashlib.sha256(body).hexdigest()),
         storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt",
     )
+    streams = []
+
     def handler(request):
+        response_body = body + b"excess" if response == "oversend" else body
+        stream = UnconsumedStream(response_body)
+        streams.append(stream)
         if response == "full":
-            return httpx.Response(200, stream=UnconsumedStream(body * 100000))
+            return httpx.Response(200, stream=stream)
         if response == "missing_range":
-            return httpx.Response(206, stream=UnconsumedStream(body))
+            return httpx.Response(206, stream=stream)
         if response == "wrong_total":
             return httpx.Response(
-                206, stream=UnconsumedStream(body),
+                206, stream=stream,
                 headers={"Content-Range": f"bytes 0-{len(body)-1}/{len(body)+1}"},
             )
-        if response == "oversend":
-            return httpx.Response(
-                206, stream=UnconsumedStream(body + b"excess"),
-                headers={"Content-Range": f"bytes 0-{len(body)-1}/{len(body)}"},
-            )
         return httpx.Response(
-            206, content=body,
+            206, stream=stream,
             headers={"Content-Range": f"bytes 0-{len(body)-1}/{len(body)}"},
         )
     store, bucket, _ = bounded_store(
@@ -261,6 +261,11 @@ async def test_bounded_signed_range_rejects_bad_storage_responses(monkeypatch, r
     assert not result.success
     assert result.data is None
     assert result.error == "bounded_artifact_read_unavailable"
+    # Header failures must reject before any content consumption.
+    # Oversized responses and wrong digests must exercise a real raw stream.
+    assert len(streams) == 1
+    expected_reads = 1 if response in {"oversend", "wrong_digest"} else 0
+    assert streams[0].reads == expected_reads
 
 
 @pytest.mark.asyncio
