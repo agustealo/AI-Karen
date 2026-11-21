@@ -182,3 +182,11 @@ test until a canonical bounded storage-read contract exists.
 issuer. No document bytes can flow through the removed adapter, and the
 consumer writing-style feature remains disabled. This is a defensive scope
 reduction, not completion of WS-04A3 or WS-04A4.
+
+## WS-04A4: Canonical storage capability audit and negative contract proof
+
+Inspection of the current storage infrastructure found that `SupabaseArtifactStore.download` returns a `BytesIO` wrapping an already-fetched complete Supabase Storage object. The shared `ObjectStorageClient.get` similarly returns `bytes` rather than a verified bounded stream, and `ArtifactStore.read_owner_active_code` checks owner, size and digest but also calls whole-object `bucket.download`. These existing contracts cannot guarantee resource-bounded downloads when storage bytes disagree with DB metadata. Do **not** reuse them for user-provided writing-style source texts under a claimed transport/memory budget.
+
+A new negative regression in `tests/extensions/test_artifact_writing_style_source_authority.py` proves the inactive metadata+issuer authorization path does not call `ArtifactStore.download` at all, including on a positive in-memory consent decision. It verifies the two metadata reads and two current issuer checks and provides a download dependency that raises if touched. This test does not establish a production consent issuer; it only fences off unsafe byte access from the current adapter.
+
+To unblock actual WS-02C content ingestion, extend the **canonical storage owner** with an explicit owner-scoped range/stream API whose response size is enforced at the transport layer; add a backend capability check that denies when streaming/range semantics are unavailable; then test a maliciously oversized object with a deceptively small metadata size and measure actual bytes transferred. Only after source-owner proof may a KariSignature adapter use that API, subject to independently issued durable author consent, transactional revocation and runtime RBAC.
