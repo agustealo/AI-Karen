@@ -144,6 +144,36 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             revision=saved,
         )
 
+        # A delegated identity can be revoked without revoking other purposes.
+        assert await repo.revoke_grant(
+            tenant_id=str(tenant_a), actor_id=str(owner),
+            profile_id=str(profile), grantee_actor_id=str(delegate),
+            purpose="draft_email", correlation_id="revoke-grant",
+        )
+        with pytest.raises(PermissionError, match="style_unavailable"):
+            await resolver.resolve(request)
+        await repo.grant_use(
+            tenant_id=str(tenant_a), actor_id=str(owner),
+            profile_id=str(profile), grantee_actor_id=str(delegate),
+            purpose="draft_email", correlation_id="regrant-a",
+        )
+        assert (await resolver.resolve(request)).revision_number == 1
+
+        # FORCE RLS protects even direct SQL under a non-superuser backend role.
+        async with TestClient().get_async_session() as session:
+            await session.execute(
+                text("SELECT set_config('app.current_tenant_id', :t, true)"),
+                {"t": str(tenant_b)},
+            )
+            invisible = await session.execute(
+                text(
+                    "SELECT profile_id FROM public.writing_style_profiles "
+                    "WHERE tenant_id=CAST(:tenant AS uuid)"
+                ),
+                {"tenant": str(tenant_a)},
+            )
+            assert invisible.scalars().all() == []
+
         # Concurrent writes from revision 1 have exactly one winner.
         async def publish_again(index: int):
             return await repo.publish(
@@ -202,7 +232,8 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             )
             events = result.fetchall()
         assert [item[0] for item in events] == [
-            "create", "publish", "grant", "publish", "revoke_profile",
+            "create", "publish", "grant", "revoke_grant", "grant",
+            "publish", "revoke_profile",
         ]
     finally:
         if engine is not None:
