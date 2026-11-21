@@ -102,11 +102,11 @@ jobs:
               position = sql.find(marker)
               if position < 0:
                   raise RuntimeError(f"Missing canonical tenant conversion: {table}")
-              start = sql.rfind("DO $", 0, position)
-              finish = sql.find("END $;", position)
+              start = sql.rfind("DO " + chr(36) * 2, 0, position)
+              finish = sql.find("END " + chr(36) * 2 + ";", position)
               if start < 0 or finish < 0:
                   raise RuntimeError(f"Malformed canonical tenant conversion: {table}")
-              block = sql[start : finish + len("END $;")]
+              block = sql[start : finish + len("END " + chr(36) * 2 + ";")]
               if f"ALTER COLUMN tenant_id TYPE UUID" not in block:
                   raise RuntimeError(f"Tenant type correction missing: {table}")
               return block
