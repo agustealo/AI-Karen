@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
+import { ContentIntelligenceSelectionPanel } from './ContentIntelligenceSelectionPanel';
 
 interface ExplorerItem {
   source_id: string;
@@ -299,5 +300,24 @@ export function FileExplorerInventoryHost({
     pageKey: principalKey + ':' + (currentPage?.generation ?? 'pending'),
   };
 
-  return <>{children(props)}</>;
+  const selectedAnalysisSources = currentPage && !currentError && !loading
+    ? selectedSourceIds.flatMap((id) => {
+      const item = currentPage.items.find((entry) => entry.source_id === id);
+      return item ? [{ source_id: item.source_id, revision: item.revision }] : [];
+    })
+    : [];
+  const selectionKey = props.pageKey + ':' +
+    selectedAnalysisSources.map((source) => source.source_id + ':' + source.revision).join('|');
+
+  return (
+    <>
+      {children(props)}
+      {selectedAnalysisSources.length > 0 && (
+        <ContentIntelligenceSelectionPanel
+          key={selectionKey}
+          sources={selectedAnalysisSources}
+        />
+      )}
+    </>
+  );
 }

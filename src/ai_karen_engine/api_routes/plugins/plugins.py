@@ -134,6 +134,23 @@ class FileExplorerInventoryResponse(BaseModel):
     correlation_id: str
 
 
+class ContentSourceReference(BaseModel):
+    """A selection receipt is not a permission grant."""
+
+    model_config = ConfigDict(extra="forbid")
+    source_id: UUID
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ContentOwnerSourcesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: Literal["analyze", "search", "compare"]
+    references: List[ContentSourceReference] = Field(min_length=1, max_length=12)
+    query: Optional[str] = Field(default=None, min_length=1, max_length=512)
+    left_id: Optional[UUID] = None
+    right_id: Optional[UUID] = None
+
+
 def _response_meta(request: Request) -> Dict[str, str]:
     correlation_id = (
         getattr(request.state, "correlation_id", None)
@@ -484,6 +501,77 @@ async def list_file_explorer_inventory(
         )
         raise HTTPException(
             status_code=503, detail="File inventory is unavailable"
+        ) from None
+
+
+@router.post("/content-intelligence/owner-sources")
+async def analyze_content_owner_sources(
+    payload: ContentOwnerSourcesRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> Dict[str, Any]:
+    """Thin ingress: source reads and execution require runtime admission."""
+    user_id = str(current_user.get("user_id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    try:
+        if str(UUID(user_id)) != user_id or str(UUID(tenant_id)) != tenant_id:
+            raise ValueError("unscoped")
+    except (TypeError, ValueError, AttributeError):
+        raise HTTPException(status_code=401, detail="Authenticated user and tenant required") from None
+
+    rbac = get_rbac_manager()
+    permitted = rbac.has_permission(current_user, Permission.DATA_READ)
+    meta = _response_meta(request)
+    rbac.audit_access_attempt(
+        current_user,
+        Permission.DATA_READ,
+        resource=request.url.path,
+        granted=permitted,
+        request=request,
+        additional_context={
+            "operation": "content_owner_sources",
+            "request_id": meta["request_id"],
+            "correlation_id": meta["correlation_id"],
+        },
+    )
+    if not permitted:
+        raise HTTPException(status_code=403, detail="Content source access denied")
+
+    try:
+        return await plugin_service.analyze_content_owner_sources(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"],
+            correlation_id=meta["correlation_id"],
+            operation=payload.operation,
+            references=[
+                {"source_id": str(item.source_id), "revision": item.revision}
+                for item in payload.references
+            ],
+            query=payload.query,
+            left_id=str(payload.left_id) if payload.left_id is not None else None,
+            right_id=str(payload.right_id) if payload.right_id is not None else None,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Content source access denied") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid content source request") from None
+    except Exception as exc:
+        logger.warning(
+            "content_source_execution_unavailable",
+            extra={
+                "request_id": meta["request_id"],
+                "correlation_id": meta["correlation_id"],
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503, detail="Content source processing unavailable"
         ) from None
 
 

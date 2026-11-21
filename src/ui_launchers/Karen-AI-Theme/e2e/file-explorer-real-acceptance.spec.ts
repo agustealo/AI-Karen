@@ -249,3 +249,74 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   // A read-only acceptance run never uploads, changes ACLs or disables plugins.
   expect(info.project.name).toBe("chromium");
 });
+
+
+/**
+ * Opt-in real selection-to-analysis evidence. The dedicated acceptance owner
+ * must seed a supported, active text/code artifact on the first owner page,
+ * enable both canonical plugins, and supply its exact UUID. No route mocking.
+ * This opt-in gate is not considered satisfied when the test is skipped.
+ */
+test('KCONTENT-LIVE: selected owner text is analyzed by the authorized runtime', async (
+  { page },
+) => {
+  test.skip(
+    !enabled || process.env.KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE !== 'true',
+    'Requires authenticated Content Intelligence live acceptance setup',
+  );
+  test.setTimeout(6 * 60_000);
+  if (!email || !password) {
+    throw new Error('Dedicated KAREN_UX_EMAIL / KAREN_UX_PASSWORD required');
+  }
+  const expectedId = process.env.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID;
+  if (!expectedId || !/^[a-f0-9-]{36}$/.test(expectedId)) {
+    throw new Error('Seeded KAREN_CONTENT_INTELLIGENCE_SOURCE_ID UUID required');
+  }
+  const origin = trustedOrigin();
+  await page.setViewportSize(widths[0]);
+  await signInApprovedKaren(page, email, password, {
+    allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1',
+  });
+
+  const inventoryRequest = nextRealPage(page, origin);
+  await enterWorkspace(page);
+  const inventoryHttp = await inventoryRequest;
+  expect(inventoryHttp.status()).toBe(200);
+  const inventory = inventoryResponse(await inventoryHttp.json());
+  const selected = inventory.items.find((file) => file.source_id === expectedId);
+  expect(selected, 'Dedicated owned text artifact must appear in the live first page').toBeDefined();
+  if (!selected) throw new Error('Selected owner artifact not available');
+
+  const explorer = page.getByRole('region', { name: 'Shared File Explorer' });
+  await verifyDisplayedInventory(page, inventory);
+  await explorer.getByRole('checkbox', { name: 'Select ' + selected.name }).first().check();
+  await expect(
+    page.getByRole('button', { name: 'Analyze selected files' }),
+  ).toBeEnabled();
+
+  const analysisHttpPromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === origin.origin &&
+      url.pathname === '/api/plugins/content-intelligence/owner-sources' &&
+      response.request().method() === 'POST';
+  }, { timeout: 45_000 });
+  await page.getByRole('button', { name: 'Analyze selected files' }).click();
+  const analysisHttp = await analysisHttpPromise;
+  const requestPayload = analysisHttp.request().postDataJSON();
+  expect(requestPayload).toEqual({
+    operation: 'analyze',
+    references: [{ source_id: expectedId, revision: selected.sha256 }],
+  });
+  expect(analysisHttp.status(), 'Authorization or source reads must not silently degrade').toBe(200);
+  const responseBody = await analysisHttp.json();
+  expect(responseBody.operation).toBe('analyze');
+  expect(responseBody.persisted).toBe(false);
+  expect(responseBody.documents).toHaveLength(1);
+  expect(responseBody.documents[0].id).toBe(expectedId);
+  expect(responseBody.documents[0].sha256).toBe(selected.sha256);
+
+  const verifiedResult = page.getByRole('status', { name: 'Verified analysis results' });
+  await expect(verifiedResult).toBeVisible();
+  await expect(verifiedResult.getByText(selected.name)).toBeVisible();
+  await expect(verifiedResult.getByText(/Lexical analysis of 1 authorized file/)).toBeVisible();
+});
