@@ -45,6 +45,10 @@ class Result:
     def all(self):
         return self._first if isinstance(self._first, list) else []
 
+    def scalar_one(self):
+        assert self._first is not None
+        return self._first
+
 
 class FakeSession:
     def __init__(self, outputs):
@@ -123,7 +127,8 @@ def request(**updates):
 async def test_unpin_receipt_and_delete_share_single_scoped_commit(monkeypatch):
     row = receipt_row()
     fake, state, scopes = wire(monkeypatch, [
-        Result(), Result(), Result({"pin_id": PIN, "revision": 4}), Result(row),
+        Result(), Result(), Result({"pin_id": PIN, "revision": 4}),
+        Result([]), Result(row),
     ])
     result = await PresentationPinRepository().mutate_with_receipt(**request())
     assert result.receipt_id == RECEIPT
@@ -134,7 +139,8 @@ async def test_unpin_receipt_and_delete_share_single_scoped_commit(monkeypatch):
     assert "pg_advisory_xact_lock" in fake.queries[0]
     assert "SELECT receipt_id" in fake.queries[1]
     assert "DELETE FROM public.conversation_presentation_pins" in fake.queries[2]
-    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[3]
+    assert "SELECT pin_id, position, revision" in fake.queries[3]
+    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[4]
 
 
 @pytest.mark.asyncio
@@ -165,19 +171,19 @@ async def test_different_request_with_same_key_conflicts_before_any_mutation(mon
 async def test_receipt_insert_failure_rolls_back_the_deleted_pin(monkeypatch):
     fake, state, _ = wire(monkeypatch, [
         Result(), Result(), Result({"pin_id": PIN, "revision": 4}),
-        RuntimeError("receipt insert unavailable"),
+        Result([]), RuntimeError("receipt insert unavailable"),
     ])
     with pytest.raises(PresentationPinUnavailable):
         await PresentationPinRepository().mutate_with_receipt(**request())
     assert state == {"committed": False, "rolled_back": True}
-    assert len(fake.queries) == 4
+    assert len(fake.queries) == 5
 
 
 @pytest.mark.asyncio
 async def test_missing_unpin_still_records_truthful_absent_receipt(monkeypatch):
     absent = receipt_row(outcome="already_absent")
     fake, state, _ = wire(monkeypatch, [
-        Result(), Result(), Result(), Result(absent),
+        Result(), Result(), Result(), Result([]), Result(absent),
     ])
     result = await PresentationPinRepository().mutate_with_receipt(**request())
     assert result.outcome == "already_absent"
@@ -334,6 +340,72 @@ async def test_reorder_replayed_receipt_skips_all_row_updates(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_owner_normalization_closes_unpin_hole_without_touching_other_owner(monkeypatch):
+    fake, state, _ = wire(monkeypatch, [
+        Result([
+            {"pin_id": SECOND_PIN, "position": 0, "revision": 2},
+            {"pin_id": THIRD_PIN, "position": 3, "revision": 7},
+        ]),
+        Result([{"pin_id": THIRD_PIN, "revision": 8}]),
+    ])
+    async with module.async_transaction_scope(TENANT, user_id=USER) as session:
+        result = await module._reposition_owner_pins(
+            session, {"tenant": TENANT, "user": USER},
+        )
+    assert result is None
+    assert state["committed"]
+    assert len(fake.queries) == 2
+    assert "FOR UPDATE" in fake.queries[0]
+    assert "p.tenant_id = :tenant AND p.user_id = :user" in fake.queries[1]
+    assert json.loads(fake.params[1]["move_rows"]) == [
+        {"pin_id": THIRD_PIN, "position": 1, "expected_revision": 7},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_owner_normalization_insert_at_occupied_ordinal_shifts_neighbors(monkeypatch):
+    inserted = THIRD_PIN
+    fake, state, _ = wire(monkeypatch, [
+        Result([
+            {"pin_id": PIN, "position": 0, "revision": 2},
+            {"pin_id": SECOND_PIN, "position": 1, "revision": 4},
+            {"pin_id": inserted, "position": 0, "revision": 1},
+        ]),
+        Result([
+            {"pin_id": SECOND_PIN, "revision": 5},
+            {"pin_id": inserted, "revision": 2},
+        ]),
+    ])
+    async with module.async_transaction_scope(TENANT, user_id=USER) as session:
+        result = await module._reposition_owner_pins(
+            session, {"tenant": TENANT, "user": USER},
+            selected_pin=inserted, destination=1,
+        )
+    assert result == 2
+    assert state["committed"]
+    moves = json.loads(fake.params[1]["move_rows"])
+    assert moves == [
+        {"pin_id": inserted, "position": 1, "expected_revision": 1},
+        {"pin_id": SECOND_PIN, "position": 2, "expected_revision": 4},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_normalization_update_cardinality_failure_rolls_back_unpin_and_receipt(monkeypatch):
+    fake, state, _ = wire(monkeypatch, [
+        Result(), Result(), Result({"pin_id": PIN, "revision": 3}),
+        Result([
+            {"pin_id": SECOND_PIN, "position": 2, "revision": 1},
+        ]),
+        Result([]),
+    ])
+    with pytest.raises(PresentationPinConflict, match="revision"):
+        await PresentationPinRepository().mutate_with_receipt(**request())
+    assert len(fake.queries) == 5
+    assert state == {"committed": False, "rolled_back": True}
+
+
+@pytest.mark.asyncio
 async def test_untrusted_pin_admission_is_denied_before_sql(monkeypatch):
     scope = Mock(side_effect=AssertionError("SQL must not run"))
     monkeypatch.setattr(module, "async_transaction_scope", scope)
@@ -387,7 +459,7 @@ async def test_pin_requires_source_admission_and_receipts_existing_pin(monkeypat
         "expected_revision": None, "committed_revision": 3,
     }
     fake, state, _ = wire(monkeypatch, [
-        Result(), Result(), Result(pin_row), Result(result_row),
+        Result(), Result(), Result(pin_row), Result([]), Result(result_row),
     ])
     receipt = await PresentationPinRepository().mutate_with_receipt(
         **request(
@@ -400,9 +472,9 @@ async def test_pin_requires_source_admission_and_receipts_existing_pin(monkeypat
     admission.assert_called_once()
     assert receipt.outcome == "pinned"
     assert state["committed"]
-    assert len(fake.queries) == 4
+    assert len(fake.queries) == 5
     assert "SELECT" in fake.queries[2]
-    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[3]
+    assert "INSERT INTO public.conversation_presentation_pin_mutation_receipts" in fake.queries[4]
 
 
 @pytest.mark.asyncio
