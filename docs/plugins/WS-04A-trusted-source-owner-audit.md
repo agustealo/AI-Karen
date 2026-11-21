@@ -250,3 +250,9 @@ Fresh independent review of `3fefdcbd0cf105ee313575660cfef63cb87104f4` found a s
 The canonical `SupabaseArtifactStore.read_owner_active_text_bounded` now requires `parts.path == expected_path` **without unquoting**. This fails closed on encoded path components, including the signed route name and filename, before any HTTP request. The existing exact raw `token` query key validation remains in place. The regression matrix now includes encoded route and filename paths and uses a forbidden HTTP transport to prove rejection is pre-request.
 
 This correction is committed but cannot be considered independently accepted until current-head code/security review and exact-head CI pass. The live authenticated Karen storage target, durable author consent and WS-02C runtime composition remain outstanding. Consumer feature remains disabled.
+
+## WS-04A7 test evidence correction: zero outbound requests
+
+Independent review of `9ad1b3b0488f169ccdfad5c22b15ea91129d160f` identified an invalid negative-proof assumption: the `MockTransport` handler raised `AssertionError` if an invalid signed URL reached HTTP, but the repository intentionally catches `Exception` and returns denial. Consequently, the test still passed when an unwanted network request was attempted.
+
+The existing `test_bounded_signed_range_blocks_untrusted_urls` now **records every transport invocation** and asserts the list is empty after the repository call, including encoded query names and encoded route/filename paths. The handler returns an error response instead of relying on an exception to escape the repository. This distinguishes valid pre-request rejection from a failed request that occurred too late. No authenticated live storage acceptance or author consent has been proven.
