@@ -202,14 +202,14 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
         with pytest.raises(PermissionError, match="style_unavailable"):
             await resolver.resolve(request)
 
-        # Immutable historical revisions cannot be modified, even through
-        # the backend's database role.
-        async with TestClient().get_async_session() as session:
-            await session.execute(
-                text("SELECT set_config('app.current_tenant_id', :t, true)"),
-                {"t": str(tenant_a)},
-            )
-            with pytest.raises(Exception, match="immutable"):
+        # A PostgreSQL statement failure must unwind the whole transaction.
+        # Catching inside the transaction would leave the session aborted.
+        with pytest.raises(Exception, match="immutable"):
+            async with TestClient().get_async_session() as session:
+                await session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :t, true)"),
+                    {"t": str(tenant_a)},
+                )
                 await session.execute(
                     text(
                         "UPDATE public.writing_style_revisions SET "
