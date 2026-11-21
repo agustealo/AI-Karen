@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { ApiError } from "@/lib/api";
 import {
   KarenCopilotPinnedDock,
   parseAuthorizedPinReadback,
@@ -154,13 +155,13 @@ describe("governed pinned workspace reference consumer", () => {
     };
     const ordered = { schema_version: 1, read_only: true, pins: [authorizedPin, secondPin] };
     api.get.mockResolvedValue(ordered);
-    api.post.mockRejectedValue(Object.assign(new Error("conflict"), { status: 409 }));
+    api.post.mockRejectedValue(new ApiError(409, "Conflict"));
     render(<KarenCopilotPinnedDock mutationControlsEnabled />);
     await screen.findByTestId("karen-pins-authorized");
     expect(screen.getByRole("button", { name: "Move reference 1 up" }).hasAttribute("disabled")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Move reference 1 down" }));
     expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
-      .toContain("Pin change not confirmed");
+      .toContain("Saved references changed elsewhere");
     expect(api.post).toHaveBeenCalledTimes(1);
     expect(api.post.mock.calls[0][1]).toMatchObject({
       operation: "reorder", pin_id: authorizedPin.pin_id,
