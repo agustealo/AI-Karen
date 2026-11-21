@@ -212,3 +212,11 @@ prove a working streamed read or positive capability. Those tests, backend
 transport support, PostgreSQL deletion fencing and author-issued consent
 remain separate release gates. The WS-04A document reader remains removed
 and consumer functionality disabled.
+
+## WS-04A6: Canonical Supabase owner-ranged transport (code under review)
+
+The existing `SupabaseArtifactStore` now overrides `ArtifactStore.read_owner_active_text_bounded` with an owner-scoped PostgreSQL `SELECT ... FOR SHARE` query followed by a **signed, short-lived HTTP Range request** to the currently configured Supabase Storage origin. No SDK `bucket.download` call occurs on this path. The URL signer is the already-initialized platform storage bucket. Every outbound signed URL must match the configured origin, expected `/storage/v1/object/sign/artifacts/<tenant>/<artifact>/<filename>` path and a nonempty token; redirected or alternate-origin targets fail closed.
+
+The byte read requires `206 Partial Content`, an exact `Content-Range` matching the owner metadata's verified small byte size, identity encoding, bounded `aiter_raw(chunk_size=4096)` reads, exact length, the original SHA-256, strict UTF-8, and no disallowed control characters. If the backend ignores the range, returns a different object size, exceeds the cap, changes the digest, or fails its signed-link capability, it returns only `bounded_artifact_read_unavailable`. The existing owner row is locked for the duration of the storage read. The request budget is at most 65536 bytes. The URL and token are never included in API errors or structured logs.
+
+The new regression matrix in `tests/services/test_artifact_storage_platform_client.py` uses `httpx.MockTransport` for success, full-response rejection, missing/wrong `Content-Range`, oversized response, wrong digest, untrusted host, scheme/bucket/path mismatch, absent owner and invalid budgets. These tests validate code paths without asserting a live Supabase-host result. **Independent code/security review, exact-head CI and authenticated integration against a real storage instance remain mandatory.** No WS-04A content-reader consumer is reintroduced in this slice, and no author-issued consent or runtime activation has been granted.
