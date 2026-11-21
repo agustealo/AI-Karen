@@ -21,3 +21,7 @@ The canonical preinstalled packages under `src/ai_karen_engine/extensions/plugin
 Only proven ship-ready plugins may be copied. The preinstalled `whatsapp-cloud`, `telegram-bot`, and `zulip-cloud` communication adapters are **not** automatically publishable as free packages merely because the backend catalog discovers them. They require governed tenant activation, independent provider/live delivery acceptance, exact-head CI, signed-in UI proof, and a reviewed release decision before mirroring. Keep backend-only channel transports disabled to generic plugin execution.
 
 This distribution parity rule does not validate tenant credentials, remote provider health, or production release readiness. It guarantees the shipped copy is identical to the approved canonical source, not that an unproven source is approved.
+
+## Release ledger and synchronization
+
+See [KCE-FREE-01 release eligibility ledger](RELEASE_ELIGIBILITY.md) for the current approved mirrors and pending candidates. Verify existing release copies with `python scripts/sync_free_plugin_release_mirrors.py`; pass `--sync` to refresh existing mirrors after canonical-source review. This command never publishes a new package or activates a plugin.
