@@ -64,11 +64,15 @@ class Kernel:
         return {"status": "enabled" if self.enabled else "disabled",
                 "dependencies_resolved": True}
 
-    async def execute(self, request):
-        self.calls.append(request)
+    async def admit(self, request):
+        self.calls.append(("admit", request))
         roles = request.context.audit_context.get("user_roles", ["user"])
         if not self.allowed_roles.intersection(roles):
             return SimpleNamespace(status="denied", payload=None)
+        return SimpleNamespace(status="admitted", payload=None)
+
+    async def execute(self, request):
+        self.calls.append(("execute", request))
         return SimpleNamespace(
             status="success", payload={"operation": request.payload["operation"]},
         )
@@ -83,11 +87,13 @@ async def test_owner_text_only_reaches_kernel_after_verified_read():
     assert answer == {"operation": "analyze"}
     assert store.calls == [(FILE_ID, TENANT, OWNER)]
     assert len(kernel.calls) == 2
-    assert kernel.calls[0].payload["documents"][0]["text"] == FILE_ID
-    assert kernel.calls[1].payload["documents"] == [{
+    assert kernel.calls[0][0] == "admit"
+    assert kernel.calls[0][1].payload == {}
+    assert kernel.calls[1][0] == "execute"
+    assert kernel.calls[1][1].payload["documents"] == [{
         "id": FILE_ID, "name": "notes.txt", "text": TEXT,
     }]
-    assert kernel.calls[1].authorized_plan.policy_decision_id == "policy"
+    assert kernel.calls[1][1].authorized_plan.policy_decision_id == "policy"
 
 
 @pytest.mark.asyncio
@@ -132,7 +138,7 @@ async def test_stale_revision_revoked_owner_and_changed_bytes_denied():
     with pytest.raises(PermissionError, match="evidence_invalid"):
         await host.execute_owner_text(**args)
     assert len(kernel.calls) == 4
-    assert all(request.payload["operation"] == "analyze" for request in kernel.calls)
+    assert all(kind == "admit" for kind, request in kernel.calls)
 
 
 @pytest.mark.asyncio
@@ -168,4 +174,5 @@ async def test_guest_role_fails_canonical_kernel_admission_without_source_read()
         )
     assert store.calls == []
     assert len(kernel.calls) == 1
-    assert kernel.calls[0].payload["documents"][0]["text"] == FILE_ID
+    assert kernel.calls[0][0] == "admit"
+    assert kernel.calls[0][1].payload == {}

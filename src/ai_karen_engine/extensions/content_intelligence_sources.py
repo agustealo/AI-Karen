@@ -27,6 +27,7 @@ class TextStore(Protocol):
 class Kernel(Protocol):
     def get_record(self, plugin_id: str) -> dict[str, Any] | None: ...
     async def execute(self, request: ExtensionExecutionRequest) -> Any: ...
+    async def admit(self, request: ExtensionExecutionRequest) -> Any: ...
 
 
 def _uuid(value: Any) -> bool:
@@ -109,29 +110,16 @@ class ContentSourceHost:
             or record.get("dependencies_resolved") is not True
         ):
             raise PermissionError("content_source_plugin_disabled")
-        # The kernel owns RBAC, lifecycle, permission and action admission.
-        # Probe with the already-validated, non-content source identifier.
-        # Its result is discarded and never presented as document analysis.
-        admission = await self._kernel.execute(ExtensionExecutionRequest(
+        # Admission uses the SAME executor gates but runs no plugin handler.
+        # Actual operation input schema is checked on final execution.
+        admission = await self._kernel.admit(ExtensionExecutionRequest(
             plugin_id=PLUGIN,
             capability="execute",
-            payload={
-                "operation": "analyze",
-                "documents": [{
-                    "id": references[0]["source_id"],
-                    "name": "source-reference",
-                    "text": references[0]["source_id"],
-                }],
-            },
+            payload={},
             context=context,
             authorized_plan=plan,
         ))
-        admission_payload = getattr(admission, "payload", None)
-        if (
-            getattr(admission, "status", None) != "success"
-            or not isinstance(admission_payload, dict)
-            or admission_payload.get("operation") != "analyze"
-        ):
+        if getattr(admission, "status", None) != "admitted":
             raise PermissionError("content_source_kernel_admission_denied")
         documents: list[dict[str, str]] = []
         total_chars = 0
