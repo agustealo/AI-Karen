@@ -1,0 +1,151 @@
+"""WS-04A9Q: first-party document consent ingress is thin and fail-closed."""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+from fastapi import FastAPI
+
+from ai_karen_engine.api_routes.automation import approvals as routes
+from ai_karen_engine.core.runtime.document_consent_approval import (
+    DocumentConsentApprovalScope,
+)
+from ai_karen_engine.services.approvals import (
+    ApprovalScopeError,
+    ApprovalStateError,
+)
+
+pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture
+def client_and_service(monkeypatch):
+    app = FastAPI()
+    app.include_router(routes.router)
+    scope = DocumentConsentApprovalScope(
+        tenant_id=str(uuid.uuid4()),
+        author_actor_id=str(uuid.uuid4()),
+        session_id=uuid.uuid4().hex,
+        profile_id=str(uuid.uuid4()),
+        artifact_id=str(uuid.uuid4()),
+        source_sha256="a" * 64,
+        action="issue",
+        analysis_allowed=True,
+        style_use_allowed=False,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    approval_id = str(uuid.uuid4())
+    record = {
+        "approval_id": approval_id,
+        "status": "pending",
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=15),
+        "created_at": datetime.now(timezone.utc),
+        "intent": "writing_style.document_consent.issue",
+        "risk_level": "high",
+        "reason_codes": [],
+    }
+    service = SimpleNamespace(
+        get_document_consent_confirmation=AsyncMock(return_value=(record, scope)),
+        confirm_stored_document_consent=AsyncMock(
+            return_value={**record, "status": "approved"},
+        ),
+        issue_stored_document_consent=AsyncMock(return_value=str(uuid.uuid4())),
+    )
+    monkeypatch.setattr(routes, "get_approval_service", lambda: service)
+    return app, approval_id, scope, service
+
+
+async def test_preview_is_source_bound_and_does_not_accept_request_scopes(
+    client_and_service,
+):
+    app, approval_id, scope, service = client_and_service
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            "/api/approvals/document-consent/" + approval_id,
+            headers={"Authorization": "Bearer test-author"},
+        )
+    assert response.status_code == 200
+    assert response.json()["source_sha256"] == scope.source_sha256
+    assert response.json()["artifact_id"] == scope.artifact_id
+    assert "source_bytes" not in response.json()
+    kwargs = service.get_document_consent_confirmation.await_args.kwargs
+    assert kwargs["request"].headers["authorization"] == "Bearer test-author"
+    assert service.get_document_consent_confirmation.await_args.args == (approval_id,)
+
+
+async def test_confirmation_requires_strict_explicit_true(client_and_service):
+    app, approval_id, _, service = client_and_service
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        for value in ("true", 1, "yes"):
+            response = await client.post(
+                "/api/approvals/document-consent/" + approval_id + "/confirm",
+                json={"confirmed": value},
+            )
+            assert response.status_code == 422
+        response = await client.post(
+            "/api/approvals/document-consent/" + approval_id + "/confirm",
+            json={"confirmed": True},
+        )
+    assert response.status_code == 200
+    service.confirm_stored_document_consent.assert_awaited_once()
+    assert service.confirm_stored_document_consent.await_args.kwargs["confirmed"] is True
+    assert "scope" not in service.confirm_stored_document_consent.await_args.kwargs
+    service.issue_stored_document_consent.assert_not_awaited()
+
+
+async def test_receipt_route_only_sends_server_approval_identity(client_and_service):
+    app, approval_id, _, service = client_and_service
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/approvals/document-consent/" + approval_id + "/issue",
+            json={
+                "source_sha256": "b" * 64,
+                "style_use_allowed": True,
+                "actor_id": str(uuid.uuid4()),
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["status"] == "issued"
+    service.issue_stored_document_consent.assert_awaited_once()
+    assert service.issue_stored_document_consent.await_args.args == (approval_id,)
+    kwargs = service.issue_stored_document_consent.await_args.kwargs
+    assert "source_sha256" not in kwargs
+    assert "actor_id" not in kwargs
+    assert "style_use_allowed" not in kwargs
+    assert kwargs["correlation_id"]
+
+
+async def test_scope_and_state_failures_do_not_return_success(client_and_service):
+    app, approval_id, _, service = client_and_service
+    service.get_document_consent_confirmation.side_effect = ApprovalScopeError("denied")
+    service.confirm_stored_document_consent.side_effect = ApprovalScopeError("denied")
+    service.issue_stored_document_consent.side_effect = ApprovalStateError("not issued")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        preview = await client.get("/api/approvals/document-consent/" + approval_id)
+        confirm = await client.post(
+            "/api/approvals/document-consent/" + approval_id + "/confirm",
+            json={"confirmed": True},
+        )
+        receipt = await client.post(
+            "/api/approvals/document-consent/" + approval_id + "/issue",
+        )
+    assert preview.status_code == 403
+    assert confirm.status_code == 403
+    assert receipt.status_code == 409
+    assert receipt.json()["detail"] == "Document receipt not issued"
