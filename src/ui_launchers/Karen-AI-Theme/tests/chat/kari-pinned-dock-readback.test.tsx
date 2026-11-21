@@ -258,6 +258,76 @@ describe("governed pinned workspace reference consumer", () => {
     });
   });
 
+  it("withholds a pin after a committed unpin receipt contradicts fresh readback", async () => {
+    scopedReadback([snapshot, snapshot]);
+    api.post.mockImplementation(async (_path, request) => ({
+      schema_version: 1, committed: true,
+      receipt: {
+        receipt_id: "committed",
+        idempotency_key: request.idempotency_key,
+        operation: request.operation,
+        pin_id: request.pin_id,
+      },
+    }));
+    render(<KarenCopilotPinnedDock mutationControlsEnabled />);
+    fireEvent.click(await screen.findByRole("button", { name: "Unpin reference 1" }));
+    expect(await screen.findByTestId("karen-pinning-not-available")).toBeTruthy();
+    expect(screen.queryByText("Saved reference 1 · Revision 2")).toBeNull();
+    expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
+      .toContain("not confirmed by readback");
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not accept a reordered pin until position and revision both advance", async () => {
+    const second = {
+      ...authorizedPin,
+      pin_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      position: 1,
+      revision: 9,
+    };
+    const original = { ...snapshot, pins: [authorizedPin, second] };
+    const contradictory = { ...snapshot, pins: [
+      { ...second, position: 0, revision: 9 },
+      { ...authorizedPin, position: 1, revision: 2 },
+    ] };
+    scopedReadback([original, contradictory]);
+    api.post.mockImplementation(async (_path, request) => ({
+      schema_version: 1, committed: true,
+      receipt: {
+        receipt_id: "committed",
+        idempotency_key: request.idempotency_key,
+        operation: request.operation,
+        pin_id: request.pin_id,
+      },
+    }));
+    render(<KarenCopilotPinnedDock mutationControlsEnabled />);
+    fireEvent.click(await screen.findByRole("button", { name: "Move reference 1 down" }));
+    expect(await screen.findByTestId("karen-pinning-not-available")).toBeTruthy();
+    expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
+      .toContain("not confirmed by readback");
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds controls if post-commit authorized readback is unavailable", async () => {
+    scopedReadback([snapshot, new Error("unavailable after commit")]);
+    api.post.mockImplementation(async (_path, request) => ({
+      schema_version: 1, committed: true,
+      receipt: {
+        receipt_id: "committed",
+        idempotency_key: request.idempotency_key,
+        operation: request.operation,
+        pin_id: request.pin_id,
+      },
+    }));
+    render(<KarenCopilotPinnedDock mutationControlsEnabled />);
+    fireEvent.click(await screen.findByRole("button", { name: "Unpin reference 1" }));
+    expect(await screen.findByTestId("karen-pinning-not-available")).toBeTruthy();
+    expect(screen.queryByTestId("karen-pin-controls")).toBeNull();
+    expect((await screen.findByTestId("karen-pins-mutation-notice")).textContent)
+      .toContain("not confirmed by readback");
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses reorder on position gaps even when the capability grants it", async () => {
     scopedReadback([{ ...snapshot, pins: [{ ...authorizedPin, position: 3 }, {
       ...authorizedPin, pin_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", position: 4,
