@@ -20,6 +20,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ai_karen_engine.persistence.repositories.approval_repository import (
+    SqlApprovalRepository,
+)
 from ai_karen_engine.services.postgres_document_style_consent_issuer import (
     PostgresDocumentStyleConsentIssuer,
 )
@@ -66,6 +69,7 @@ async def test_first_party_author_consent_postgres() -> None:
         # This test owns the disposable database only. A fresh empty DB is
         # supplied by the existing KariSignature PostgreSQL CI job.
         await raw.execute("""
+            DROP TABLE IF EXISTS public.runtime_approval_requests CASCADE;
             DROP TABLE IF EXISTS public.writing_style_document_consents CASCADE;
             DROP TABLE IF EXISTS public.writing_style_sample_audit CASCADE;
             DROP TABLE IF EXISTS public.writing_style_sample_evidence CASCADE;
@@ -74,6 +78,7 @@ async def test_first_party_author_consent_postgres() -> None:
             DROP TABLE IF EXISTS public.writing_style_revisions CASCADE;
             DROP TABLE IF EXISTS public.writing_style_profiles CASCADE;
             DROP TABLE IF EXISTS public.files CASCADE;
+            DROP TABLE IF EXISTS public.auth_users CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_only() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_fence() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_bound_grant_to_source_consent() CASCADE;
@@ -84,6 +89,7 @@ async def test_first_party_author_consent_postgres() -> None:
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_validate() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
+            CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
                 tenant_id uuid NOT NULL,
@@ -96,6 +102,7 @@ async def test_first_party_author_consent_postgres() -> None:
             );
         """)
         for filename in (
+            "20261006030000_26_runtime_human_approval_authority.sql",
             "20261120235900_60_writing_style_identity.sql",
             "20261122010001_61_writing_style_sample_evidence.sql",
             "20261122010002_62_writing_style_document_author_consent.sql",
@@ -105,6 +112,10 @@ async def test_first_party_author_consent_postgres() -> None:
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2) "
             "ON CONFLICT DO NOTHING", tenant, foreign_tenant,
+        )
+        await raw.execute(
+            "INSERT INTO public.auth_users (user_id) VALUES ($1),($2)",
+            owner, other_actor,
         )
         await raw.execute(
             "INSERT INTO public.writing_style_profiles "
@@ -123,6 +134,10 @@ async def test_first_party_author_consent_postgres() -> None:
         await raw.execute(
             f'GRANT SELECT, INSERT, UPDATE '
             f'ON public.writing_style_document_consents TO "{role}"'
+        )
+        await raw.execute(
+            f'GRANT SELECT, UPDATE ON public.runtime_approval_requests '
+            f'TO "{role}"'
         )
         await raw.execute(
             f'GRANT SELECT ON public.files, public.writing_style_profiles '
@@ -191,6 +206,76 @@ async def test_first_party_author_consent_postgres() -> None:
                     async with session.begin():
                         await session.execute(text(f'SET LOCAL ROLE "{role}"'))
                         yield session
+
+        # The canonical approval repository must consume only the exact
+        # approved author action and only within the same caller transaction.
+        # A subsequent source INSERT error must roll consumption back.
+        approval_id = uuid.uuid4()
+        approval_fingerprint = "d" * 64
+        await raw.execute(
+            "INSERT INTO public.runtime_approval_requests "
+            "(approval_id,tenant_id,user_id,request_fingerprint,intent,"
+            "risk_level,request_payload,status,decided_by,expires_at) "
+            "VALUES ($1,$2,$3,$4,'writing_style.document_consent.issue',"
+            "'high','{}'::jsonb,'approved',$3,"
+            "clock_timestamp()+interval '1 hour')",
+            approval_id, tenant, owner, approval_fingerprint,
+        )
+        consume_args = dict(
+            approval_id=str(approval_id), tenant_id=str(tenant),
+            author_actor_id=str(owner), fingerprint=approval_fingerprint,
+            action="issue",
+        )
+
+        # Mismatched author is never permitted to consume the receipt.
+        async with sessions() as test_session:
+            async with test_session.begin():
+                await test_session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                await test_session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": str(tenant)},
+                )
+                assert await SqlApprovalRepository.consume_document_consent_in_session(
+                    test_session, **{**consume_args, "author_actor_id": str(other_actor)}
+                ) is None
+
+        class RollbackApproval(RuntimeError):
+            pass
+
+        with pytest.raises(RollbackApproval):
+            async with sessions() as test_session:
+                async with test_session.begin():
+                    await test_session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                    await test_session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        {"tenant": str(tenant)},
+                    )
+                    assert await SqlApprovalRepository.consume_document_consent_in_session(
+                        test_session, **consume_args
+                    ) is not None
+                    raise RollbackApproval()
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests "
+            "WHERE approval_id=$1", approval_id,
+        ) == "approved"
+
+        async with sessions() as test_session:
+            async with test_session.begin():
+                await test_session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                await test_session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": str(tenant)},
+                )
+                assert await SqlApprovalRepository.consume_document_consent_in_session(
+                    test_session, **consume_args
+                ) is not None
+                assert await SqlApprovalRepository.consume_document_consent_in_session(
+                    test_session, **consume_args
+                ) is None
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests "
+            "WHERE approval_id=$1", approval_id,
+        ) == "consumed"
 
         scope = dict(
             tenant_id=str(tenant), actor_id=str(owner),
