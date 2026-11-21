@@ -1,6 +1,8 @@
 """WS-04A2 regression: document ownership is necessary, never style consent."""
 from __future__ import annotations
 
+import hashlib
+import io
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -10,6 +12,7 @@ import pytest
 
 from ai_karen_engine.services.artifact_writing_style_source_authority import (
     ArtifactWritingStyleSourceAuthority,
+    ArtifactWritingStyleContentReader,
 )
 from ai_karen_engine.services.writing_style_sample_provenance import (
     VerifiedWritingStyleSource,
@@ -288,3 +291,103 @@ async def test_positive_current_consent_reverified_after_final_source_read():
     assert await authority.verify_use(**s) is True
     assert issuer.verify_current.await_count == 2
     assert artifacts.get_metadata.await_count == 2
+
+
+def text_artifact(s, body=b"These are my original words for learning my style."):
+    metadata = artifact_result(s)
+    metadata.data.mime_type = "text/plain"
+    metadata.data.size_bytes = len(body)
+    metadata.data.sha256 = hashlib.sha256(body).hexdigest()
+    return metadata
+
+
+def text_reader(s, body=b"These are my original words for learning my style."):
+    artifacts = SimpleNamespace(
+        get_metadata=AsyncMock(return_value=text_artifact(s, body)),
+        download=AsyncMock(return_value=SimpleNamespace(
+            success=True, data=io.BytesIO(body),
+        )),
+    )
+    return ArtifactWritingStyleContentReader(artifacts=artifacts), artifacts
+
+
+async def test_current_content_reader_returns_bounded_verified_utf8():
+    s = scope()
+    body = b"These are my original words for learning my style."
+    reader, store = text_reader(s, body)
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type="document", source_id=s["source_id"],
+    ) == body.decode()
+    assert store.get_metadata.await_count == 2
+    store.download.assert_awaited_once_with(s["source_id"], s["tenant_id"])
+
+
+@pytest.mark.parametrize("mode", [
+    "wrong_owner", "wrong_tenant", "deleted", "research", "non_text",
+    "missing_digest", "bad_digest", "oversized", "empty", "invalid_utf8",
+    "missing_download", "storage_failure", "changed_digest", "archived_after",
+    "wrong_source_type", "wrong_source_id",
+])
+async def test_current_content_reader_refuses_unsafe_source_bytes(mode):
+    s = scope()
+    body = b"original source content, only source owner may authorize its use"
+    reader, store = text_reader(s, body)
+    first = text_artifact(s, body)
+    if mode == "wrong_owner":
+        first.data.user_id = str(uuid.uuid4())
+    elif mode == "wrong_tenant":
+        first.data.tenant_id = str(uuid.uuid4())
+    elif mode == "deleted":
+        first.data.deleted_at = datetime.now(timezone.utc)
+    elif mode == "research":
+        first.data.kind = "search_article"
+    elif mode == "non_text":
+        first.data.mime_type = "text/html"
+    elif mode == "missing_digest":
+        first.data.sha256 = None
+    elif mode == "bad_digest":
+        first.data.sha256 = "f" * 64
+    elif mode == "oversized":
+        first.data.size_bytes = 70000
+    elif mode == "empty":
+        first.data.size_bytes = 0
+    elif mode == "invalid_utf8":
+        invalid = b"\xff" + body
+        first = text_artifact(s, invalid)
+        store.download.return_value = SimpleNamespace(success=True, data=io.BytesIO(invalid))
+    elif mode == "missing_download":
+        store.download.return_value = SimpleNamespace(success=False, data=None)
+    elif mode == "storage_failure":
+        store.download.side_effect = RuntimeError("private bucket key")
+    elif mode == "changed_digest":
+        latest = text_artifact(s, body + b" changed")
+        store.get_metadata.side_effect = [first, latest]
+    elif mode == "archived_after":
+        latest = text_artifact(s, body)
+        latest.data.deleted_at = datetime.now(timezone.utc)
+        store.get_metadata.side_effect = [first, latest]
+    else:
+        store.get_metadata.return_value = first
+    if mode not in ("changed_digest", "archived_after"):
+        store.get_metadata.return_value = first
+    expected_type = "email" if mode == "wrong_source_type" else "document"
+    expected_id = "../unsafe" if mode == "wrong_source_id" else s["source_id"]
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type=expected_type, source_id=expected_id,
+    ) is None
+
+
+async def test_content_reader_limits_and_missing_dependency():
+    s = scope()
+    reader, store = text_reader(s)
+    with pytest.raises(ValueError, match="invalid_style_source_byte_budget"):
+        ArtifactWritingStyleContentReader(artifacts=store, max_text_bytes=0)
+    with pytest.raises(ValueError, match="artifact_source_owner_required"):
+        ArtifactWritingStyleContentReader(artifacts=None)
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type="transcript", source_id=s["source_id"],
+    ) is None
+    store.download.assert_not_awaited()
