@@ -36,7 +36,7 @@ const mutation = z.discriminatedUnion("operation", [
     operation: z.literal("reorder"),
     idempotency_key: uuid,
     pin_id: uuid,
-    expected_revision: z.number().int().min(1).max(9223372036854775000),
+    expected_revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
     position: z.number().int().min(0).max(99),
   }).strict(),
 ]);
