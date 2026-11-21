@@ -180,7 +180,7 @@ async def test_real_workflow_stream_close_finalizes_orchestrator_and_graph(
     class Graph:
         async def astream(self, *_args, **_kwargs):
             try:
-                yield {"formatted_response": {"data": {"response": "graph-content"}}}
+                yield {"response_synth": {"formatted_response": {"data": {"response": "graph-content"}}}}
                 await asyncio.Event().wait()
             finally:
                 graph_closed.set()
