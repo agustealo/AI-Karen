@@ -1750,6 +1750,37 @@ class ChatRuntime:
                 provider_meta["generation_error"] = True
                 provider_meta["degraded_mode"] = True
                 provider_meta["degradation_reason"] = "memory_source_revoked_or_unverifiable"
+                provider_meta["error_code"] = "CHAT_MEMORY_SOURCE_REVOKED"
+                self._emitter.emit(
+                    RuntimeEventType.REQUEST_FAILED,
+                    status="denied",
+                    error_type="MemorySourceRevoked",
+                    metadata={"error_code": "CHAT_MEMORY_SOURCE_REVOKED"},
+                )
+                yield self._enrich_chunk(
+                    ChatStreamChunk(
+                        type=ChatStreamEventType.ERROR,
+                        content="The response could not be authorized.",
+                        correlation_id=ctx.correlation_id,
+                        metadata={
+                            "error_code": "CHAT_MEMORY_SOURCE_REVOKED",
+                            "error_type": "MemorySourceRevoked",
+                            "correlation_id": ctx.correlation_id,
+                            "requested_provider": request.preferred_provider,
+                            "requested_model": request.preferred_model,
+                            "actual_provider": provider_meta.get("actual_provider"),
+                            "actual_model": provider_meta.get("actual_model"),
+                            "runtime_engine": provider_meta.get("runtime_engine"),
+                            "response_source": provider_meta.get("response_source"),
+                            "fallback_level": provider_meta.get("fallback_level", 0),
+                            "degraded_mode": True,
+                            "degradation_reason": "memory_source_revoked_or_unverifiable",
+                            "fallback_reason": None,
+                        },
+                    ),
+                    sequence, request_id, response_id, conversation_id,
+                )
+                sequence += 1
         if streamed_text and generation_error is None:
             transcript_started = time.perf_counter()
             try:
