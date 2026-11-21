@@ -1,7 +1,6 @@
 """WS-04A2 regression: document ownership is necessary, never style consent."""
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -210,18 +209,26 @@ async def test_missing_or_invalid_digest_fails_closed(digest, stage):
     assert await authority.verify_use(**s) is False
 
 
-async def test_expiration_during_final_metadata_read_denies_use():
+async def test_expiration_during_final_metadata_read_denies_use(monkeypatch):
+    """Prove the second expiry check independent of scheduler latency."""
+    import ai_karen_engine.services.artifact_writing_style_source_authority as module
+
     s = scope()
-    expiry = datetime.now(timezone.utc) + timedelta(milliseconds=80)
+    beginning = datetime.now(timezone.utc)
+    expiry = beginning + timedelta(seconds=1)
     authority, artifacts, _ = adapter(
         s, consent=decision(s, style_use=True, expiry=expiry)
     )
 
-    async def read_metadata(artifact_id, tenant_id):
-        if artifacts.get_metadata.await_count == 2:
-            await asyncio.sleep(0.12)
-        return artifact_result(s)
+    class ConsentClock(datetime):
+        checks = 0
 
-    artifacts.get_metadata.side_effect = read_metadata
+        @classmethod
+        def now(cls, tz=None):
+            cls.checks += 1
+            return beginning if cls.checks == 1 else expiry + timedelta(seconds=1)
+
+    monkeypatch.setattr(module, "datetime", ConsentClock)
     assert await authority.verify_use(**s) is False
+    assert ConsentClock.checks >= 2
     assert artifacts.get_metadata.await_count == 2
