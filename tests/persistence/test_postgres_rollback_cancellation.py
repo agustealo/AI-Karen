@@ -135,9 +135,9 @@ async def test_noncooperative_rollback_is_reported_uncertain_not_success():
         await asyncio.wait_for(started.wait(), timeout=1)
         with pytest.raises(RuntimeError, match="connection_uncertain"):
             await asyncio.wait_for(task, timeout=3)
-        session.invalidate.assert_awaited_once()
-        # The driver task may still exist. This test deliberately does NOT
-        # claim pool reclamation or a safe session close in that condition.
+        # Concurrent invalidation is forbidden while rollback is still
+        # active; deferred retirement owns invalidation after it completes.
+        session.invalidate.assert_not_awaited()
         assert not finished.is_set()
     finally:
         release.set()
