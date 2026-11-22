@@ -449,6 +449,28 @@ class ApprovalService:
         )
         return record
 
+    async def list_document_author_draft_profiles(
+        self, *, request: "Request",
+    ) -> list[dict[str, str]]:
+        """Fresh bearer-scoped presentation inventory from the canonical owner."""
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.services.writing_style_profile_repository import (
+            WritingStyleProfileRepository,
+        )
+
+        context = await get_document_style_consent_context(request)
+        principal = context.require_authenticated_user()
+        tenant_id, actor_id = str(principal.tenant_id), str(principal.user_id)
+        if (
+            str(context.tenant_id) != tenant_id
+            or str(context.user_id) != actor_id
+            or not context.session_id
+        ):
+            raise ApprovalScopeError("Authenticated document author required")
+        return await WritingStyleProfileRepository().list_owned_drafts(
+            tenant_id=tenant_id, actor_id=actor_id,
+        )
+
     async def initiate_document_consent(
         self,
         *,
