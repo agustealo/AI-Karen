@@ -8,6 +8,8 @@ import { defineConfig, devices } from '@playwright/test';
  * CI cannot silently omit first-run coverage while that directory migration is
  * completed.
  */
+const liveGenerationAudit = process.env.KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE === 'true';
+
 export default defineConfig({
   testDir: '.',
   testMatch: ['tests/e2e/**/*.spec.ts', 'e2e/**/*.spec.ts'],
@@ -17,14 +19,14 @@ export default defineConfig({
   },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: liveGenerationAudit ? 0 : process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  reporter: 'html',
+  reporter: liveGenerationAudit ? [['list']] : 'html',
   use: {
-    baseURL: 'http://localhost:3000',
-    trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    baseURL: liveGenerationAudit ? process.env.KAREN_BASE_URL : 'http://localhost:3000',
+    trace: liveGenerationAudit ? 'off' : 'on-first-retry',
+    screenshot: liveGenerationAudit ? 'off' : 'only-on-failure',
+    video: liveGenerationAudit ? 'off' : 'retain-on-failure',
   },
 
   projects: [
@@ -50,7 +52,7 @@ export default defineConfig({
     },
   ],
 
-  webServer: {
+  webServer: liveGenerationAudit ? undefined : {
     command: 'npm run dev',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
