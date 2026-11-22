@@ -214,3 +214,88 @@ async def test_live_logical_transaction_without_checkout_rolls_back_cleanly():
         assert engine.async_engine.pool.checkedout() == baseline
     finally:
         await session.close()
+
+
+@pytest.mark.timeout(30)
+async def test_live_stalled_invalidation_does_not_race_session_close_or_pool_reuse():
+    """A stalled real-session invalidation exclusively owns its cleanup."""
+    from ai_karen_engine.persistence.postgres import transactions
+
+    engine = get_postgres_engine()
+    baseline = engine.async_engine.pool.checkedout()
+    session = engine.async_session_factory()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    invalidate_finished = asyncio.Event()
+    overlap = []
+    pending = None
+    retirement_task = None
+
+    try:
+        await session.execute(text("SELECT 1"))
+        original_invalidate = session.invalidate
+        original_close = session.close
+
+        async def held_invalidate():
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            try:
+                await original_invalidate()
+            finally:
+                invalidate_finished.set()
+
+        async def checked_close():
+            if not invalidate_finished.is_set():
+                overlap.append("close raced pending invalidation")
+            await original_close()
+
+        settings = SimpleNamespace(pool=SimpleNamespace(
+            rollback_timeout_seconds=0.1,
+            invalidate_timeout_seconds=0.1,
+        ))
+        with patch.object(
+            session, "rollback", side_effect=RuntimeError("driver rollback failed")
+        ), patch.object(
+            session, "invalidate", side_effect=held_invalidate
+        ) as invalidation_spy, patch.object(
+            session, "close", side_effect=checked_close
+        ) as close_spy, patch(
+            "ai_karen_engine.persistence.postgres.transactions.get_database_settings",
+            return_value=settings,
+        ):
+            supervisor = asyncio.create_task(
+                transactions.rollback_async_transaction(session)
+            )
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=5)
+                with pytest.raises(transactions._InvalidationStillActive) as caught:
+                    await asyncio.wait_for(asyncio.shield(supervisor), timeout=5)
+                pending = caught.value
+                retirement_task = pending.retirement_task
+                assert retirement_task is not None
+                assert invalidation_spy.await_count == 1
+                close_spy.assert_not_awaited()
+                assert not invalidate_finished.is_set()
+                # The held driver was detached before an unrelated request.
+                assert engine.async_engine.pool.checkedout() == baseline
+                async with engine.async_session_factory() as independent:
+                    assert (await independent.execute(text("SELECT 1"))).scalar_one() == 1
+            finally:
+                release.set()
+                if retirement_task is not None:
+                    await asyncio.wait_for(retirement_task, timeout=5)
+            assert not overlap
+            assert invalidation_spy.await_count == 1
+            close_spy.assert_awaited_once()
+    finally:
+        release.set()
+        if retirement_task is None:
+            await session.close()
+
+    assert engine.async_engine.pool.checkedout() == baseline
+    async with engine.async_session_factory() as healthy:
+        assert (await healthy.execute(text("SELECT 1"))).scalar_one() == 1
+    assert engine.async_engine.pool.checkedout() == baseline
