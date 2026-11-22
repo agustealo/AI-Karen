@@ -229,6 +229,7 @@ jobs:
         run: |
           pytest tests/integration/test_live_memory_authorization_load.py -q -rs
           pytest tests/persistence/test_postgres_rollback_cancellation.py -q -rs
+          pytest tests/integration/test_live_postgres_rollback_pool_quarantine.py -q -rs
       - name: Preserve sanitized memory authorization load evidence
         if: always()
         uses: actions/upload-artifact@v4
