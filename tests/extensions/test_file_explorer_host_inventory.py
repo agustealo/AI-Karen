@@ -179,6 +179,24 @@ async def test_cursor_is_passed_without_becoming_a_permission():
 
 
 @pytest.mark.asyncio
+async def test_bounded_cursor_is_accepted_at_browser_contract_limit():
+    cursor = "x" * 768
+    source = OwnerSource(pages=[
+        {"items": [_item(1)], "has_more": True, "next_cursor": cursor},
+        {"items": [_item(2)], "has_more": False, "next_cursor": None},
+    ])
+    host = FileExplorerInventoryHost(kernel=Kernel(), source=source)
+
+    first = await host.list_owner_page(context=_context(), plan=_plan())
+    assert first["next_cursor"] == cursor
+    second = await host.list_owner_page(
+        context=_context(), plan=_plan(), cursor=cursor
+    )
+    assert second["items"] == [_item(2)]
+    assert source.calls[-1] == (TENANT, OWNER, 100, cursor)
+
+
+@pytest.mark.asyncio
 async def test_unavailable_source_is_not_a_successful_empty_inventory():
     source = OwnerSource(error=RuntimeError("file_explorer_artifact_list_unavailable"))
     kernel = Kernel()
