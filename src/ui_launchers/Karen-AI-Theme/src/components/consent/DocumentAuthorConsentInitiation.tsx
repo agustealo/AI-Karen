@@ -64,6 +64,8 @@ export function DocumentAuthorConsentInitiation() {
   const [documents, setDocuments] = useState<OwnerArtifact[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Counts completed, validated inventory pages, not requests in flight.
+  const [loadedPages, setLoadedPages] = useState(0);
   const [profiles, setProfiles] = useState<DraftProfile[]>([]);
   const [selectedDocument, setSelectedDocument] = useState('');
   const [profileId, setProfileId] = useState('');
@@ -88,6 +90,7 @@ export function DocumentAuthorConsentInitiation() {
         return;
       }
       setDocuments(page.items.filter(isCandidate));
+      setLoadedPages(1);
       setNextCursor(page.has_more ? page.next_cursor : null);
       setProfiles(drafts.filter((profile) =>
         UUID.test(profile.profile_id) &&
@@ -123,6 +126,7 @@ export function DocumentAuthorConsentInitiation() {
         return [...previous, ...page.items.filter((item) => isCandidate(item) && !seen.has(item.id))];
       });
       setNextCursor(page.has_more ? page.next_cursor : null);
+      setLoadedPages((count) => count + 1);
     } catch {
       setError('The next owned document page could not be verified. No new selection was authorized.');
     } finally {
@@ -170,6 +174,7 @@ export function DocumentAuthorConsentInitiation() {
   return (
     <section
       aria-label="Initiate document author consent"
+      data-owner-pages-loaded={loadedPages}
       className="mx-auto max-w-2xl space-y-5 rounded-lg border border-border p-6"
     >
       <h1 className="text-xl font-semibold">Review your document authorship</h1>
