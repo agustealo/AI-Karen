@@ -28,7 +28,7 @@ describe('document author source initiation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.get.mockImplementation((url: string) => Promise.resolve(
-      url === '/api/artifacts/' ? [document] : [{
+      url.startsWith('/api/artifacts/owner-page?') ? { items: [document], has_more: false, next_cursor: null } : [{
         profile_id: profileId, label: 'My style', kind: 'personal',
       }],
     ));
@@ -42,7 +42,7 @@ describe('document author source initiation', () => {
   it('does not submit without a server-listed source and profile', async () => {
     render(<DocumentAuthorConsentInitiation />);
     await screen.findByText(/author-original.txt/);
-    expect(api.get).toHaveBeenCalledWith('/api/artifacts/');
+    expect(api.get).toHaveBeenCalledWith('/api/artifacts/owner-page?limit=100');
     expect(api.get).toHaveBeenCalledWith('/api/approvals/document-consent/profiles');
     const button = screen.getByRole('button', { name: 'Continue to author review' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
@@ -96,12 +96,12 @@ describe('document author source initiation', () => {
   });
 
   it('does not offer altered, deleted, oversized or research artifacts', async () => {
-    api.get.mockImplementation((url: string) => Promise.resolve(url === '/api/artifacts/' ? [
+    api.get.mockImplementation((url: string) => Promise.resolve(url.startsWith('/api/artifacts/owner-page?') ? { items: [
       { ...document, id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', kind: 'search_article' },
       { ...document, id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', deleted_at: '2026-01-01' },
       { ...document, id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', size_bytes: 65537 },
       { ...document, id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', sha256: '' },
-    ] : [{ profile_id: profileId, label: 'My style', kind: 'personal' }]));
+    ], has_more: false, next_cursor: null } : [{ profile_id: profileId, label: 'My style', kind: 'personal' }]));
     render(<DocumentAuthorConsentInitiation />);
     expect(await screen.findByText(/No eligible documents/)).toBeTruthy();
     expect(screen.queryByRole('combobox', { name: 'Your document' })).toBeNull();
@@ -146,7 +146,7 @@ describe('document author source initiation', () => {
   });
   it('does not submit when the authenticated draft inventory is empty', async () => {
     api.get.mockImplementation((url: string) => Promise.resolve(
-      url === '/api/artifacts/' ? [document] : [],
+      url.startsWith('/api/artifacts/owner-page?') ? { items: [document] : [],
     ));
     render(<DocumentAuthorConsentInitiation />);
     expect(await screen.findByText(/No eligible author-owned draft profiles/)).toBeTruthy();
