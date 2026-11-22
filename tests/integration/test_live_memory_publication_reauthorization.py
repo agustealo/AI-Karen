@@ -122,23 +122,35 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
         try:
             await asyncio.wait_for(staged.wait(), timeout=15)
             separate_gate = PostgresEventSource()
-            for authorizer in (gate, separate_gate):
-                assert await asyncio.wait_for(
+            # Both independent sessions query the database concurrently
+            # while the writer's consent update is still uncommitted.
+            before_commit = await asyncio.wait_for(
+                asyncio.gather(*(
                     authorizer.authorize_selected_records(
                         tenant_id=str(tenant), user_id=str(user),
                         origins=selected,
-                    ), timeout=15,
-                ) is True
+                    )
+                    for authorizer in (gate, separate_gate)
+                )),
+                timeout=15,
+            )
+            assert before_commit == [True, True]
         finally:
             release.set()
             await asyncio.wait_for(writer_task, timeout=15)
 
         # Both fresh transactions must reject the now committed withdrawal.
-        for authorizer in (gate, separate_gate):
-            assert await authorizer.authorize_selected_records(
-                tenant_id=str(tenant), user_id=str(user),
-                origins=selected,
-            ) is False
+        after_commit = await asyncio.wait_for(
+            asyncio.gather(*(
+                authorizer.authorize_selected_records(
+                    tenant_id=str(tenant), user_id=str(user),
+                    origins=selected,
+                )
+                for authorizer in (gate, separate_gate)
+            )),
+            timeout=15,
+        )
+        assert after_commit == [False, False]
 
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             scope = (await session.execute(select(ConsentScope).where(
