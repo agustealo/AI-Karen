@@ -217,3 +217,101 @@ async def test_missing_validated_ui_entry_fails_closed_without_false_success(tmp
     assert "entry component missing" in result["errors"][0]["error"]
     assert result["import_map"] == {}
     assert not (tmp_path / "plugin-repo/file-explorer").exists()
+
+
+@pytest.mark.asyncio
+async def test_linked_source_asset_does_not_materialize_or_copy_private_content(tmp_path):
+    """A validated registry record does not make linked source bytes safe."""
+    import os
+
+    source = tmp_path / "plugin"
+    ui = source / "ui"
+    ui.mkdir(parents=True)
+    original = PLUGIN / "plugin_manifest.json"
+    (source / "plugin_manifest.json").write_bytes(original.read_bytes())
+    (ui / "FileExplorerPage.tsx").write_bytes(
+        (PLUGIN / "ui/FileExplorerPage.tsx").read_bytes()
+    )
+    private = tmp_path / "private.tsx"
+    private.write_text("private content", encoding="utf-8")
+    os.symlink(private, ui / "leak.tsx")
+
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "published"),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(ui / "FileExplorerPage.tsx"),
+        "plugin_dir": str(source),
+        "manifest_path": str(source / "plugin_manifest.json"),
+        "ui_config": {"source_path": "ui", "entry_file": "FileExplorerPage.tsx"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert not (tmp_path / "published/file-explorer").exists()
+    assert private.read_text(encoding="utf-8") == "private content"
+
+
+@pytest.mark.asyncio
+async def test_linked_published_target_never_receives_materialized_assets(tmp_path):
+    """Existing links in the target are not overwritten or followed."""
+    import os
+
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep.tsx"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    output = tmp_path / "published"
+    output.mkdir()
+    os.symlink(external, output / "file-explorer")
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(output),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(PLUGIN / "ui/FileExplorerPage.tsx"),
+        "plugin_dir": str(PLUGIN),
+        "manifest_path": str(PLUGIN / "plugin_manifest.json"),
+        "ui_config": {"source_path": "ui", "entry_file": "FileExplorerPage.tsx"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert sentinel.read_text(encoding="utf-8") == "unchanged"
+    assert not (external / "FileExplorerPage.tsx").exists()
+
+
+@pytest.mark.asyncio
+async def test_ui_source_path_cannot_escape_validated_plugin_root(tmp_path):
+    source = tmp_path / "plugin"
+    source.mkdir()
+    (source / "plugin_manifest.json").write_bytes(
+        (PLUGIN / "plugin_manifest.json").read_bytes()
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "published"),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(PLUGIN / "ui/FileExplorerPage.tsx"),
+        "plugin_dir": str(source),
+        "manifest_path": str(source / "plugin_manifest.json"),
+        "ui_config": {"source_path": "../"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert not (tmp_path / "published/file-explorer").exists()
