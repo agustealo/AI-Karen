@@ -221,6 +221,24 @@ async def test_first_party_author_consent_postgres(
                         await session.execute(text(f'SET LOCAL ROLE "{role}"'))
                         yield session
 
+        # Governed profile inventory must not enumerate foreign actors or
+        # tenants, and must stop exposing a formerly eligible draft.
+        draft_repo = WritingStyleProfileRepository(client_factory=TrustedTestClient)
+        owned = await draft_repo.list_owned_drafts(
+            tenant_id=str(tenant), actor_id=str(owner),
+        )
+        assert any(item["profile_id"] == str(profile) for item in owned)
+        assert await draft_repo.list_owned_drafts(
+            tenant_id=str(tenant), actor_id=str(other_actor),
+        ) == []
+        assert await draft_repo.list_owned_drafts(
+            tenant_id=str(foreign_tenant), actor_id=str(owner),
+        ) == []
+        with pytest.raises(ValueError, match="invalid_style_profile_page_limit"):
+            await draft_repo.list_owned_drafts(
+                tenant_id=str(tenant), actor_id=str(owner), limit=101,
+            )
+
         # The canonical approval repository must consume only the exact
         # approved author action and only within the same caller transaction.
         # A subsequent source INSERT error must roll consumption back.
