@@ -13,6 +13,7 @@ const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'tru
 const navigationAcceptance = process.env.KAREN_NAV_VISUAL_ACCEPTANCE === 'true';
 const fileExplorerAcceptance = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === 'true';
 const pinReadbackAcceptance = process.env.KAREN_PIN_READBACK_ACCEPTANCE === '1';
+const documentAuthorAcceptance = process.env.KAREN_DOCUMENT_AUTHOR_ACCEPTANCE === 'true';
 // A local benchmark signs in with real credentials. Disable sensitive
 // recordings at configuration authority, even if a future spec forgets
 // its own test.use privacy override or someone opts into capture video.
@@ -22,7 +23,8 @@ const privateBrowserRun = localBenchmark ||
   navigationAcceptance ||
   settingsAcceptance ||
   fileExplorerAcceptance ||
-  pinReadbackAcceptance;
+  pinReadbackAcceptance ||
+  documentAuthorAcceptance;
 
 export default defineConfig({
   testDir: './',
@@ -36,13 +38,13 @@ export default defineConfig({
 
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance ? 0 : process.env.CI ? 2 : 0,
+  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance ? 0 : process.env.CI ? 2 : 0,
   workers: 1,
 
   // Authenticated Settings acceptance must not persist response text,
   // failure stacks or browser state into local HTML/JSON result artifacts.
   // The console list reporter supplies the protected job's result.
-  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance
+  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance
     ? [['list']]
     : [
         ['html', { outputFolder: 'playwright-report' }],
