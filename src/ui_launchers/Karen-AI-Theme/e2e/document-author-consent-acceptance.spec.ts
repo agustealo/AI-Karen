@@ -47,6 +47,12 @@ async function selectSource(page: Page, origin: URL): Promise<Locator> {
   expect(new URL(page.url()).origin).toBe(origin.origin);
   const selector = page.getByRole("region", { name: "Initiate document author consent" });
   await expect(selector).toBeVisible();
+  // The section shell renders before both inventory requests settle. Never
+  // treat absent controls during initial loading as an exhausted page.
+  await expect(selector.getByText("Loading owned document metadata…")).toHaveCount(0, {
+    timeout: 20_000,
+  });
+  await expect(selector.getByRole("alert")).toHaveCount(0);
   // Owner pages are bounded. Walk only the dedicated author inventory,
   // never use a free-form artifact input or guess an unlisted source ID.
   let found = false;
