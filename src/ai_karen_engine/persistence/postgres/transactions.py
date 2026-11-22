@@ -52,6 +52,14 @@ class _RollbackStillActive(RuntimeError):
         self.retirement_task: asyncio.Task | None = None
 
 
+class _InvalidationStillActive(_RollbackStillActive):
+    """A pending invalidation retains exclusive ownership of its session."""
+
+    def __init__(self, task: asyncio.Task) -> None:
+        super().__init__(task)
+        self.args = ("postgres_invalidate_unresponsive_connection_uncertain_quarantined",)
+
+
 async def _bounded_transaction_cleanup(
     operation,
     *,
@@ -89,8 +97,10 @@ async def _bounded_transaction_cleanup(
         raise TimeoutError(f"postgres_{label}_deadline_exceeded")
     if label == "rollback":
         raise _RollbackStillActive(task)
+    if label == "invalidate":
+        raise _InvalidationStillActive(task)
 
-    # Invalidation itself remains in flight; observe its eventual result.
+    # Unexpected cleanup operations must still have their result observed.
     task.add_done_callback(_observe_postgres_cleanup_task)
     logger.critical(
         "postgres.transaction_cleanup_unresponsive",
@@ -156,7 +166,11 @@ def _detach_pending_rollback_connection(pool_proxy) -> object | None:
 
 
 def _schedule_quarantined_session_retirement(
-    session: AsyncSession, rollback_task: asyncio.Task, driver
+    session: AsyncSession,
+    rollback_task: asyncio.Task,
+    driver,
+    *,
+    invalidate_after_task: bool = True,
 ) -> asyncio.Task:
     """Keep the session owned until its active rollback ends, then close it."""
 
@@ -173,8 +187,10 @@ def _schedule_quarantined_session_retirement(
         except BaseException:
             pass
         try:
-            # Session-level operations are safe only *after* rollback settles.
-            await session.invalidate()
+            # Do not launch a second invalidation when the original
+            # invalidation task has just completed. Close sequentially.
+            if invalidate_after_task:
+                await session.invalidate()
         except BaseException:
             logger.exception("postgres.quarantined_session_invalidation_failed")
         finally:
@@ -221,6 +237,23 @@ async def rollback_async_transaction(session: AsyncSession) -> None:
                 seconds=settings.invalidate_timeout_seconds,
                 label="invalidate",
             )
+        except _InvalidationStillActive as pending:
+            # The original invalidation is still mutating this AsyncSession.
+            # Transfer teardown ownership without starting a competing close
+            # or invoking invalidate a second time.
+            driver = None
+            try:
+                driver = _detach_pending_rollback_connection(pool_proxy)
+            except BaseException:
+                logger.exception("postgres.pending_invalidation_detach_failed")
+            pending.retirement_task = _schedule_quarantined_session_retirement(
+                session, pending.task, driver, invalidate_after_task=False
+            )
+            logger.critical(
+                "postgres.invalidation_pending_quarantined",
+                extra={"pool_detach_confirmed": driver is not None},
+            )
+            raise
         except BaseException:
             logger.exception(
                 "postgres.transaction_invalidation_failed",
