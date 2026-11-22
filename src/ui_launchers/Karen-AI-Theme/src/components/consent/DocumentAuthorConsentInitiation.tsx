@@ -15,6 +15,12 @@ interface OwnerArtifact {
   deleted_at: string | null;
 }
 
+interface DraftProfile {
+  profile_id: string;
+  label: string;
+  kind: string;
+}
+
 interface PendingAuthorApproval {
   approval_id: string;
   status: string;
@@ -43,6 +49,7 @@ function isCandidate(value: OwnerArtifact): boolean {
 export function DocumentAuthorConsentInitiation() {
   const router = useRouter();
   const [documents, setDocuments] = useState<OwnerArtifact[]>([]);
+  const [profiles, setProfiles] = useState<DraftProfile[]>([]);
   const [selectedDocument, setSelectedDocument] = useState('');
   const [profileId, setProfileId] = useState('');
   const [allowStyleUse, setAllowStyleUse] = useState(false);
@@ -52,15 +59,24 @@ export function DocumentAuthorConsentInitiation() {
 
   useEffect(() => {
     let active = true;
-    void apiClient.get<OwnerArtifact[]>('/api/artifacts/').then((results) => {
+    void Promise.all([
+      apiClient.get<OwnerArtifact[]>('/api/artifacts/'),
+      apiClient.get<DraftProfile[]>('/api/approvals/document-consent/profiles'),
+    ]).then(([artifacts, drafts]) => {
       if (!active) return;
-      if (!Array.isArray(results)) {
-        setError('Document inventory is unavailable.');
+      if (!Array.isArray(artifacts) || !Array.isArray(drafts)) {
+        setError('Document and draft-profile inventory is unavailable.');
         return;
       }
-      setDocuments(results.filter(isCandidate));
+      setDocuments(artifacts.filter(isCandidate));
+      setProfiles(drafts.filter((profile) =>
+        UUID.test(profile.profile_id) &&
+        typeof profile.label === 'string' &&
+        profile.label.trim().length > 0 &&
+        typeof profile.kind === 'string'
+      ));
     }).catch(() => {
-      if (active) setError('Your documents could not be verified.');
+      if (active) setError('Your documents and draft profiles could not be verified.');
     }).finally(() => {
       if (active) setLoading(false);
     });
@@ -69,7 +85,8 @@ export function DocumentAuthorConsentInitiation() {
 
   const selected = documents.find((item) => item.id === selectedDocument);
   const canSubmit = Boolean(
-    selected && UUID.test(profileId) && !loading && !submitting,
+    selected && profiles.some((profile) => profile.profile_id === profileId) &&
+    !loading && !submitting,
   );
 
   async function initiate() {
@@ -147,23 +164,35 @@ export function DocumentAuthorConsentInitiation() {
           <div><dt className="font-medium">MIME type</dt><dd>{selected.mime_type}</dd></div>
         </dl>
       )}
-      <label className="block space-y-2 text-sm">
-        <span className="font-medium">Existing draft writing-style profile ID</span>
-        <input
-          aria-label="Existing draft writing-style profile ID"
-          value={profileId}
-          onChange={(event) => setProfileId(event.target.value.trim())}
-          disabled={submitting}
-          placeholder="Profile UUID"
-          autoComplete="off"
-          spellCheck={false}
-          className="w-full rounded-md border border-border bg-background p-2"
-        />
-        <span className="block text-muted-foreground">
-          The server verifies that this profile belongs to the authenticated author
-          and is still an eligible draft. Entering an ID grants no access.
-        </span>
-      </label>
+      {!loading && profiles.length === 0 && (
+        <p role="status">
+          No eligible author-owned draft profiles were returned. This screen
+          cannot authorize a missing or unpublished profile.
+        </p>
+      )}
+      {profiles.length > 0 && (
+        <label className="block space-y-2 text-sm">
+          <span className="font-medium">Your draft writing-style profile</span>
+          <select
+            aria-label="Your draft writing-style profile"
+            value={profileId}
+            onChange={(event) => setProfileId(event.target.value)}
+            disabled={submitting}
+            className="w-full rounded-md border border-border bg-background p-2"
+          >
+            <option value="">Select an existing draft profile</option>
+            {profiles.map((profile) => (
+              <option key={profile.profile_id} value={profile.profile_id}>
+                {profile.label} ({profile.kind})
+              </option>
+            ))}
+          </select>
+          <span className="block text-muted-foreground">
+            The backend rechecks profile ownership and draft eligibility on submission.
+            Selecting a profile is not author consent.
+          </span>
+        </label>
+      )}
       <label className="flex items-start gap-2 text-sm">
         <input
           type="checkbox"
