@@ -121,3 +121,8 @@ The opt-in live mutation acceptance now covers creation, human confirmation, iss
 The disposable PostgreSQL acceptance now invokes the existing `WritingStyleProfileRepository.read_current_published` and `authorize_use` owners **after** author consent has been revoked and its database trigger has revoked the published profile and delegate grant. Both methods must deny access to the previously authorized delegated actor even when that caller retains a historical published revision ID, revision number and digest. This is a runtime-query regression rather than a frontend visual assertion, a simulated grant or a new authorization helper.
 
 The preceding `fd7b9072ab5fe0db8201e2221a32c7db6a58bed9` head passed 19/19 workflows; its two P2 browser review threads were resolved after evidence-backed fixes. The revocation and delegated-use changes require their OWN exact-head tests and live-host acceptance before release. No actual target-host execution, Supabase Storage read or consumer ingestion is claimed by this source test.
+
+
+### WS-04A9AB: uncertain revocation response recovery
+
+When the revocation HTTP response is lost or fails, the first-party author screen now reads the existing server-verified current receipt endpoint before displaying a continuing receipt. If a current receipt remains, it displays a non-success warning and preserves the verified receipt. If no current receipt can be verified, it removes the stale identifier without claiming the revocation succeeded. This also preserves the strict distinction between `revoked` finality, `current receipt` verification and `unknown` outcome. Frontend regression tests cover both outcomes.
