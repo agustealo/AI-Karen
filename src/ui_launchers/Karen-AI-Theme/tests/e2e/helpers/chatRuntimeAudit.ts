@@ -83,7 +83,7 @@ export async function openChat(page: Page): Promise<void> {
     { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
   );
   if (health.status() !== 200 ||
-      !/^application\\/json(?:;|$)/i.test(health.headers()['content-type'] || '')) {
+      !/^application\/json(?:;|$)/i.test(health.headers()['content-type'] || '')) {
     throw new Error('Canonical chat backend is not ready for live acceptance');
   }
   const readiness: unknown = await health.json();
