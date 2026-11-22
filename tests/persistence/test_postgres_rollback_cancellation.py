@@ -377,3 +377,67 @@ async def test_rollback_preflight_uses_existing_connection_only():
 
     assert await transactions._capture_rollback_connection(session) is proxy
     session.connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_noncooperative_invalidation_defers_scope_exit_until_retirement():
+    """Failed rollback cannot close a session while invalidation still runs."""
+    from ai_karen_engine.persistence.postgres import transactions
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    overlapping = []
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock(side_effect=RuntimeError("rollback failed"))
+    session.__aenter__ = AsyncMock(return_value=session)
+
+    async def unresponsive_invalidation():
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        finally:
+            finished.set()
+
+    async def close_session(*args, **kwargs):
+        if not finished.is_set():
+            overlapping.append("context close while invalidation active")
+        return False
+
+    session.invalidate = AsyncMock(side_effect=unresponsive_invalidation)
+    session.close = AsyncMock(side_effect=close_session)
+    session.__aexit__ = AsyncMock(side_effect=close_session)
+    engine = MagicMock()
+    engine.async_session_factory.return_value = session
+    pending = None
+
+    with patch.object(transactions, "get_postgres_engine", return_value=engine):
+        async def failing_scope():
+            async with transactions.async_transaction_scope():
+                raise ValueError("original failure")
+
+        task = asyncio.create_task(failing_scope())
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+            with pytest.raises(transactions._InvalidationStillActive) as caught:
+                await asyncio.wait_for(task, timeout=3)
+            pending = caught.value
+            assert pending.retirement_task is not None
+            assert not finished.is_set()
+            session.close.assert_not_awaited()
+            session.__aexit__.assert_not_awaited()
+            assert session.invalidate.await_count == 1
+        finally:
+            release.set()
+            await asyncio.wait_for(finished.wait(), timeout=2)
+            if pending is not None and pending.retirement_task is not None:
+                await asyncio.wait_for(pending.retirement_task, timeout=2)
+
+    assert not overlapping
+    session.invalidate.assert_awaited_once()
+    session.close.assert_awaited_once()
+    session.__aexit__.assert_not_awaited()
