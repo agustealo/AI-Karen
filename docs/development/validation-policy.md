@@ -21,3 +21,7 @@ A release candidate must pass the full exact-revision gate, real deployment and 
 - Preserve CI on `main` and manual `workflow_dispatch` entry points.
 - Record relevant test results and remaining risks in the PR description.
 - For a release or high-risk merge, use the label and keep it in place through final CI; any later commit invalidates the previous result.
+
+## Required-check fail-closed contract
+
+GitHub may count a skipped job as a successful required check. Therefore the `main-quality-gate` and `first-boot-acceptance` decision jobs run unconditionally and fail when `ci:merge-gate` is absent or any prerequisite is not successful. Configure branch protection to require the **decision** checks, never the opt-in heavy job `first-boot` alone. An unlabeled development PR intentionally remains unmergeable under those required checks while its fast checks can pass. Do not remove the merge label to bypass a failing decision. The connection used for this change cannot modify branch protection; an administrator must enable required checks if they are not already enforced.
