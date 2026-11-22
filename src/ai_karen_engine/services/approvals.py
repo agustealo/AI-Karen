@@ -1014,6 +1014,39 @@ class ApprovalService:
             })
         return receipt_id
 
+    async def revoke_stored_document_consent(
+        self, approval_id: str, *, request: "Request",
+        confirmed: bool, correlation_id: str,
+    ) -> bool:
+        """Revoke only the live server-bound receipt after explicit author action.
+
+        A browser cannot choose tenant, actor, profile, artifact or receipt.
+        Existing bearer, consent and RuntimePolicy owners enforce revocation.
+        """
+        if confirmed is not True:
+            raise ApprovalScopeError("Explicit revocation confirmation required")
+        record, scope = await self.get_document_consent_confirmation(
+            approval_id, request=request,
+        )
+        if record.get("status") != "consumed":
+            raise ApprovalStateError("No issued author consent to revoke")
+        receipt = await self.recover_stored_document_consent_receipt(
+            approval_id, request=request,
+        )
+        if receipt is None:
+            raise ApprovalStateError("No current author consent receipt")
+        revoked = await self.revoke_document_consent(
+            request=request,
+            tenant_id=scope.tenant_id,
+            actor_id=scope.author_actor_id,
+            profile_id=scope.profile_id,
+            artifact_id=scope.artifact_id,
+            correlation_id=correlation_id,
+        )
+        if not revoked:
+            raise ApprovalStateError("Document consent revocation not recorded")
+        return True
+
     async def revoke_document_consent(
         self,
         *,
