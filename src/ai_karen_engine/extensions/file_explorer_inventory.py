@@ -97,21 +97,11 @@ class FileExplorerInventoryHost:
             raise PermissionError("file_explorer_disabled")
 
 
-    async def revalidate_owner_selection(
+    async def _admit_kernel_before_read(
         self, *, context: ExtensionExecutionContext,
-        plan: AuthorizedExecutionPlan, source_id: str, expected_revision: str,
-    ) -> dict[str, Any]:
-        """Recheck selected metadata without granting access to source bytes."""
-        self._authorize_owner(context=context, plan=plan)
-        if not _canonical_uuid(source_id):
-            raise PermissionError("file_explorer_source_id_invalid")
-        if (
-            not isinstance(expected_revision, str)
-            or len(expected_revision) != 64
-            or any(c not in "0123456789abcdefABCDEF" for c in expected_revision)
-        ):
-            raise PermissionError("file_explorer_revision_invalid")
-        # Run the full canonical execution gate before touching source metadata.
+        plan: AuthorizedExecutionPlan,
+    ) -> None:
+        # Kernel admission must precede every owner metadata read.
         # An empty host-issued list has no source contents but triggers the same
         # lifecycle, role, action and permission checks as inventory listing.
         admission_context = replace(
@@ -136,6 +126,22 @@ class FileExplorerInventoryHost:
             or admission.payload.get("items") != []
         ):
             raise PermissionError("file_explorer_kernel_denied")
+
+    async def revalidate_owner_selection(
+        self, *, context: ExtensionExecutionContext,
+        plan: AuthorizedExecutionPlan, source_id: str, expected_revision: str,
+    ) -> dict[str, Any]:
+        """Recheck selected metadata without granting access to source bytes."""
+        self._authorize_owner(context=context, plan=plan)
+        if not _canonical_uuid(source_id):
+            raise PermissionError("file_explorer_source_id_invalid")
+        if (
+            not isinstance(expected_revision, str)
+            or len(expected_revision) != 64
+            or any(c not in "0123456789abcdefABCDEF" for c in expected_revision)
+        ):
+            raise PermissionError("file_explorer_revision_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
         evidence = await self._source.revalidate_owner_reference(
             tenant_id=context.tenant_id, user_id=context.user_id,
             source_id=source_id, expected_revision=expected_revision,
@@ -179,6 +185,8 @@ class FileExplorerInventoryHost:
             raise ValueError("file_explorer_page_limit_invalid")
         if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= MAX_CURSOR_LENGTH):
             raise ValueError("file_explorer_cursor_invalid")
+
+        await self._admit_kernel_before_read(context=context, plan=plan)
 
         page = await self._source.list_owner_sources_page(
             tenant_id=context.tenant_id,
