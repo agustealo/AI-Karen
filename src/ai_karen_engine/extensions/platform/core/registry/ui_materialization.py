@@ -295,6 +295,7 @@ class UIMaterializationPipeline:
         updated: List[Dict[str, Any]] = []
         removed: List[Dict[str, Any]] = []
         errors: List[Dict[str, str]] = []
+        materialized_ui_plugins: List[Dict[str, Any]] = []
 
         for plugin_ui in ui_plugins:
             try:
@@ -302,6 +303,10 @@ class UIMaterializationPipeline:
                 generated.extend(result["generated"])
                 updated.extend(result["updated"])
                 removed.extend(result["removed"])
+                if plugin_ui.get("has_component") and plugin_ui.get("component_path"):
+                    # Discovery is not materialization. Never advertise a UI
+                    # importer for a plugin whose source copy failed.
+                    materialized_ui_plugins.append(plugin_ui)
             except Exception as exc:
                 logger.exception(
                     "Failed to materialize governed UI plugin %s",
@@ -312,7 +317,7 @@ class UIMaterializationPipeline:
                 )
 
         removed.extend(await self.cleanup_stale_artifacts(ui_plugins))
-        import_map = await self.generate_import_map(ui_plugins)
+        import_map = await self.generate_import_map(materialized_ui_plugins)
         return {
             "status": "success" if not errors else "degraded",
             "timestamp": datetime.utcnow().isoformat(),
