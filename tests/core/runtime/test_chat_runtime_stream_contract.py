@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import os
 from contextlib import ExitStack
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2215,6 +2216,281 @@ async def test_revocation_after_final_stream_delta_blocks_transcript():
     assert any(chunk.type == "error" for chunk in chunks)
     assert not gateway.calls
     memory_persist.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_revocation_committed_while_next_stream_chunk_waits_blocks_publication():
+    """A deterministic barrier models a committed revoke before the next yield.
+
+    This proves the ChatRuntime publication fence, not a PostgreSQL transaction
+    or an atomic network-to-database revocation protocol.
+    """
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    next_chunk_ready = asyncio.Event()
+    release_next_chunk = asyncio.Event()
+    revoked = asyncio.Event()
+    producer_closed = asyncio.Event()
+    memory_persist = AsyncMock()
+
+    async def check_source(*args, **kwargs):
+        if revoked.is_set():
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    async def provider_stream(*args, **kwargs):
+        try:
+            yield ChatStreamChunk(
+                type="content", content="first", correlation_id="corr-1",
+            )
+            next_chunk_ready.set()
+            await release_next_chunk.wait()
+            yield ChatStreamChunk(
+                type="content", content="forbidden", correlation_id="corr-1",
+            )
+        finally:
+            producer_closed.set()
+
+    with patch.object(
+        ChatRuntime,
+        "_authorize_selected_memory_before_generation",
+        side_effect=check_source,
+    ):
+        task = asyncio.create_task(
+            _collect_stream(
+                runtime, request, decision, plan, provider_stream,
+                persist_memory=memory_persist,
+            )
+        )
+        try:
+            await asyncio.wait_for(next_chunk_ready.wait(), timeout=5)
+            revoked.set()
+            release_next_chunk.set()
+            chunks = await asyncio.wait_for(task, timeout=5)
+        finally:
+            release_next_chunk.set()
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    assert [chunk.content for chunk in chunks if chunk.type == "content"] == [
+        "first",
+    ]
+    errors = [chunk for chunk in chunks if chunk.type == ChatStreamEventType.ERROR]
+    assert len(errors) == 1
+    assert errors[0].metadata["error_code"] == "CHAT_MEMORY_SOURCE_REVOKED"
+    assert not any(
+        chunk.type == ChatStreamEventType.COMPLETE
+        and chunk.metadata.get("transcript_persistence_status") == "persisted"
+        for chunk in chunks
+    )
+    assert producer_closed.is_set()
+    memory_persist.assert_not_awaited()
+    assert not gateway.calls
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
+    reason="requires isolated migrated PostgreSQL memory database",
+)
+async def test_live_postgres_revocation_between_stream_chunks_denies_publication():
+    """The real PostgreSQL consent ledger fences an already-running stream."""
+    from datetime import timezone
+    from uuid import UUID
+
+    from sqlalchemy import delete, select
+
+    from ai_karen_engine.core.context.contracts import (
+        CognitiveContext,
+        ContextEvidence,
+        ContextRequirements,
+        EvidenceScope,
+        EvidenceSource,
+    )
+    from ai_karen_engine.persistence.postgres.transactions import (
+        async_transaction_scope,
+    )
+    from ai_karen_engine.platform.memory.postgres.event_source import (
+        PostgresEventSource,
+    )
+    from ai_karen_engine.platform.memory.postgres.ledger_models import (
+        ConsentScope,
+        MemoryAssertion,
+        MemoryEvent,
+    )
+
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    # Preserve the policy-bound authenticated subject from _make_request.
+    tenant = UUID(TENANT_ID)
+    user = UUID(USER_ID)
+    event_id, assertion_id, scope_id = uuid4(), uuid4(), uuid4()
+    scope_name = f"stream-revocation-{uuid4().hex}"
+    next_chunk_ready = asyncio.Event()
+    release_next_chunk = asyncio.Event()
+    producer_closed = asyncio.Event()
+    memory_persist = AsyncMock()
+
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(MemoryEvent(
+                event_id=event_id, tenant_id=tenant, user_id=user,
+                event_type="memory_persisted", source_type="chat_user",
+                payload_hash=uuid4().hex, consent_state="granted",
+                payload={
+                    "content": "consented stream test memory",
+                    "vault": {"consent_scope": scope_name},
+                },
+            ))
+            await session.flush()
+            session.add(MemoryAssertion(
+                assertion_id=assertion_id, event_id=event_id,
+                tenant_id=tenant, user_id=user,
+                content="consented stream test memory",
+                consent_state="granted",
+            ))
+            session.add(ConsentScope(
+                scope_id=scope_id, tenant_id=tenant, user_id=user,
+                scope_name=scope_name, is_granted=True,
+            ))
+
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            assertion = (
+                await session.execute(
+                    select(MemoryAssertion).where(
+                        MemoryAssertion.assertion_id == assertion_id,
+                    )
+                )
+            ).scalar_one()
+            revision = assertion.updated_at
+        if revision.tzinfo is None:
+            revision = revision.replace(tzinfo=timezone.utc)
+        origin = {
+            "record_type": "memory_assertion",
+            "record_id": str(assertion_id),
+            "event_id": str(event_id),
+            "record_updated_at": revision.astimezone(timezone.utc).isoformat(),
+        }
+        decision.cognitive_context = CognitiveContext(
+            context_id=str(uuid4()),
+            request_id=request.context.request_id,
+            correlation_id=request.context.correlation_id,
+            tenant_id=str(tenant),
+            user_id=str(user),
+            requirements=ContextRequirements(
+                request_id=request.context.request_id,
+                correlation_id=request.context.correlation_id,
+                tenant_id=str(tenant),
+                user_id=str(user),
+            ),
+            authorized_sources=["memory"],
+            evidence=[ContextEvidence(
+                evidence_id=str(assertion_id),
+                source=EvidenceSource.MEMORY,
+                content="consented stream test memory",
+                scope=EvidenceScope(
+                    tenant_id=str(tenant), user_id=str(user),
+                ),
+                metadata={
+                    "memory_metadata": {
+                        "source": "postgres_memory_ledger",
+                    },
+                    "canonical_event_origin": origin,
+                },
+            )],
+        )
+        gate = PostgresEventSource()
+        assert await gate.authorize_selected_records(
+            tenant_id=str(tenant), user_id=str(user), origins=[origin],
+        ) is True
+
+        async def provider_stream(*args, **kwargs):
+            try:
+                yield ChatStreamChunk(
+                    type="content", content="before-revocation",
+                    correlation_id=request.context.correlation_id,
+                )
+                next_chunk_ready.set()
+                await release_next_chunk.wait()
+                yield ChatStreamChunk(
+                    type="content", content="forbidden-after-revocation",
+                    correlation_id=request.context.correlation_id,
+                )
+            finally:
+                producer_closed.set()
+
+        task = asyncio.create_task(_collect_stream(
+            runtime, request, decision, plan, provider_stream,
+            persist_memory=memory_persist,
+        ))
+        try:
+            await asyncio.wait_for(next_chunk_ready.wait(), timeout=15)
+            # Commit the withdrawal on a separate scoped DB transaction
+            # before allowing the second provider chunk to be yielded.
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                scope = (
+                    await session.execute(
+                        select(ConsentScope).where(
+                            ConsentScope.scope_id == scope_id,
+                        )
+                    )
+                ).scalar_one()
+                scope.is_granted = False
+                scope.revoked_at = datetime.datetime.now(
+                    timezone.utc,
+                ).replace(tzinfo=None)
+            assert await gate.authorize_selected_records(
+                tenant_id=str(tenant), user_id=str(user), origins=[origin],
+            ) is False
+            release_next_chunk.set()
+            chunks = await asyncio.wait_for(task, timeout=15)
+        finally:
+            release_next_chunk.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        assert [
+            chunk.content for chunk in chunks if chunk.type == "content"
+        ] == ["before-revocation"]
+        errors = [
+            chunk for chunk in chunks
+            if chunk.type == ChatStreamEventType.ERROR
+        ]
+        assert len(errors) == 1
+        assert errors[0].metadata["error_code"] == (
+            "CHAT_MEMORY_SOURCE_REVOKED"
+        )
+        assert producer_closed.is_set()
+        assert memory_persist.await_count == 0
+        assert gateway.calls == []
+        assert not any(
+            chunk.type == ChatStreamEventType.COMPLETE
+            and chunk.metadata.get("transcript_persistence_status")
+            == "persisted"
+            for chunk in chunks
+        )
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(MemoryAssertion).where(
+                MemoryAssertion.assertion_id == assertion_id,
+            ))
+            await session.execute(delete(MemoryEvent).where(
+                MemoryEvent.event_id == event_id,
+            ))
+            await session.execute(delete(ConsentScope).where(
+                ConsentScope.scope_id == scope_id,
+            ))
+
 
 
 def test_post_provider_and_finality_source_fences_are_runtime_owned():

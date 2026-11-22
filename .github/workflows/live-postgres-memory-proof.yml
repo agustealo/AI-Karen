@@ -217,7 +217,27 @@ jobs:
           pytest tests/integration/test_live_profile_reconciliation.py -q -rs
           pytest tests/integration/test_live_memory_consent_revocation.py -q -rs
           pytest tests/integration/test_live_memory_publication_reauthorization.py -q -rs
+          pytest tests/integration/test_live_memory_cross_process_revocation.py -q -rs
+          pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k live_postgres_revocation_between_stream_chunks_denies_publication -q -rs
           pytest tests/integration/test_live_automation_task_claims.py -q -rs
+      - name: Measure canonical memory authorization against migrated PostgreSQL
+        env:
+          KAREN_MEMORY_AUTH_LOAD: "1"
+          KAREN_MEMORY_AUTH_LOAD_LEVELS: "1,8,32,64"
+          KAREN_MEMORY_AUTH_LOAD_SAMPLES: "128"
+          KAREN_MEMORY_AUTH_LOAD_REPORT: "memory-auth-load-report.json"
+        run: |
+          pytest tests/integration/test_live_memory_authorization_load.py -q -rs
+          pytest tests/integration/test_live_postgres_rollback_pool_quarantine.py -q -rs
+          pytest tests/persistence/test_postgres_rollback_cancellation.py -q -rs
+      - name: Preserve sanitized memory authorization load evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kis-graph-01c2r-d-postgres-auth-load
+          path: memory-auth-load-report.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: KCR-04A observe canonical durable SQL and NeuroRecall against PostgreSQL
         env:
           KCR04A_REPORT_PATH: kcr04a-live-retrieval-report.json

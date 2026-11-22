@@ -284,6 +284,8 @@ class PoolSettings(BaseSettings):
     pool_size: int = 10
     max_overflow: int = 20
     pool_timeout: int = 30
+    rollback_timeout_seconds: float = 5.0
+    invalidate_timeout_seconds: float = 5.0
     pool_recycle: int = 3600
     pool_pre_ping: bool = True
     echo_sql: bool = False
@@ -294,6 +296,14 @@ class PoolSettings(BaseSettings):
             env_file_encoding="utf-8",
             extra="ignore",
         )
+
+    @field_validator("rollback_timeout_seconds", "invalidate_timeout_seconds")
+    @classmethod
+    def _validate_cleanup_deadlines(cls, value: float) -> float:
+        value = float(value)
+        if not 0.1 <= value <= 120.0:
+            raise ValueError("database cleanup deadlines must be between 0.1 and 120 seconds")
+        return value
 
     @field_validator("pool_size", mode="before")
     @classmethod
