@@ -217,6 +217,7 @@ jobs:
           pytest tests/integration/test_live_profile_reconciliation.py -q -rs
           pytest tests/integration/test_live_memory_consent_revocation.py -q -rs
           pytest tests/integration/test_live_memory_publication_reauthorization.py -q -rs
+          pytest tests/integration/test_live_memory_cross_process_revocation.py -q -rs
           pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k live_postgres_revocation_between_stream_chunks_denies_publication -q -rs
           pytest tests/integration/test_live_automation_task_claims.py -q -rs
       - name: KCR-04A observe canonical durable SQL and NeuroRecall against PostgreSQL
