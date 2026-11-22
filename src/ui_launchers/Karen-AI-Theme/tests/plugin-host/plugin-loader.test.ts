@@ -94,7 +94,7 @@ describe('Canonical plugin catalog integration', () => {
       json: async () => response,
     }));
     invalidateCatalogCache();
-    if (response.plugins[0].version === undefined) {
+    if ((response as { plugins: Array<{ version?: string }> }).plugins[0].version === undefined) {
       await expect(resolvePluginComponentAsync('file-explorer')).rejects.toThrow('Invalid plugin catalog response');
     } else {
       expect(await resolvePluginComponentAsync('file-explorer')).toBeNull();
