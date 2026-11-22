@@ -756,11 +756,12 @@ class ApprovalService:
         })
         return record
 
-    async def get_document_consent_confirmation(
+    async def _load_document_consent_scope(
         self,
         approval_id: str,
         *,
         request: "Request",
+        require_originating_session: bool,
     ) -> tuple[Dict[str, Any], "DocumentConsentApprovalScope"]:
         """Load canonical author consent metadata from the existing SQL ledger.
 
@@ -814,7 +815,15 @@ class ApprovalService:
                 style_use_allowed=source["style_use_allowed"],
                 expires_at=datetime.fromisoformat(source["expires_at"]),
             )
-            scope.require_matching_context(context)
+            if require_originating_session:
+                scope.require_matching_context(context)
+            elif (
+                str(context.tenant_id) != scope.tenant_id
+                or str(context.user_id) != scope.author_actor_id
+                or str(principal.tenant_id) != scope.tenant_id
+                or str(principal.user_id) != scope.author_actor_id
+            ):
+                raise PermissionError("document_consent_author_mismatch")
         except (KeyError, ValueError, TypeError, AttributeError, PermissionError) as exc:
             raise ApprovalScopeError("Document author approval scope mismatch") from exc
         if (
@@ -822,6 +831,29 @@ class ApprovalService:
             or scope.to_record() != source
         ):
             raise ApprovalScopeError("Document author approval fingerprint mismatch")
+        return record, scope
+
+    async def get_document_consent_confirmation(
+        self, approval_id: str, *, request: "Request",
+    ) -> tuple[Dict[str, Any], "DocumentConsentApprovalScope"]:
+        """Only the originating bearer session may review/issue consent."""
+        return await self._load_document_consent_scope(
+            approval_id, request=request, require_originating_session=True,
+        )
+
+    async def get_document_consent_revocation_scope(
+        self, approval_id: str, *, request: "Request",
+    ) -> tuple[Dict[str, Any], "DocumentConsentApprovalScope"]:
+        """Freshly authenticated author may revoke after access-token refresh.
+
+        This method must NEVER authorize source review, confirmation or issuance.
+        It checks the immutable consumed approval, not the current file.
+        """
+        record, scope = await self._load_document_consent_scope(
+            approval_id, request=request, require_originating_session=False,
+        )
+        if record.get("status") != "consumed":
+            raise ApprovalStateError("No issued author consent to revoke")
         return record, scope
 
     async def get_document_consent_review(
@@ -1025,22 +1057,16 @@ class ApprovalService:
         """
         if confirmed is not True:
             raise ApprovalScopeError("Explicit revocation confirmation required")
-        record, scope = await self.get_document_consent_confirmation(
+        record, scope = await self.get_document_consent_revocation_scope(
             approval_id, request=request,
         )
-        if record.get("status") != "consumed":
-            raise ApprovalStateError("No issued author consent to revoke")
-        receipt = await self.recover_stored_document_consent_receipt(
-            approval_id, request=request,
-        )
-        if receipt is None:
-            raise ApprovalStateError("No current author consent receipt")
         revoked = await self.revoke_document_consent(
             request=request,
             tenant_id=scope.tenant_id,
             actor_id=scope.author_actor_id,
             profile_id=scope.profile_id,
             artifact_id=scope.artifact_id,
+            expected_source_sha256=scope.source_sha256,
             correlation_id=correlation_id,
         )
         if not revoked:
@@ -1056,6 +1082,7 @@ class ApprovalService:
         profile_id: str,
         artifact_id: str,
         correlation_id: str,
+        expected_source_sha256: str | None = None,
     ) -> bool:
         """Host-only author revocation through the existing one-way SQL owner."""
         from ai_karen_engine.core.runtime.composition import (
@@ -1084,6 +1111,7 @@ class ApprovalService:
             profile_id=profile_id,
             artifact_id=artifact_id,
             correlation_id=correlation_id,
+            expected_source_sha256=expected_source_sha256,
         )
         if revoked:
             self._audit.log_audit_event({
