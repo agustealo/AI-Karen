@@ -109,6 +109,28 @@ describe('document author source initiation', () => {
     expect(api.post).not.toHaveBeenCalled();
   });
 
+  it('only offers filenames compatible with canonical bounded storage reads', async () => {
+    const validMarkdown = { ...document, id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', filename: 'author-notes.MD' };
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.startsWith('/api/artifacts/owner-page?')
+        ? { items: [
+          { ...document, filename: 'author original.txt' },
+          { ...document, id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', filename: '../source.txt' },
+          { ...document, id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', filename: 'plain.pdf' },
+          { ...document, id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', filename: 'file.txt/other' },
+          { ...document, id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', filename: 'x'.repeat(157) + '.txt' },
+          validMarkdown,
+          null,
+        ], has_more: false, next_cursor: null }
+        : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    expect(await screen.findByText(/author-notes.MD/)).toBeTruthy();
+    const choice = screen.getByRole('combobox', { name: 'Your document' }) as HTMLSelectElement;
+    expect(Array.from(choice.options).map((option) => option.value)).toEqual(['', validMarkdown.id]);
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
   it('does not navigate or claim consent when initiation is denied', async () => {
     api.post.mockRejectedValue(new Error('403'));
     render(<DocumentAuthorConsentInitiation />);
