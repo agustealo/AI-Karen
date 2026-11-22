@@ -486,6 +486,7 @@ class UIMaterializationPipeline:
             if (
                 not re.fullmatch(r"[a-zA-Z0-9_-]+", plugin_id)
                 or source_rel.is_absolute()
+                or not source_rel.parts
                 or any(part in {".", ".."} for part in source_rel.parts)
             ):
                 raise ValueError("unsafe UI source path or plugin identifier")
@@ -494,6 +495,9 @@ class UIMaterializationPipeline:
             if (
                 not source_dir.is_dir()
                 or source_dir.is_symlink()
+                or not source_dir.resolve().is_relative_to(plugin_dir.resolve())
+                or any((plugin_dir / Path(*source_rel.parts[:index])).is_symlink()
+                       for index in range(1, len(source_rel.parts) + 1))
                 or plugin_dir.is_symlink()
                 or not manifest_path.is_file()
                 or manifest_path.is_symlink()
