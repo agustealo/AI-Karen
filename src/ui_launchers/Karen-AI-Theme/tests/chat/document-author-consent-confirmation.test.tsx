@@ -46,6 +46,8 @@ describe('first-party document author confirmation', () => {
     expect(await screen.findByText(preview.artifact_id)).toBeTruthy();
     expect(screen.getByText(preview.source_sha256)).toBeTruthy();
     expect(screen.getByText('author-original.txt')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Initiate another document review' }).getAttribute('href'))
+      .toBe('/approvals/document-consent/new');
     expect(screen.getByText('1024 bytes (text/plain)')).toBeTruthy();
     expect(screen.getByText('Not allowed')).toBeTruthy();
 
