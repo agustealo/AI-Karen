@@ -33,6 +33,7 @@ export class TimeQueryApi {
   private readonly readsInFlight = new Map<string, Promise<unknown>>();
   private readTail: Promise<void> = Promise.resolve();
   private readNotBefore = 0;
+  private lastReadRateLimitError: ApiError | null = null;
 
   constructor(api: ExtensionAPI) {
     this.api = api;
@@ -41,6 +42,11 @@ export class TimeQueryApi {
   private async readWithRateLimit<T>(command: Record<string, unknown>): Promise<T> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const delayMs = Math.max(0, this.readNotBefore - Date.now());
+      if (delayMs > MAX_READ_RETRY_AFTER_SECONDS * 1000) {
+        // The server cooldown is still authoritative, but automated reads
+        // must not wait longer than the bounded retry policy allows.
+        throw this.lastReadRateLimitError ?? new ApiError(429, 'Time Query read rate limited');
+      }
       if (delayMs > 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
       }
@@ -60,6 +66,7 @@ export class TimeQueryApi {
         // Honor the backend's admission time for subsequent reads even if
         // this particular read has exhausted its bounded retry allowance.
         const seconds = Math.max(1, retryAfter);
+        this.lastReadRateLimitError = error;
         this.readNotBefore = Math.max(this.readNotBefore, Date.now() + seconds * 1000);
         if (attempt > 0 || seconds > MAX_READ_RETRY_AFTER_SECONDS) {
           throw error;
@@ -85,6 +92,14 @@ export class TimeQueryApi {
     return read;
   }
 
+  private async executeMutation<T>(readKey: string, command: Record<string, unknown>): Promise<T> {
+    // A completed write invalidates the old in-flight snapshot. A following
+    // refresh joins the serial read queue after that stale read, not its promise.
+    const response = await this.api.execute(command) as T;
+    this.readsInFlight.delete(readKey);
+    return response;
+  }
+
   getCurrentTime(mode: string = 'datetime'): Promise<CurrentTimeResponse> {
     return this.executeRead('time:' + mode, { mode });
   }
@@ -102,11 +117,11 @@ export class TimeQueryApi {
   }
 
   addMultiClock(timezone: string): Promise<BaseResponse> {
-    return this.api.execute({ mode: 'multi_clock', action: 'add', timezone }) as Promise<BaseResponse>;
+    return this.executeMutation<BaseResponse>('clocks:list', { mode: 'multi_clock', action: 'add', timezone });
   }
 
   removeMultiClock(clock_id: string): Promise<BaseResponse> {
-    return this.api.execute({ mode: 'multi_clock', action: 'remove', clock_id }) as Promise<BaseResponse>;
+    return this.executeMutation<BaseResponse>('clocks:list', { mode: 'multi_clock', action: 'remove', clock_id });
   }
 
   setStopwatchAction(action: string, stopwatch_id: string = 'default'): Promise<StopwatchResponse> {
@@ -121,19 +136,19 @@ export class TimeQueryApi {
   }
 
   createAlarm(data: AlarmCreateParams): Promise<AlarmResponse> {
-    return this.api.execute({ mode: 'alarm', action: 'create', ...data }) as Promise<AlarmResponse>;
+    return this.executeMutation<AlarmResponse>('alarms:list', { mode: 'alarm', action: 'create', ...data });
   }
 
   updateAlarm(alarm_id: string, data: AlarmUpdateParams): Promise<AlarmResponse> {
-    return this.api.execute({ mode: 'alarm', action: 'update', alarm_id, ...data }) as Promise<AlarmResponse>;
+    return this.executeMutation<AlarmResponse>('alarms:list', { mode: 'alarm', action: 'update', alarm_id, ...data });
   }
 
   deleteAlarm(alarm_id: string): Promise<BaseResponse> {
-    return this.api.execute({ mode: 'alarm', action: 'delete', alarm_id }) as Promise<BaseResponse>;
+    return this.executeMutation<BaseResponse>('alarms:list', { mode: 'alarm', action: 'delete', alarm_id });
   }
 
   setAlarmStatus(alarm_id: string, enabled: boolean): Promise<AlarmResponse> {
-    return this.api.execute({ mode: 'alarm', action: enabled ? 'enable' : 'disable', alarm_id }) as Promise<AlarmResponse>;
+    return this.executeMutation<AlarmResponse>('alarms:list', { mode: 'alarm', action: enabled ? 'enable' : 'disable', alarm_id });
   }
 
   convertTimezone(datetime: string, from_timezone: string, to_timezone: string): Promise<ConversionResponse> {
