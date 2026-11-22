@@ -180,3 +180,40 @@ async def test_failed_ui_copy_cannot_claim_importer_or_success(tmp_path, monkeyp
     assert result["errors"][0]["plugin_id"] == "file-explorer"
     assert result["import_map"] == {}
     assert not (tmp_path / "plugin-repo/file-explorer/FileExplorerPage.tsx").exists()
+
+
+@pytest.mark.asyncio
+async def test_missing_validated_ui_entry_fails_closed_without_false_success(tmp_path):
+    """A registry-valid provides_ui plugin still needs an actual component."""
+    plugin_dir = tmp_path / "missing-ui"
+    plugin_dir.mkdir()
+    manifest_path = plugin_dir / "plugin_manifest.json"
+    manifest_path.write_bytes((PLUGIN / "plugin_manifest.json").read_bytes())
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=plugin_dir,
+        manifest_path=manifest_path,
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+    discovered = await pipeline.discover_ui_plugins()
+    assert len(discovered) == 1
+    assert discovered[0]["registry_validated"] is True
+    assert discovered[0]["has_component"] is False
+
+    result = await pipeline.materialize_all()
+    assert result["status"] == "degraded"
+    assert result["plugins_processed"] == 1
+    assert result["errors"][0]["plugin_id"] == "file-explorer"
+    assert "entry component missing" in result["errors"][0]["error"]
+    assert result["import_map"] == {}
+    assert not (tmp_path / "plugin-repo/file-explorer").exists()
