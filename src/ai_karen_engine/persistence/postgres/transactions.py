@@ -182,11 +182,20 @@ async def rollback_async_transaction(session: AsyncSession) -> None:
             label="rollback",
         )
     except _RollbackStillActive as pending:
-        driver = _detach_pending_rollback_connection(pool_proxy)
+        driver = None
+        try:
+            driver = _detach_pending_rollback_connection(pool_proxy)
+        except BaseException:
+            # Ownership must transfer even if the pool proxy is already
+            # invalidated. Never close this AsyncSession while rollback runs.
+            logger.exception("postgres.pending_rollback_detach_failed")
         pending.retirement_task = _schedule_quarantined_session_retirement(
             session, pending.task, driver
         )
-        logger.critical("postgres.rollback_pending_quarantined")
+        logger.critical(
+            "postgres.rollback_pending_quarantined",
+            extra={"pool_detach_confirmed": driver is not None},
+        )
         raise
     except BaseException:
         try:
@@ -244,6 +253,12 @@ async def async_transaction_scope(
                 )
             yield session
             await session.commit()
+        except _RollbackStillActive:
+            # Nested persistence owners may have already quarantined an
+            # unresponsive rollback. Its retirement task owns the session;
+            # a second rollback or close here would race that task.
+            close_in_caller = False
+            raise
         except BaseException:
             try:
                 await rollback_async_transaction(session)
