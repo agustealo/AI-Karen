@@ -25,6 +25,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from fastapi import Request
 
 from ai_karen_engine.auth import auth_middleware, session as auth_session
+from ai_karen_engine.core.runtime.prompt.karisignature_contract import (
+    KariSignatureRequest,
+    KariSignatureRevision,
+)
 from ai_karen_engine.core.runtime.document_consent_approval import (
     DocumentConsentApprovalScope,
 )
@@ -769,6 +773,34 @@ async def test_first_party_author_consent_postgres(
             "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
             tenant, profile, other_actor,
         ) is True
+        # Prove the actual delegated-use runtime owner denies the same
+        # previously granted actor and published revision after revocation.
+        delegated_request = KariSignatureRequest(
+            tenant_id=str(tenant),
+            actor_id=str(other_actor),
+            profile_id=str(profile),
+            purpose="draft_email",
+            correlation_id="post-revocation-use-denied",
+        )
+        published_revision = KariSignatureRevision(
+            tenant_id=str(tenant),
+            profile_id=str(profile),
+            revision_id=str(revision),
+            revision_number=1,
+            state="published",
+            approved_expression={"tone": "direct"},
+            content_digest="b" * 64,
+        )
+        delegated_owner = WritingStyleProfileRepository(
+            client_factory=TrustedTestClient,
+        )
+        assert await delegated_owner.read_current_published(
+            request=delegated_request,
+        ) is None
+        assert await delegated_owner.authorize_use(
+            request=delegated_request, revision=published_revision,
+        ) is False
+
         # P2 regression: an author can revoke consent while the profile is
         # still draft, including after evidence has been registered. The
         # database must prevent both later publication and direct SQL grants.
