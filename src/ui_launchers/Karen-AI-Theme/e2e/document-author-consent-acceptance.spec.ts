@@ -53,6 +53,7 @@ async function selectSource(page: Page, origin: URL): Promise<Locator> {
     timeout: 20_000,
   });
   await expect(selector.getByRole("alert")).toHaveCount(0);
+  await expect(selector).toHaveAttribute("data-owner-pages-loaded", "1");
   // Owner pages are bounded. Walk only the dedicated author inventory,
   // never use a free-form artifact input or guess an unlisted source ID.
   let found = false;
@@ -77,8 +78,12 @@ async function selectSource(page: Page, origin: URL): Promise<Locator> {
     await more.click();
     const response = await nextPageResponse;
     expect(response.ok(), "Owned document page request must succeed").toBe(true);
-    await expect(selector.getByRole("button", { name: "Loading documents…" }))
-      .toHaveCount(0, { timeout: 20_000 });
+    // A network response may complete before React commits the new options.
+    // The picker increments this marker only after validating and applying
+    // the requested page; waiting for the new value prevents stale-page reads.
+    await expect(selector).toHaveAttribute(
+      "data-owner-pages-loaded", String(pageNumber + 2), { timeout: 20_000 },
+    );
     await expect(selector.getByRole("alert")).toHaveCount(0);
   }
   expect(found, "Expected source must be in the authenticated owner inventory").toBe(true);
