@@ -38,6 +38,7 @@ describe('document author source initiation', () => {
   it('does not submit without a server-listed source and profile', async () => {
     render(<DocumentAuthorConsentInitiation />);
     await screen.findByText(/author-original.txt/);
+    expect(api.get).toHaveBeenCalledWith('/api/artifacts/');
     const button = screen.getByRole('button', { name: 'Continue to author review' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByRole('combobox', { name: 'Your document' }), {
