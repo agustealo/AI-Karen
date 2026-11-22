@@ -67,13 +67,17 @@ async def test_approval_consumption_requires_author_actor_intent_and_exact_finge
         "status='approved'", "decided_by=CAST(:actor AS uuid)",
         "request_fingerprint=:fingerprint", "intent=:intent",
         "expires_at>clock_timestamp()", "RETURNING *",
-        "SET status='consumed'", "request_payload='{}'::jsonb",
+        "SET status='consumed'",
         "decision_reason='explicit_author_confirmation'",
         "policy_decision_id LIKE 'policy-document-consent-preflight-%'",
         "CAST(:scope_record AS jsonb)", "risk_level='high'",
         "decided_at IS NOT NULL",
     ):
         assert condition in sql
+    # The consumed document scope is required for fresh-bearer receipt
+    # recovery; generic approval consumption retains its purge behavior.
+    assert "request_payload='{}'::jsonb" not in sql
+    assert "request_payload -> 'document_consent_scope'" in sql
     assert params["intent"] == "writing_style.document_consent.issue"
     assert params["fingerprint"] == args["fingerprint"]
     assert params["actor"] == args["author_actor_id"]
