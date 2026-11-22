@@ -368,3 +368,22 @@ async def test_revocation_review_uses_verified_author_scope_not_source_bytes(
         denied = await client.get(url)
         assert denied.status_code == 403
         assert "source_sha256" not in denied.json()
+
+
+async def test_revocation_review_does_not_present_unconsumed_approval(
+    client_and_service,
+):
+    app, approval_id, _, service = client_and_service
+    service.get_document_consent_revocation_scope.side_effect = ApprovalStateError(
+        "not issued"
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            "/api/approvals/document-consent/" + approval_id + "/revoke-review",
+        )
+    assert response.status_code == 409
+    assert "source_sha256" not in response.json()
+    assert "receipt_id" not in response.json()
