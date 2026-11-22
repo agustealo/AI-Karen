@@ -183,8 +183,29 @@ async def list_owned_artifact_page(
     )
     if not result.success:
         raise HTTPException(status_code=503, detail="Owned artifact inventory unavailable")
+    # The repository, not this HTTP boundary, owns paging decisions. An
+    # incomplete or malformed result must never masquerade as a final page.
+    meta = result.metadata
+    if (
+        not isinstance(result.data, list)
+        or len(result.data) > limit
+        or not isinstance(meta, dict)
+        or type(meta.get("has_more")) is not bool
+    ):
+        raise HTTPException(status_code=503, detail="Owned artifact page invalid")
+    has_more = meta["has_more"]
+    next_cursor = meta.get("next_cursor")
+    if has_more and (
+        not result.data
+        or not isinstance(next_cursor, str)
+        or not 1 <= len(next_cursor) <= 768
+        or next_cursor == cursor
+    ):
+        raise HTTPException(status_code=503, detail="Owned artifact cursor unavailable")
+    if not has_more and next_cursor is not None:
+        raise HTTPException(status_code=503, detail="Owned artifact cursor inconsistent")
     items: List[ArtifactMetadataResponse] = []
-    for artifact in result.data or []:
+    for artifact in result.data:
         if (
             artifact.tenant_id != tenant_id
             or artifact.user_id != user_id
@@ -205,11 +226,6 @@ async def list_owned_artifact_page(
             created_at=artifact.created_at.isoformat() if artifact.created_at else "",
             deleted_at=None,
         ))
-    meta = result.metadata or {}
-    has_more = meta.get("has_more") is True
-    next_cursor = meta.get("next_cursor")
-    if has_more and (not isinstance(next_cursor, str) or not next_cursor):
-        raise HTTPException(status_code=503, detail="Owned artifact cursor unavailable")
     return OwnedArtifactPage(
         items=items, has_more=has_more,
         next_cursor=next_cursor if has_more else None,
