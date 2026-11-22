@@ -179,7 +179,8 @@ async def test_first_party_author_consent_postgres(
         )
         await raw.execute(
             f'GRANT SELECT ON public.writing_style_grants, '
-            f'public.writing_style_sample_evidence TO "{role}"'
+            f'public.writing_style_sample_evidence, '
+            f'public.writing_style_revisions TO "{role}"'
         )
         await raw.execute(
             f'GRANT INSERT ON public.writing_style_audit TO "{role}"'
