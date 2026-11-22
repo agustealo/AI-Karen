@@ -330,3 +330,46 @@ async def test_detach_failure_defers_session_teardown_until_rollback_finishes():
     assert not invalidation_during_rollback
     session.invalidate.assert_awaited_once()
     session.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rollback_preflight_never_acquires_new_connection():
+    """A logical transaction with no owned connection must not check out."""
+    from ai_karen_engine.persistence.postgres import transactions
+
+    session = MagicMock(spec=transactions.AsyncSession)
+    session.in_transaction.return_value = True
+    session.is_active = True
+    transaction = MagicMock()
+    transaction._connections = {}
+    session.sync_session.get_transaction.return_value = transaction
+    session.connection = AsyncMock(
+        side_effect=AssertionError("rollback preflight checked out connection")
+    )
+
+    owned = await transactions._capture_rollback_connection(session)
+
+    assert owned is None
+    session.connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rollback_preflight_uses_existing_connection_only():
+    """Existing checked-out physical connection is read without session I/O."""
+    from ai_karen_engine.persistence.postgres import transactions
+
+    session = MagicMock(spec=transactions.AsyncSession)
+    session.in_transaction.return_value = True
+    session.is_active = True
+    connection = MagicMock()
+    proxy = object()
+    connection.connection = proxy
+    transaction = MagicMock()
+    transaction._connections = {object(): (connection, None, True, False)}
+    session.sync_session.get_transaction.return_value = transaction
+    session.connection = AsyncMock(
+        side_effect=AssertionError("session.connection() must not run")
+    )
+
+    assert await transactions._capture_rollback_connection(session) is proxy
+    session.connection.assert_not_awaited()
