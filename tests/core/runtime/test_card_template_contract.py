@@ -43,6 +43,7 @@ def test_system_catalog_is_immutable_seed_projection_not_a_second_renderer_regis
     assert set(CARD_TEMPLATE_COMPONENT_TYPES) < set(PRESENTATION_COMPONENT_TYPES)
     assert {item["definition"]["slots"][0]["component_type"] for item in catalog} == CARD_TEMPLATE_COMPONENT_TYPES
     assert len({item["definition"]["template_key"] for item in catalog}) == len(catalog)
+    assert any(item["definition"]["template_key"] == "system-planner-task-list" for item in catalog)
     assert all(item["origin"] == "system" and item["editable"] is False for item in catalog)
     assert all(validate_card_template_draft(item["definition"]) == item["definition"] for item in catalog)
     catalog[0]["definition"]["title"] = "Mutated caller copy"

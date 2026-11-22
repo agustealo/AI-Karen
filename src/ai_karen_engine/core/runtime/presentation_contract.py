@@ -667,7 +667,7 @@ def built_in_card_template_catalog() -> list[dict[str, Any]]:
     for component in sorted(CARD_TEMPLATE_COMPONENT_TYPES):
         definition = validate_card_template_draft({
             "schema_version": 1,
-            "template_key": "system-" + component.replace(".", "-"),
+            "template_key": "system-" + component.replace(".", "-").replace("_", "-"),
             "title": component.replace(".", " ").title(),
             "layout": "stack",
             "density": "comfortable",
