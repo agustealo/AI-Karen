@@ -73,8 +73,17 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
         ) as invalidate_spy:
             rollback_task = asyncio.create_task(rollback_async_transaction(session))
             await asyncio.wait_for(entered_rollback.wait(), timeout=5)
+            # The connection is intentionally still checked out during the
+            # bounded rollback attempt. Quarantine is required only after
+            # that attempt has expired and the caller receives uncertainty.
+            assert engine.async_engine.pool.checkedout() == baseline + 1
+            with pytest.raises(
+                RuntimeError, match="connection_uncertain"
+            ) as uncertain:
+                await asyncio.wait_for(asyncio.shield(rollback_task), timeout=5)
+            assert getattr(uncertain.value, "retirement_task", None) is not None
             assert engine.async_engine.pool.checkedout() == baseline, (
-                "the active rollback still owns a reusable pooled connection"
+                "the uncertain rollback still owns a reusable pooled connection"
             )
             # A fresh scoped connection must be distinct from the held,
             # detached driver while rollback is still suspended.
