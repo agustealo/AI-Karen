@@ -42,37 +42,35 @@ def transaction_scope(
         session.close()
 
 
+class _RollbackStillActive(RuntimeError):
+    """A rollback did not settle and still owns the SQLAlchemy session."""
+
+    def __init__(self, task: asyncio.Task) -> None:
+        super().__init__("postgres_rollback_unresponsive_connection_quarantined")
+        self.task = task
+
+
 async def _bounded_transaction_cleanup(
     operation,
     *,
     seconds: float,
     label: str,
 ) -> None:
-    """Drain an async SQLAlchemy cleanup operation within a finite budget.
-
-    Repeated caller cancellations cannot bypass rollback safety. If the
-    driver ignores its own cancellation, fail closed and report an uncertain
-    session, rather than claim the connection was returned cleanly.
-    """
+    """Bound the wait without concurrent operations on an active AsyncSession."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + seconds
     task = asyncio.create_task(operation)
-    while not task.done():
-        remaining = deadline - loop.time()
-        if remaining <= 0:
-            break
+    deadline = loop.time() + seconds
+    while not task.done() and loop.time() < deadline:
         try:
-            await asyncio.wait({task}, timeout=remaining)
+            await asyncio.wait({task}, timeout=max(0.0, deadline - loop.time()))
         except asyncio.CancelledError:
-            # The original cancellation is re-raised by the transaction
-            # owner once cleanup is complete or its deadline has expired.
+            # The calling transaction re-raises cancellation after cleanup.
             continue
     if task.done():
         await task
         return
 
     task.cancel()
-    # A driver that supports cancellation should finish teardown promptly.
     grace_deadline = loop.time() + min(1.0, seconds)
     while not task.done() and loop.time() < grace_deadline:
         try:
@@ -81,23 +79,17 @@ async def _bounded_transaction_cleanup(
             )
         except asyncio.CancelledError:
             continue
-
     if task.done():
-        # Consume cancellation/failure so the abandoned task cannot emit a
-        # never-retrieved exception or be mistaken for clean rollback.
         try:
             await task
         except BaseException:
             pass
         raise TimeoutError(f"postgres_{label}_deadline_exceeded")
+    if label == "rollback":
+        raise _RollbackStillActive(task)
 
-    def _observe_late_completion(completed: asyncio.Task) -> None:
-        try:
-            completed.result()
-        except BaseException:
-            pass
-
-    task.add_done_callback(_observe_late_completion)
+    # Invalidation itself remains in flight; observe its eventual result.
+    task.add_done_callback(_observe_postgres_cleanup_task)
     logger.critical(
         "postgres.transaction_cleanup_unresponsive",
         extra={"operation": label, "deadline_seconds": seconds},
@@ -105,15 +97,78 @@ async def _bounded_transaction_cleanup(
     raise RuntimeError(f"postgres_{label}_unresponsive_connection_uncertain")
 
 
+def _observe_postgres_cleanup_task(task: asyncio.Task) -> None:
+    try:
+        task.result()
+    except BaseException:
+        pass
+
+
+async def _quarantine_rollback_connection(session: AsyncSession):
+    """Detach a currently owned SQLAlchemy connection before rollback begins.
+
+    Connection.detach is pool-level, not a session state transition. A detached
+    connection cannot be checked out by another tenant even when its rollback
+    later becomes unresponsive. It is discarded when eventually closed.
+    """
+    if not isinstance(session, AsyncSession) or not session.in_transaction():
+        return None
+    connection = await session.connection()
+    pool_proxy = connection.sync_connection.connection
+    driver = pool_proxy.driver_connection
+    connection.sync_connection.detach()
+    logger.warning("postgres.transaction_connection_detached_for_rollback")
+    return driver
+
+
+def _schedule_quarantined_session_retirement(
+    session: AsyncSession, rollback_task: asyncio.Task, driver
+) -> None:
+    """Keep the session owned until its active rollback ends, then close it."""
+
+    if driver is not None and hasattr(driver, "terminate"):
+        try:
+            # asyncpg's terminate is synchronous and aborts driver I/O.
+            driver.terminate()
+        except Exception:
+            logger.exception("postgres.quarantined_driver_termination_failed")
+
+    async def retire() -> None:
+        try:
+            await rollback_task
+        except BaseException:
+            pass
+        try:
+            # Session-level operations are safe only *after* rollback settles.
+            await session.invalidate()
+        except BaseException:
+            logger.exception("postgres.quarantined_session_invalidation_failed")
+        finally:
+            try:
+                await session.close()
+            except BaseException:
+                logger.exception("postgres.quarantined_session_close_failed")
+
+    task = asyncio.create_task(retire())
+    task.add_done_callback(_observe_postgres_cleanup_task)
+
+
 async def rollback_async_transaction(session: AsyncSession) -> None:
-    """Rollback within configured deadlines; invalidate after uncertain outcome."""
+    """Quarantine a connection before rollback; never race session teardown."""
     settings = get_database_settings().pool
+    driver = await _quarantine_rollback_connection(session)
     try:
         await _bounded_transaction_cleanup(
             session.rollback(),
             seconds=settings.rollback_timeout_seconds,
             label="rollback",
         )
+    except _RollbackStillActive as pending:
+        _schedule_quarantined_session_retirement(
+            session, pending.task, driver
+        )
+        logger.critical("postgres.rollback_pending_quarantined")
+        raise
     except BaseException:
         try:
             await _bounded_transaction_cleanup(
@@ -137,9 +192,15 @@ async def async_transaction_scope(
     tenant_id: Optional[str] = None,
     *, user_id: Optional[str] = None,
 ) -> AsyncGenerator[AsyncSession, None]:
-    """Provide tenant and authenticated-principal scoped async transaction."""
+    """Provide tenant and authenticated-principal scoped async transaction.
+
+    A quarantined session's asynchronous cleanup is owned by its original
+    rollback task; this caller never races close against a pending rollback.
+    """
     engine = get_postgres_engine()
-    async with engine.async_session_factory() as session:
+    session = engine.async_session_factory()
+    close_in_caller = True
+    try:
         try:
             if user_id is not None:
                 try:
@@ -164,11 +225,15 @@ async def async_transaction_scope(
             yield session
             await session.commit()
         except BaseException:
-            # Cancellation must not escape while a caller-owned transaction
-            # remains active. SQLAlchemy's session context also closes it,
-            # but explicit rollback keeps the transaction boundary reliable.
-            await rollback_async_transaction(session)
+            try:
+                await rollback_async_transaction(session)
+            except _RollbackStillActive:
+                close_in_caller = False
+                raise
             raise
+    finally:
+        if close_in_caller:
+            await session.close()
 
 
 def _apply_tenant_context_sync(session: Session, tenant_id: str) -> None:
