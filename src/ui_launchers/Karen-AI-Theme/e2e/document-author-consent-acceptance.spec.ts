@@ -158,6 +158,10 @@ test("WS-04A9X: real author initiates a source-bound pending review without gran
   );
   test.setTimeout(120_000);
   requireApprovalEvidence();
+  const expectedProfile = process.env.KAREN_DOCUMENT_AUTHOR_PROFILE_ID;
+  if (!expectedProfile || !uuid.test(expectedProfile)) {
+    throw new Error("A dedicated author-owned draft profile fixture is required");
+  }
   const approved = approvedOrigin();
   await signInApprovedKaren(page, email!, password!, { allowLocalLoopback: local });
   await page.goto(
@@ -175,7 +179,7 @@ test("WS-04A9X: real author initiates a source-bound pending review without gran
     .selectOption(expectedArtifact!);
   await selector.getByRole("textbox", {
     name: "Existing draft writing-style profile ID",
-  }).fill(process.env.KAREN_DOCUMENT_AUTHOR_PROFILE_ID || "");
+  }).fill(expectedProfile);
   const start = selector.getByRole("button", { name: "Continue to author review" });
   await expect(start).toBeEnabled();
   await start.click();
