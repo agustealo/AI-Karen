@@ -114,3 +114,10 @@ Once a current issued consent receipt is verified, the dedicated author screen o
 The opt-in live mutation acceptance now covers creation, human confirmation, issuance, reload/receipt recovery, explicit revocation, and absence of a recoverable receipt after another reload within the SAME authenticated session. Read-only acceptance remains nonmutating. The disposable PostgreSQL acceptance continues to prove that revoked document consent permanently revokes the published profile and delegated grants; direct SQL un-revocation is denied. No model inference, document ingestion, publication, or delegated action is enabled in this slice.
 
 **CI status:** 19/19 passed for preceding `fd7b9072ab5fe0db8201e2221a32c7db6a58bed9`. The new WS-04A9Z revocation head has separate exact-head checks that must pass before this implementation can be considered validated. Live browser and storage proof remain external go/no-go gates, and consumer ingestion stays disabled.
+
+
+### WS-04A9AA: delegated-use runtime denial regression
+
+The disposable PostgreSQL acceptance now invokes the existing `WritingStyleProfileRepository.read_current_published` and `authorize_use` owners **after** author consent has been revoked and its database trigger has revoked the published profile and delegate grant. Both methods must deny access to the previously authorized delegated actor even when that caller retains a historical published revision ID, revision number and digest. This is a runtime-query regression rather than a frontend visual assertion, a simulated grant or a new authorization helper.
+
+The preceding `fd7b9072ab5fe0db8201e2221a32c7db6a58bed9` head passed 19/19 workflows; its two P2 browser review threads were resolved after evidence-backed fixes. The revocation and delegated-use changes require their OWN exact-head tests and live-host acceptance before release. No actual target-host execution, Supabase Storage read or consumer ingestion is claimed by this source test.
