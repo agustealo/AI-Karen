@@ -20,6 +20,7 @@ from ai_karen_engine.extensions.contracts import (
 logger = logging.getLogger(__name__)
 PLUGIN_ID = "file-explorer"
 MAX_PAGE_SIZE = 200
+MAX_CURSOR_LENGTH = 768
 _RESERVED_SCOPE = frozenset({"file_explorer_grant", "file_explorer_entries"})
 
 
@@ -176,7 +177,7 @@ class FileExplorerInventoryHost:
         self._authorize_owner(context=context, plan=plan)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
             raise ValueError("file_explorer_page_limit_invalid")
-        if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= 768):
+        if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= MAX_CURSOR_LENGTH):
             raise ValueError("file_explorer_cursor_invalid")
 
         page = await self._source.list_owner_sources_page(
@@ -194,7 +195,14 @@ class FileExplorerInventoryHost:
             not isinstance(items, list)
             or len(items) > limit
             or type(has_more) is not bool
-            or (has_more and (not items or not isinstance(next_cursor, str) or not next_cursor))
+            or (
+                has_more
+                and (
+                    not items
+                    or not isinstance(next_cursor, str)
+                    or not 1 <= len(next_cursor) <= MAX_CURSOR_LENGTH
+                )
+            )
             or (not has_more and next_cursor is not None)
         ):
             raise RuntimeError("file_explorer_source_page_invalid")
