@@ -20,6 +20,14 @@ interface ConsentPreview {
   approval_expires_at: string;
 }
 
+interface RevocationPreview {
+  approval_id: string;
+  status: 'consumed';
+  profile_id: string;
+  artifact_id: string;
+  source_sha256: string;
+}
+
 interface ApprovalDecision {
   approval_id: string;
   status: string;
@@ -34,6 +42,7 @@ export function DocumentAuthorConsentConfirmation({
   approvalId: string;
 }) {
   const [preview, setPreview] = useState<ConsentPreview | null>(null);
+  const [revocationReview, setRevocationReview] = useState<RevocationPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -49,6 +58,7 @@ export function DocumentAuthorConsentConfirmation({
     let active = true;
     setLoading(true);
     setPreview(null);
+    setRevocationReview(null);
     setConfirmed(false);
     setDecision(null);
     setReceiptId(null);
@@ -87,8 +97,25 @@ export function DocumentAuthorConsentConfirmation({
           void recoverReceipt(record.approval_id);
         }
       }
-    }).catch(() => {
-      if (active) setError('Document approval could not be verified. No consent was granted.');
+    }).catch(async () => {
+      // A fresh bearer after token rotation cannot review the original
+      // session-bound approval. It may still revoke its own issued consent.
+      try {
+        const record = await apiClient.get<RevocationPreview>(
+          '/api/approvals/document-consent/' + approvalId + '/revoke-review',
+        );
+        if (!active) return;
+        if (
+          record.approval_id !== approvalId || record.status !== 'consumed' ||
+          !ID.test(record.profile_id) || !ID.test(record.artifact_id) ||
+          !DIGEST.test(record.source_sha256)
+        ) {
+          throw new Error('Invalid revocation provenance');
+        }
+        setRevocationReview(record);
+      } catch {
+        if (active) setError('Document approval could not be verified. No consent or revocation is claimed.');
+      }
     }).finally(() => {
       if (active) setLoading(false);
     });
@@ -160,16 +187,18 @@ export function DocumentAuthorConsentConfirmation({
   }
 
   async function handleRevoke() {
-    if (!receiptId || !revokeConfirmed || revoking || revoked || !preview) return;
+    const currentApprovalId = preview?.approval_id || revocationReview?.approval_id;
+    if (!currentApprovalId || (!receiptId && !revocationReview) ||
+      !revokeConfirmed || revoking || revoked) return;
     setRevoking(true);
     setError(null);
     try {
       const result = await apiClient.post<{
         approval_id: string; status: string;
-      }>('/api/approvals/document-consent/' + preview.approval_id + '/revoke', {
+      }>('/api/approvals/document-consent/' + currentApprovalId + '/revoke', {
         confirmed: true,
       });
-      if (result.approval_id !== preview.approval_id || result.status !== 'revoked') {
+      if (result.approval_id !== currentApprovalId || result.status !== 'revoked') {
         throw new Error('Revocation could not be verified.');
       }
       setRevoked(true);
@@ -178,7 +207,7 @@ export function DocumentAuthorConsentConfirmation({
     } catch {
       // A lost revocation response may mean the consent was revoked already.
       // Re-read current server evidence rather than retaining a stale receipt.
-      const current = await recoverReceipt(preview.approval_id);
+      const current = revocationReview ? false : await recoverReceipt(currentApprovalId);
       if (!current) {
         setReceiptId(null);
         setRevokeConfirmed(false);
@@ -323,10 +352,24 @@ export function DocumentAuthorConsentConfirmation({
           {issuing && <p role="status">Issuing consent receipt…</p>}
         </div>
       )}
+      {revocationReview && !revoked && (
+        <div className="space-y-2 break-all text-sm">
+          <p role="status">
+            This approval was consumed previously. Your current session can request
+            revocation without the original token or a readable document. This
+            does not prove a receipt remains active.
+          </p>
+          <dl className="space-y-2">
+            <div><dt className="font-medium">Document ID</dt><dd>{revocationReview.artifact_id}</dd></div>
+            <div><dt className="font-medium">Writing-style profile</dt><dd>{revocationReview.profile_id}</dd></div>
+            <div><dt className="font-medium">Original SHA-256</dt><dd>{revocationReview.source_sha256}</dd></div>
+          </dl>
+        </div>
+      )}
       {revoked && (
         <p role="status">Document consent revocation recorded. No current receipt is claimed.</p>
       )}
-      {receiptId && !revoked && (
+      {(receiptId || revocationReview) && !revoked && (
         <div className="space-y-2 rounded-md border border-border p-3">
           <label className="flex items-start gap-2 text-sm">
             <input
