@@ -10,6 +10,9 @@ on:
       - "requirements.txt"
       - "src/ai_karen_engine/**"
       - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
+      - "src/ui_launchers/Karen-AI-Theme/src/plugin_repo/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/plugin-import-map.generated.ts"
+      - "src/ui_launchers/Karen-AI-Theme/tools/sync-plugin-import-map.mjs"
       - "src/ui_launchers/Karen-AI-Theme/server.mjs"
       - "src/ui_launchers/Karen-AI-Theme/src/app/api/_lib/backend-proxy.ts"
       - "src/ui_launchers/Karen-AI-Theme/package.json"
@@ -27,6 +30,9 @@ on:
       - "requirements.txt"
       - "src/ai_karen_engine/**"
       - "src/ui_launchers/Karen-AI-Theme/Dockerfile.production"
+      - "src/ui_launchers/Karen-AI-Theme/src/plugin_repo/**"
+      - "src/ui_launchers/Karen-AI-Theme/src/plugin-import-map.generated.ts"
+      - "src/ui_launchers/Karen-AI-Theme/tools/sync-plugin-import-map.mjs"
       - "src/ui_launchers/Karen-AI-Theme/server.mjs"
       - "src/ui_launchers/Karen-AI-Theme/src/app/api/_lib/backend-proxy.ts"
       - "src/ui_launchers/Karen-AI-Theme/package.json"
@@ -101,6 +107,38 @@ jobs:
             -f src/ui_launchers/Karen-AI-Theme/Dockerfile.production \
             -t ai-karen-web:beta \
             src/ui_launchers/Karen-AI-Theme
+
+      - name: Verify compiled File Explorer UI is inside the production web image
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Inspect the compiled image, not the source checkout or builder layer.
+          # This proves the UI component reached the deployable Next.js chunks;
+          # it does not grant File Explorer execution permissions or certify login.
+          docker run --rm -i --entrypoint node ai-karen-web:beta - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = '/app/.next/static/chunks';
+          const evidence = 'File Explorer is unavailable.';
+          let checked = 0;
+          let bundled = false;
+          function walk(dir) {
+            for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+              const file = path.join(dir, item.name);
+              if (item.isDirectory()) walk(file);
+              else if (item.isFile() && item.name.endsWith('.js')) {
+                checked += 1;
+                if (fs.readFileSync(file, 'utf8').includes(evidence)) bundled = true;
+              }
+            }
+          }
+          if (!fs.existsSync(root)) throw Error('Production Next.js client chunks are missing');
+          walk(root);
+          if (!checked || !bundled) {
+            throw Error('File Explorer UI is missing from compiled production client chunks');
+          }
+          process.stdout.write('Compiled File Explorer client UI verified in production image\n');
+          NODE
 
       - name: Prove both built images carry the checked-out CI source identity
         shell: bash
