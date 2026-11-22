@@ -63,7 +63,6 @@ def redact_revocable_code_metadata(metadata: Mapping[str, Any]) -> dict[str, Any
     }
 
 
-
 # One host-enforced component vocabulary. Card Studio proposals can only name
 # safe subsets of these existing types; they cannot register a new renderer.
 PRESENTATION_COMPONENT_TYPES = frozenset({

@@ -1108,15 +1108,15 @@ completion, content-size or presentation validation to silence the UI.
 ## KGUI-CARD-STUDIO-01A / KCON-720 / KCON-770: Declarative card template foundation (2026-11-22)
 
 - **KCON-720/KCON-770 source candidate:** Extend the single canonical
-  \`core/runtime/presentation_contract.py\` owner with a bounded, read-only
+  `core/runtime/presentation_contract.py` owner with a bounded, read-only
   draft schema and immutable-origin built-in seed projection, not a new
   presentation registry. Runtime-authorized source parts remain the only
   permissible inputs to the existing evidence-bound composition admission.
-- **Proof:** \`tests/core/runtime/test_card_template_contract.py\` checks
+- **Proof:** `tests/core/runtime/test_card_template_contract.py` checks
   host vocabulary, no revocable code, unknown/executable/secret fields,
   immutable builtin definitions, duplicate and malformed slots, sanitized
   source-bound composition and multi-source evidence manifests. Existing
-  \`tests/core/runtime/test_presentation_contract.py\` protects the original
+  `tests/core/runtime/test_presentation_contract.py` protects the original
   envelope semantics. Exact-head CI is required.
 - **Not certified:** tenant/user CRUD, publish/share permissions, frontend
   Card Studio, template-to-chat integration, deployed consumer acceptance,
