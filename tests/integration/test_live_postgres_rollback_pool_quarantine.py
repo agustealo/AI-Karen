@@ -21,7 +21,9 @@ from ai_karen_engine.persistence.postgres.transactions import (
 )
 
 pytestmark = [
-    pytest.mark.asyncio,
+    # The canonical engine pools asyncpg connections across these tests;
+    # running each test on a new loop would reuse a driver from a closed loop.
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
         reason="requires isolated real PostgreSQL and SQLAlchemy AsyncSession",
