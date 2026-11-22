@@ -13,7 +13,10 @@ import {
   expectNoFakeSuccess,
 } from './helpers/chatRuntimeAudit';
 
+const approvedLiveRun = process.env.KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE === 'true';
+
 test.describe('Chat runtime forensic audit', () => {
+  test.skip(!approvedLiveRun, 'Requires explicit approved live chat-generation acceptance');
   test.beforeEach(async ({ page }) => {
     await openChat(page);
   });
@@ -48,7 +51,7 @@ test.describe('Chat runtime forensic audit', () => {
     await expectNoFakeSuccess(page);
   });
 
-  test('all configured providers return actual response or honest degraded metadata', async ({ page }) => {
+  test('first three configured providers return actual provider-generated response', async ({ page }) => {
     const catalog = await fetchRuntimeCatalog(page);
     const providers = getAuditableProviders(catalog);
     console.log(`Auditing ${providers.length} providers: ${providers.map(p => p.id).join(', ')}`);
@@ -70,6 +73,7 @@ test.describe('Chat runtime forensic audit', () => {
 
         await expectForensicMetadata(page);
         await expectRequestedProviderReflected(page, provider.id, model.id);
+        await expectNoFakeSuccess(page);
       });
     }
   });
