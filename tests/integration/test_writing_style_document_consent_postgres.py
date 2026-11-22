@@ -366,6 +366,14 @@ async def test_first_party_author_consent_postgres(
             "SELECT status FROM public.runtime_approval_requests "
             "WHERE approval_id=$1", approval_id,
         ) == "consumed"
+        # Recovery reads exactly the original durable scope after consumption;
+        # a generic consumed-approval purge must not erase this binding.
+        persisted_scope = await raw.fetchval(
+            "SELECT request_payload -> 'document_consent_scope' "
+            "FROM public.runtime_approval_requests WHERE approval_id=$1",
+            approval_id,
+        )
+        assert persisted_scope == approval_payload["document_consent_scope"]
 
         scope = dict(
             tenant_id=str(tenant), actor_id=str(owner),
@@ -502,6 +510,11 @@ async def test_first_party_author_consent_postgres(
             "SELECT status FROM public.runtime_approval_requests "
             "WHERE approval_id=$1", bound_approval,
         ) == "consumed"
+        assert await raw.fetchval(
+            "SELECT request_payload -> 'document_consent_scope' "
+            "FROM public.runtime_approval_requests WHERE approval_id=$1",
+            bound_approval,
+        ) == approval_scope.to_record()
         assert await runtime_issuer.issue_with_approved_scope(
             scope=approval_scope, request=bearer_request,
             approval_id=str(bound_approval),
