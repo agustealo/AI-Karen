@@ -72,8 +72,24 @@ class Kernel:
         return SimpleNamespace(status="admitted")
 
     async def execute(self, request):
+        import hashlib
+
         self.executions.append(request)
-        return SimpleNamespace(status="success", payload={"operation": "analyze"})
+        documents = request.payload["documents"]
+        return SimpleNamespace(status="success", payload={
+            "operation": "analyze",
+            "persisted": False,
+            "documents": [{
+                "id": document["id"],
+                "name": document["name"],
+                "folder_id": None,
+                "sha256": hashlib.sha256(document["text"].encode("utf-8")).hexdigest(),
+                "characters": len(document["text"]),
+                "top_terms": [],
+            } for document in documents],
+            "relationships": [],
+            "relationship_semantics": "lexical_hints_not_verified_entities",
+        })
 
 
 class Store:
@@ -238,6 +254,12 @@ async def test_application_composes_real_source_host_and_uses_verified_text(monk
         **_args(references=[{"source_id": FILE, "revision": digest}]),
     )
     assert response["operation"] == "analyze"
+    assert response["persisted"] is False
+    assert response["documents"] == [{
+        "id": FILE, "name": "notes.txt", "folder_id": None,
+        "sha256": digest, "characters": len("example"), "top_terms": [],
+    }]
+    assert response["relationships"] == []
     assert store.calls == [(FILE, TENANT, OWNER)]
     assert len(kernel.admissions) == 1
     assert len(kernel.executions) == 1
