@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ai_karen_engine.audit_logging import (
     AuditEventType,
@@ -23,6 +23,13 @@ from ai_karen_engine.persistence.repositories.approval_repository import (
     SqlApprovalRepository,
     get_approval_repository,
 )
+
+if TYPE_CHECKING:
+    from fastapi import Request
+
+    from ai_karen_engine.core.runtime.document_consent_approval import (
+        DocumentConsentApprovalScope,
+    )
 
 
 class ApprovalError(RuntimeError):
