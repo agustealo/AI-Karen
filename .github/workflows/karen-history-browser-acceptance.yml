@@ -440,6 +440,22 @@ jobs:
             --config=e2e/playwright.config.ts --project=chromium \
             --reporter=list --retries=0
 
+      # The real-generation forensic suite reuses this job's protected identity,
+      # independently verified deployment revision, and backend readiness.
+      # It cannot pass on an assistant bubble, a fixture, or a configured-only model.
+      - name: Prove model-generated conversation with durable execution receipt
+        if: inputs.scenario == 'copilotkit-consumer'
+        shell: bash
+        env:
+          KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE: "true"
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          test "$KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE" = "true"
+          npm run test:e2e:chat-live -- --reporter=list --retries=0
+
       # Explicit opt-in, real six-turn follow-up proof on a reviewed main SHA.
       # Reuse the same backend health and independent deployment provenance
       # preflights as normal consumer acceptance. A missing model/backend MUST

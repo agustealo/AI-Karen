@@ -121,7 +121,7 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "secrets.KAREN_UX_PASSWORD" in native
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in native
     consumer_if = "        if: inputs.scenario == 'copilotkit-consumer'"
-    assert job.count(consumer_if) == 2
+    assert job.count(consumer_if) == 3
     consumer_at = job.index(consumer_if)
     consumer_start = job.rfind("      - name: ", 0, consumer_at)
     consumer_end = job.find("\n      - name:", consumer_at)
@@ -144,6 +144,20 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     assert "secrets.KAREN_UX_PASSWORD" in live_step
     assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in live_step
     assert "KAREN_E2E_AUTH_STATE" not in live_step
+    # The new model-generation audit is a THIRD independently guarded
+    # consumer step inside the same approved main-only deployment gate.
+    forensic_at = job.index(consumer_if, live_at + len(consumer_if))
+    forensic_start = job.rfind("      - name: ", 0, forensic_at)
+    forensic_end = job.find("\n      - name:", forensic_at)
+    assert forensic_start >= 0 and forensic_end > forensic_at
+    forensic_step = job[forensic_start:forensic_end]
+    assert "Prove model-generated conversation with durable execution receipt" in forensic_step
+    assert 'KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE: "true"' in forensic_step
+    assert "npm run test:e2e:chat-live -- --reporter=list --retries=0" in forensic_step
+    assert "secrets.KAREN_UX_EMAIL" in forensic_step
+    assert "secrets.KAREN_UX_PASSWORD" in forensic_step
+    assert "secrets.VERCEL_AUTOMATION_BYPASS_SECRET" in forensic_step
+    assert "KAREN_E2E_AUTH_STATE" not in forensic_step
     consumer_source = (
         ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/copilotkit-consumer-boot.spec.ts"
     ).read_text(encoding="utf-8")
