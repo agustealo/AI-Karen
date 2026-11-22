@@ -66,9 +66,20 @@ test("WS-04A9T: real bearer review does not authorize without deliberate gesture
   expect(new URL(page.url()).origin).toBe(approved.origin);
   const review = page.getByRole("region", { name: "Document author consent" });
   await expect(review).toBeVisible();
-  await expect(review.getByText(expectedArtifact!, { exact: true })).toBeVisible();
-  await expect(review.getByText(expectedDigest!, { exact: true })).toBeVisible();
-  await expect(review.getByText(expectedName!, { exact: true })).toBeVisible();
+  // Compare real rendered values without putting filenames, IDs or hashes
+  // into Playwright locator failure messages or retained traces.
+  const matched = await review.evaluate(
+    (root, expected) => {
+      const values = Array.from(root.querySelectorAll("dd"))
+        .map(element => element.textContent?.trim());
+      return values.includes(expected.artifact) &&
+        values.includes(expected.digest) &&
+        values.includes(expected.name);
+    },
+    { artifact: expectedArtifact!, digest: expectedDigest!, name: expectedName! },
+  );
+  expect(matched, "The live document identity must match the approved author fixture")
+    .toBe(true);
   await expect(review.getByText("Document author confirmation")).toBeVisible();
   await expect(review.getByText(/Document approval could not be verified/)).toHaveCount(0);
 
@@ -99,9 +110,20 @@ test("WS-04A9T: dedicated author gesture issues or recovers real durable consent
   );
   expect(new URL(page.url()).origin).toBe(approved.origin);
   const review = page.getByRole("region", { name: "Document author consent" });
-  await expect(review.getByText(expectedArtifact!, { exact: true })).toBeVisible();
-  await expect(review.getByText(expectedDigest!, { exact: true })).toBeVisible();
-  await expect(review.getByText(expectedName!, { exact: true })).toBeVisible();
+  // Compare real rendered values without putting filenames, IDs or hashes
+  // into Playwright locator failure messages or retained traces.
+  const matched = await review.evaluate(
+    (root, expected) => {
+      const values = Array.from(root.querySelectorAll("dd"))
+        .map(element => element.textContent?.trim());
+      return values.includes(expected.artifact) &&
+        values.includes(expected.digest) &&
+        values.includes(expected.name);
+    },
+    { artifact: expectedArtifact!, digest: expectedDigest!, name: expectedName! },
+  );
+  expect(matched, "The live document identity must match the approved author fixture")
+    .toBe(true);
 
   const confirm = review.getByRole("button", { name: "Confirm author consent" });
   if (await confirm.count()) {
