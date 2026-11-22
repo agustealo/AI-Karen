@@ -250,6 +250,12 @@ class SqlApprovalRepository:
         original authorization and source revision before calling it.
         Its caller MUST commit the source-bound consent INSERT in the same
         transaction; an INSERT failure must roll back this consumption.
+        Unlike generic approval consumption, this author-consent CAS MUST
+        retain the original scope and fingerprint. They contain no source
+        bytes or bearer secrets and are required to independently verify
+        an already-issued receipt after a lost HTTP response. Revocation,
+        expiry and source revision remain enforced by the current receipt
+        verifier; the stored scope is not itself authorization.
         """
         if (
             action not in {"issue", "revoke"}
