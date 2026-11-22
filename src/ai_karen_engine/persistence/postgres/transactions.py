@@ -107,11 +107,11 @@ def _observe_postgres_cleanup_task(task: asyncio.Task) -> None:
 
 
 async def _capture_rollback_connection(session: AsyncSession):
-    """Capture pool ownership without changing it during healthy rollback.
+    """Inspect only a connection *already owned* by the SQLAlchemy session.
 
-    A failed flush leaves AsyncSession inactive and forbids connection()
-    access until rollback. Never replace its original IntegrityError with
-    PendingRollbackError merely to inspect a connection.
+    Session.connection() is deliberately forbidden here: it may begin a new
+    pool checkout if a cancelled acquisition left a logical transaction with
+    no physical connection. An acquisition must never precede rollback.
     """
     if (
         not isinstance(session, AsyncSession)
@@ -119,16 +119,24 @@ async def _capture_rollback_connection(session: AsyncSession):
         or not session.is_active
     ):
         return None
-    try:
-        connection = await session.connection()
-        return connection.sync_connection.connection
-    except PendingRollbackError:
-        # SQLAlchemy may invalidate a checked-out connection after network
-        # failure or cancellation while the ORM transaction still appears
-        # active. The session cannot reconnect until rollback completes.
-        # Do not replace the caller's original error during preflight.
-        logger.warning("postgres.rollback_connection_already_invalidated")
+
+    transaction = session.sync_session.get_transaction()
+    # SQLAlchemy 2.x stores already-joined Connection objects in the root
+    # SessionTransaction. This is private state, isolated to this canonical
+    # adapter so no transport operation or new checkout occurs on cleanup.
+    owned = getattr(transaction, "_connections", None)
+    if not owned:
         return None
+    for binding in owned.values():
+        connection = binding[0]
+        try:
+            return connection.connection
+        except PendingRollbackError:
+            # The physical driver was already invalidated. Roll back the
+            # logical transaction without reconnecting or masking the error.
+            logger.warning("postgres.rollback_connection_already_invalidated")
+            return None
+    return None
 
 
 def _detach_pending_rollback_connection(pool_proxy) -> object | None:
