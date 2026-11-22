@@ -12,6 +12,9 @@ on:
       - 'src/ui_launchers/Karen-AI-Theme/next.config.ts'
       - 'src/ui_launchers/Karen-AI-Theme/src/lib/chat-response.ts'
       - 'src/ui_launchers/Karen-AI-Theme/tests/chat-response.test.ts'
+      - 'src/ui_launchers/Karen-AI-Theme/src/components/consent/DocumentAuthorConsentInitiation.tsx'
+      - 'src/ui_launchers/Karen-AI-Theme/tests/chat/document-author-consent-initiation.test.tsx'
+      - 'src/ui_launchers/Karen-AI-Theme/e2e/document-author-consent-acceptance.spec.ts'
       - 'src/ui_launchers/Karen-AI-Theme/package-lock.json'
       - 'src/ui_launchers/Karen-AI-Theme/pnpm-workspace.yaml'
       - '.github/workflows/web-pnpm-install-proof.yml'
@@ -49,5 +52,7 @@ jobs:
         run: pnpm lint
       - name: Verify real chat recovery presentation tests
         run: pnpm exec vitest run tests/chat-response.test.ts
+      - name: Verify document author inventory and initiation regressions
+        run: pnpm exec vitest run tests/chat/document-author-consent-initiation.test.tsx
       - name: Build actual Next.js application with pnpm
         run: pnpm build
