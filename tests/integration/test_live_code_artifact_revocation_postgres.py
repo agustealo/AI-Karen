@@ -478,3 +478,207 @@ async def test_for_share_read_serializes_concurrent_archive_and_revokes_next_rea
                 )
                 await admin.commit()
         await engine.dispose()
+
+
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+    or os.getenv("KAREN_TEST_CODE_ARTIFACT_POSTGRES") != "1",
+    reason="Requires explicitly disposable PostgreSQL owner/archive proof",
+)
+async def test_bounded_signed_range_holds_real_postgres_archive_lock(monkeypatch) -> None:
+    """The new signed-range reader retains PostgreSQL FOR SHARE until bytes end.
+
+    Storage is an in-process HTTPX mock; this proves real PostgreSQL archive
+    serialization and owner denial, NOT live Supabase Storage compatibility.
+    """
+    import asyncio
+    import threading
+
+    import httpx
+    from sqlalchemy.exc import DBAPIError
+
+    import ai_karen_engine.services.database.repositories.supabase_artifact_store as module
+
+    dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
+    tenant_raw = os.getenv("KAREN_TEST_ARTIFACT_TENANT_ID", "")
+    owner_raw = os.getenv("KAREN_TEST_ARTIFACT_OWNER_ID", "")
+    other_raw = os.getenv("KAREN_TEST_ARTIFACT_OTHER_USER_ID", "")
+    if not dsn or not all((tenant_raw, owner_raw, other_raw)):
+        pytest.fail("Explicit disposable database and seeded principals required")
+
+    parsed = _disposable_database_url(dsn)
+    tenant, owner, other = (str(UUID(value)) for value in (
+        tenant_raw, owner_raw, other_raw
+    ))
+    assert owner != other
+
+    engine = create_async_engine(parsed, pool_pre_ping=True, pool_size=3)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    artifact = str(uuid4())
+    filename = "bounded_author.txt"
+    key = f"{tenant}/{artifact}/{filename}"
+    body = b"An original multiline note.\n\tAnother author-owned line.\n"
+    digest = hashlib.sha256(body).hexdigest()
+    reached_body = threading.Event()
+    release_body = threading.Event()
+    issued = []
+    downloaded = []
+    inserted = False
+
+    class SignedBucket:
+        def create_signed_url(self, signed_key, lifetime):
+            issued.append((signed_key, lifetime))
+            return {
+                "signedURL": (
+                    f"/storage/v1/object/sign/artifacts/{signed_key}"
+                    "?token=disposable-secret"
+                )
+            }
+
+        def download(self, signed_key):
+            downloaded.append(signed_key)
+            raise AssertionError("Whole-object buffering must never run")
+
+    bucket = SignedBucket()
+    platform = SimpleNamespace(
+        url="https://storage.example.test",
+        storage=SimpleNamespace(
+            from_=lambda name: bucket if name == "artifacts" else None
+        ),
+    )
+
+    class HeldBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            reached_body.set()
+            if not await asyncio.to_thread(release_body.wait, 10):
+                raise TimeoutError("Controlled response was not released")
+            yield body
+
+    def storage_response(request):
+        assert request.method == "GET"
+        assert request.headers["Range"] == f"bytes=0-{len(body) - 1}"
+        assert request.url.host == "storage.example.test"
+        assert request.url.params["token"] == "disposable-secret"
+        return httpx.Response(
+            206,
+            headers={"Content-Range": f"bytes 0-{len(body) - 1}/{len(body)}"},
+            stream=HeldBody(),
+        )
+
+    transport = httpx.MockTransport(storage_response)
+    original_client = module.httpx.AsyncClient
+    monkeypatch.setattr(
+        module.httpx, "AsyncClient",
+        lambda *args, **kwargs: original_client(
+            *args, transport=transport, **kwargs
+        ),
+    )
+
+    def independent_reader():
+        async def run():
+            reader_engine = create_async_engine(parsed, pool_pre_ping=True)
+            reader_sessions = async_sessionmaker(
+                reader_engine, expire_on_commit=False
+            )
+            try:
+                store = SupabaseArtifactStore(reader_sessions, platform)
+                return await store.read_owner_active_text_bounded(
+                    artifact, tenant, owner
+                )
+            finally:
+                await reader_engine.dispose()
+
+        return asyncio.run(run())
+
+    read_task = None
+    try:
+        async with sessions() as admin:
+            assert (await admin.execute(
+                text("SELECT current_database()")
+            )).scalar_one() == "karen_code_artifact_test"
+            await admin.execute(
+                text(
+                    "INSERT INTO files "
+                    "(file_id, tenant_id, owner_user_id, name, mime_type, "
+                    "bytes, storage_uri, sha256, metadata, created_at) "
+                    "VALUES (:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
+                    ":name, 'text/plain', :bytes, :uri, :digest, "
+                    "'{}'::jsonb, NOW())"
+                ),
+                {
+                    "id": artifact, "tenant": tenant, "owner": owner,
+                    "name": filename, "bytes": len(body),
+                    "uri": f"supabase://artifacts/{key}", "digest": digest,
+                },
+            )
+            await admin.commit()
+            inserted = True
+
+        read_task = asyncio.create_task(
+            asyncio.to_thread(independent_reader)
+        )
+        try:
+            assert await asyncio.to_thread(reached_body.wait, 10), (
+                "Ranged read never reached controlled streaming response"
+            )
+            assert not read_task.done()
+
+            async with sessions() as writer:
+                await writer.execute(text("SET LOCAL lock_timeout = '250ms'"))
+                with pytest.raises(DBAPIError) as blocked:
+                    await writer.execute(
+                        text(
+                            "UPDATE files SET deleted_at=NOW() "
+                            "WHERE file_id=:id AND tenant_id=:tenant "
+                            "AND deleted_at IS NULL"
+                        ),
+                        {"id": artifact, "tenant": tenant},
+                    )
+                assert "lock timeout" in str(blocked.value).lower()
+                await writer.rollback()
+            assert not read_task.done()
+        finally:
+            release_body.set()
+
+        result = await asyncio.wait_for(read_task, timeout=15)
+        assert result.success and result.data is not None
+        assert result.data.text.encode("utf-8") == body
+        assert result.data.sha256 == digest
+        assert issued == [(key, 60)]
+        assert downloaded == []
+
+        async with sessions() as writer:
+            changed = await writer.execute(
+                text(
+                    "UPDATE files SET deleted_at=NOW() "
+                    "WHERE file_id=:id AND tenant_id=:tenant "
+                    "AND deleted_at IS NULL"
+                ),
+                {"id": artifact, "tenant": tenant},
+            )
+            assert changed.rowcount == 1
+            await writer.commit()
+
+        store = SupabaseArtifactStore(sessions, platform)
+        revoked = await store.read_owner_active_text_bounded(
+            artifact, tenant, owner
+        )
+        foreign = await store.read_owner_active_text_bounded(
+            artifact, tenant, other
+        )
+        assert not revoked.success and revoked.data is None
+        assert not foreign.success and foreign.data is None
+        assert issued == [(key, 60)]
+        assert downloaded == []
+    finally:
+        release_body.set()
+        if read_task is not None and not read_task.done():
+            await asyncio.wait_for(read_task, timeout=15)
+        if inserted:
+            async with sessions() as admin:
+                await admin.execute(
+                    text("DELETE FROM files WHERE file_id=:id"),
+                    {"id": artifact},
+                )
+                await admin.commit()
+        await engine.dispose()

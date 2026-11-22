@@ -186,6 +186,7 @@ class PluginCatalogRecord:
             "status": self.status,
             "checksum": self.checksum,
             "error_message": self.error_message,
+            "is_valid": self.is_valid,
             "dependencies_resolved": self.is_valid,
             "compatibility_checked": self.is_valid,
         }
