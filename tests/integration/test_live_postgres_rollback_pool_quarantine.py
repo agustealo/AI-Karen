@@ -97,13 +97,19 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
             invalidation_attempts = invalidate_spy.await_count
     finally:
         release_rollback.set()
+        retirement_task = None
         if rollback_task is not None:
             try:
                 await asyncio.wait_for(rollback_task, timeout=5)
-            except BaseException:
-                pass
+            except BaseException as exc:
+                retirement_task = getattr(exc, "retirement_task", None)
         event.remove(engine.async_engine.sync_engine, "rollback", hold_real_rollback)
-        await asyncio.wait_for(session.close(), timeout=5)
+        if retirement_task is not None:
+            # The original rollback task owns session retirement. Never
+            # introduce an independent concurrent close in this test.
+            await asyncio.wait_for(retirement_task, timeout=5)
+        else:
+            await asyncio.wait_for(session.close(), timeout=5)
 
     recovered_checkout_count = engine.async_engine.pool.checkedout()
     async with engine.async_session_factory() as healthy:
