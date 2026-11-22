@@ -57,6 +57,11 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
 
     try:
         await session.execute(text("SELECT 1"))
+        assert engine.async_engine.pool.checkedout() == baseline + 1
+        # The pool-owned connection must be detached before the rollback
+        # starts. Capture its driver identity before SQLAlchemy enters the
+        # rollback state machine, when introspection is still permitted.
+        held_driver = session.sync_session.connection().connection.driver_connection
         event.listen(engine.async_engine.sync_engine, "rollback", hold_real_rollback)
         with patch(
             "ai_karen_engine.persistence.postgres.transactions.get_database_settings",
@@ -66,9 +71,18 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
         ) as invalidate_spy:
             rollback_task = asyncio.create_task(rollback_async_transaction(session))
             await asyncio.wait_for(entered_rollback.wait(), timeout=5)
-            assert engine.async_engine.pool.checkedout() == baseline + 1, (
-                "rollback hook did not suspend a checked-out connection"
+            assert engine.async_engine.pool.checkedout() == baseline, (
+                "the active rollback still owns a reusable pooled connection"
             )
+            # A fresh scoped connection must be distinct from the held,
+            # detached driver while rollback is still suspended.
+            async with engine.async_session_factory() as other:
+                other_connection = await other.connection()
+                assert (
+                    other_connection.sync_connection.connection.driver_connection
+                    is not held_driver
+                ), "the held rollback connection was reused by the pool"
+                assert (await other.execute(text("SELECT 1"))).scalar_one() == 1
             # Explicitly assert no session-state transition is attempted
             # while the real SQLAlchemy rollback remains suspended.
             try:
