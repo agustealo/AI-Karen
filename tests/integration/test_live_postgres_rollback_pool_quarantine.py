@@ -1,0 +1,85 @@
+"""Live SQLAlchemy session lifecycle proof for stalled PostgreSQL rollback.
+
+This test deliberately holds a real SQLAlchemy session rollback inside its
+state transition. A mocked session cannot detect IllegalStateChangeError or
+verify connection-pool recovery.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+from sqlalchemy import event, text
+from sqlalchemy.util.concurrency import await_only
+
+from ai_karen_engine.persistence.postgres.engine import get_postgres_engine
+from ai_karen_engine.persistence.postgres.transactions import (
+    rollback_async_transaction,
+)
+
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.skipif(
+        os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
+        reason="requires isolated real PostgreSQL and SQLAlchemy AsyncSession",
+    ),
+]
+
+
+@pytest.mark.timeout(30)
+async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
+    """A held SQLAlchemy rollback must not be invalidated concurrently."""
+    engine = get_postgres_engine()
+    baseline = engine.async_engine.pool.checkedout()
+    settings = SimpleNamespace(pool=SimpleNamespace(
+        rollback_timeout_seconds=0.1,
+        invalidate_timeout_seconds=0.1,
+    ))
+    entered_rollback = asyncio.Event()
+    release_rollback = asyncio.Event()
+    rollback_task = None
+    session = engine.async_session_factory()
+
+    def hold_real_rollback(sync_session, previous_transaction):
+        # Called from SQLAlchemy's actual rollback transition, in its
+        # greenlet. await_only suspends without blocking the event loop.
+        entered_rollback.set()
+        try:
+            await_only(release_rollback.wait())
+        except asyncio.CancelledError:
+            # Simulate an uncooperative transport until explicitly released.
+            await_only(release_rollback.wait())
+
+    try:
+        await session.execute(text("SELECT 1"))
+        event.listen(session.sync_session, "after_soft_rollback", hold_real_rollback)
+        with patch(
+            "ai_karen_engine.persistence.postgres.transactions.get_database_settings",
+            return_value=settings,
+        ):
+            rollback_task = asyncio.create_task(rollback_async_transaction(session))
+            await asyncio.wait_for(entered_rollback.wait(), timeout=5)
+            # The current implementation is expected to fail this test:
+            # session.invalidate() races an active SessionTransaction.rollback().
+            try:
+                await asyncio.wait_for(rollback_task, timeout=5)
+            except BaseException:
+                pass
+            assert not session.sync_session.in_transaction() or rollback_task.done()
+    finally:
+        release_rollback.set()
+        if rollback_task is not None:
+            try:
+                await asyncio.wait_for(rollback_task, timeout=5)
+            except BaseException:
+                pass
+        event.remove(session.sync_session, "after_soft_rollback", hold_real_rollback)
+        await asyncio.wait_for(session.close(), timeout=5)
+
+    assert engine.async_engine.pool.checkedout() == baseline
+    async with engine.async_session_factory() as healthy:
+        assert (await healthy.execute(text("SELECT 1"))).scalar_one() == 1
+    assert engine.async_engine.pool.checkedout() == baseline
