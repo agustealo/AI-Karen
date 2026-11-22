@@ -92,10 +92,18 @@ export class TimeQueryApi {
     return read;
   }
 
-  private async executeMutation<T>(readKey: string, command: Record<string, unknown>): Promise<T> {
-    // A completed write invalidates the old in-flight snapshot. A following
-    // refresh joins the serial read queue after that stale read, not its promise.
+  private async executeMutation<T extends BaseResponse>(
+    readKey: string,
+    command: Record<string, unknown>,
+  ): Promise<T> {
+    // Mutations are never retried. A failed or unverified acknowledgement must
+    // neither invalidate reads nor be presented as a completed user action.
     const response = await this.api.execute(command) as T;
+    if (response?.status !== 'success') {
+      throw new Error(response?.error || 'Time Query did not confirm the requested change');
+    }
+    // A following refresh must join the serial queue after any stale snapshot,
+    // rather than coalescing with a pre-mutation read.
     this.readsInFlight.delete(readKey);
     return response;
   }

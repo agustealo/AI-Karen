@@ -241,6 +241,7 @@ jobs:
         run: |
           pytest \
             tests/extensions/ \
+            tests/api/test_content_owner_sources_api.py \
             tests/api_routes/chat/test_conversation_structured_content_response.py \
             tests/core/runtime/test_conversation_runtime_gateway.py \
             tests/core/runtime/test_conversational_plugin_inspection.py \

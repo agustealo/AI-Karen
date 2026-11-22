@@ -114,3 +114,69 @@ KGUI-01 is intentionally only the typed manifest/catalog bridge. Next work:
 KGUI-02 backend+frontend presentation schema parity for chart and code,
 KGUI-03 source-backed media, KGUI-04 governed UI interaction contracts,
 KGUI-05 authenticated browser, lifecycle and accessibility release proof.
+
+## KGUI-03A: Fault containment and shorthand calendar repair (2026-11-22)
+
+- Keep bare/short date questions in the existing governed Time Query route. A date
+  observation comes from the actual authorized clock receipt, not a second model
+  synthesis that could invent the weekday. Concepts involving historical dates
+  or code remain ordinary chat.
+- Contain exceptions at each read-only presentation occurrence in the saved
+  assistant message and response rail. Preserve text, other cards and provenance.
+  A malformed replay event remains a backend-attested history-integrity failure:
+  do not silently discard it or weaken the owner-scoped recovery contract.
+- This slice does not claim to reproduce every reported crash, certify live
+  search availability or add executable generated components.
+
+## KGUI-03B+: Proposed Card Studio extension contract
+
+**Owner:** Card Studio is an optional, governed authoring workspace exposed
+through the existing PluginKernel, extension manifests and trusted UI host.
+The canonical presentation contract remains the only card schema and admission
+authority; Card Studio must not create a second registry, execution route or
+free-form React/HTML generator.
+
+**Library and CRUD:** Show system templates as immutable seed definitions.
+Create user-owned copies; edit drafts with optimistic revision control; clone,
+preview, publish, activate/deactivate and archive scoped templates. Do not
+mutate built-in defaults. Store versioned declarations, theme/layout preferences,
+data-source bindings, owner, tenant and audit metadata in a canonical governed
+PostgreSQL repository, not browser localStorage. Existing
+`CustomizableCardDeck` remains a local show/hide/order preference layer until
+its explicit migration to scoped saved preferences.
+
+**Three creation entrypoints:** (1) user enters a structured definition in Card
+Studio; (2) user describes a desired card in chat, where CORTEX proposes a
+`card.template.propose` intent and RuntimePolicy controls proposal execution;
+(3) a dedicated Studio prompt generates an editable declarative draft. All use
+one versioned prompt contract, a single schema validator, the same draft service,
+and a read-only preview with supplied real authorized evidence or clearly marked
+sandbox sample data. No generated code is executed.
+
+**Runtime rendering:** Separate template selection from capability invocation.
+CORTEX may request a presentation; ChatRuntime resolves authorized capabilities,
+obtains typed evidence, evaluates the active template against its allowed
+host primitives, validates limits and emits the existing `karen.presentation.v1`
+event with evidence provenance. Replayed templates must remain bound to the
+original committed version and must recheck authorization. If a template is
+unavailable, safely show truthful source-backed text.
+
+**Scope and security:** Authenticated user-scoped and tenant-scoped ownership;
+RBAC for publish/share/administration; CSRF protections on mutations; immutable
+revision history; audit of activation; template and binding validation;
+parameterized queries and backend-only source adapters; no arbitrary URLs,
+unsafe HTML/CSS, JS/TSX, SQL or secret-bearing fields from model outputs.
+Any action card requires a separately authorized manifest action, confirmation,
+idempotency and a persisted receipt.
+
+**Adoption sequence:** First merge KGUI-03A and reproduce the real chat crash.
+Then introduce the canonical template schema and migration/repository; create
+read-only Studio CRUD and preview; add chat-to-draft suggestions; add versioned
+bindings and controlled publication. Introduce new host primitives only after
+schema parity in Python/TypeScript, hostile-input tests and browser acceptance.
+
+**Proof:** DST, locale and short contextual date tests; real authenticated
+time/news provider probes; one bad card leaves chat plus peers readable;
+old/revoked/unknown templates fail closed; tenant isolation and RBAC; concurrent
+edits with revision conflict; cross-process persistence; historical replay;
+responsive browser tests; accessibility, structured telemetry and no secret logs.

@@ -144,4 +144,20 @@ describe('Time Query HTTP 429 recovery and non-replay contract', () => {
     await waitFor(() => expect(result.current.error).toContain('Try again in 4 seconds'));
     expect(spy).not.toHaveBeenCalled();
   });
+  it('does not invalidate existing reads when a mutation fails its acknowledgement', async () => {
+    let releaseOld: ((value: unknown) => void) | undefined;
+    const oldRead = new Promise<unknown>((resolve) => { releaseOld = resolve; });
+    const execute = vi.fn().mockReturnValueOnce(oldRead)
+      .mockResolvedValueOnce({ status: 'error', error: 'Storage unavailable' });
+    const api = new TimeQueryApi(extension(execute));
+    const pending = api.getAlarms();
+    await Promise.resolve();
+    await expect(api.deleteAlarm('alarm-a')).rejects.toThrow('Storage unavailable');
+    const coalesced = api.getAlarms();
+    expect(coalesced).toBe(pending);
+    releaseOld!({ status: 'success', alarms: [] });
+    await Promise.all([pending, coalesced]);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
 });
