@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 import { apiClient } from '@/lib/api';
 
@@ -182,12 +183,12 @@ export function DocumentAuthorConsentConfirmation({
       className="mx-auto max-w-2xl space-y-5 rounded-lg border border-border p-6"
     >
       <h1 className="text-xl font-semibold">Document author confirmation</h1>
-      <a
+      <Link
         href="/approvals/document-consent/new"
         className="inline-block text-sm underline underline-offset-4"
       >
         Initiate another document review
-      </a>
+      </Link>
       <p className="text-sm text-muted-foreground">
         This decision is separate from chat approval. Confirm only if you authored
         this exact document and wish to authorize the uses shown below.
