@@ -173,8 +173,8 @@ async def test_import_map_requires_installer_integrity_not_discovery_only(monkey
             assert plugin_id == "file-explorer"
             return SimpleNamespace(status=SimpleNamespace(value="success"))
 
-    monkeypatch.setattr(routes, "get_ui_pipeline", Pipeline)
-    monkeypatch.setattr(routes, "get_ui_service", Service)
+    monkeypatch.setattr(routes, "get_ui_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(routes, "get_ui_service", lambda: Service())
 
     result = await routes.get_import_map()
     assert result["status"] == "success"
@@ -212,8 +212,8 @@ async def test_import_map_never_advertises_unverified_installed_package(monkeypa
                 status=SimpleNamespace(value="validation_failed")
             )
 
-    monkeypatch.setattr(routes, "get_ui_pipeline", Pipeline)
-    monkeypatch.setattr(routes, "get_ui_service", Service)
+    monkeypatch.setattr(routes, "get_ui_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(routes, "get_ui_service", lambda: Service())
 
     result = await routes.get_import_map()
     assert result["data"]["import_map"] == {}
