@@ -103,8 +103,10 @@ function validateAnalysis(raw: unknown, selected: AnalyzableSource[]): AnalyzedR
 
 export function ContentIntelligenceSelectionPanel({
   sources,
+  onRefreshInventory,
 }: {
   sources: AnalyzableSource[];
+  onRefreshInventory?: () => void;
 }) {
   const [status, setStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
   const [result, setResult] = useState<AnalyzedResponse | null>(null);
@@ -144,6 +146,17 @@ export function ContentIntelligenceSelectionPanel({
     }
   }
 
+  function refreshInventory(): void {
+    // Revoke this presentation attempt before asking the authenticated host
+    // for fresh metadata. The selection cannot be reused as an access grant.
+    generation.current += 1;
+    controller.current?.abort();
+    controller.current = null;
+    setResult(null);
+    setStatus('idle');
+    onRefreshInventory?.();
+  }
+
   return (
     <section className="mt-4 space-y-3 rounded-lg border p-4" aria-label="Content Intelligence analysis">
       <div>
@@ -168,7 +181,18 @@ export function ContentIntelligenceSelectionPanel({
       )}
       {status === 'pending' && <p role="status">Checking current access and analyzing…</p>}
       {status === 'error' && (
-        <p role="alert">Analysis is unavailable or access was denied. Refresh the file inventory and retry.</p>
+        <div className="space-y-2">
+          <p role="alert">Analysis is unavailable or access was denied. The selected file may have changed. Refresh inventory and reselect before retrying.</p>
+          {onRefreshInventory && (
+            <button
+              type="button"
+              className="rounded border px-3 py-2 text-sm"
+              onClick={refreshInventory}
+            >
+              Refresh inventory and reselect
+            </button>
+          )}
+        </div>
       )}
       {status === 'success' && result && (
         <div role="status" className="space-y-3" aria-label="Verified analysis results">
