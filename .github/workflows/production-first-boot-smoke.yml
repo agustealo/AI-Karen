@@ -23,6 +23,7 @@ on:
       - "tests/architecture/test_first_run_system_contract.py"
       - ".github/workflows/production-first-boot-smoke.yml"
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
     branches:
       - main
     paths:
@@ -52,6 +53,7 @@ permissions:
 
 jobs:
   first-boot:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
