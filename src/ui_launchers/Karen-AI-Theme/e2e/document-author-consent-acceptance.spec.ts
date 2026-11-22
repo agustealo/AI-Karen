@@ -87,7 +87,7 @@ test("WS-04A9Y: read-only authenticated inventory never initiates approval", asy
   // Do not click, mutate, initiate, confirm, issue or read document content.
 });
 
-test("WS-04A9Y: same author session initiates, confirms and recovers a real receipt", async ({ page }) => {
+test("WS-04A9Y: author issues and recovers, then revokes from a fresh login", async ({ page, browser }) => {
   test.skip(
     !enabled || !mutationEnabled,
     "Mutation trial requires explicit disposable fixture authorization",
@@ -130,19 +130,38 @@ test("WS-04A9Y: same author session initiates, confirms and recovers a real rece
   await expectExactSource(recovered);
   await expect(recovered.getByText(/Verified receipt ID:/).first()).toBeVisible();
   await expect(recovered.getByRole("button", { name: "Confirm author consent" })).toHaveCount(0);
-  // A second explicit author gesture revokes the actual issued receipt.
-  const revokeCheckbox = recovered.getByRole("checkbox", {
-    name: "Confirm revoke document consent",
-  });
-  const revoke = recovered.getByRole("button", { name: "Revoke document consent" });
-  await expect(revoke).toBeDisabled();
-  await revokeCheckbox.check();
-  await expect(revoke).toBeEnabled();
-  await revoke.click();
-  await expect(recovered.getByText(/Document consent revocation recorded/)).toBeVisible();
-  await expect(recovered.getByText(/Verified receipt ID:/)).toHaveCount(0);
-  await page.reload();
-  const afterRevoke = page.getByRole("region", { name: "Document author consent" });
-  await expect(afterRevoke.getByRole("button", { name: "Confirm author consent" })).toHaveCount(0);
-  await expect(afterRevoke.getByText(/Verified receipt ID:/)).toHaveCount(0);
+  // A separate browser context creates a genuinely new bearer token. The
+  // original session remains mandatory for issuance, but not revocation.
+  const rotated = await browser.newContext();
+  try {
+    const fresh = await rotated.newPage();
+    await signInApprovedKaren(fresh, email!, password!, {
+      allowLocalLoopback: local,
+    });
+    await fresh.goto(page.url());
+    expect(new URL(fresh.url()).origin).toBe(origin.origin);
+    const revocation = fresh.getByRole("region", { name: "Document author consent" });
+    await expect(revocation.getByText(/Your current session can request/))
+      .toBeVisible();
+    await expect(revocation.getByRole("button", {
+      name: "Confirm author consent",
+    })).toHaveCount(0);
+    const revokeCheckbox = revocation.getByRole("checkbox", {
+      name: "Confirm revoke document consent",
+    });
+    const revoke = revocation.getByRole("button", { name: "Revoke document consent" });
+    await expect(revoke).toBeDisabled();
+    await revokeCheckbox.check();
+    await expect(revoke).toBeEnabled();
+    await revoke.click();
+    await expect(revocation.getByText(/Document consent revocation recorded/)).toBeVisible();
+    await fresh.reload();
+    const afterRevoke = fresh.getByRole("region", { name: "Document author consent" });
+    await expect(afterRevoke.getByText(/Verified receipt ID:/)).toHaveCount(0);
+    await expect(afterRevoke.getByRole("button", {
+      name: "Confirm author consent",
+    })).toHaveCount(0);
+  } finally {
+    await rotated.close();
+  }
 });
