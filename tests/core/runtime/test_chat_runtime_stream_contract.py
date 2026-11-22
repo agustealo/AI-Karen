@@ -2303,6 +2303,7 @@ async def test_revocation_committed_while_next_stream_chunk_waits_blocks_publica
 async def test_live_postgres_revocation_between_stream_chunks_denies_publication():
     """The real PostgreSQL consent ledger fences an already-running stream."""
     from datetime import timezone
+    from uuid import UUID
 
     from sqlalchemy import delete, select
 
@@ -2329,17 +2330,11 @@ async def test_live_postgres_revocation_between_stream_chunks_denies_publication
     request = _make_request()
     decision = _make_decision()
     plan = _make_plan()
-    tenant = uuid4()
-    user = uuid4()
+    # Preserve the policy-bound authenticated subject from _make_request.
+    tenant = UUID(TENANT_ID)
+    user = UUID(USER_ID)
     event_id, assertion_id, scope_id = uuid4(), uuid4(), uuid4()
     scope_name = f"stream-revocation-{uuid4().hex}"
-    request.context.tenant_id = str(tenant)
-    request.context.user_id = str(user)
-    request.context.authenticated_user = UserData(
-        user_id=str(user), tenant_id=str(tenant),
-    )
-    plan.authorized_tenant_id = str(tenant)
-    plan.authorized_user_id = str(user)
     next_chunk_ready = asyncio.Event()
     release_next_chunk = asyncio.Event()
     producer_closed = asyncio.Event()
