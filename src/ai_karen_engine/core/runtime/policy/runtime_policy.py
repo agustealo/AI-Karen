@@ -31,6 +31,9 @@ from ai_karen_engine.core.runtime.policy.reasoning_policy import (
 
 if TYPE_CHECKING:
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.document_consent_approval import (
+        DocumentConsentApprovalScope,
+    )
     from ai_karen_engine.core.runtime.plugin_lifecycle_approval import (
         PluginLifecycleApprovalScope,
     )
