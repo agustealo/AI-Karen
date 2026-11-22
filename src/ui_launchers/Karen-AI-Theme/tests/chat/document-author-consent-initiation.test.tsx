@@ -146,7 +146,9 @@ describe('document author source initiation', () => {
   });
   it('does not submit when the authenticated draft inventory is empty', async () => {
     api.get.mockImplementation((url: string) => Promise.resolve(
-      url.startsWith('/api/artifacts/owner-page?') ? { items: [document] : [],
+      url.startsWith('/api/artifacts/owner-page?')
+        ? { items: [document], has_more: false, next_cursor: null }
+        : [],
     ));
     render(<DocumentAuthorConsentInitiation />);
     expect(await screen.findByText(/No eligible author-owned draft profiles/)).toBeTruthy();
