@@ -61,6 +61,39 @@ def _response(record: dict) -> ApprovalResponse:
     )
 
 
+class DocumentAuthorInitiation(BaseModel):
+    """Source selector only; no client-side identity, digest or expiry authority."""
+
+    model_config = {"extra": "forbid"}
+
+    profile_id: UUID
+    artifact_id: UUID
+    style_use_allowed: StrictBool
+
+
+@router.post("/document-consent/initiate", response_model=ApprovalResponse)
+async def initiate_document_author_consent(
+    request: Request,
+    body: DocumentAuthorInitiation,
+):
+    """Request source-scoped review; never issue a receipt or ingest content."""
+    from uuid import uuid4
+
+    try:
+        record = await get_approval_service().initiate_document_consent(
+            request=request,
+            profile_id=str(body.profile_id),
+            artifact_id=str(body.artifact_id),
+            style_use_allowed=body.style_use_allowed,
+            correlation_id=str(uuid4()),
+        )
+        return _response(record)
+    except (ApprovalScopeError, PermissionError) as exc:
+        raise HTTPException(
+            status_code=403, detail="Document initiation denied",
+        ) from exc
+
+
 class DocumentAuthorConfirmation(BaseModel):
     """Explicit first-party author gesture, not a chat or tool approval."""
 
