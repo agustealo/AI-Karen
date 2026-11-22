@@ -511,7 +511,16 @@ class UIMaterializationPipeline:
             if any(asset.is_symlink() for asset in source_assets):
                 raise ValueError("linked UI source files are not allowed")
 
-            if self.plugins_ui_dir.is_symlink() or target_dir.is_symlink():
+            # The frontend publication root may itself be nested beneath a
+            # linked parent. Check every lexical ancestor without resolving the
+            # link, or mkdir/copy can escape into an unrelated directory.
+            publication_root = self.plugins_ui_dir.absolute()
+            if any(
+                candidate.is_symlink()
+                for candidate in (publication_root, *publication_root.parents)
+            ):
+                raise ValueError("linked UI publication ancestry is not allowed")
+            if target_dir.is_symlink():
                 raise ValueError("linked UI target directory is not allowed")
             if target_dir.exists():
                 if not target_dir.is_dir():
