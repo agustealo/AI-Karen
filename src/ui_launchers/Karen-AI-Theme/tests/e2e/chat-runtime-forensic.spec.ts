@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../../e2e/fixtures/verified-search-deployment';
 import { openChat } from './helpers/chatRuntimeAudit';
 
 /**
