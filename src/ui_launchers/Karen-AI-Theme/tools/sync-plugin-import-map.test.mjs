@@ -85,3 +85,14 @@ test('the repository checked-in baseline equals current installed package eviden
   const output = join(workspace, 'src/plugin-import-map.generated.ts');
   assert.equal(readFileSync(output, 'utf8'), renderPluginImportMap(repo));
 });
+
+test('pnpm build proof executes the canonical guarded package build', () => {
+  const workspace = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const manifest = JSON.parse(readFileSync(join(workspace, 'package.json'), 'utf8'));
+  const workflow = readFileSync(
+    join(workspace, '../../../.github/workflows/web-pnpm-install-proof.yml'), 'utf8',
+  );
+  assert.match(manifest.scripts.build, /^node tools\/sync-plugin-import-map\.mjs && node --test /);
+  assert.match(workflow, /run: pnpm build/);
+  assert.doesNotMatch(workflow, /run: pnpm exec next build/);
+});
