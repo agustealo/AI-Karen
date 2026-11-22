@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node tools/sync-plugin-import-map.mjs && node tools/prepare-next-dev-cache.mjs && node tools/prepare-copilotkit-styles.mjs && next dev -p 3000",
-    "build": "node --test tools/sync-plugin-import-map.test.mjs && node tools/sync-plugin-import-map.mjs && node tools/prepare-copilotkit-styles.mjs && next build",
+    "build": "node tools/sync-plugin-import-map.mjs && node --test tools/sync-plugin-import-map.test.mjs && node tools/prepare-copilotkit-styles.mjs && next build",
     "start": "next start",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
     "typecheck": "tsc --noEmit",
