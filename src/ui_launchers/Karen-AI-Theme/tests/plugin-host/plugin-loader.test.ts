@@ -1,4 +1,4 @@
-import { vi, describe, it, expect } from 'vitest';
+import { vi, describe, it, expect, afterEach } from 'vitest';
 
 // Mock the require object before anything else is imported
 vi.hoisted(() => {
@@ -19,7 +19,7 @@ vi.hoisted(() => {
 });
 
 // Now import the module that calls require.context at top level
-import { resolvePluginComponent, normalizePluginId, PLUGIN_IMPORT_MAP, type LoaderPluginEntry } from '../../src/plugin_host/loader';
+import { resolvePluginComponent, resolvePluginComponentAsync, invalidateCatalogCache, normalizePluginId, PLUGIN_IMPORT_MAP, type LoaderPluginEntry } from '../../src/plugin_host/loader';
 import React from 'react';
 import '@testing-library/jest-dom';
 
@@ -57,5 +57,47 @@ describe('Plugin Loader', () => {
     (PLUGIN_IMPORT_MAP as Record<string, () => Promise<{ default: () => null }>>)['weather-query'] = vi.fn().mockResolvedValue({ default: () => null });
     const component = resolvePluginComponent('weather-query', mockCatalog);
     expect(component).toBeTruthy();
+  });
+});
+
+describe('Canonical plugin catalog integration', () => {
+  afterEach(() => {
+    invalidateCatalogCache();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    [{ plugins: [{ name: 'file-explorer', version: '0.2.0', status: 'enabled', has_component: true }] }],
+    [{ extensions: [{ name: 'file-explorer', version: '0.2.0', status: 'enabled', capabilities: { provides_ui: true } }] }],
+    [{ data: { plugins: [{ name: 'file-explorer', version: '0.2.0', status: 'enabled', has_component: true }] } }],
+    [[{ name: 'file-explorer', version: '0.2.0', status: 'enabled', has_component: true }]],
+  ])('resolves an installed GUI only from a verified backend catalog', async (response) => {
+    (PLUGIN_IMPORT_MAP as Record<string, () => Promise<{ default: () => null }>>)['file-explorer'] =
+      vi.fn().mockResolvedValue({ default: () => null });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    }));
+    invalidateCatalogCache();
+    expect(await resolvePluginComponentAsync('file-explorer')).not.toBeNull();
+  });
+
+  it.each([
+    [{ plugins: [{ name: 'file-explorer', version: '0.2.0', status: 'disabled', has_component: true }] }],
+    [{ plugins: [{ name: 'file-explorer', version: '0.2.0', status: 'enabled', has_component: false }] }],
+    [{ plugins: [{ name: 'file-explorer', status: 'enabled', has_component: true }] }],
+  ])('refuses disabled, non-GUI, or malformed catalog entries', async (response) => {
+    (PLUGIN_IMPORT_MAP as Record<string, () => Promise<{ default: () => null }>>)['file-explorer'] =
+      vi.fn().mockResolvedValue({ default: () => null });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    }));
+    invalidateCatalogCache();
+    if (response.plugins[0].version === undefined) {
+      await expect(resolvePluginComponentAsync('file-explorer')).rejects.toThrow('Invalid plugin catalog response');
+    } else {
+      expect(await resolvePluginComponentAsync('file-explorer')).toBeNull();
+    }
   });
 });
