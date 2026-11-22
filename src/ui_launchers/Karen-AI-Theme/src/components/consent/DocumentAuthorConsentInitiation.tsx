@@ -58,6 +58,17 @@ function isCandidate(value: OwnerArtifact): boolean {
   );
 }
 
+function isValidOwnerPage(page: OwnerArtifactPage | null | undefined, cursor: string | null): page is OwnerArtifactPage {
+  if (!page || !Array.isArray(page.items) || page.items.length > 100 ||
+      typeof page.has_more !== 'boolean') return false;
+  if (page.has_more) {
+    return page.items.length > 0 && typeof page.next_cursor === 'string' &&
+      page.next_cursor.length >= 1 && page.next_cursor.length <= 768 &&
+      page.next_cursor !== cursor;
+  }
+  return page.next_cursor === null;
+}
+
 /** Source picker only. The backend owns identity, policy, and approval scope. */
 export function DocumentAuthorConsentInitiation() {
   const router = useRouter();
@@ -81,11 +92,7 @@ export function DocumentAuthorConsentInitiation() {
       apiClient.get<DraftProfile[]>('/api/approvals/document-consent/profiles'),
     ]).then(([page, drafts]) => {
       if (!active) return;
-      if (!page || !Array.isArray(page.items) ||
-          typeof page.has_more !== 'boolean' ||
-          (page.has_more && (typeof page.next_cursor !== 'string' ||
-            page.next_cursor.length === 0 || page.next_cursor.length > 768)) ||
-          !Array.isArray(drafts)) {
+      if (!isValidOwnerPage(page, null) || !Array.isArray(drafts)) {
         setError('Document and draft-profile inventory is unavailable.');
         return;
       }
@@ -114,11 +121,7 @@ export function DocumentAuthorConsentInitiation() {
       const page = await apiClient.get<OwnerArtifactPage>(
         '/api/artifacts/owner-page?limit=100&cursor=' + encodeURIComponent(nextCursor),
       );
-      if (!page || !Array.isArray(page.items) ||
-          typeof page.has_more !== 'boolean' ||
-          (page.has_more && (typeof page.next_cursor !== 'string' ||
-            !page.next_cursor || page.next_cursor.length > 768 ||
-            page.next_cursor === nextCursor))) {
+      if (!isValidOwnerPage(page, nextCursor)) {
         throw new Error('Invalid owner page');
       }
       setDocuments((previous) => {
