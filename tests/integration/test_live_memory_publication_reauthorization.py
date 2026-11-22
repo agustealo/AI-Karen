@@ -1,6 +1,7 @@
 """Live source-record and canonical event consent proof before model dispatch."""
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from datetime import datetime, timezone
@@ -99,6 +100,55 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
             tenant_id=str(tenant), user_id=str(user),
             origins=[{**selected[0], "record_updated_at": None}],
         ) is False
+
+        # Hold a real revocation transaction open while two independent
+        # authorizers read the last committed consent state. Event barriers
+        # establish the ordering; no sleep or mocked database result is used.
+        staged = asyncio.Event()
+        release = asyncio.Event()
+
+        async def commit_revocation_after_readers() -> None:
+            async with async_transaction_scope(tenant_id=str(tenant)) as writer:
+                scope = (await writer.execute(select(ConsentScope).where(
+                    ConsentScope.scope_id == scope_id,
+                ))).scalar_one()
+                scope.is_granted = False
+                scope.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await writer.flush()
+                staged.set()
+                await release.wait()
+
+        writer_task = asyncio.create_task(commit_revocation_after_readers())
+        try:
+            await asyncio.wait_for(staged.wait(), timeout=15)
+            separate_gate = PostgresEventSource()
+            for authorizer in (gate, separate_gate):
+                assert await asyncio.wait_for(
+                    authorizer.authorize_selected_records(
+                        tenant_id=str(tenant), user_id=str(user),
+                        origins=selected,
+                    ), timeout=15,
+                ) is True
+        finally:
+            release.set()
+            await asyncio.wait_for(writer_task, timeout=15)
+
+        # Both fresh transactions must reject the now committed withdrawal.
+        for authorizer in (gate, separate_gate):
+            assert await authorizer.authorize_selected_records(
+                tenant_id=str(tenant), user_id=str(user),
+                origins=selected,
+            ) is False
+
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            scope = (await session.execute(select(ConsentScope).where(
+                ConsentScope.scope_id == scope_id,
+            ))).scalar_one()
+            scope.is_granted = True
+            scope.revoked_at = None
+        assert await separate_gate.authorize_selected_records(
+            tenant_id=str(tenant), user_id=str(user), origins=selected,
+        ) is True
 
         # Scope withdrawal after selection blocks both active derived records.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
