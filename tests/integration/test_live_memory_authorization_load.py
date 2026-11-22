@@ -163,10 +163,9 @@ async def test_memory_authorization_load_report() -> None:
             "record_updated_at": revision.astimezone(timezone.utc).isoformat(),
         }
         async with asyncio.timeout(15):
-            async with asyncio.timeout(15):
-                assert await gate.authorize_selected_records(
-                    tenant_id=str(tenant), user_id=str(user), origins=[origin],
-                ) is True
+            assert await gate.authorize_selected_records(
+                tenant_id=str(tenant), user_id=str(user), origins=[origin],
+            ) is True
     
         # Warm-up is excluded from measured samples and explicitly reported.
         for _ in range(4):
