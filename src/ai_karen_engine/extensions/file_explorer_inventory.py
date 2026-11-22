@@ -177,7 +177,7 @@ class FileExplorerInventoryHost:
         self._authorize_owner(context=context, plan=plan)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
             raise ValueError("file_explorer_page_limit_invalid")
-        if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= 768):
+        if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= MAX_CURSOR_LENGTH):
             raise ValueError("file_explorer_cursor_invalid")
 
         page = await self._source.list_owner_sources_page(
