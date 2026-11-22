@@ -190,9 +190,12 @@ describe('document author source initiation', () => {
     ));
     render(<DocumentAuthorConsentInitiation />);
     expect(await screen.findByText(/author-original.txt/)).toBeTruthy();
+    const inventory = screen.getByRole('region', { name: 'Initiate document author consent' });
+    expect(inventory.getAttribute('data-owner-pages-loaded')).toBe('1');
     expect(screen.queryByText(/later.txt/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Load more owned documents' }));
     expect(await screen.findByText(/later.txt/)).toBeTruthy();
+    await waitFor(() => expect(inventory.getAttribute('data-owner-pages-loaded')).toBe('2'));
     expect(api.get).toHaveBeenCalledWith(
       '/api/artifacts/owner-page?limit=100&cursor=owned-next',
     );
