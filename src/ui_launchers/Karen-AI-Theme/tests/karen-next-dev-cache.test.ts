@@ -149,7 +149,13 @@ describe("Next.js dev cache integrity", () => {
       readFileSync(path.join(ROOT, "package.json"), "utf8"),
     ).scripts as { dev: string; build: string };
     const script = "node tools/prepare-next-dev-cache.mjs";
-    expect(scripts.dev.startsWith(script + " &&")).toBe(true);
+    const devSteps = scripts.dev.split(" && ");
+    expect(devSteps).toEqual([
+      "node tools/sync-plugin-import-map.mjs",
+      script,
+      "node tools/prepare-copilotkit-styles.mjs",
+      "next dev -p 3000",
+    ]);
     expect(scripts.build).not.toContain(script);
   });
 });
