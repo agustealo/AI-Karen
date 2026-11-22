@@ -133,3 +133,16 @@ When the revocation HTTP response is lost or fails, the first-party author scree
 The PR branch is reconciled with mainline commit `119a36904951e2819bcb097a6e3d9bb1aa1b7817` through a true two-parent commit. The existing seven forensic-browser and architecture files are preserved byte-for-byte from main; the web package retains BOTH the mainline `test:e2e:chat-live` and the PR's `test:e2e:document-author` commands. Branch comparison confirmed no missing mainline commits after reconciliation.
 
 This integration does not substitute for an exact-head CI run. If the source branch is in draft state and workflows do not start, mark it reviewable solely to trigger the required pull-request synchronization checks, then return it to draft before any merge. No consent, writing-style ingestion, deployment or training capability is enabled by this reconciliation. Release stays blocked until fresh checks and all target-host/storage evidence are verified.
+
+
+### WS-04A9AD/AE: fresh-token, archived-source author revocation
+
+Independent review found two fail-closed mistakes in the revocation UX: a refreshed author bearer could not match the originating one-time approval token, and a deleted/archived source prevented a still-persisted receipt from being revoked. Both are distinct from source-bound issuance.
+
+The approval loader now has a **private** original-session control. Review, author confirmation and receipt issuance continue to require the original session. Revocation instead loads the consumed approval with a fresh, authenticated bearer matching the durable author and tenant, verifies the canonical approval fingerprint and policy decision, and relies on the existing RuntimePolicy plus one-way PostgreSQL revocation issuer. The revocation SQL further binds the original source SHA-256 from the stored approval; it does not require the document to exist or be currently readable.
+
+A new author-only `GET /api/approvals/document-consent/{approval_id}/revoke-review` returns minimal durable provenance, not source bytes or a claim that consent remains live. If the original-session preview fails after token refresh or source deletion, the existing review screen can obtain this verified fallback and offer an explicit second revocation gesture. A successful response is claimed only after SQL confirms a one-way transition. The revocation POST explicitly requires `confirmed: true` **at ingress and inside ApprovalService**.
+
+The disposable PostgreSQL test revokes a receipt after the file is marked deleted and rejects a forged source digest, then checks the profile and delegated-use fences. The opt-in browser mutation trial uses a fresh browser context and a new login for revocation after issuing/recovering consent with the original author session. No test bypasses identity or session validation.
+
+**Observed regression:** first post-reconciliation exact-head KariSignature CI reported 218 passed, 1 failed on an HTTP boundary test that showed `confirmed: false` was accepted by a mocked service. Ingress now rejects it independently. This revised head must be revalidated; previous green runs cannot certify it. Live host, storage and consumer-ingestion acceptance remain held.
