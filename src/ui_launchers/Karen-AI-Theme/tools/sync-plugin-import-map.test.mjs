@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { renderPluginImportMap, syncPluginImportMap } from './sync-plugin-import-map.mjs';
 
@@ -79,7 +80,7 @@ test('linked packages and source files are never trusted as installed UI', () =>
 }));
 
 test('the repository checked-in baseline equals current installed package evidence', () => {
-  const workspace = join(import.meta.dirname ?? new URL('..', import.meta.url).pathname, '..');
+  const workspace = join(dirname(fileURLToPath(import.meta.url)), '..');
   const repo = join(workspace, 'src/plugin_repo');
   const output = join(workspace, 'src/plugin-import-map.generated.ts');
   assert.equal(readFileSync(output, 'utf8'), renderPluginImportMap(repo));
