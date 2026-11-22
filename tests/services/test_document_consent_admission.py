@@ -821,51 +821,51 @@ async def test_initiation_rejects_wrong_identity_and_purpose_before_sql(
     repo.create.assert_not_awaited()
 
 
-async def test_stored_revocation_requires_live_receipt_and_scope_from_ledger(
+async def test_stored_revocation_uses_immutable_approval_not_live_file(
     monkeypatch,
 ):
     scope, context = evidence()
+    context.session_id = uuid.uuid4().hex  # Refreshed bearer; same verified author.
     await wire_auth(monkeypatch, context)
     record = approval(scope, status="consumed")
-    target = service(SimpleNamespace())
-    confirmed = AsyncMock(return_value=(record, scope))
-    current = AsyncMock(return_value=str(uuid.uuid4()))
+    repo = SimpleNamespace(get=AsyncMock(return_value=record))
+    target = service(repo)
     revoke = AsyncMock(return_value=True)
-    monkeypatch.setattr(target, "get_document_consent_confirmation", confirmed)
-    monkeypatch.setattr(target, "recover_stored_document_consent_receipt", current)
     monkeypatch.setattr(target, "revoke_document_consent", revoke)
+    current = AsyncMock()
+    monkeypatch.setattr(target, "recover_stored_document_consent_receipt", current)
     request = object()
+
+    # Original-session issuance/review remains strictly denied.
+    with pytest.raises(ApprovalScopeError, match="scope mismatch"):
+        await target.get_document_consent_confirmation(
+            record["approval_id"], request=request,
+        )
 
     with pytest.raises(ApprovalScopeError, match="Explicit revocation"):
         await target.revoke_stored_document_consent(
             record["approval_id"], request=request, confirmed=False,
             correlation_id="missing-gesture",
         )
-    confirmed.assert_not_awaited()
-    revoked = await target.revoke_stored_document_consent(
-        record["approval_id"], request=request, confirmed=True,
-        correlation_id="author-revoke",
-    )
-    assert revoked is True
-    revoke.assert_awaited_once_with(
-        request=request,
-        tenant_id=scope.tenant_id,
-        actor_id=scope.author_actor_id,
-        profile_id=scope.profile_id,
-        artifact_id=scope.artifact_id,
-        correlation_id="author-revoke",
-    )
-    current.return_value = None
-    revoke.reset_mock()
-    with pytest.raises(ApprovalStateError, match="No current"):
-        await target.revoke_stored_document_consent(
-            record["approval_id"], request=request, confirmed=True,
-            correlation_id="stale-receipt",
-        )
     revoke.assert_not_awaited()
 
-    current.return_value = str(uuid.uuid4())
-    confirmed.return_value = ({**record, "status": "approved"}, scope)
+    assert await target.revoke_stored_document_consent(
+        record["approval_id"], request=request, confirmed=True,
+        correlation_id="author-revoke",
+    ) is True
+    revoke.assert_awaited_once_with(
+        request=request, tenant_id=scope.tenant_id,
+        actor_id=scope.author_actor_id, profile_id=scope.profile_id,
+        artifact_id=scope.artifact_id,
+        expected_source_sha256=scope.source_sha256,
+        correlation_id="author-revoke",
+    )
+    # No source read/recovery is needed: an archived/deleted file must not
+    # strand an otherwise authentic author's revocation.
+    current.assert_not_awaited()
+
+    repo.get.return_value = {**record, "status": "approved"}
+    revoke.reset_mock()
     with pytest.raises(ApprovalStateError, match="No issued"):
         await target.revoke_stored_document_consent(
             record["approval_id"], request=request, confirmed=True,
@@ -874,18 +874,41 @@ async def test_stored_revocation_requires_live_receipt_and_scope_from_ledger(
     revoke.assert_not_awaited()
 
 
-async def test_revocation_failure_never_becomes_success(monkeypatch):
-    scope, _ = evidence()
+async def test_revocation_never_crosses_author_tenant_or_approval_fingerprint(
+    monkeypatch,
+):
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
     record = approval(scope, status="consumed")
-    target = service(SimpleNamespace())
-    monkeypatch.setattr(
-        target, "get_document_consent_confirmation",
-        AsyncMock(return_value=(record, scope)),
-    )
-    monkeypatch.setattr(
-        target, "recover_stored_document_consent_receipt",
-        AsyncMock(return_value=str(uuid.uuid4())),
-    )
+    repo = SimpleNamespace(get=AsyncMock(return_value=record))
+    target = service(repo)
+    revoke = AsyncMock(return_value=True)
+    monkeypatch.setattr(target, "revoke_document_consent", revoke)
+    for change in ("foreign_author", "foreign_tenant", "fingerprint"):
+        context.user_id = scope.author_actor_id
+        context.tenant_id = scope.tenant_id
+        context.authenticated_user.user_id = scope.author_actor_id
+        context.authenticated_user.tenant_id = scope.tenant_id
+        repo.get.return_value = dict(record)
+        if change == "foreign_author":
+            context.user_id = str(uuid.uuid4())
+        elif change == "foreign_tenant":
+            context.tenant_id = str(uuid.uuid4())
+        else:
+            repo.get.return_value["request_fingerprint"] = "b" * 64
+        with pytest.raises((ApprovalScopeError, PermissionError)):
+            await target.revoke_stored_document_consent(
+                record["approval_id"], request=object(), confirmed=True,
+                correlation_id="foreign-or-forged",
+            )
+    revoke.assert_not_awaited()
+
+
+async def test_revocation_failure_never_becomes_success(monkeypatch):
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    record = approval(scope, status="consumed")
+    target = service(SimpleNamespace(get=AsyncMock(return_value=record)))
     rejected = AsyncMock(return_value=False)
     monkeypatch.setattr(target, "revoke_document_consent", rejected)
     with pytest.raises(ApprovalStateError, match="not recorded"):
