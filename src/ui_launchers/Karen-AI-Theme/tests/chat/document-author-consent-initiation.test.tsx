@@ -315,4 +315,35 @@ describe('document author source initiation', () => {
     expect(api.post).not.toHaveBeenCalled();
   });
 
+  it('disables author initiation during an unresolved owner-page request', async () => {
+    let resolveNextPage: ((value: unknown) => void) | undefined;
+    api.get.mockImplementation((url: string) => (
+      url.includes('cursor=next-page')
+        ? new Promise((resolve) => { resolveNextPage = resolve; })
+        : Promise.resolve(
+            url.startsWith('/api/artifacts/owner-page?')
+              ? { items: [document], has_more: true, next_cursor: 'next-page' }
+              : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+          )
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    await screen.findByText(/author-original.txt/);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your document' }), {
+      target: { value: documentId },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your draft writing-style profile' }), {
+      target: { value: profileId },
+    });
+    const initiate = screen.getByRole('button', { name: 'Continue to author review' }) as HTMLButtonElement;
+    expect(initiate.disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more owned documents' }));
+    expect(screen.getByRole('button', { name: 'Loading documents…' })).toBeTruthy();
+    expect(initiate.disabled).toBe(true);
+    fireEvent.click(initiate);
+    expect(api.post).not.toHaveBeenCalled();
+    resolveNextPage?.({ items: [], has_more: false, next_cursor: null });
+    await waitFor(() => expect(initiate.disabled).toBe(false));
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
 });
