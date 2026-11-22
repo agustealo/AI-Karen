@@ -126,3 +126,10 @@ The preceding `fd7b9072ab5fe0db8201e2221a32c7db6a58bed9` head passed 19/19 workf
 ### WS-04A9AB: uncertain revocation response recovery
 
 When the revocation HTTP response is lost or fails, the first-party author screen now reads the existing server-verified current receipt endpoint before displaying a continuing receipt. If a current receipt remains, it displays a non-success warning and preserves the verified receipt. If no current receipt can be verified, it removes the stale identifier without claiming the revocation succeeded. This also preserves the strict distinction between `revoked` finality, `current receipt` verification and `unknown` outcome. Frontend regression tests cover both outcomes.
+
+
+### WS-04A9AC: reconciliation with live main and certification policy
+
+The PR branch is reconciled with mainline commit `119a36904951e2819bcb097a6e3d9bb1aa1b7817` through a true two-parent commit. The existing seven forensic-browser and architecture files are preserved byte-for-byte from main; the web package retains BOTH the mainline `test:e2e:chat-live` and the PR's `test:e2e:document-author` commands. Branch comparison confirmed no missing mainline commits after reconciliation.
+
+This integration does not substitute for an exact-head CI run. If the source branch is in draft state and workflows do not start, mark it reviewable solely to trigger the required pull-request synchronization checks, then return it to draft before any merge. No consent, writing-style ingestion, deployment or training capability is enabled by this reconciliation. Release stays blocked until fresh checks and all target-host/storage evidence are verified.
