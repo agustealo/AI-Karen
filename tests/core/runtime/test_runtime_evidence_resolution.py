@@ -403,3 +403,131 @@ async def test_persona_scope_respects_backend_memory_sharing_preferences(
     await resolver.resolve(request, _authorized_context(request))
     assert len(manager.calls) == 1
     assert manager.calls[0]["persona_filter"] == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "record_type", "identity_key", "event_key"),
+    [
+        ("postgres_memory_ledger", "memory_assertion", "assertion_id", "event_id"),
+        ("postgres_profile_fact", "profile_fact", "fact_id", "event_id"),
+        ("postgres_procedure", "memory_procedure", "procedure_id", "source_event_id"),
+        ("postgres_user_goal", "memory_user_goal", "goal_id", "event_id"),
+        ("postgres_open_loop", "memory_open_loop", "open_loop_id", "event_id"),
+        (
+            "postgres_prospective_memory", "memory_prospective_item",
+            "prospective_id", "event_id",
+        ),
+        ("postgres_graph", "memory_event", "event_id", "event_id"),
+    ],
+)
+def test_canonical_event_origin_preserves_event_identity_without_acl_grant(
+    source: str, record_type: str, identity_key: str, event_key: str,
+) -> None:
+    """Derived source rows must not masquerade as canonical event IDs."""
+    record_id = "00000000-0000-4000-8000-000000000021"
+    event_id = (
+        record_id if source == "postgres_graph"
+        else "00000000-0000-4000-8000-000000000022"
+    )
+    item = {
+        "id": record_id,
+        "content": "Selected memory",
+        "metadata": {
+            "tenant_id": "tenant-1",
+            "user_id": "user-1",
+            "source": source,
+            "custom": {
+                event_key: event_id,
+                "provenance": {
+                    "store": "postgres",
+                    "record_type": record_type,
+                    identity_key: record_id,
+                    event_key: event_id,
+                    "source_type": "chat",
+                },
+            },
+        },
+    }
+    request = _request()
+    evidence = RuntimeEvidenceResolver._memory_item_to_evidence(
+        item, request=request, retrieved_at=datetime.now(timezone.utc),
+    )
+    origin = evidence.metadata["canonical_event_origin"]
+    assert origin == {
+        "event_id": event_id,
+        "record_id": record_id,
+        "record_type": record_type,
+        "source": source,
+    }
+    assert evidence.provenance.source_record_id == record_id
+
+    from copy import deepcopy
+
+    for alter in (
+        lambda m: m.update({"tenant_id": "another-tenant"}),
+        lambda m: m.update({"user_id": "another-user"}),
+        lambda m: m["custom"]["provenance"].update({identity_key: event_id + "-fake"}),
+        lambda m: m["custom"]["provenance"].update({event_key: "not-a-uuid"}),
+        lambda m: m["custom"]["provenance"].update({"record_type": "other"}),
+        lambda m: m["custom"].update({event_key: "different-event"}),
+        lambda m: m["custom"]["provenance"].update({"source_type": ""}),
+    ):
+        forged = deepcopy(item)
+        alter(forged["metadata"])
+        denied = RuntimeEvidenceResolver._memory_item_to_evidence(
+            forged, request=request, retrieved_at=datetime.now(timezone.utc),
+        )
+        assert denied.metadata["canonical_event_origin"] is None
+
+
+def test_ephemeral_or_unknown_memory_origin_never_invents_ledger_identity() -> None:
+    request = _request()
+    for source in ("stm", "unknown", "model_claim", None):
+        item = {
+            "id": "00000000-0000-4000-8000-000000000099",
+            "content": "Unverified source",
+            "metadata": {
+                "tenant_id": "tenant-1", "user_id": "user-1",
+                "source": source,
+                "custom": {
+                    "event_id": "00000000-0000-4000-8000-000000000022",
+                },
+            },
+        }
+        evidence = RuntimeEvidenceResolver._memory_item_to_evidence(
+            item, request=request, retrieved_at=datetime.now(timezone.utc),
+        )
+        assert evidence.metadata["canonical_event_origin"] is None
+
+
+def test_canonical_event_origin_uses_selected_record_revision_not_custom_claim():
+    item = {
+        "id": "00000000-0000-4000-8000-000000000021",
+        "updated_at": "2026-11-21T07:30:00",
+        "metadata": {
+            "tenant_id": "tenant-1",
+            "user_id": "user-1",
+            "source": "postgres_memory_ledger",
+            "custom": {
+                "event_id": "00000000-0000-4000-8000-000000000022",
+                "updated_at": "1900-01-01T00:00:00",
+                "provenance": {
+                    "store": "postgres",
+                    "record_type": "memory_assertion",
+                    "assertion_id": "00000000-0000-4000-8000-000000000021",
+                    "event_id": "00000000-0000-4000-8000-000000000022",
+                    "source_type": "chat_user",
+                },
+            },
+        },
+    }
+    origin = RuntimeEvidenceResolver._canonical_memory_event_origin(
+        item, tenant_id="tenant-1", user_id="user-1",
+    )
+    assert origin is not None
+    assert origin["record_updated_at"] == "2026-11-21T07:30:00+00:00"
+    assert origin["record_updated_at"] != item["metadata"]["custom"]["updated_at"]
+    item["updated_at"] = "invalid-revision"
+    assert RuntimeEvidenceResolver._canonical_memory_event_origin(
+        item, tenant_id="tenant-1", user_id="user-1",
+    ) is None

@@ -32,12 +32,10 @@ def test_runbook_requires_real_protected_browser_proof():
     )
     assert match is not None
     protected_job = match.group("body")
-    assert (
-        "inputs.scenario == 'content-intelligence' || "
-        "inputs.scenario == 'content-intelligence-denial' || "
-        "inputs.scenario == 'content-intelligence-revocation') && "
-        "github.ref == 'refs/heads/main'"
-    ) in protected_job
+    for scenario in ("content-intelligence", "content-intelligence-denial",
+                     "content-intelligence-revocation"):
+        assert f"inputs.scenario == '{scenario}'" in protected_job
+    assert "github.ref == 'refs/heads/main'" in protected_job
     assert "environment: karen-sanitized-browser-acceptance" in protected_job
     assert (
         "KAREN_FILE_EXPLORER_ACCEPTANCE: "
@@ -64,11 +62,9 @@ def test_live_cross_principal_negative_acceptance_is_protected_and_not_skipped()
     workflow = WORKFLOW.read_text(encoding="utf-8")
     spec = SPEC.read_text(encoding="utf-8")
     assert "          - content-intelligence-denial" in workflow
-    assert (
-        "inputs.scenario == 'content-intelligence-denial' || "
-        "inputs.scenario == 'content-intelligence-revocation') && "
-        "github.ref == 'refs/heads/main'"
-    ) in workflow
+    assert "inputs.scenario == 'content-intelligence-denial'" in workflow
+    assert "inputs.scenario == 'content-intelligence-revocation'" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE:" in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID:" in workflow
     assert "KAREN_UX_ISOLATION_EMAIL: ${{ secrets.KAREN_UX_ISOLATION_EMAIL }}" in workflow
@@ -91,7 +87,8 @@ def test_protected_revoked_artifact_scenario_requires_real_owner_control():
     spec = SPEC.read_text(encoding="utf-8")
     runbook = RUNBOOK.read_text(encoding="utf-8")
     assert "          - content-intelligence-revocation" in workflow
-    assert "inputs.scenario == 'content-intelligence-revocation') && github.ref == 'refs/heads/main'" in workflow
+    assert "inputs.scenario == 'content-intelligence-revocation'" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_REVOCATION_ACCEPTANCE:" in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID:" in workflow
     assert "KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION:" in workflow
@@ -101,3 +98,19 @@ def test_protected_revoked_artifact_scenario_requires_real_owner_control():
     assert "denied.status()" in spec
     assert "real PostgreSQL/Storage" in runbook
     assert "Not shipped" in LEDGER.read_text(encoding="utf-8")
+
+
+def test_file_explorer_dispatch_runs_only_its_real_browser_case():
+    """Do not report Content Intelligence opt-out skips in File Explorer proof."""
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    spec = SPEC.read_text(encoding="utf-8")
+    branch = re.search(
+        r'(?ms)^          elif \[\[ "\$\{\{ inputs\.scenario \}\}" == "file-explorer" \]\]; then\n'
+        r'(?P<body>.*?)(?=^          (?:elif |else\b))',
+        workflow,
+    )
+    assert branch is not None
+    assert "--grep='KFILE-LIVE'" in branch.group("body")
+    assert "KFILE-LIVE: authenticated owner files" in spec
+    for other in ("KCONTENT-LIVE", "KCONTENT-DENY-LIVE", "KCONTENT-REVOKED-LIVE"):
+        assert f"--grep='{other}'" not in branch.group("body")

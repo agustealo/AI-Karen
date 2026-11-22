@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 # Standard redaction patterns
 _REDACTION_PATTERNS = [
+    # Signed HTTP URLs carry bearer tokens in their query strings.
+    # Redact short as well as long tokens, including percent-encoded values.
+    (re.compile(r"(?i)([?&]token=)[^&#\s\"']+"), r"\1[REDACTED]"),
     # JWT (most specific)
     (re.compile(r"(?i)eyJ[a-z0-9_-]*\.eyJ[a-z0-9_-]*\.[a-z0-9_-]*"), "[JWT_REDACTED]"),
     # API Keys & Tokens with labels
@@ -46,3 +50,22 @@ def redact_data(data: Any) -> Any:
     if isinstance(data, list):
         return [redact_data(item) for item in data]
     return data
+
+
+class SignedStorageURLLogFilter(logging.Filter):
+    """Sanitize HTTPX's signed-object request log before any handler sees it."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == "httpx":
+            message = record.getMessage()
+            if "/storage/v1/object/sign/" in message and "token=" in message.lower():
+                record.msg = redact_text(message)
+                record.args = ()
+        return True
+
+
+def install_signed_storage_httpx_log_filter() -> None:
+    """Idempotent installation at the canonical transport/logging boundary."""
+    logger = logging.getLogger("httpx")
+    if not any(isinstance(item, SignedStorageURLLogFilter) for item in logger.filters):
+        logger.addFilter(SignedStorageURLLogFilter())

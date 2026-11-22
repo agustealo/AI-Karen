@@ -702,6 +702,94 @@ class RuntimeEvidenceResolver:
             semantic_scope=tuple(sorted(normalized_scope.items())),
         )
 
+    @staticmethod
+    def _canonical_memory_event_origin(
+        item: dict[str, Any],
+        *,
+        tenant_id: str,
+        user_id: str,
+    ) -> dict[str, str] | None:
+        """Project a typed durable origin without granting live authorization.
+
+        NeuroRecall validates source records before selecting them. This
+        second, scope-bound projection preserves the *event* UUID separately
+        from assertion, profile-fact, procedure and other memory row IDs.
+        It is intentionally not an ACL receipt or permission watermark.
+        """
+        import uuid
+
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        if (
+            metadata.get("tenant_id") != tenant_id
+            or metadata.get("user_id") != user_id
+        ):
+            return None
+        custom = metadata.get("custom")
+        if not isinstance(custom, dict):
+            return None
+        provenance = custom.get("provenance")
+        if not isinstance(provenance, dict):
+            return None
+
+        # Each entry is (canonical record type, row identity key, event key).
+        # This is a projection of NeuroRecall's existing source contracts,
+        # not a new source-authorizer registry.
+        origins = {
+            "postgres_memory_ledger": ("memory_assertion", "assertion_id", "event_id"),
+            "postgres_profile_fact": ("profile_fact", "fact_id", "event_id"),
+            "postgres_procedure": ("memory_procedure", "procedure_id", "source_event_id"),
+            "postgres_user_goal": ("memory_user_goal", "goal_id", "event_id"),
+            "postgres_open_loop": ("memory_open_loop", "open_loop_id", "event_id"),
+            "postgres_prospective_memory": ("memory_prospective_item", "prospective_id", "event_id"),
+            "postgres_graph": ("memory_event", "event_id", "event_id"),
+        }
+        source = metadata.get("source")
+        contract = origins.get(source) if isinstance(source, str) else None
+        if contract is None:
+            return None
+        record_type, identity_key, event_key = contract
+        memory_id = str(item.get("id") or "")
+        event_id = provenance.get(event_key)
+        if (
+            provenance.get("store") != "postgres"
+            or provenance.get("record_type") != record_type
+            or provenance.get(identity_key) != memory_id
+            or custom.get(event_key) != event_id
+            or not isinstance(event_id, str)
+            or not isinstance(provenance.get("source_type"), str)
+            or not provenance["source_type"].strip()
+        ):
+            return None
+        try:
+            event_uuid = uuid.UUID(event_id)
+            record_uuid = uuid.UUID(memory_id)
+        except (TypeError, ValueError):
+            return None
+        if str(event_uuid) != event_id or str(record_uuid) != memory_id:
+            return None
+        origin = {
+            "event_id": event_id,
+            "record_id": memory_id,
+            "record_type": record_type,
+            "source": source,
+        }
+        # This revision is copied from the retriever's MemoryEntry, not the
+        # stored custom metadata. Its absence prevents later live attestation.
+        revision = item.get("updated_at")
+        if isinstance(revision, str):
+            try:
+                parsed_revision = datetime.fromisoformat(revision)
+            except ValueError:
+                return None
+            if parsed_revision.tzinfo is None:
+                parsed_revision = parsed_revision.replace(tzinfo=timezone.utc)
+            origin["record_updated_at"] = parsed_revision.astimezone(
+                timezone.utc
+            ).isoformat()
+        return origin
+
     @classmethod
     def _memory_item_to_evidence(
         cls,
@@ -748,6 +836,11 @@ class RuntimeEvidenceResolver:
             metadata={
                 "memory_type": item.get("memory_type"),
                 "memory_metadata": item_metadata,
+                # A provenance candidate is not current consent authority.
+                # Runtime publication must recheck this event at the ledger.
+                "canonical_event_origin": cls._canonical_memory_event_origin(
+                    item, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+                ),
             },
             fact_semantics=cls._profile_fact_semantics(
                 item_metadata,
