@@ -105,3 +105,12 @@ The live-browser suite no longer attempts to review approvals created under an u
 Playwright now polls the actual canonical review values after the asynchronous preview request instead of asserting immediately after the section container appears. No sensitive source IDs, filenames, digests or auth tokens are placed in assertion error messages or artifacts. The review fixes do not weaken the runtime approval session binding, nor do they certify a live trial until executed on a target host.
 
 **Remaining:** complete fresh exact-head CI and independent review, observe the real approved-host browser trial and Supabase storage proof, verify current source consent through publication and every delegated use. Keep draft/unmerged and consumer ingestion disabled.
+
+
+### WS-04A9Z: author revocation after durable issuance
+
+Once a current issued consent receipt is verified, the dedicated author screen offers a separate, unchecked **Revoke document consent** gesture. It sends only `{"confirmed":true}` to the strict first-party `POST /api/approvals/document-consent/{approval_id}/revoke` endpoint. The endpoint rejects any caller-supplied tenant, actor, artifact, profile or receipt scope. The existing ApprovalService recovers the durable approval scope and verifies that a currently live, source-matching consent receipt is present; only then does the existing RuntimePolicy-authorized SQL issuer perform its one-way revocation. Success is returned **only after the backend confirms revocation**. Failed or uncertain revocations do not claim success in the browser.
+
+The opt-in live mutation acceptance now covers creation, human confirmation, issuance, reload/receipt recovery, explicit revocation, and absence of a recoverable receipt after another reload within the SAME authenticated session. Read-only acceptance remains nonmutating. The disposable PostgreSQL acceptance continues to prove that revoked document consent permanently revokes the published profile and delegated grants; direct SQL un-revocation is denied. No model inference, document ingestion, publication, or delegated action is enabled in this slice.
+
+**CI status:** 19/19 passed for preceding `fd7b9072ab5fe0db8201e2221a32c7db6a58bed9`. The new WS-04A9Z revocation head has separate exact-head checks that must pass before this implementation can be considered validated. Live browser and storage proof remain external go/no-go gates, and consumer ingestion stays disabled.
