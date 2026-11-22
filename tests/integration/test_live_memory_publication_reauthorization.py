@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import delete, select
@@ -122,35 +124,74 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
         try:
             await asyncio.wait_for(staged.wait(), timeout=15)
             separate_gate = PostgresEventSource()
-            # Both independent sessions query the database concurrently
-            # while the writer's consent update is still uncommitted.
-            before_commit = await asyncio.wait_for(
-                asyncio.gather(*(
-                    authorizer.authorize_selected_records(
-                        tenant_id=str(tenant), user_id=str(user),
-                        origins=selected,
+            # Prove overlap at the database connection boundary, not
+            # merely that two asyncio coroutines were scheduled. The writer
+            # already holds one connection: this requires two additional
+            # reader connections and fails if the pool cannot supply them.
+            connected = asyncio.Event()
+            release_readers = asyncio.Event()
+            connections_acquired = 0
+
+            @asynccontextmanager
+            async def reader_transaction(*args, **kwargs):
+                nonlocal connections_acquired
+                async with async_transaction_scope(*args, **kwargs) as session:
+                    await session.connection()
+                    connections_acquired += 1
+                    if connections_acquired == 2:
+                        connected.set()
+                    await release_readers.wait()
+                    yield session
+
+            with patch(
+                "ai_karen_engine.platform.memory.postgres.event_source."
+                "async_transaction_scope",
+                reader_transaction,
+            ):
+                # TaskGroup drains both readers if either fails or the
+                # rendezvous times out, before the writer is released.
+                async with asyncio.TaskGroup() as readers:
+                    first_reader = readers.create_task(
+                        gate.authorize_selected_records(
+                            tenant_id=str(tenant), user_id=str(user),
+                            origins=selected,
+                        )
                     )
-                    for authorizer in (gate, separate_gate)
-                )),
-                timeout=15,
-            )
-            assert before_commit == [True, True]
+                    second_reader = readers.create_task(
+                        separate_gate.authorize_selected_records(
+                            tenant_id=str(tenant), user_id=str(user),
+                            origins=selected,
+                        )
+                    )
+                    try:
+                        await asyncio.wait_for(connected.wait(), timeout=15)
+                        assert connections_acquired == 2
+                    finally:
+                        release_readers.set()
+                assert [first_reader.result(), second_reader.result()] == [
+                    True, True,
+                ]
         finally:
             release.set()
             await asyncio.wait_for(writer_task, timeout=15)
 
-        # Both fresh transactions must reject the now committed withdrawal.
-        after_commit = await asyncio.wait_for(
-            asyncio.gather(*(
-                authorizer.authorize_selected_records(
+        # TaskGroup also drains sibling readers on postcommit query failure.
+        async with asyncio.TaskGroup() as readers:
+            first_reader = readers.create_task(
+                gate.authorize_selected_records(
                     tenant_id=str(tenant), user_id=str(user),
                     origins=selected,
                 )
-                for authorizer in (gate, separate_gate)
-            )),
-            timeout=15,
-        )
-        assert after_commit == [False, False]
+            )
+            second_reader = readers.create_task(
+                separate_gate.authorize_selected_records(
+                    tenant_id=str(tenant), user_id=str(user),
+                    origins=selected,
+                )
+            )
+        assert [first_reader.result(), second_reader.result()] == [
+            False, False,
+        ]
 
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             scope = (await session.execute(select(ConsentScope).where(
