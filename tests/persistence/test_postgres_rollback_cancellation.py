@@ -107,3 +107,38 @@ async def test_stalled_invalidation_is_not_an_unbounded_cleanup_loop():
             await asyncio.wait_for(task, timeout=2)
         except RuntimeError:
             pass
+
+
+
+@pytest.mark.asyncio
+async def test_noncooperative_rollback_is_reported_uncertain_not_success():
+    """A cancellation-resistant driver must never produce a clean receipt."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    session = MagicMock()
+
+    async def noncooperative_rollback():
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            # Simulate a driver that ignores cancellation until I/O resolves.
+            await release.wait()
+        finally:
+            finished.set()
+
+    session.rollback = AsyncMock(side_effect=noncooperative_rollback)
+    session.invalidate = AsyncMock(return_value=None)
+    task = asyncio.create_task(rollback_async_transaction(session))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        with pytest.raises(RuntimeError, match="connection_uncertain"):
+            await asyncio.wait_for(task, timeout=3)
+        session.invalidate.assert_awaited_once()
+        # The driver task may still exist. This test deliberately does NOT
+        # claim pool reclamation or a safe session close in that condition.
+        assert not finished.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(finished.wait(), timeout=2)
