@@ -173,3 +173,10 @@ The first owner-page integration head `665655b108e6696c1ff29f9164862f0e55c3d05a`
 The inline review also found that Playwright's source selector could mistake an as-yet-unloaded document inventory for an empty page. It now waits for the initial loading indicator to disappear and refuses an error alert before interpreting an absent source dropdown or pagination control. Later-page source selection still uses owner-keyset pages and never a free-form document identifier.
 
 These repairs need their own exact-head CI and independent live-target-host author acceptance. They do not activate ingestion, add a storage backend or authorize document content use.
+
+
+### WS-04A9AQ: later-page live browser response synchronization
+
+A P2 review of the reconciled head identified a further acceptance-only race. A paginated source button changes its accessible name from `Load more owned documents` to `Loading documents…` as the request is pending, which makes a negated assertion against the first locator succeed prematurely. The Playwright source selector now attaches a response waiter to the real `GET /api/artifacts/owner-page` cursor request *before clicking*, requires a successful HTTP response, then waits for the loading button to disappear and the author inventory to remain free of error alerts before examining the next page's options. It does not use request interception, an alternate artifact ID input, or mutate approvals. The production source-picker and consent authorization paths are unchanged.
+
+The fix requires fresh exact-head CI; this is **not** proof that the opt-in real-host Playwright acceptance suite ran. Independent approved-host and storage evidence remains required.
