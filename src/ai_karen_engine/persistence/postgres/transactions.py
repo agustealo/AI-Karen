@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager, contextmanager
 from typing import AsyncGenerator, Generator, Optional
 
 from sqlalchemy import text
+from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -118,8 +119,16 @@ async def _capture_rollback_connection(session: AsyncSession):
         or not session.is_active
     ):
         return None
-    connection = await session.connection()
-    return connection.sync_connection.connection
+    try:
+        connection = await session.connection()
+        return connection.sync_connection.connection
+    except PendingRollbackError:
+        # SQLAlchemy may invalidate a checked-out connection after network
+        # failure or cancellation while the ORM transaction still appears
+        # active. The session cannot reconnect until rollback completes.
+        # Do not replace the caller's original error during preflight.
+        logger.warning("postgres.rollback_connection_already_invalidated")
+        return None
 
 
 def _detach_pending_rollback_connection(pool_proxy) -> object | None:
