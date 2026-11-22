@@ -14,6 +14,7 @@ const navigationAcceptance = process.env.KAREN_NAV_VISUAL_ACCEPTANCE === 'true';
 const fileExplorerAcceptance = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === 'true';
 const pinReadbackAcceptance = process.env.KAREN_PIN_READBACK_ACCEPTANCE === '1';
 const documentAuthorAcceptance = process.env.KAREN_DOCUMENT_AUTHOR_ACCEPTANCE === 'true';
+const secureAuthorAcceptance = documentAuthorAcceptance;
 // A local benchmark signs in with real credentials. Disable sensitive
 // recordings at configuration authority, even if a future spec forgets
 // its own test.use privacy override or someone opts into capture video.
@@ -23,8 +24,8 @@ const privateBrowserRun = localBenchmark ||
   navigationAcceptance ||
   settingsAcceptance ||
   fileExplorerAcceptance ||
-  pinReadbackAcceptance ||
-  documentAuthorAcceptance;
+  pinReadbackAcceptance;
+const protectedBrowserRun = privateBrowserRun || secureAuthorAcceptance;
 
 export default defineConfig({
   testDir: './',
@@ -38,7 +39,7 @@ export default defineConfig({
 
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance ? 0 : process.env.CI ? 2 : 0,
+  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance ? 0 : process.env.CI ? 2 : 0,
   workers: 1,
 
   // Authenticated Settings acceptance must not persist response text,
@@ -56,10 +57,10 @@ export default defineConfig({
     baseURL: process.env.KAREN_BASE_URL || 'http://localhost:8010',
     headless: localBenchmark || !!process.env.CI,
     viewport: { width: 1280, height: 720 },
-    screenshot: privateBrowserRun ? 'off' : 'only-on-failure',
+    screenshot: protectedBrowserRun ? 'off' : 'only-on-failure',
     // Opt in only on an approved sanitized test installation. Full-session
     // recordings may contain sensitive conversation text or browser state.
-    video: privateBrowserRun
+    video: protectedBrowserRun
       ? 'off'
       : process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'
         ? 'on'
@@ -67,7 +68,7 @@ export default defineConfig({
     // This opt-in suite types a real credential during sign-in.
     // Playwright traces retain fill action parameters, including passwords.
     // Never record such traces or include them in uploaded artifacts.
-    trace: privateBrowserRun
+    trace: protectedBrowserRun
       ? 'off'
       : 'retain-on-failure',
     actionTimeout: 15000,
