@@ -6,6 +6,7 @@ This does NOT verify authorship outside authenticated first-party attestation.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -317,6 +318,33 @@ async def test_first_party_author_consent_postgres(
             json.dumps(approval_payload), approval_id,
         )
 
+        # The persisted approval TTL is an independent SQL admission check.
+        # A still-valid bearer and matching author/source cannot extend it.
+        await raw.execute(
+            "UPDATE public.runtime_approval_requests "
+            "SET expires_at=clock_timestamp()-interval '1 second' "
+            "WHERE approval_id=$1", approval_id,
+        )
+        async with sessions() as test_session:
+            async with test_session.begin():
+                await test_session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                await test_session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": str(tenant)},
+                )
+                assert await SqlApprovalRepository.consume_document_consent_in_session(
+                    test_session, **consume_args
+                ) is None
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests "
+            "WHERE approval_id=$1", approval_id,
+        ) == "approved"
+        await raw.execute(
+            "UPDATE public.runtime_approval_requests "
+            "SET expires_at=clock_timestamp()+interval '1 hour' "
+            "WHERE approval_id=$1", approval_id,
+        )
+
         # Mismatched author is never permitted to consume the receipt.
         async with sessions() as test_session:
             async with test_session.begin():
@@ -500,12 +528,28 @@ async def test_first_party_author_consent_postgres(
             "status": auth_middleware.TokenStatus.VALID,
             "payload": claims,
         }
-        issued = await runtime_issuer.issue_with_approved_scope(
-            scope=approval_scope, request=bearer_request,
-            approval_id=str(bound_approval),
-            correlation_id="author-affirmative",
+        # Two real database transactions race for the SAME approved action.
+        # The repository CAS must admit exactly one and the receipt insert
+        # must be committed in that winning transaction only.
+        attempts = await asyncio.gather(
+            *(
+                runtime_issuer.issue_with_approved_scope(
+                    scope=approval_scope, request=bearer_request,
+                    approval_id=str(bound_approval),
+                    correlation_id=f"concurrent-author-{index}",
+                )
+                for index in range(2)
+            )
         )
-        assert issued is not None
+        successful = [value for value in attempts if value is not None]
+        assert len(successful) == 1
+        assert attempts.count(None) == 1
+        issued = successful[0]
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.writing_style_document_consents "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND artifact_id=$3",
+            tenant, profile, artifact,
+        ) == 1
         assert await raw.fetchval(
             "SELECT status FROM public.runtime_approval_requests "
             "WHERE approval_id=$1", bound_approval,
