@@ -135,3 +135,57 @@ async def test_selected_timezone_beats_utc_fallback() -> None:
     assert observed["timezone"] in {"EST", "EDT"}
     assert observed["source_detail"]["timezone_source"] == "zoneinfo"
     assert observed["resolution_meta"]["resolvedTimezone"] == "America/Detroit"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Date", "date?", "The date?", "THE DATE.",
+        "what's the date?", "what is today's date?",
+    ],
+)
+def test_short_date_requests_use_authorized_time_capability(prompt: str) -> None:
+    decision = resolve_capability_decision(prompt)
+    assert decision.intent == "time.current"
+    assert decision.requires_tool is True
+    assert decision.allow_llm_only is False
+    assert decision.capability == "time_query"
+    parameters = DirectCapabilityExecutor()._plugin_parameters(
+        decision.intent, prompt, SimpleNamespace(metadata={}), None,
+        resolved_context={"timezone": "America/Detroit"},
+    )
+    assert parameters["mode"] == "date"
+    assert parameters["timezone"] == "America/Detroit"
+
+
+@pytest.mark.parametrize(
+    "prompt", ["the date of the French Revolution", "date parsing in Python"]
+)
+def test_conceptual_date_requests_do_not_claim_current_clock(prompt: str) -> None:
+    assert resolve_capability_decision(prompt).intent != "time.current"
+
+
+@pytest.mark.asyncio
+async def test_simple_date_answer_uses_tool_observation_without_model_invention() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    runtime = ChatRuntime.__new__(ChatRuntime)
+
+    async def model_must_not_run(*args, **kwargs):
+        raise AssertionError("A simple current-date request must not invoke a model")
+
+    async def no_composition(*args, **kwargs):
+        return None
+
+    runtime._synthesize_search_evidence = model_must_not_run
+    runtime._plan_verified_surface = no_composition
+    observed_text = "The current date in America/Detroit is 2026-11-22."
+    answer, metadata = await runtime._compose_direct_capability_answer(
+        SimpleNamespace(messages=[{"role": "user", "content": "The date?"}]),
+        SimpleNamespace(intent="time.current"),
+        object(), object(),
+        SimpleNamespace(text=observed_text, success=True),
+        {"structured_content": {}},
+    )
+    assert answer == observed_text
+    assert metadata["answer_composition_status"] == "source_observation"
