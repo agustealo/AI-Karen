@@ -319,6 +319,8 @@ async def revoke_document_author_consent(
     """Revoke an issued author receipt through runtime policy and SQL owner."""
     from uuid import uuid4
 
+    if body.confirmed is not True:
+        raise HTTPException(status_code=403, detail="Explicit revocation required")
     try:
         await get_approval_service().revoke_stored_document_consent(
             str(approval_id), request=request, confirmed=body.confirmed,
