@@ -276,7 +276,7 @@ class SqlApprovalRepository:
             text(
                 "UPDATE public.runtime_approval_requests "
                 "SET status='consumed', consumed_at=clock_timestamp(), "
-                "request_payload='{}'::jsonb, updated_at=clock_timestamp() "
+                "updated_at=clock_timestamp() "
                 "WHERE approval_id=CAST(:approval AS uuid) "
                 "AND tenant_id=CAST(:tenant AS uuid) "
                 "AND user_id=CAST(:actor AS uuid) "
