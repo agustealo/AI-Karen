@@ -89,3 +89,22 @@ def test_migration_never_registers_runtime_or_downloads_source() -> None:
     assert "httpx" not in source
     assert "download(" not in source
     assert "create policy" in source
+
+
+def test_author_document_discovery_uses_canonical_owner_paging() -> None:
+    root = Path(__file__).resolve().parents[2]
+    route = (root / "src/ai_karen_engine/api_routes/artifacts.py").read_text(
+        encoding="utf-8"
+    )
+    picker = (
+        root
+        / "src/ui_launchers/Karen-AI-Theme/src/components/consent/"
+        "DocumentAuthorConsentInitiation.tsx"
+    ).read_text(encoding="utf-8")
+    assert '@router.get("/owner-page"' in route
+    assert "store.list_owner_artifacts_page(" in route
+    assert '"Owned artifact scope mismatch"' in route
+    assert "/api/artifacts/owner-page?limit=100" in picker
+    assert "/api/artifacts/'" not in picker
+    assert "loadMoreDocuments" in picker
+    assert "Document ingestion remains disabled" in picker
