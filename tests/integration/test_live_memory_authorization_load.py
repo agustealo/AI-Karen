@@ -5,7 +5,6 @@ import asyncio
 import json
 import os
 import platform
-import statistics
 import time
 import uuid
 from datetime import timezone
@@ -53,9 +52,13 @@ async def _measure(
         async with semaphore:
             before = time.perf_counter()
             try:
-                observed = await gate.authorize_selected_records(
-                    tenant_id=str(tenant), user_id=str(user), origins=[origin],
-                )
+                # Bound the complete canonical authorization transaction,
+                # including pool acquisition, query, commit, and cleanup.
+                async with asyncio.timeout(15):
+                    observed = await gate.authorize_selected_records(
+                        tenant_id=str(tenant), user_id=str(user),
+                        origins=[origin],
+                    )
                 return (1000.0 * (time.perf_counter() - before), observed, None)
             except Exception as exc:
                 return (1000.0 * (time.perf_counter() - before),
@@ -122,6 +125,8 @@ async def test_memory_authorization_load_report() -> None:
     gate = PostgresEventSource()
     engine = get_postgres_engine()
     results: list[dict] = []
+    failure_type: str | None = None
+    cleanup_failure_type: str | None = None
     try:
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             session.add(MemoryEvent(
@@ -158,7 +163,7 @@ async def test_memory_authorization_load_report() -> None:
         assert await gate.authorize_selected_records(
             tenant_id=str(tenant), user_id=str(user), origins=[origin],
         ) is True
-
+    
         # Warm-up is excluded from measured samples and explicitly reported.
         for _ in range(4):
             assert await gate.authorize_selected_records(
@@ -169,7 +174,7 @@ async def test_memory_authorization_load_report() -> None:
                 gate, tenant=tenant, user=user, origin=origin,
                 concurrency=concurrency, samples=per_level, expected=True,
             ))
-
+    
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             scope = (await session.execute(select(ConsentScope).where(
                 ConsentScope.scope_id == scope_id,
@@ -183,41 +188,63 @@ async def test_memory_authorization_load_report() -> None:
                 gate, tenant=tenant, user=user, origin=origin,
                 concurrency=concurrency, samples=per_level, expected=False,
             ))
+    
+    except BaseException as exc:
+        failure_type = type(exc).__name__
+        raise
     finally:
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
-            await session.execute(delete(MemoryAssertion).where(
-                MemoryAssertion.assertion_id == assertion_id,
-            ))
-            await session.execute(delete(MemoryEvent).where(
-                MemoryEvent.event_id == event_id,
-            ))
-            await session.execute(delete(ConsentScope).where(
-                ConsentScope.scope_id == scope_id,
-            ))
-
-    pool = engine.async_engine.pool
-    report = {
-        "schema_version": 1,
-        "test": "canonical_postgres_memory_authorization",
-        "source": "PostgresEventSource.authorize_selected_records",
-        "python_version": platform.python_version(),
-        "platform": platform.platform(),
-        "database_driver": engine.async_engine.dialect.name,
-        "pool_status": pool.status(),
-        "warmup_calls": 4,
-        "sample_count_per_condition_and_level": per_level,
-        "concurrency_levels": list(levels),
-        "latency_method": "wall_clock_elapsed_per_call_including_pool_wait",
-        "measurements": results,
+        try:
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                await session.execute(delete(MemoryAssertion).where(
+                    MemoryAssertion.assertion_id == assertion_id,
+                ))
+                await session.execute(delete(MemoryEvent).where(
+                    MemoryEvent.event_id == event_id,
+                ))
+                await session.execute(delete(ConsentScope).where(
+                    ConsentScope.scope_id == scope_id,
+                ))
+        except BaseException as cleanup_exc:
+            cleanup_failure_type = type(cleanup_exc).__name__
+            if failure_type is None:
+                raise
+        finally:
+            # Write the evidence on all exits, including a failed revocation,
+            # incomplete batch, or failed fixture cleanup. Never log IDs or
+            # database credentials in the report.
+            report = {
+                "schema_version": 1,
+                "test": "canonical_postgres_memory_authorization",
+                "source": "PostgresEventSource.authorize_selected_records",
+                "status": (
+                    "complete"
+                    if failure_type is None and cleanup_failure_type is None
+                    else "incomplete"
+                ),
+                "failure_type": failure_type,
+                "cleanup_failure_type": cleanup_failure_type,
+                "python_version": platform.python_version(),
+                "platform": platform.platform(),
+                "database_driver": engine.async_engine.dialect.name,
+                "pool_status": engine.async_engine.pool.status(),
+                "warmup_calls": 4,
+                "sample_count_per_condition_and_level": per_level,
+                "concurrency_levels": list(levels),
+                "latency_method": "wall_clock_elapsed_per_call_including_pool_wait",
+                "per_call_timeout_seconds": 15,
+                "measurements": results,
         "limitations": [
             "No provider generation, network delivery, or cancellation latency",
             "No memory-free ChatRuntime stream baseline",
             "No production-host resource, network, or database server telemetry",
             "No release thresholds asserted from benchmark output",
         ],
-    }
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            }
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(report, indent=2) + "\\n", encoding="utf-8"
+            )
+
     assert results
     assert all(row["attempted"] == per_level for row in results)
     assert all(row["errors"] == 0 and row["authorization_mismatches"] == 0
