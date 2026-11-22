@@ -165,6 +165,37 @@ async def test_voice_modality_cannot_be_finalized_as_generic_plugin(
         )
 
 
+
+@pytest.mark.asyncio
+async def test_specialized_voice_lifecycle_rejects_generic_mutations_without_markers(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path, plugin_id="voice-terminal", voice_modality=True)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+
+    root = tmp_path / "voice-terminal"
+    disabled_marker = root / ".karen-manual-disabled"
+    enabled_marker = root / kernel.MANUAL_ENABLED_MARKER
+    assert disabled_marker.is_file()
+    assert not enabled_marker.exists()
+
+    with pytest.raises(ValueError, match="governed voice runtime"):
+        await service.enable_plugin("voice-terminal")
+    with pytest.raises(ValueError, match="governed voice runtime"):
+        await service.disable_plugin("voice-terminal")
+
+    # The generic management path must leave both the durable choice and
+    # the runtime eligibility unchanged after either rejected operation.
+    assert disabled_marker.is_file()
+    assert not enabled_marker.exists()
+    record = kernel.get_record("voice-terminal")
+    assert record is not None
+    assert record["status"] == "disabled"
+
+
 def test_kernel_observation_rejects_bogus_identifiers() -> None:
     with pytest.raises(ValueError):
         PluginLifecycleKernelObservation(
