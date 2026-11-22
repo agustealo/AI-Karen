@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "node tools/prepare-next-dev-cache.mjs && node tools/prepare-copilotkit-styles.mjs && next dev -p 3000",
-    "build": "node tools/prepare-copilotkit-styles.mjs && next build",
+    "dev": "node tools/sync-plugin-import-map.mjs && node tools/prepare-next-dev-cache.mjs && node tools/prepare-copilotkit-styles.mjs && next dev -p 3000",
+    "build": "node tools/sync-plugin-import-map.mjs && node --test tools/sync-plugin-import-map.test.mjs && node tools/prepare-copilotkit-styles.mjs && next build",
     "start": "next start",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
     "typecheck": "tsc --noEmit",
@@ -19,7 +19,9 @@
     "ci:forbid-mocks": "bash tools/check-no-prod-mocks.sh",
     "test:e2e:planner": "playwright test e2e/planner-presentation-replay.spec.ts --config=e2e/playwright.config.ts --project=chromium",
     "test:e2e:search-release": "playwright test e2e/intelligent-search-replay.spec.ts --config=e2e/playwright.config.ts --project=chromium",
-    "test:e2e:latency-local": "KAREN_LOCAL_LATENCY_BENCHMARK=1 KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0 playwright test e2e/copilotkit-consumer-boot.spec.ts --config=e2e/playwright.config.ts --project=chromium --grep=\"one first\" --repeat-each=10 --workers=1 && python ../../../scripts/analyze_karen_latency.py test-results.json --require-scenarios='time,weather,search,news,current movies,current movie source table'"
+    "test:e2e:latency-local": "KAREN_LOCAL_LATENCY_BENCHMARK=1 KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0 playwright test e2e/copilotkit-consumer-boot.spec.ts --config=e2e/playwright.config.ts --project=chromium --grep=\"one first\" --repeat-each=10 --workers=1 && python ../../../scripts/analyze_karen_latency.py test-results.json --require-scenarios='time,weather,search,news,current movies,current movie source table'",
+    "test:e2e:chat-live": "playwright test tests/e2e/chat-runtime-forensic.spec.ts --config=playwright.config.ts --project=chromium --workers=1",
+    "test:plugin-import-map": "node --test tools/sync-plugin-import-map.test.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^4.1.3",

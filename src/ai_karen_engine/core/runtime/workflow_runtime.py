@@ -172,30 +172,34 @@ class WorkflowRuntime:
             return
 
         orchestrator = await self._get_orchestrator()
-        async for chunk in orchestrator.stream_process(
+        graph_stream = orchestrator.stream_process(
             messages=self._to_langchain(request.messages),
             user_id=ctx.user_id,
             session_id=conversation_id,
             config=config,
-        ):
-            for activity_chunk in self._extract_agent_activity_chunks(
-                chunk,
-                correlation_id=ctx.correlation_id,
-            ):
-                yield activity_chunk
-
-            content, meta = self._extract_stream_payload(chunk)
-            if content or meta:
-                yield _SharedChatStreamChunk(
-                    type=(
-                        "status"
-                        if meta.get("status") and not content
-                        else "content"
-                    ),
-                    content=content,
+        )
+        try:
+            async for chunk in graph_stream:
+                for activity_chunk in self._extract_agent_activity_chunks(
+                    chunk,
                     correlation_id=ctx.correlation_id,
-                    metadata=meta,
-                )
+                ):
+                    yield activity_chunk
+
+                content, meta = self._extract_stream_payload(chunk)
+                if content or meta:
+                    yield _SharedChatStreamChunk(
+                        type=(
+                            "status"
+                            if meta.get("status") and not content
+                            else "content"
+                        ),
+                        content=content,
+                        correlation_id=ctx.correlation_id,
+                        metadata=meta,
+                    )
+        finally:
+            await graph_stream.aclose()
 
     @staticmethod
     def _project_medusa_event(

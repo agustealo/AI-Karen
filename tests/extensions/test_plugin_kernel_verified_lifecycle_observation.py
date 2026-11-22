@@ -165,6 +165,88 @@ async def test_voice_modality_cannot_be_finalized_as_generic_plugin(
         )
 
 
+
+@pytest.mark.asyncio
+async def test_voice_generic_enable_is_only_plugin_eligibility_not_voice_finality(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path, plugin_id="voice-terminal", voice_modality=True)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+
+    root = tmp_path / "voice-terminal"
+    disabled_marker = root / ".karen-manual-disabled"
+    enabled_marker = root / kernel.MANUAL_ENABLED_MARKER
+    assert disabled_marker.is_file()
+    assert await service.enable_plugin("voice-terminal")
+    assert not disabled_marker.exists()
+    assert enabled_marker.is_file()
+    assert kernel.get_record("voice-terminal")["status"] == "enabled"
+
+    # General opt-in makes the plugin eligible. It is NOT proof that the
+    # voice model is installed/licensed/healthy, or that synthesis can run.
+    with pytest.raises(RuntimeError, match="Specialized plugin lifecycle authority"):
+        await kernel.observe_lifecycle_for_finalization(
+            "voice-terminal", operation_id=str(uuid.uuid4())
+        )
+
+    assert await service.disable_plugin("voice-terminal")
+    assert disabled_marker.is_file()
+    assert not enabled_marker.exists()
+    assert kernel.get_record("voice-terminal")["status"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_channel_manual_disable_is_emergency_host_gate_not_activation(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(
+        tmp_path, plugin_id="channel-terminal", explicit_disabled=False
+    )
+    root = tmp_path / "channel-terminal"
+    manifest_path = root / "plugin_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"] = {
+        "communication_channel": {
+            "version": "1.0.0",
+            "transport": "telegram-bot",
+            "ingress": ["webhook"],
+            "inbound": ["text"],
+            "outbound": ["text"],
+            "authentication": "token",
+            "supports_edits": False,
+            "supports_streaming": False,
+            "supports_media": False,
+            "supports_delivery_receipts": False,
+        }
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    disabled_marker = root / ".karen-manual-disabled"
+    enabled_marker = root / kernel.MANUAL_ENABLED_MARKER
+
+    record = kernel.get_record("channel-terminal")
+    assert record is not None and record["is_valid"] is True
+    assert record["status"] == "disabled"
+    assert kernel.get_channel_activation_manifest("channel-terminal") is not None
+    with pytest.raises(ValueError, match="governed Channel Gateway"):
+        await service.enable_plugin("channel-terminal")
+    assert not disabled_marker.exists()
+    assert not enabled_marker.exists()
+
+    # The manual disable is an additional host-level emergency veto.
+    assert await service.disable_plugin("channel-terminal")
+    assert disabled_marker.is_file()
+    assert kernel.get_channel_activation_manifest("channel-terminal") is None
+    assert kernel.get_record("channel-terminal")["status"] == "disabled"
+
+
 def test_kernel_observation_rejects_bogus_identifiers() -> None:
     with pytest.raises(ValueError):
         PluginLifecycleKernelObservation(

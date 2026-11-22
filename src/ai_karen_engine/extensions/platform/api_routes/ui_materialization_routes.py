@@ -503,24 +503,52 @@ async def list_installed_ui_plugins():
 
 @router.get("/import-map", response_model=Dict[str, Any])
 async def get_import_map():
-    """Return the import map generated from governed UI discovery."""
+    """Return installed backend UI import candidates, never deployed build truth.
+
+    The runtime registry controls UI discovery. The UI installer controls
+    on-disk package integrity. Neither can certify the separately compiled
+    Next.js deployment, whose static import map is fixed at build time.
+    """
 
     try:
         pipeline = get_ui_pipeline()
-        ui_plugins = await pipeline.discover_ui_plugins()
-        import_map = await pipeline.generate_import_map(ui_plugins)
+        ui_service = get_ui_service()
+        discovered = await pipeline.discover_ui_plugins()
+        installed = {
+            str(item.get("plugin_id")): item
+            for item in ui_service.list_installed_ui()
+            if isinstance(item, dict) and item.get("plugin_id")
+        }
+        verified = []
+        for plugin in discovered:
+            plugin_id = str(plugin.get("plugin_id") or "")
+            record = installed.get(plugin_id)
+            if (
+                not record
+                or record.get("state") != "installed"
+                or record.get("status") != "success"
+            ):
+                continue
+            integrity = ui_service.validate_ui_package(plugin_id)
+            if _enum_value(integrity.status) != "success":
+                continue
+            verified.append(plugin)
+
+        import_map = await pipeline.generate_import_map(verified)
         return {
             "status": "success",
             "data": {
                 "import_map": import_map,
                 "total_entries": len(import_map),
+                "artifact_scope": "backend_verified_installed_packages",
+                "deployment_verified": False,
             },
         }
     except Exception as exc:
-        logger.exception("Failed to generate UI import map")
+        logger.exception("Failed to generate verified installed UI import candidates")
         raise HTTPException(
             status_code=500,
-            detail="Failed to generate UI import map.",
+            detail="Failed to generate verified UI import candidates.",
         ) from exc
 
 

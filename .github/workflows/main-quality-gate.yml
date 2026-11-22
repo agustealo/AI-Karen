@@ -2,6 +2,7 @@ name: Main Quality Gate
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
     branches:
       - main
   push:
@@ -18,6 +19,7 @@ concurrency:
 
 jobs:
   classifier-burn:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate'))
     name: classifier-burn
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -54,6 +56,7 @@ jobs:
         run: pytest tests/core/intelligence/test_intelligence_runtime_classify_burn.py -q
 
   backend-quality:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate'))
     name: backend-quality
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -376,6 +379,8 @@ jobs:
           pytest tests/core/runtime/test_graph_evidence_freshness_boundary.py -q
           pytest tests/core/runtime/test_graph_prompt_metadata_authority.py -q
           pytest tests/core/runtime/test_graph_live_reauthorization.py -q
+          pytest tests/core/runtime/test_workflow_runtime_agent_stream.py -k real_workflow_stream_close_finalizes_orchestrator_and_graph -q
+          pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k "revoked_memory_between_stream_deltas or revocation_after_final_stream_delta or revocation_committed_while_next_stream_chunk_waits_blocks_publication or post_provider_and_finality_source_fences or reasoning_wrapper_close_cancels_real_nested_provider_worker or revocation_during_nonstream_memory_persistence_returns_denial or graph_wrapper_close_propagates_to_workflow_stream or cancel_during_stream_final_source_check_records_terminal or cancel_during_nonstream_source_finality_records_terminal or revocation_after_provider_completion_uses_memory_denial_receipt or revocation_during_streamed_memory_persistence_emits_denial_not_save_error" -q
           pytest tests/core/memory/test_memory_formation_service.py -q
           pytest tests/platform/memory/test_semantic_user_state_projection.py -q
           pytest tests/memory/test_stm_closure_1b.py -q
@@ -408,6 +413,7 @@ jobs:
           test -z "$refs" || { echo "$refs"; exit 1; }
 
   frontend-quality:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate'))
     name: frontend-quality
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -485,6 +491,7 @@ jobs:
         run: npm run build
 
   deployment-contract:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate'))
     name: deployment-contract
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -571,6 +578,9 @@ jobs:
           PY
 
   main-quality-gate:
+    # This decision MUST run even when the expensive prerequisites are skipped.
+    # GitHub treats skipped jobs as successful required checks.
+    if: ${{ always() }}
     name: main-quality-gate
     runs-on: ubuntu-latest
     needs:
@@ -578,8 +588,26 @@ jobs:
       - backend-quality
       - frontend-quality
       - deployment-contract
+    env:
+      ACCEPTANCE_REQUESTED: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate')) }}
+      CLASSIFIER_RESULT: ${{ needs.classifier-burn.result }}
+      BACKEND_RESULT: ${{ needs.backend-quality.result }}
+      FRONTEND_RESULT: ${{ needs.frontend-quality.result }}
+      DEPLOYMENT_RESULT: ${{ needs.deployment-contract.result }}
     steps:
-      - name: Publish merge decision
+      - name: Publish fail-closed merge decision
+        shell: bash
         run: |
+          set -euo pipefail
+          if [[ "$ACCEPTANCE_REQUESTED" != "true" ]]; then
+            echo "::error::Merge acceptance not requested; apply ci:merge-gate to a ready PR"
+            exit 1
+          fi
+          for result in "$CLASSIFIER_RESULT" "$BACKEND_RESULT" "$FRONTEND_RESULT" "$DEPLOYMENT_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "::error::Main Quality prerequisite is not successful: $result"
+              exit 1
+            fi
+          done
           echo "MAIN QUALITY GATE PASSED"
           echo "sha=$GITHUB_SHA"

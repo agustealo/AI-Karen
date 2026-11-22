@@ -1,0 +1,77 @@
+name: DEV_FAST Focused Validation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dev-fast:
+    name: dev-fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - name: Install lightweight quality dependencies
+        run: |
+          python -m pip install --disable-pip-version-check ruff pytest pyyaml
+      - name: Validate changed Python and workflow syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          import os
+          import pathlib
+          import subprocess
+          import yaml
+
+          base = os.environ.get("GITHUB_BASE_REF", "main")
+          if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+              subprocess.run(["git", "fetch", "--no-tags", "origin", base], check=True)
+              changed = subprocess.check_output(
+                  ["git", "diff", "--name-only", "-z", f"origin/{base}...HEAD"]
+              ).decode().split("\0")
+          else:
+              changed = subprocess.check_output(
+                  ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"]
+              ).decode().split("\0")
+          py = []
+          for name in filter(None, changed):
+              path = pathlib.Path(name)
+              if not path.is_file():
+                  continue
+              if path.suffix == ".py":
+                  ast.parse(path.read_text(encoding="utf-8"), filename=name)
+                  py.append(name)
+              elif name.startswith(".github/workflows/") and path.suffix in (".yml", ".yaml"):
+                  with path.open(encoding="utf-8") as stream:
+                      yaml.safe_load(stream)
+          pathlib.Path("/tmp/dev-fast-python-files").write_text("\n".join(py))
+          print(f"Validated {len(py)} changed Python files")
+          PY
+      - name: Ruff changed Python correctness
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -s /tmp/dev-fast-python-files ]]; then
+            mapfile -t files < /tmp/dev-fast-python-files
+            ruff check --select E9,F63,F7,F82 "${files[@]}"
+          fi

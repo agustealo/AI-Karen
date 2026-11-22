@@ -1,4 +1,5 @@
-import { expect, Page, APIRequestContext, test } from '@playwright/test';
+import { signInApprovedKaren } from '../../../e2e/fixtures/approved-karen-login';
+import { expect, type Page } from '@playwright/test';
 
 export type RuntimeProviderModel = {
   id: string;
@@ -57,25 +58,50 @@ export function pickProviderModel(provider: RuntimeProvider): RuntimeProviderMod
 }
 
 export async function openChat(page: Page): Promise<void> {
-  await page.goto('/');
-  
-  // If redirected to login, perform authentication
-  if (page.url().includes('/login')) {
-    // Switch to Email mode (the first button in the toggle)
-    const emailButton = page.locator('button:has-text("Email")');
-    if (await emailButton.isVisible()) {
-      await emailButton.click();
-    }
-    
-    await page.fill('input[name="email"]', 'admin@karen.ai');
-    await page.fill('input[name="password"]', 'Admin@123!');
-    await page.click('button[type="submit"]');
-    
-    // Wait for redirect to dashboard/chat
-    await expect(page).toHaveURL(/.*dashboard|.*chat|.*\//, { timeout: 30000 });
+  // An approved, origin-locked real account is mandatory for live forensics.
+  // Never use seeded/default credentials or bypass real host authentication.
+  const email = process.env.KAREN_UX_EMAIL;
+  const password = process.env.KAREN_UX_PASSWORD;
+  if (!email || !password || process.env.KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE !== 'true') {
+    throw new Error('Approved live chat generation acceptance is not configured');
   }
-
-  await expect(page.getByTestId('chat-root')).toBeVisible({ timeout: 60_000 });
+  const local = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1';
+  const configured = process.env.KAREN_BASE_URL;
+  if (!configured) throw new Error('Approved chat-generation origin is required');
+  const base = new URL(configured);
+  const clean = !base.username && !base.password && base.pathname === '/' &&
+    !base.search && !base.hash;
+  const approvedRelease = base.protocol === 'https:' && !base.port;
+  const approvedLoopback = local && base.protocol === 'http:' &&
+    ['localhost', '127.0.0.1'].includes(base.hostname) && !!base.port;
+  if (!clean || !(approvedRelease || approvedLoopback)) {
+    throw new Error('Chat generation acceptance requires an approved exact origin');
+  }
+  // Never send credentials to a deployment without its real canonical API.
+  const health = await page.context().request.get(
+    new URL('/api/health', base).toString(),
+    { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
+  );
+  if (health.status() !== 200 ||
+      !/^application\/json(?:;|$)/i.test(health.headers()['content-type'] || '')) {
+    throw new Error('Canonical chat backend is not ready for live acceptance');
+  }
+  const readiness: unknown = await health.json();
+  if (!readiness || typeof readiness !== 'object' ||
+      (readiness as Record<string, unknown>).status !== 'ok' ||
+      (readiness as Record<string, unknown>).backend_ready !== true) {
+    throw new Error('Canonical chat backend did not report verified readiness');
+  }
+  await signInApprovedKaren(page, email, password, { allowLocalLoopback: local });
+  await page.goto(new URL('/dashboard', base).toString());
+  expect(new URL(page.url()).origin).toBe(base.origin);
+  const shell = page.getByTestId('karen-copilot-consumer-chat');
+  const launch = page.getByRole('button', { name: 'Ask Karen', exact: true });
+  if (!(await shell.isVisible().catch(() => false)) &&
+      await launch.isVisible().catch(() => false)) {
+    await launch.click();
+  }
+  await expect(shell).toBeVisible({ timeout: 60_000 });
 }
 
 export async function selectProviderAndModel(
@@ -138,9 +164,6 @@ export async function openResponseDetails(page: Page): Promise<void> {
   const toggle = lastAssistantMessage.getByTestId('chat-response-details-toggle');
   
   if (!(await toggle.isVisible())) {
-    const content = await lastAssistantMessage.innerText();
-    console.error(`Metadata toggle not visible for message: "${content.slice(0, 100)}..."`);
-    // Check if there is any hidden metadata info
     throw new Error('Forensic metadata toggle not found on the assistant message.');
   }
 
@@ -167,11 +190,15 @@ export async function expectForensicMetadata(page: Page): Promise<void> {
   await expect(page.getByTestId('chat-correlation-id').last()).toBeVisible();
 
   const actualProvider = await page.getByTestId('chat-actual-provider').last().innerText();
+  const actualModel = await page.getByTestId('chat-actual-model').last().innerText();
   const runtimeEngine = await page.getByTestId('chat-runtime-engine').last().innerText();
+  const responseSource = await page.getByTestId('chat-response-source').last().innerText();
   const correlationId = await page.getByTestId('chat-correlation-id').last().innerText();
 
   expect(actualProvider.trim(), 'Actual provider missing').not.toMatch(/^(n\/a|none|unknown)?$/i);
+  expect(actualModel.trim(), 'Actual model missing').not.toMatch(/^(n\/a|none|unknown)?$/i);
   expect(runtimeEngine.trim(), 'Runtime engine missing').not.toMatch(/^(n\/a|none|unknown)?$/i);
+  expect(responseSource.trim(), 'Response source missing').not.toMatch(/^(n\/a|none|unknown|emergency_unavailable|unavailable|memory_persistence|provider_stream_pending_receipt)?$/i);
   expect(correlationId.trim(), 'Correlation ID missing').not.toMatch(/^(n\/a|none|unknown)?$/i);
 }
 
