@@ -95,7 +95,13 @@ export async function openChat(page: Page): Promise<void> {
   await signInApprovedKaren(page, email, password, { allowLocalLoopback: local });
   await page.goto(new URL('/dashboard', base).toString());
   expect(new URL(page.url()).origin).toBe(base.origin);
-  await expect(page.getByTestId('karen-copilot-consumer-chat')).toBeVisible({ timeout: 60_000 });
+  const shell = page.getByTestId('karen-copilot-consumer-chat');
+  const launch = page.getByRole('button', { name: 'Ask Karen', exact: true });
+  if (!(await shell.isVisible().catch(() => false)) &&
+      await launch.isVisible().catch(() => false)) {
+    await launch.click();
+  }
+  await expect(shell).toBeVisible({ timeout: 60_000 });
 }
 
 export async function selectProviderAndModel(
