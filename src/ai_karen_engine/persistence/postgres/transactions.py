@@ -18,6 +18,11 @@ from ai_karen_engine.persistence.postgres import get_postgres_engine
 
 logger = logging.getLogger(__name__)
 
+# Strong ownership of outstanding session retirement tasks. asyncio's event
+# loop keeps only weak references to tasks; exceptions may be discarded by
+# callers and must not own the lifetime of database cleanup.
+_PENDING_SESSION_RETIREMENTS: set[asyncio.Task] = set()
+
 # Canonical RLS setting used by the Supabase baseline policies.
 _TENANT_SETTING = "app.current_tenant_id"
 # Compatibility setting retained while older SQL/helpers are audited.
@@ -116,6 +121,14 @@ def _observe_postgres_cleanup_task(task: asyncio.Task) -> None:
         pass
 
 
+def _finish_session_retirement(task: asyncio.Task) -> None:
+    """Observe completion and release the canonical strong task reference."""
+    try:
+        _observe_postgres_cleanup_task(task)
+    finally:
+        _PENDING_SESSION_RETIREMENTS.discard(task)
+
+
 async def _capture_rollback_connection(session: AsyncSession):
     """Inspect only a connection *already owned* by the SQLAlchemy session.
 
@@ -200,7 +213,8 @@ def _schedule_quarantined_session_retirement(
                 logger.exception("postgres.quarantined_session_close_failed")
 
     task = asyncio.create_task(retire())
-    task.add_done_callback(_observe_postgres_cleanup_task)
+    _PENDING_SESSION_RETIREMENTS.add(task)
+    task.add_done_callback(_finish_session_retirement)
     return task
 
 
