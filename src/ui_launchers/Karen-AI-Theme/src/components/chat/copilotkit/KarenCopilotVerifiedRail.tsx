@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from "react";
 import ConversationContextRail from "@/components/chat/ConversationContextRail";
-import { KarenPresentationRegistry } from "@/components/chat/KarenPresentationRegistry";
+import { KarenSafePresentation } from "@/components/chat/KarenSafePresentation";
 import { useKarenVerifiedResponseContext } from "./KarenCopilotVerifiedHistory";
 
 function ActivityReplayNotice() {
@@ -91,7 +91,7 @@ export function KarenCopilotVerifiedRail() {
           <p className="mb-2 break-all font-mono text-[11px] text-muted-foreground">
             {presentation.component_type.replace(/\./g, " · ")}
           </p>
-          <KarenPresentationRegistry data={presentation} />
+          <KarenSafePresentation data={presentation} />
         </article>
       ))}
       <p className="text-xs text-muted-foreground">

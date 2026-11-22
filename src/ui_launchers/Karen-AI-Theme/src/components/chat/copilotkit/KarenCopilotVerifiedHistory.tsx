@@ -16,10 +16,10 @@ import type { ComponentProps, ReactNode } from "react";
 import type { AgentStepEvent } from "@/lib/types";
 
 import {
-  KarenPresentationRegistry,
   parseKarenPresentation,
   type KarenPresentationEnvelope,
 } from "@/components/chat/KarenPresentationRegistry";
+import { KarenSafePresentation } from "@/components/chat/KarenSafePresentation";
 import {
   KarenResponseIntegrity,
   KarenRestoredExecutionReceipt,
@@ -363,7 +363,7 @@ export function KarenCopilotAssistantMessage(
       {parts.map((part, index) => (
         <div key={index} data-testid="karen-copilot-verified-part">
           {part.type === "presentation" &&
-            <KarenPresentationRegistry data={part.value} />}
+            <KarenSafePresentation data={part.value} />}
           {part.type === "receipt" &&
             <KarenRestoredExecutionReceipt data={part.value} />}
           {part.type === "integrity" &&
