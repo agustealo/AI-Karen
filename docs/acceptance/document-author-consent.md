@@ -164,3 +164,12 @@ HTTP and component tests cover owner/tenant binding, pagination, malformed curso
 The existing `KariSignature PostgreSQL Principal and Revocation Proof` workflow now explicitly compiles and runs the source-owner HTTP regression suite `tests/api_routes/test_document_author_owned_artifacts_http.py` alongside the consent HTTP and PostgreSQL tests. Its existing branch path filters include the owner endpoint and canonical ArtifactStore adapter so changes to their authority cannot silently bypass this dedicated source-consent proof.
 
 The first owner-pagination head's `Web pnpm 11 Build Proof` failed on a malformed **test fixture** in the empty-draft-inventory case. The revised fixture returns the complete paginated metadata shape and no longer has the parser error. This latest head must independently pass CI. A test status on an older head is not accepted as proof for the revised branch.
+
+
+### WS-04A9AK: bounded-inventory live acceptance and CI collection repair
+
+The first owner-page integration head `665655b108e6696c1ff29f9164862f0e55c3d05a` exposed two independently actionable issues. The KariSignature PostgreSQL proof was blocked at **HTTP-test collection**, because importing the existing artifact upload router requires `python-multipart` even when the requested test covers only owner metadata. Its dedicated CI dependency installation now includes multipart; no production database permission or artifact authorization behavior is changed.
+
+The inline review also found that Playwright's source selector could mistake an as-yet-unloaded document inventory for an empty page. It now waits for the initial loading indicator to disappear and refuses an error alert before interpreting an absent source dropdown or pagination control. Later-page source selection still uses owner-keyset pages and never a free-form document identifier.
+
+These repairs need their own exact-head CI and independent live-target-host author acceptance. They do not activate ingestion, add a storage backend or authorize document content use.
