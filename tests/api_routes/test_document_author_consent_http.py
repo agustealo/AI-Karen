@@ -50,6 +50,7 @@ def client_and_service(monkeypatch):
     }
     service = SimpleNamespace(
         initiate_document_consent=AsyncMock(return_value=record),
+        revoke_stored_document_consent=AsyncMock(return_value=True),
         list_document_author_draft_profiles=AsyncMock(return_value=[{
             "profile_id": scope.profile_id, "label": "Author draft", "kind": "personal",
         }]),
@@ -292,3 +293,42 @@ async def test_draft_profile_inventory_is_only_server_authenticated_metadata(
         denied = await client.get("/api/approvals/document-consent/profiles")
         assert denied.status_code == 403
         assert not isinstance(denied.json(), list)
+
+
+async def test_revocation_requires_explicit_true_and_never_accepts_scoped_inputs(
+    client_and_service,
+):
+    app, approval_id, _, service = client_and_service
+    url = "/api/approvals/document-consent/" + approval_id + "/revoke"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        for payload in (
+            {"confirmed": False},
+            {"confirmed": "true"},
+            {"confirmed": 1},
+            {"confirmed": True, "receipt_id": str(uuid.uuid4())},
+            {"confirmed": True, "tenant_id": str(uuid.uuid4())},
+        ):
+            response = await client.post(url, json=payload)
+            assert response.status_code in (403, 422)
+        service.revoke_stored_document_consent.assert_not_awaited()
+        result = await client.post(
+            url,
+            json={"confirmed": True},
+            headers={"Authorization": "Bearer verified-author"},
+        )
+        assert result.status_code == 200
+        assert result.json() == {"approval_id": approval_id, "status": "revoked"}
+        kwargs = service.revoke_stored_document_consent.await_args.kwargs
+        assert kwargs["request"].headers["authorization"] == "Bearer verified-author"
+        assert kwargs["confirmed"] is True
+        assert "actor_id" not in kwargs
+        assert "receipt_id" not in kwargs
+        service.revoke_stored_document_consent.side_effect = ApprovalStateError(
+            "not current"
+        )
+        unavailable = await client.post(url, json={"confirmed": True})
+        assert unavailable.status_code == 409
+        assert unavailable.json()["detail"] == "Author revocation not recorded"
