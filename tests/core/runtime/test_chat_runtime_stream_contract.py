@@ -1157,7 +1157,11 @@ async def test_kis_graph_01c2r_e_stream_baseline_receipt_preserves_memory_mode(
     assert isinstance(receipt["request_to_first_content_ms"], float)
     assert receipt["request_to_first_content_ms"] >= 0
     assert receipt["latency_ms"] >= receipt["request_to_first_content_ms"]
-    assert not gateway.calls
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0]["user_text"] == "hello"
+    assert gateway.calls[0]["assistant_text"] == "same provider output"
+    assert receipt["transcript_persistence_status"] == "persisted"
+    assert receipt["transcript_persisted_count"] == 2
 
 
 @pytest.mark.asyncio
