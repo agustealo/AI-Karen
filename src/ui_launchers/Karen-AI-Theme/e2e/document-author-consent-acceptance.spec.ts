@@ -47,12 +47,22 @@ async function selectSource(page: Page, origin: URL): Promise<Locator> {
   expect(new URL(page.url()).origin).toBe(origin.origin);
   const selector = page.getByRole("region", { name: "Initiate document author consent" });
   await expect(selector).toBeVisible();
-  const document = selector.getByRole("combobox", { name: "Your document" });
-  await expect(document).toBeVisible();
-  // Compare IDs inside the page; do not print sensitive source metadata.
-  const found = await document.evaluate((node, id) => (
-    Array.from((node as HTMLSelectElement).options).some(option => option.value === id)
-  ), expectedArtifact!);
+  // Owner pages are bounded. Walk only the dedicated author inventory,
+  // never use a free-form artifact input or guess an unlisted source ID.
+  let found = false;
+  for (let pageNumber = 0; pageNumber < 25; pageNumber += 1) {
+    const document = selector.getByRole("combobox", { name: "Your document" });
+    if (await document.count() > 0) {
+      found = await document.evaluate((node, id) => (
+        Array.from((node as HTMLSelectElement).options).some(option => option.value === id)
+      ), expectedArtifact!);
+    }
+    if (found) break;
+    const more = selector.getByRole("button", { name: "Load more owned documents" });
+    if (!await more.isVisible().catch(() => false)) break;
+    await more.click();
+    await expect(more).not.toHaveText("Loading documents…");
+  }
   expect(found, "Expected source must be in the authenticated owner inventory").toBe(true);
   return selector;
 }
