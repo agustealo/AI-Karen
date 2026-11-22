@@ -167,7 +167,7 @@ async def test_voice_modality_cannot_be_finalized_as_generic_plugin(
 
 
 @pytest.mark.asyncio
-async def test_specialized_voice_lifecycle_rejects_generic_mutations_without_markers(
+async def test_voice_generic_enable_is_only_plugin_eligibility_not_voice_finality(
     tmp_path: Path,
 ) -> None:
     _create_plugin(tmp_path, plugin_id="voice-terminal", voice_modality=True)
@@ -180,28 +180,31 @@ async def test_specialized_voice_lifecycle_rejects_generic_mutations_without_mar
     disabled_marker = root / ".karen-manual-disabled"
     enabled_marker = root / kernel.MANUAL_ENABLED_MARKER
     assert disabled_marker.is_file()
-    assert not enabled_marker.exists()
+    assert await service.enable_plugin("voice-terminal")
+    assert not disabled_marker.exists()
+    assert enabled_marker.is_file()
+    assert kernel.get_record("voice-terminal")["status"] == "enabled"
 
-    with pytest.raises(ValueError, match="governed voice runtime"):
-        await service.enable_plugin("voice-terminal")
-    with pytest.raises(ValueError, match="governed voice runtime"):
-        await service.disable_plugin("voice-terminal")
+    # General opt-in makes the plugin eligible. It is NOT proof that the
+    # voice model is installed/licensed/healthy, or that synthesis can run.
+    with pytest.raises(RuntimeError, match="Specialized plugin lifecycle authority"):
+        await kernel.observe_lifecycle_for_finalization(
+            "voice-terminal", operation_id=str(uuid.uuid4())
+        )
 
-    # The generic management path must leave both the durable choice and
-    # the runtime eligibility unchanged after either rejected operation.
+    assert await service.disable_plugin("voice-terminal")
     assert disabled_marker.is_file()
     assert not enabled_marker.exists()
-    record = kernel.get_record("voice-terminal")
-    assert record is not None
-    assert record["status"] == "disabled"
-
+    assert kernel.get_record("voice-terminal")["status"] == "disabled"
 
 
 @pytest.mark.asyncio
-async def test_communication_channel_rejects_generic_lifecycle_mutations(
+async def test_channel_manual_disable_is_emergency_host_gate_not_activation(
     tmp_path: Path,
 ) -> None:
-    _create_plugin(tmp_path, plugin_id="channel-terminal")
+    _create_plugin(
+        tmp_path, plugin_id="channel-terminal", explicit_disabled=False
+    )
     root = tmp_path / "channel-terminal"
     manifest_path = root / "plugin_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -229,14 +232,18 @@ async def test_communication_channel_rejects_generic_lifecycle_mutations(
     enabled_marker = root / kernel.MANUAL_ENABLED_MARKER
 
     record = kernel.get_record("channel-terminal")
-    assert record is not None
+    assert record is not None and record["is_valid"] is True
     assert record["status"] == "disabled"
+    assert kernel.get_channel_activation_manifest("channel-terminal") is not None
     with pytest.raises(ValueError, match="governed Channel Gateway"):
         await service.enable_plugin("channel-terminal")
-    with pytest.raises(ValueError, match="governed Channel Gateway"):
-        await service.disable_plugin("channel-terminal")
-    assert disabled_marker.is_file()
+    assert not disabled_marker.exists()
     assert not enabled_marker.exists()
+
+    # The manual disable is an additional host-level emergency veto.
+    assert await service.disable_plugin("channel-terminal")
+    assert disabled_marker.is_file()
+    assert kernel.get_channel_activation_manifest("channel-terminal") is None
     assert kernel.get_record("channel-terminal")["status"] == "disabled"
 
 
