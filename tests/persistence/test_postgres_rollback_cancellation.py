@@ -445,14 +445,13 @@ async def test_noncooperative_invalidation_defers_scope_exit_until_retirement():
 
 @pytest.mark.asyncio
 async def test_retirement_registry_keeps_cleanup_alive_after_exception_discard():
-    """GC cannot abandon a pending session retirement when the caller drops it."""
+    """Registry roots pending retirement when caller/rollback refs are dropped."""
     import gc
     import weakref
 
     from ai_karen_engine.persistence.postgres import transactions
 
     entered = asyncio.Event()
-    release = asyncio.Event()
     finished = asyncio.Event()
     session = MagicMock()
     session.invalidate = AsyncMock()
@@ -461,9 +460,10 @@ async def test_retirement_registry_keeps_cleanup_alive_after_exception_discard()
     async def held_rollback():
         entered.set()
         try:
-            await release.wait()
-        except asyncio.CancelledError:
-            await release.wait()
+            # This Future is not retained by the test or an external event.
+            # The coroutine and its wait target become a collectable cycle
+            # without the retirement registry owning the pending task.
+            await asyncio.Future()
         finally:
             finished.set()
 
@@ -472,23 +472,41 @@ async def test_retirement_registry_keeps_cleanup_alive_after_exception_discard()
     retirement = transactions._schedule_quarantined_session_retirement(
         session, rollback, None
     )
+    rollback_ref = weakref.ref(rollback)
     retirement_ref = weakref.ref(retirement)
-    assert retirement in transactions._PENDING_SESSION_RETIREMENTS
+
+    # Allow retirement to suspend on the rollback before removing all local
+    # task references and running GC. An event loop ready queue is not proof.
+    await asyncio.sleep(0)
+    assert not retirement.done()
     del retirement
+    del rollback
     gc.collect()
     await asyncio.sleep(0)
-    assert retirement_ref() is not None
-    assert retirement_ref() in transactions._PENDING_SESSION_RETIREMENTS
-    session.close.assert_not_awaited()
-    session.invalidate.assert_not_awaited()
+
     try:
-        release.set()
-        await asyncio.wait_for(rollback, timeout=2)
-        await asyncio.wait_for(retirement_ref(), timeout=2)
-        await asyncio.sleep(0)
-        assert finished.is_set()
-        session.invalidate.assert_awaited_once()
-        session.close.assert_awaited_once()
-        assert retirement_ref() not in transactions._PENDING_SESSION_RETIREMENTS
+        assert retirement_ref() is not None
+        assert rollback_ref() is not None
+        assert retirement_ref() in transactions._PENDING_SESSION_RETIREMENTS
+        session.invalidate.assert_not_awaited()
+        session.close.assert_not_awaited()
     finally:
-        release.set()
+        surviving_rollback = rollback_ref()
+        if surviving_rollback is not None:
+            surviving_rollback.cancel()
+            try:
+                await asyncio.wait_for(surviving_rollback, timeout=2)
+            except asyncio.CancelledError:
+                pass
+            del surviving_rollback
+
+        surviving_retirement = retirement_ref()
+        if surviving_retirement is not None:
+            await asyncio.wait_for(surviving_retirement, timeout=2)
+            del surviving_retirement
+
+    await asyncio.sleep(0)
+    assert finished.is_set()
+    session.invalidate.assert_awaited_once()
+    session.close.assert_awaited_once()
+    assert not transactions._PENDING_SESSION_RETIREMENTS
