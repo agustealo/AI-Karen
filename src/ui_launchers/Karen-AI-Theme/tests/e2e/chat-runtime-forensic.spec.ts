@@ -1,96 +1,112 @@
-import { test, expect } from '@playwright/test';
-import {
-  fetchRuntimeCatalog,
-  getAuditableProviders,
-  pickProviderModel,
-  openChat,
-  selectProviderAndModel,
-  sendAuditPrompt,
-  waitForAssistantResponse,
-  openResponseDetails,
-  expectForensicMetadata,
-  expectRequestedProviderReflected,
-  expectNoFakeSuccess,
-} from './helpers/chatRuntimeAudit';
+import { expect, test } from '@playwright/test';
+import { openChat } from './helpers/chatRuntimeAudit';
 
-const approvedLiveRun = process.env.KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE === 'true';
+/**
+ * Explicit, real-account, real-provider acceptance. No route interception,
+ * fake SSE, seeded credentials, transient model-name assertions or UI-only
+ * success criteria. A saved answer must have a backend-issued generative
+ * execution receipt bound to that exact assistant message.
+ */
+const enabled = process.env.KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE === 'true';
 
-test.describe('Chat runtime forensic audit', () => {
-  test.skip(!approvedLiveRun, 'Requires explicit approved live chat-generation acceptance');
-  test.beforeEach(async ({ page }) => {
+test.describe('Canonical CopilotKit live generation', () => {
+  test.skip(!enabled, 'Requires approved-host real-model acceptance');
+  test.use({ trace: 'off', video: 'off', screenshot: 'off' });
+
+  test('one real run persists provider-proven answer and survives reload', async ({ page }) => {
+    test.setTimeout(180_000);
     await openChat(page);
-  });
-
-  test('runtime provider catalog exposes at least one auditable provider', async ({ page }) => {
-    const catalog = await fetchRuntimeCatalog(page);
-    const providers = getAuditableProviders(catalog);
-
-    expect(
-      providers.length,
-      'No configured runtime providers returned by /api/runtime/providers',
-    ).toBeGreaterThan(0);
-  });
-
-  test('default selected provider returns an actual chat response', async ({ page }) => {
-    const catalog = await fetchRuntimeCatalog(page);
-    const providers = getAuditableProviders(catalog);
-
-    expect(providers.length).toBeGreaterThan(0);
-
-    const defaultProvider =
-      providers.find((provider) => provider.id === catalog.default_provider) || providers[0];
-    const model = pickProviderModel(defaultProvider);
-
-    await selectProviderAndModel(page, defaultProvider.id, model.id);
-    await sendAuditPrompt(page);
-    await waitForAssistantResponse(page);
-    await openResponseDetails(page);
-
-    await expectForensicMetadata(page);
-    await expectRequestedProviderReflected(page, defaultProvider.id, model.id);
-    await expectNoFakeSuccess(page);
-  });
-
-  test('first three configured providers return actual provider-generated response', async ({ page }) => {
-    const catalog = await fetchRuntimeCatalog(page);
-    const providers = getAuditableProviders(catalog);
-    console.log(`Auditing ${providers.length} providers: ${providers.map(p => p.id).join(', ')}`);
-
-    expect(providers.length).toBeGreaterThan(0);
-
-    // Test a subset of providers to keep the audit efficient
-    const providersToAudit = providers.slice(0, 3);
-
-    for (const provider of providersToAudit) {
-      const model = pickProviderModel(provider);
-      console.log(`Starting audit for ${provider.id} using model ${model.id}`);
-
-      await test.step(`audit ${provider.id} / ${model.id}`, async () => {
-        await selectProviderAndModel(page, provider.id, model.id);
-        await sendAuditPrompt(page);
-        await waitForAssistantResponse(page);
-        await openResponseDetails(page);
-
-        await expectForensicMetadata(page);
-        await expectRequestedProviderReflected(page, provider.id, model.id);
-        await expectNoFakeSuccess(page);
-      });
+    const shell = page.getByTestId('karen-copilot-consumer-chat');
+    const askKaren = page.getByRole('button', { name: 'Ask Karen', exact: true });
+    if (!(await shell.isVisible().catch(() => false)) &&
+        await askKaren.isVisible().catch(() => false)) {
+      await askKaren.click();
     }
-  });
+    await expect(shell).toBeVisible({ timeout: 30_000 });
+    await expect(shell.getByTestId('karen-copilot-controlled-chat')).toBeVisible();
 
-  test('provider catalog selection and chat metadata do not diverge', async ({ page }) => {
-    const catalog = await fetchRuntimeCatalog(page);
-    const providers = getAuditableProviders(catalog);
+    const previousId = await shell.getAttribute('data-conversation-id');
+    await shell.getByRole('button', { name: 'New conversation' }).click();
+    await expect.poll(async () => {
+      const current = await shell.getAttribute('data-conversation-id');
+      return current && current !== previousId ? current : null;
+    }, { timeout: 30_000 }).not.toBeNull();
 
-    for (const provider of providers) {
-      const model = pickProviderModel(provider);
+    const conversationId = await shell.getAttribute('data-conversation-id');
+    expect(conversationId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 
-      await test.step(`selection truth ${provider.id}`, async () => {
-        await selectProviderAndModel(page, provider.id, model.id);
+    const prompt = `Live chat generation acceptance ${crypto.randomUUID()}: Respond with one brief sentence.`;
+    const runRequests: string[] = [];
+    page.on('request', request => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === 'POST' && [
+        '/api/copilotkit/agent/default/run',
+        '/api/chat/ag-ui',
+        '/api/chat/stream',
+      ].includes(path)) runRequests.push(path);
+    });
+    const composer = shell.getByTestId('karen-copilot-sdk-chat').locator('textarea').first();
+    await expect(composer).toBeVisible();
+    await composer.fill(prompt);
+    await composer.press('Enter');
 
-        await expect(page.getByTestId('chat-provider-select')).toHaveValue(provider.id);
-        await expect(page.getByTestId('chat-model-select')).toHaveValue(model.id);
-      });
-    }
+    let verifiedAssistantId = '';
+    await expect.poll(async () => {
+      const observation = await page.evaluate(async ({ id, sent }) => {
+        const token = window.localStorage.getItem('access_token');
+        const response = await fetch(
+          `/api/copilotkit/threads/${encodeURIComponent(id)}/messages`,
+          {
+            credentials: 'same-origin',
+            redirect: 'error',
+            cache: 'no-store',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          },
+        );
+        if (!response.ok) return null;
+        const body = await response.json() as {
+          threadId?: string;
+          messages?: Array<{ id?: string; role?: string; content?: string }>;
+          replayEvents?: Array<{ type?: string; name?: string; messageId?: string; value?: Record<string, unknown> }>;
+        };
+        if (body.threadId !== id || !Array.isArray(body.messages) ||
+            !Array.isArray(body.replayEvents)) return null;
+        const users = body.messages.filter(message => message.role === 'user' && message.content === sent);
+        if (users.length !== 1) return null;
+        const index = body.messages.findIndex(message => message === users[0]);
+        const answer = body.messages[index + 1];
+        if (answer?.role !== 'assistant' || !answer.id || !answer.content?.trim()) return null;
+        const receipts = body.replayEvents.filter(event =>
+          event.type === 'CUSTOM' && event.name === 'karen.execution_receipt.v1' &&
+          event.messageId === answer.id,
+        );
+        if (receipts.length !== 1) return null;
+        const receipt = receipts[0].value;
+        if (!receipt || typeof receipt !== 'object') return null;
+        const actualProvider = receipt.actual_provider;
+        const actualModel = receipt.actual_model;
+        const responseSource = receipt.response_source;
+        if ([actualProvider, actualModel, responseSource].some(value =>
+          typeof value !== 'string' || !value.trim() ||
+          ['none', 'unknown', 'unavailable'].includes(value.trim().toLowerCase()))) return null;
+        if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/i.test(String(responseSource))) return null;
+        return answer.id;
+      }, { id: conversationId!, sent: prompt });
+      if (observation) verifiedAssistantId = observation;
+      return Boolean(observation);
+    }, { timeout: 120_000, intervals: [1000, 2000, 3000],
+      message: 'Real model execution must produce one persisted assistant turn and one bound receipt' })
+      .toBe(true);
+
+    expect(runRequests, 'A single submitted turn must produce exactly one run request').toHaveLength(1);
+    await expect(shell.getByTestId('karen-copilot-assistant-message').last()).toBeVisible();
+    expect(verifiedAssistantId).toMatch(/^[a-zA-Z0-9_-]{1,128}$/);
+
+    await page.reload();
+    const restored = page.getByTestId('karen-copilot-consumer-chat');
+    await expect(restored).toBeVisible({ timeout: 30_000 });
+    await expect(restored).toHaveAttribute('data-conversation-id', conversationId!);
+    await expect(restored.getByTestId('karen-copilot-assistant-message').last())
+      .toBeVisible({ timeout: 30_000 });
   });
 });
