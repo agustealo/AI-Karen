@@ -219,6 +219,8 @@ async def test_memory_authorization_load_report() -> None:
                 "status": (
                     "complete"
                     if failure_type is None and cleanup_failure_type is None
+                    and len(results) == 2 * len(levels)
+                    and all(row["errors"] == 0 and row["authorization_mismatches"] == 0 for row in results)
                     else "incomplete"
                 ),
                 "failure_type": failure_type,
@@ -233,16 +235,16 @@ async def test_memory_authorization_load_report() -> None:
                 "latency_method": "wall_clock_elapsed_per_call_including_pool_wait",
                 "per_call_timeout_seconds": 15,
                 "measurements": results,
-        "limitations": [
-            "No provider generation, network delivery, or cancellation latency",
-            "No memory-free ChatRuntime stream baseline",
-            "No production-host resource, network, or database server telemetry",
-            "No release thresholds asserted from benchmark output",
-        ],
+                "limitations": [
+                    "No provider generation, network delivery, or cancellation latency",
+                    "No memory-free ChatRuntime stream baseline",
+                    "No production-host resource, network, or database server telemetry",
+                    "No release thresholds asserted from benchmark output",
+                ],
             }
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(
-                json.dumps(report, indent=2) + "\\n", encoding="utf-8"
+                json.dumps(report, indent=2) + "\n", encoding="utf-8"
             )
 
     assert results
