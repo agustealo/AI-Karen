@@ -67,3 +67,10 @@ To complete WS-04A9U without introducing duplicate owners:
 4. Record exact commit, approved-host identity, sanitized pass/fail artifacts and independent review on this PR. A skipped test, mock or prior-head CI result must not be promoted to release acceptance.
 
 **Release invariant:** Keep PR #1183 draft, consumer writing-style document ingestion disabled, and source-family availability fail-closed until every required live authorization, storage and publication/use gate has observed evidence.
+
+
+### WS-04A9V: PostgreSQL negative/concurrency regression (pending exact-head CI)
+
+The existing disposable `test_first_party_author_consent_postgres` now asserts that an expired persisted approval cannot be consumed even with a matching author/tenant/scope; its row remains `approved` until a valid expiration is restored. The real issuer is then invoked simultaneously twice against the same valid author-confirmed approval through two PostgreSQL transactions. Acceptance requires exactly one non-null issuance result, one denied attempt, exactly one committed document-consent receipt, one consumed approval, and the original durable document scope retained for readback. This tests the existing SQL CAS and issuer together; it does not add an alternate locking coordinator or API flow.
+
+These checks are **code committed but not yet independently passing** until fresh KariSignature PostgreSQL CI and all other required exact-head workflows succeed. Source initiation from an authenticated browser, the dedicated target-host trial, session-revocation browser observability, and real Supabase Storage approval remain unverified external/end-to-end gates. Keep consumer ingestion disabled.
