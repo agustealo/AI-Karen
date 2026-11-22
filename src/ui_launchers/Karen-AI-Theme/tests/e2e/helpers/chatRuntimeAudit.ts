@@ -68,7 +68,7 @@ export async function openChat(page: Page): Promise<void> {
   const local = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1';
   await signInApprovedKaren(page, email, password, { allowLocalLoopback: local });
   const base = new URL(process.env.KAREN_BASE_URL!);
-  await page.goto(new URL('/chat', base).toString());
+  await page.goto(new URL('/dashboard', base).toString());
   expect(new URL(page.url()).origin).toBe(base.origin);
   await expect(page.getByTestId('chat-root')).toBeVisible({ timeout: 60_000 });
 }
