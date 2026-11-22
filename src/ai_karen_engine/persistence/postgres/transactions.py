@@ -48,6 +48,7 @@ class _RollbackStillActive(RuntimeError):
     def __init__(self, task: asyncio.Task) -> None:
         super().__init__("postgres_rollback_unresponsive_connection_quarantined")
         self.task = task
+        self.retirement_task: asyncio.Task | None = None
 
 
 async def _bounded_transaction_cleanup(
@@ -123,7 +124,7 @@ async def _quarantine_rollback_connection(session: AsyncSession):
 
 def _schedule_quarantined_session_retirement(
     session: AsyncSession, rollback_task: asyncio.Task, driver
-) -> None:
+) -> asyncio.Task:
     """Keep the session owned until its active rollback ends, then close it."""
 
     if driver is not None and hasattr(driver, "terminate"):
@@ -151,6 +152,7 @@ def _schedule_quarantined_session_retirement(
 
     task = asyncio.create_task(retire())
     task.add_done_callback(_observe_postgres_cleanup_task)
+    return task
 
 
 async def rollback_async_transaction(session: AsyncSession) -> None:
@@ -164,7 +166,7 @@ async def rollback_async_transaction(session: AsyncSession) -> None:
             label="rollback",
         )
     except _RollbackStillActive as pending:
-        _schedule_quarantined_session_retirement(
+        pending.retirement_task = _schedule_quarantined_session_retirement(
             session, pending.task, driver
         )
         logger.critical("postgres.rollback_pending_quarantined")
