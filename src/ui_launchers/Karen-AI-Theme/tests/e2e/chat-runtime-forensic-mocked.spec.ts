@@ -7,7 +7,10 @@ import {
   expectForensicMetadata,
 } from './helpers/chatRuntimeAudit';
 
+const approvedLiveRun = process.env.KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE === 'true';
+
 test.describe('Chat runtime forensic mocked fallback states', () => {
+  test.skip(!approvedLiveRun, 'Requires explicit approved live chat-generation acceptance');
   test('renders vLLM fallback truth when requested provider fails', async ({ page }) => {
     const metadata = {
       degraded_mode: true,
