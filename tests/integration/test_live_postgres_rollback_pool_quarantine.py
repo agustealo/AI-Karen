@@ -59,16 +59,20 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
         with patch(
             "ai_karen_engine.persistence.postgres.transactions.get_database_settings",
             return_value=settings,
-        ):
+        ), patch.object(
+            session, "invalidate", wraps=session.invalidate,
+        ) as invalidate_spy:
             rollback_task = asyncio.create_task(rollback_async_transaction(session))
             await asyncio.wait_for(entered_rollback.wait(), timeout=5)
-            # The current implementation is expected to fail this test:
-            # session.invalidate() races an active SessionTransaction.rollback().
+            # Explicitly assert no session-state transition is attempted
+            # while the real SQLAlchemy rollback remains suspended.
             try:
-                await asyncio.wait_for(rollback_task, timeout=5)
-            except BaseException:
-                pass
-            assert not session.sync_session.in_transaction() or rollback_task.done()
+                await asyncio.wait_for(asyncio.shield(rollback_task), timeout=5)
+            except (RuntimeError, TimeoutError):
+                assert rollback_task.done(), "rollback cleanup failed to terminate"
+            assert invalidate_spy.await_count == 0, (
+                "session.invalidate raced an active SQLAlchemy rollback"
+            )
     finally:
         release_rollback.set()
         if rollback_task is not None:
