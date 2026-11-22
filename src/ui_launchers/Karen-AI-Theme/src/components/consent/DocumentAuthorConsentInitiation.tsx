@@ -35,9 +35,14 @@ interface PendingAuthorApproval {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+// Mirrors the canonical bounded source reader's safe basename contract.
+// Presentation filtering only: the backend still owns all authorization.
+const SOURCE_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,159}$/;
 
 function isCandidate(value: OwnerArtifact): boolean {
   return (
+    value != null &&
+    typeof value === 'object' &&
     UUID.test(value.id) &&
     ['attachment', 'document'].includes(value.kind) &&
     value.mime_type === 'text/plain' &&
@@ -47,7 +52,9 @@ function isCandidate(value: OwnerArtifact): boolean {
     SHA256.test(value.sha256) &&
     value.deleted_at == null &&
     typeof value.filename === 'string' &&
-    value.filename.length > 0
+    SOURCE_FILENAME.test(value.filename) &&
+    !['.', '..'].includes(value.filename) &&
+    /\.(txt|md)$/i.test(value.filename)
   );
 }
 
