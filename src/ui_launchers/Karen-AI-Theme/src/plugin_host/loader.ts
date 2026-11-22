@@ -41,14 +41,44 @@ type PluginImporter = () => Promise<{ default: React.ComponentType<Record<string
 /** Backend catalog response - can be direct array or wrapped */
 // Direct array response from backend
 interface BackendCatalog {
-  status?: string;
+  plugins?: unknown;
+  extensions?: unknown;
   data?: {
-    plugins: { plugin_id: string; status: string; has_component: boolean; ui_entry_points?: UIEntryPoint[]; capabilities?: { provides_ui?: boolean } }[];
-    total?: number;
+    plugins?: unknown;
   };
-  // Direct array response from backend
-  length?: number;
-  map?: Record<string, unknown>;
+}
+
+/** The backend may expose its catalog as an array or a documented wrapper.
+ * Invalid or incomplete entries must not become fabricated UI availability.
+ */
+function parseBackendCatalog(response: unknown): LoaderPluginEntry[] {
+  const wrapped = response && typeof response === 'object' && !Array.isArray(response)
+    ? response as BackendCatalog
+    : null;
+  const entries = Array.isArray(response)
+    ? response
+    : wrapped?.plugins ?? wrapped?.extensions ?? wrapped?.data?.plugins;
+  if (!Array.isArray(entries) || !entries.every((entry) =>
+    entry !== null &&
+    typeof entry === 'object' &&
+    typeof entry.name === 'string' &&
+    entry.name.length > 0 &&
+    typeof entry.status === 'string' &&
+    typeof entry.version === 'string'
+  )) {
+    throw new Error('Invalid plugin catalog response');
+  }
+  return entries.map((entry) => ({
+    name: entry.name,
+    status: entry.status,
+    capabilities: {
+      provides_ui: entry.has_component === true ||
+        entry.capabilities?.provides_ui === true,
+    },
+    ui_entry_points: Array.isArray(entry.ui_entry_points)
+      ? entry.ui_entry_points
+      : undefined,
+  }));
 }
 
 // ─── Fallback component factory ───────────────────────────────────────────────
@@ -112,21 +142,10 @@ async function fetchBackendCatalog(): Promise<LoaderPluginEntry[]> {
       if (!res.ok) {
         throw new Error(`Backend catalog fetch failed: ${res.status}`);
       }
-      return res.json() as Promise<BackendCatalog>;
+      return res.json() as Promise<unknown>;
     })
     .then((response) => {
-      // Handle both wrapped and direct array responses
-      const pluginsArray = Array.isArray(response) ? response : response.data?.plugins;
-      if (!Array.isArray(pluginsArray)) {
-        throw new Error('Invalid plugin catalog response');
-      }
-      cachedCatalog = pluginsArray.map((p) => ({
-        name: p.name,
-        status: p.status,
-        capabilities: {
-          provides_ui: p.has_component || p.capabilities?.provides_ui || false,
-        },
-      }));
+      cachedCatalog = parseBackendCatalog(response);
       lastCatalogFetch = now;
       catalogFetchPromise = null;
       return cachedCatalog!;
