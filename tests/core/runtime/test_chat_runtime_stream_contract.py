@@ -3054,6 +3054,7 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
             )
 
         chunks = []
+        first_content_elapsed_ms = None
         with ExitStack() as stack:
             stack.enter_context(patch.object(
                 runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None,
@@ -3088,6 +3089,14 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
             async with aclosing(runtime.execute_stream(request)) as stream:
                 async for chunk in stream:
                     chunks.append(chunk)
+                    if (
+                        first_content_elapsed_ms is None
+                        and chunk.type == ChatStreamEventType.CONTENT
+                        and chunk.content
+                    ):
+                        # Observe the first outward content from the caller's
+                        # start, including PostgreSQL recall and pool wait.
+                        first_content_elapsed_ms = 1000 * (time.perf_counter() - started)
                     if on_chunk is not None:
                         await on_chunk(chunk)
 
@@ -3096,6 +3105,10 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
         return chunks, gateway, {
             "resolved_memory_ms": round(resolved_ms, 3),
             "total_elapsed_ms": round(total_ms, 3),
+            "end_to_end_first_content_ms": (
+                round(first_content_elapsed_ms, 3)
+                if first_content_elapsed_ms is not None else None
+            ),
             "runtime_first_content_ms": (
                 round(float(receipts[0]["request_to_first_content_ms"]), 3)
                 if receipts and "request_to_first_content_ms" in receipts[0]
@@ -3165,6 +3178,8 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
                 assert not any(c.type == ChatStreamEventType.ERROR for c in chunks)
                 assert gateway.calls and len(gateway.calls) == 1
                 assert timing["runtime_first_content_ms"] is not None
+                assert timing["end_to_end_first_content_ms"] is not None
+                assert timing["end_to_end_first_content_ms"] >= timing["resolved_memory_ms"]
                 assert timing["total_elapsed_ms"] >= timing["resolved_memory_ms"]
                 observations["memory_enabled" if enabled else "memory_free"].append(timing)
         report["modes"] = {
@@ -3175,6 +3190,9 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
                 "total_p95_ms": percentile([x["total_elapsed_ms"] for x in values], 95),
                 "recall_p50_ms": percentile([x["resolved_memory_ms"] for x in values], 50),
                 "first_content_p95_ms": percentile(
+                    [x["end_to_end_first_content_ms"] for x in values], 95,
+                ),
+                "runtime_only_first_content_p95_ms": percentile(
                     [x["runtime_first_content_ms"] for x in values], 95,
                 ),
             }
