@@ -1103,6 +1103,68 @@ async def test_kcon765_stream_receipt_measures_ingress_to_first_content_and_comp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recall_status", "recall_count"),
+    [
+        ("skipped", 0),
+        ("success", 1),
+    ],
+    ids=["memory-free", "memory-enabled"],
+)
+async def test_kis_graph_01c2r_e_stream_baseline_receipt_preserves_memory_mode(
+    recall_status: str,
+    recall_count: int,
+):
+    """Verify comparable canonical stream receipts, not a production benchmark.
+
+    Both cases traverse ChatRuntime.execute_stream with the same provider
+    output and authenticated request. The resolved-memory seam is simulated;
+    real PostgreSQL and provider latency require separate acceptance evidence.
+    """
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+
+    async def provider_stream(*args, **kwargs):
+        yield ChatStreamChunk(
+            type="content", content="same provider output",
+            correlation_id="corr-1",
+        )
+
+    chunks = await _collect_stream(
+        runtime,
+        request,
+        decision,
+        plan,
+        provider_stream,
+        resolved_memory_meta={
+            "memory_recall_status": recall_status,
+            "memory_recall_count": recall_count,
+            "memory_persistence_status": "skipped",
+        },
+    )
+    content = [chunk.content for chunk in chunks if chunk.type == "content"]
+    assert content == ["same provider output"]
+    completes = [
+        chunk for chunk in chunks
+        if chunk.type == ChatStreamEventType.COMPLETE
+    ]
+    assert len(completes) == 1
+    receipt = completes[0].metadata
+    assert receipt["correlation_id"] == request.context.correlation_id
+    assert receipt["request_id"] == request.context.request_id
+    assert isinstance(receipt["request_to_first_content_ms"], float)
+    assert receipt["request_to_first_content_ms"] >= 0
+    assert receipt["latency_ms"] >= receipt["request_to_first_content_ms"]
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0]["user_text"] == "hello"
+    assert gateway.calls[0]["assistant_text"] == "same provider output"
+    assert receipt["transcript_persistence_status"] == "persisted"
+    assert receipt["transcript_persisted_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_kcon765_first_verified_presentation_is_timed_but_unverified_is_not():
     runtime, _ = _make_runtime()
     request = _make_request()
