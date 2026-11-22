@@ -273,4 +273,46 @@ describe('document author source initiation', () => {
     expect(api.post).not.toHaveBeenCalled();
   });
 
+  it('filters malformed draft entries while preserving a real eligible profile', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.startsWith('/api/artifacts/owner-page?')
+        ? { items: [document], has_more: false, next_cursor: null }
+        : [null, false, {}, { profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    expect(await screen.findByText(/author-original.txt/)).toBeTruthy();
+    const draftChoice = screen.getByRole('combobox', {
+      name: 'Your draft writing-style profile',
+    }) as HTMLSelectElement;
+    expect(Array.from(draftChoice.options).map((option) => option.value))
+      .toEqual(['', profileId]);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('blocks consent initiation after a malformed continuation response', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.includes('cursor=next-page')
+        ? { items: [document], has_more: false, next_cursor: 'invalid-terminal-cursor' }
+        : url.startsWith('/api/artifacts/owner-page?')
+          ? { items: [document], has_more: true, next_cursor: 'next-page' }
+          : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    await screen.findByText(/author-original.txt/);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your document' }), {
+      target: { value: documentId },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your draft writing-style profile' }), {
+      target: { value: profileId },
+    });
+    const initiate = screen.getByRole('button', { name: 'Continue to author review' }) as HTMLButtonElement;
+    expect(initiate.disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more owned documents' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(initiate.disabled).toBe(true);
+    fireEvent.click(initiate);
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
 });
