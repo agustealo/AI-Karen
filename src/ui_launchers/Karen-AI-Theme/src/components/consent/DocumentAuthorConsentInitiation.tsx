@@ -52,7 +52,7 @@ export function DocumentAuthorConsentInitiation() {
 
   useEffect(() => {
     let active = true;
-    void apiClient.get<OwnerArtifact[]>('/artifacts/').then((results) => {
+    void apiClient.get<OwnerArtifact[]>('/api/artifacts/').then((results) => {
       if (!active) return;
       if (!Array.isArray(results)) {
         setError('Document inventory is unavailable.');
