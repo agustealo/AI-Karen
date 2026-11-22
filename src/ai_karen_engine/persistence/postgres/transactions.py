@@ -46,7 +46,7 @@ class _RollbackStillActive(RuntimeError):
     """A rollback did not settle and still owns the SQLAlchemy session."""
 
     def __init__(self, task: asyncio.Task) -> None:
-        super().__init__("postgres_rollback_unresponsive_connection_quarantined")
+        super().__init__("postgres_rollback_unresponsive_connection_uncertain_quarantined")
         self.task = task
         self.retirement_task: asyncio.Task | None = None
 
