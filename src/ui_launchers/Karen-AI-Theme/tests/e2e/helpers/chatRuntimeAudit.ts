@@ -70,7 +70,7 @@ export async function openChat(page: Page): Promise<void> {
   const base = new URL(process.env.KAREN_BASE_URL!);
   await page.goto(new URL('/dashboard', base).toString());
   expect(new URL(page.url()).origin).toBe(base.origin);
-  await expect(page.getByTestId('chat-root')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('karen-copilot-consumer-chat')).toBeVisible({ timeout: 60_000 });
 }
 
 export async function selectProviderAndModel(
