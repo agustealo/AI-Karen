@@ -222,6 +222,7 @@ class TamperingKernel(Kernel):
     lambda payload: payload["documents"][0].update({"sha256": "f" * 64}),
     lambda payload: payload["documents"][0].update({"characters": 1}),
     lambda payload: payload["documents"][0].update({"name": "foreign.txt"}),
+    lambda payload: payload["documents"][0].update({"folder_id": "foreign-folder"}),
     lambda payload: payload["documents"].append(dict(payload["documents"][0])),
     lambda payload: payload["documents"][0].update({"top_terms": [{"term": "x", "count": -1}]}),
 ])
@@ -367,3 +368,38 @@ async def test_analysis_relationship_between_verified_sources_is_preserved():
         references=REFS + [{"source_id": second_id, "revision": DIGEST}],
     )
     assert result["relationships"] == [pair]
+
+
+@pytest.mark.asyncio
+async def test_search_result_rejects_unverified_folder_label():
+    """A search hit cannot claim folder membership the host never admitted."""
+    def inject_foreign_folder(payload):
+        payload["matches"] = [{
+            "document_id": FILE_ID,
+            "document_name": "notes.txt",
+            "folder_id": "foreign-folder",
+            "sha256": DIGEST,
+            "offset": 0,
+            "end_offset": 6,
+            "excerpt": TEXT[:6],
+        }]
+
+    with pytest.raises(RuntimeError, match="content_source_output_invalid"):
+        await ContentSourceHost(
+            store=Store(), kernel=TamperingKernel(inject_foreign_folder)
+        ).execute_owner_text(
+            context=context(), plan=plan(), operation="search", references=REFS,
+            query="vendor",
+        )
+
+
+@pytest.mark.asyncio
+async def test_canonical_null_folder_labels_remain_valid():
+    """The real plugin schema uses null when no folder was authorized."""
+    kernel = TamperingKernel(lambda payload: payload["documents"][0].update(
+        {"folder_id": None}
+    ))
+    result = await ContentSourceHost(store=Store(), kernel=kernel).execute_owner_text(
+        context=context(), plan=plan(), operation="analyze", references=REFS,
+    )
+    assert result["documents"][0]["folder_id"] is None
