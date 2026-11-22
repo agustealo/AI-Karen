@@ -146,3 +146,14 @@ A new author-only `GET /api/approvals/document-consent/{approval_id}/revoke-revi
 The disposable PostgreSQL test revokes a receipt after the file is marked deleted and rejects a forged source digest, then checks the profile and delegated-use fences. The opt-in browser mutation trial uses a fresh browser context and a new login for revocation after issuing/recovering consent with the original author session. No test bypasses identity or session validation.
 
 **Observed regression:** first post-reconciliation exact-head KariSignature CI reported 218 passed, 1 failed on an HTTP boundary test that showed `confirmed: false` was accepted by a mocked service. Ingress now rejects it independently. This revised head must be revalidated; previous green runs cannot certify it. Live host, storage and consumer-ingestion acceptance remain held.
+
+
+### WS-04A9AH: source-owner inventory reuses canonical bounded pagination
+
+The first-party source picker no longer requests the tenant-wide `GET /api/artifacts/` inventory, which previously loaded every tenant artifact before the HTTP controller filtered by the current user. It now calls `GET /api/artifacts/owner-page?limit=100`, backed by the existing `ArtifactStore.list_owner_artifacts_page` contract and `SupabaseArtifactStore`'s tenant-and-owner-scoped keyset PostgreSQL query. The new thin route returns only source metadata, a scoped opaque cursor and `has_more`; it does not return object storage locations or source bytes. A broken cursor, missing owner scope, inconsistent row owner or repository failure denies the page.
+
+A **Load more owned documents** control fetches successive pages. The UI still filters to active, correctly hashed, bounded plain-text candidates and lists only server-returned IDs. A source selected through the browser grants no consent or document read: `ApprovalService` and the PostgreSQL source owner recheck the original actor, tenant, exact digest and draft-profile scope at initiation and issuance. The real-browser fixture walks bounded pages rather than assuming its dedicated source appears in the first 100 rows.
+
+HTTP and component tests cover owner/tenant binding, pagination, malformed cursors, invalid limits, foreign source rows, malformed pages and page-two source selection. The source table remains `public.files` throughout; no parallel registry, plugin authority or storage adapter is introduced.
+
+**Release:** Passing exact-head CI is separate from approved-host acceptance. The complete 19/19 green prior head was `8ef95ab8997a17ebaeb418e6a4572a8d27936648`. This owner-pagination change requires its own fresh exact-head checks. Consumer ingestion remains disabled until authorized browser-to-storage source read and revocation behavior are observed on the target host.
