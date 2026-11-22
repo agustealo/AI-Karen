@@ -51,6 +51,9 @@ def client_and_service(monkeypatch):
     service = SimpleNamespace(
         initiate_document_consent=AsyncMock(return_value=record),
         revoke_stored_document_consent=AsyncMock(return_value=True),
+        get_document_consent_revocation_scope=AsyncMock(return_value=(
+            {**record, "status": "consumed"}, scope,
+        )),
         list_document_author_draft_profiles=AsyncMock(return_value=[{
             "profile_id": scope.profile_id, "label": "Author draft", "kind": "personal",
         }]),
@@ -332,3 +335,36 @@ async def test_revocation_requires_explicit_true_and_never_accepts_scoped_inputs
         unavailable = await client.post(url, json={"confirmed": True})
         assert unavailable.status_code == 409
         assert unavailable.json()["detail"] == "Author revocation not recorded"
+
+
+async def test_revocation_review_uses_verified_author_scope_not_source_bytes(
+    client_and_service,
+):
+    app, approval_id, scope, service = client_and_service
+    url = "/api/approvals/document-consent/" + approval_id + "/revoke-review"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(
+            url, headers={"Authorization": "Bearer refreshed-author"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "approval_id": approval_id,
+            "status": "consumed",
+            "profile_id": scope.profile_id,
+            "artifact_id": scope.artifact_id,
+            "source_sha256": scope.source_sha256,
+        }
+        kwargs = service.get_document_consent_revocation_scope.await_args.kwargs
+        assert kwargs["request"].headers["authorization"] == "Bearer refreshed-author"
+        assert "source" not in kwargs
+        assert "actor_id" not in kwargs
+
+        service.get_document_consent_revocation_scope.side_effect = ApprovalScopeError(
+            "foreign author"
+        )
+        denied = await client.get(url)
+        assert denied.status_code == 403
+        assert "source_sha256" not in denied.json()
