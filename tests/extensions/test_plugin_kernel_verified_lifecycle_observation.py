@@ -196,6 +196,50 @@ async def test_specialized_voice_lifecycle_rejects_generic_mutations_without_mar
     assert record["status"] == "disabled"
 
 
+
+@pytest.mark.asyncio
+async def test_communication_channel_rejects_generic_lifecycle_mutations(
+    tmp_path: Path,
+) -> None:
+    _create_plugin(tmp_path, plugin_id="channel-terminal")
+    root = tmp_path / "channel-terminal"
+    manifest_path = root / "plugin_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"] = {
+        "communication_channel": {
+            "version": "1.0.0",
+            "transport": "telegram-bot",
+            "ingress": ["webhook"],
+            "inbound": ["text"],
+            "outbound": ["text"],
+            "authentication": "token",
+            "supports_edits": False,
+            "supports_streaming": False,
+            "supports_media": False,
+            "supports_delivery_receipts": False,
+        }
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    disabled_marker = root / ".karen-manual-disabled"
+    enabled_marker = root / kernel.MANUAL_ENABLED_MARKER
+
+    record = kernel.get_record("channel-terminal")
+    assert record is not None
+    assert record["status"] == "disabled"
+    with pytest.raises(ValueError, match="governed Channel Gateway"):
+        await service.enable_plugin("channel-terminal")
+    with pytest.raises(ValueError, match="governed Channel Gateway"):
+        await service.disable_plugin("channel-terminal")
+    assert disabled_marker.is_file()
+    assert not enabled_marker.exists()
+    assert kernel.get_record("channel-terminal")["status"] == "disabled"
+
+
 def test_kernel_observation_rejects_bogus_identifiers() -> None:
     with pytest.raises(ValueError):
         PluginLifecycleKernelObservation(
