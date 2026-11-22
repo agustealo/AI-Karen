@@ -224,4 +224,53 @@ describe('document author source initiation', () => {
     expect(api.post).not.toHaveBeenCalled();
   });
 
+  it('does not count or admit a malformed continuation response', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.includes('cursor=next-page')
+        ? { items: [document], has_more: false, next_cursor: 'unexpected' }
+        : url.startsWith('/api/artifacts/owner-page?')
+          ? { items: [document], has_more: true, next_cursor: 'next-page' }
+          : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    await screen.findByText(/author-original.txt/);
+    const inventory = screen.getByRole('region', { name: 'Initiate document author consent' });
+    expect(inventory.getAttribute('data-owner-pages-loaded')).toBe('1');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more owned documents' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(inventory.getAttribute('data-owner-pages-loaded')).toBe('1');
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('does not accept an empty continuation page or repeat its cursor', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.includes('cursor=next-page')
+        ? { items: [], has_more: true, next_cursor: 'next-page' }
+        : url.startsWith('/api/artifacts/owner-page?')
+          ? { items: [document], has_more: true, next_cursor: 'next-page' }
+          : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    await screen.findByText(/author-original.txt/);
+    const inventory = screen.getByRole('region', { name: 'Initiate document author consent' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more owned documents' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(inventory.getAttribute('data-owner-pages-loaded')).toBe('1');
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects an over-limit initial page rather than presenting it as verified', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.startsWith('/api/artifacts/owner-page?')
+        ? { items: Array.from({ length: 101 }, () => document), has_more: false, next_cursor: null }
+        : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    const inventory = screen.getByRole('region', { name: 'Initiate document author consent' });
+    expect(inventory.getAttribute('data-owner-pages-loaded')).toBe('0');
+    expect(screen.queryByRole('combobox', { name: 'Your document' })).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
 });
