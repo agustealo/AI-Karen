@@ -2280,7 +2280,14 @@ async def test_revocation_committed_while_next_stream_chunk_waits_blocks_publica
     assert [chunk.content for chunk in chunks if chunk.type == "content"] == [
         "first",
     ]
-    assert any(chunk.type == "error" for chunk in chunks)
+    errors = [chunk for chunk in chunks if chunk.type == ChatStreamEventType.ERROR]
+    assert len(errors) == 1
+    assert errors[0].metadata["error_code"] == "CHAT_MEMORY_SOURCE_REVOKED"
+    assert not any(
+        chunk.type == ChatStreamEventType.COMPLETE
+        and chunk.metadata.get("transcript_persistence_status") == "persisted"
+        for chunk in chunks
+    )
     assert producer_closed.is_set()
     memory_persist.assert_not_awaited()
     assert not gateway.calls
