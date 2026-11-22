@@ -61,6 +61,23 @@ def _response(record: dict) -> ApprovalResponse:
     )
 
 
+class DocumentAuthorDraftProfile(BaseModel):
+    profile_id: UUID
+    label: str
+    kind: str
+
+
+@router.get("/document-consent/profiles", response_model=List[DocumentAuthorDraftProfile])
+async def list_document_author_draft_profiles(request: Request):
+    """Return only canonical author-owned draft metadata after bearer checks."""
+    try:
+        return await get_approval_service().list_document_author_draft_profiles(
+            request=request,
+        )
+    except (ApprovalScopeError, PermissionError) as exc:
+        raise HTTPException(status_code=403, detail="Draft profiles unavailable") from exc
+
+
 class DocumentAuthorInitiation(BaseModel):
     """Source selector only; no client-side identity, digest or expiry authority."""
 
