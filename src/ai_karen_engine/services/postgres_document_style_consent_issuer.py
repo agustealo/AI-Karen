@@ -11,7 +11,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from fastapi import Request
 from sqlalchemy import text
@@ -30,6 +30,11 @@ from ai_karen_engine.services.writing_style_profile_repository import (
 from ai_karen_engine.services.writing_style_sample_provenance import (
     VerifiedWritingStyleSource,
 )
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        RuntimePolicyEnforcer,
+    )
 
 logger = logging.getLogger(__name__)
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
