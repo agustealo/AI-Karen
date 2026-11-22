@@ -62,6 +62,17 @@ function Consumer() {
           <output data-testid="key">{props.pageKey}</output>
           <output data-testid="selection">{props.selectedSourceIds.join(',')}</output>
           <button type="button" onClick={props.onRefresh}>Refresh</button>
+          <button type="button" onClick={() => {
+            const current = props.items[0];
+            if (current) {
+              props.onSelect([{
+                source_id: current.source_id,
+                revision: current.revision,
+                sha256: current.sha256,
+                kind: current.kind,
+              }]);
+            }
+          }}>Select current</button>
           <button type="button" onClick={() => props.onNextPage(props.nextCursor || '')}>Next</button>
           <button type="button" onClick={() => props.onSelect([{
             source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file',
@@ -230,6 +241,55 @@ describe('File Explorer to Content Intelligence handoff', () => {
     });
     expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(screen.getByText(/Lexical analysis of 1 authorized file/)).toBeTruthy();
+  });
+
+  it('reloads authoritative owner inventory after a stale revision failure and requires new selection', async () => {
+    const latestSha = 'b'.repeat(64);
+    const latestPage = response(FILE_A);
+    latestPage.items[0].revision = latestSha;
+    latestPage.items[0].sha256 = latestSha;
+    mocks.get.mockResolvedValueOnce(response(FILE_A)).mockResolvedValueOnce(latestPage);
+    mocks.post.mockRejectedValueOnce(new Error('private stale revision details'))
+      .mockResolvedValueOnce(analyzed(FILE_A, latestSha));
+
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Refresh inventory'));
+    expect(screen.queryByText(/private stale revision details/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory and reselect' }));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    expect(screen.getByTestId('selection').textContent).toBe('');
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+
+    // Only a fresh selection on the new authorized page can invoke analysis.
+    fireEvent.click(screen.getByText('Select current'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByText('vendor (2)')).toBeTruthy());
+    expect(mocks.post).toHaveBeenCalledTimes(2);
+    expect(mocks.post.mock.calls[1][1]).toEqual({
+      operation: 'analyze',
+      references: [{ source_id: FILE_A, revision: latestSha }],
+    });
+  });
+
+  it('can retry a transient analysis failure without fabricating an authorized result', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    mocks.post.mockRejectedValueOnce(new Error('Service unavailable'))
+      .mockResolvedValueOnce(analyzed());
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Analysis is unavailable'));
+    expect(screen.queryByRole('status', { name: 'Verified analysis results' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze selected files' }));
+    await waitFor(() => expect(screen.getByText('vendor (2)')).toBeTruthy());
+    expect(mocks.post).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a response whose digest does not match the current selection', async () => {
