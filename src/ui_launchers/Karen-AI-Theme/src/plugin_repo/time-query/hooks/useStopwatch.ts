@@ -1,10 +1,10 @@
 import { useState, useCallback, useEffect } from 'react';
 import { TimeQueryApi } from '../services/timeQueryApi';
 import { StopwatchState } from '../types';
-import { PluginExtensionError } from '@/lib/extensions/hooks/usePluginExtension';
+import { ApiError } from '@/lib/api';
 
 const isRateLimitError = (error: unknown) =>
-  error instanceof PluginExtensionError && error.status === 429;
+  error instanceof ApiError && error.status === 429;
 
 export function useStopwatch(api: TimeQueryApi) {
   const [state, setState] = useState<StopwatchState | null>(null);

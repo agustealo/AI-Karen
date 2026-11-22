@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '@/lib/useAuth';
-import { apiClient } from '@/lib/api';
+import { ApiError, apiClient } from '@/lib/api';
  
 export class PluginExtensionError extends Error {
   status: number;
@@ -64,7 +64,11 @@ export function usePluginExtension(pluginId: string): UsePluginExtensionReturn {
         return data;
       } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-        setError(errorMessage);
+        // A throttled command is recoverable; it must not mark the entire
+        // extension host unhealthy and replace otherwise usable plugin UI.
+        if (!(err instanceof ApiError && err.status === 429)) {
+          setError(errorMessage);
+        }
         throw err;
       }
     },

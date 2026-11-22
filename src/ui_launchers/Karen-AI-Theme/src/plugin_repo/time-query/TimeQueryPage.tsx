@@ -29,9 +29,9 @@ const TimeQueryPage: React.FC = () => {
   const { data: timeData, error: timeError, refresh: refreshTime } = useTimeQuery(timeApi);
   const enrichedTime = useTimePayload(timeData);
 
-  const { multiClocksData, searchWorldTime, addClock, removeClock, refreshClocks } = useWorldClocks(timeApi);
+  const { multiClocksData, error: clocksError, searchWorldTime, addClock, removeClock, refreshClocks } = useWorldClocks(timeApi);
   const { state: stopwatchState, performAction: performStopwatchAction } = useStopwatch(timeApi);
-  const { alarms, createAlarm, deleteAlarm, toggleAlarm } = useAlarms(timeApi);
+  const { alarms, error: alarmsError, fetchAlarms, createAlarm, deleteAlarm, toggleAlarm } = useAlarms(timeApi);
 
   if (!isReady) {
     return <LoadingState message="Initializing Time Query Plugin..." />;
@@ -80,6 +80,8 @@ const TimeQueryPage: React.FC = () => {
         {timeData && <DiagnosticsPanel payload={timeData} />}
 
         {timeError && <ErrorState error={`Sync Error: ${timeError}`} onRetry={refreshTime} />}
+        {clocksError && <ErrorState error={`World Clocks: ${clocksError}`} onRetry={refreshClocks} />}
+        {alarmsError && <ErrorState error={`Alarms: ${alarmsError}`} onRetry={fetchAlarms} />}
       </div>
     </div>
   );

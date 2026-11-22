@@ -11,12 +11,14 @@ const SAME_ORIGIN_API_BASE_URL = '';
 export class ApiError extends Error {
   status: number;
   details?: unknown;
+  retryAfterSeconds: number | null;
 
-  constructor(status: number, message: string, details?: unknown) {
+  constructor(status: number, message: string, details?: unknown, retryAfterSeconds: number | null = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.details = details;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -158,6 +160,16 @@ class ApiClient {
     }
 
     return String(payload);
+  }
+
+  /** Preserve server-directed cooldown without treating a POST as replayable. */
+  private parseRetryAfterSeconds(value: string | null): number | null {
+    if (!value) return null;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric >= 0) return Math.ceil(numeric);
+    const date = Date.parse(value);
+    if (Number.isNaN(date)) return null;
+    return Math.max(0, Math.ceil((date - Date.now()) / 1000));
   }
 
   private isTransientError(error: unknown): boolean {
@@ -777,6 +789,9 @@ class ApiClient {
         response.status,
         errorMessage,
         errorData,
+        response.status === 429
+          ? this.parseRetryAfterSeconds(response.headers.get('Retry-After'))
+          : null,
       );
     }
 
