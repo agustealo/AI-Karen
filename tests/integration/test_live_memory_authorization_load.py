@@ -128,30 +128,32 @@ async def test_memory_authorization_load_report() -> None:
     failure_type: str | None = None
     cleanup_failure_type: str | None = None
     try:
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
-            session.add(MemoryEvent(
-                event_id=event_id, tenant_id=tenant, user_id=user,
-                event_type="memory_persisted", source_type="chat_user",
-                payload_hash=uuid.uuid4().hex, consent_state="granted",
-                payload={"content": "isolated load evidence", "vault": {
-                    "consent_scope": consent_name,
-                }},
-            ))
-            await session.flush()
-            session.add(MemoryAssertion(
-                assertion_id=assertion_id, event_id=event_id,
-                tenant_id=tenant, user_id=user,
-                content="isolated load evidence", consent_state="granted",
-            ))
-            session.add(ConsentScope(
-                scope_id=scope_id, tenant_id=tenant, user_id=user,
-                scope_name=consent_name, is_granted=True,
-            ))
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
-            row = (await session.execute(select(MemoryAssertion).where(
-                MemoryAssertion.assertion_id == assertion_id,
-            ))).scalar_one()
-            revision = row.updated_at
+        async with asyncio.timeout(15):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                session.add(MemoryEvent(
+                    event_id=event_id, tenant_id=tenant, user_id=user,
+                    event_type="memory_persisted", source_type="chat_user",
+                    payload_hash=uuid.uuid4().hex, consent_state="granted",
+                    payload={"content": "isolated load evidence", "vault": {
+                        "consent_scope": consent_name,
+                    }},
+                ))
+                await session.flush()
+                session.add(MemoryAssertion(
+                    assertion_id=assertion_id, event_id=event_id,
+                    tenant_id=tenant, user_id=user,
+                    content="isolated load evidence", consent_state="granted",
+                ))
+                session.add(ConsentScope(
+                    scope_id=scope_id, tenant_id=tenant, user_id=user,
+                    scope_name=consent_name, is_granted=True,
+                ))
+        async with asyncio.timeout(15):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                row = (await session.execute(select(MemoryAssertion).where(
+                    MemoryAssertion.assertion_id == assertion_id,
+                ))).scalar_one()
+                revision = row.updated_at
         if revision.tzinfo is None:
             revision = revision.replace(tzinfo=timezone.utc)
         origin = {
@@ -160,9 +162,11 @@ async def test_memory_authorization_load_report() -> None:
             "event_id": str(event_id),
             "record_updated_at": revision.astimezone(timezone.utc).isoformat(),
         }
-        assert await gate.authorize_selected_records(
-            tenant_id=str(tenant), user_id=str(user), origins=[origin],
-        ) is True
+        async with asyncio.timeout(15):
+            async with asyncio.timeout(15):
+                assert await gate.authorize_selected_records(
+                    tenant_id=str(tenant), user_id=str(user), origins=[origin],
+                ) is True
     
         # Warm-up is excluded from measured samples and explicitly reported.
         for _ in range(4):
@@ -175,14 +179,16 @@ async def test_memory_authorization_load_report() -> None:
                 concurrency=concurrency, samples=per_level, expected=True,
             ))
     
-        async with async_transaction_scope(tenant_id=str(tenant)) as session:
-            scope = (await session.execute(select(ConsentScope).where(
-                ConsentScope.scope_id == scope_id,
-            ))).scalar_one()
-            scope.is_granted = False
-        assert await gate.authorize_selected_records(
-            tenant_id=str(tenant), user_id=str(user), origins=[origin],
-        ) is False
+        async with asyncio.timeout(15):
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                scope = (await session.execute(select(ConsentScope).where(
+                    ConsentScope.scope_id == scope_id,
+                ))).scalar_one()
+                scope.is_granted = False
+        async with asyncio.timeout(15):
+            assert await gate.authorize_selected_records(
+                tenant_id=str(tenant), user_id=str(user), origins=[origin],
+            ) is False
         for concurrency in levels:
             results.append(await _measure(
                 gate, tenant=tenant, user=user, origin=origin,
@@ -194,16 +200,17 @@ async def test_memory_authorization_load_report() -> None:
         raise
     finally:
         try:
-            async with async_transaction_scope(tenant_id=str(tenant)) as session:
-                await session.execute(delete(MemoryAssertion).where(
-                    MemoryAssertion.assertion_id == assertion_id,
-                ))
-                await session.execute(delete(MemoryEvent).where(
-                    MemoryEvent.event_id == event_id,
-                ))
-                await session.execute(delete(ConsentScope).where(
-                    ConsentScope.scope_id == scope_id,
-                ))
+            async with asyncio.timeout(15):
+                async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                    await session.execute(delete(MemoryAssertion).where(
+                        MemoryAssertion.assertion_id == assertion_id,
+                    ))
+                    await session.execute(delete(MemoryEvent).where(
+                        MemoryEvent.event_id == event_id,
+                    ))
+                    await session.execute(delete(ConsentScope).where(
+                        ConsentScope.scope_id == scope_id,
+                    ))
         except BaseException as cleanup_exc:
             cleanup_failure_type = type(cleanup_exc).__name__
             if failure_type is None:
