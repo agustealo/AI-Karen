@@ -103,8 +103,9 @@ async def test_owner_page_calls_canonical_kernel_and_preserves_metadata():
     assert result["has_more"] is False
     assert result["next_cursor"] is None
     assert result["correlation_id"] == "corr-1"
-    assert len(kernel.calls) == 1
-    request = kernel.calls[0]
+    assert len(kernel.calls) == 2
+    assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
+    request = kernel.calls[1]
     assert request.plugin_id == "file-explorer"
     assert request.authorized_plan.policy_decision_id == "policy-1"
     assert request.context.resource_scope["file_explorer_grant"] == "host_verified"
@@ -204,7 +205,28 @@ async def test_unavailable_source_is_not_a_successful_empty_inventory():
         await FileExplorerInventoryHost(kernel=kernel, source=source).list_owner_page(
             context=_context(), plan=_plan()
         )
-    assert kernel.calls == []
+    assert len(kernel.calls) == 1
+    assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
+
+
+@pytest.mark.asyncio
+async def test_inventory_kernel_role_denial_prevents_owner_repository_query():
+    source = OwnerSource()
+
+    class DenyingKernel(Kernel):
+        async def execute(self, request):
+            self.calls.append(request)
+            return SimpleNamespace(status="denied", payload=None)
+
+    kernel = DenyingKernel()
+    with pytest.raises(PermissionError, match="file_explorer_kernel_denied"):
+        await FileExplorerInventoryHost(kernel=kernel, source=source).list_owner_page(
+            context=_context(audit_context={"user_roles": ["guest"]}),
+            plan=_plan(),
+        )
+    assert source.calls == []
+    assert len(kernel.calls) == 1
+    assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
 
 
 @pytest.mark.asyncio
@@ -215,6 +237,8 @@ async def test_kernel_denial_and_corrupt_page_fail_closed():
         await FileExplorerInventoryHost(kernel=kernel, source=source).list_owner_page(
             context=_context(), plan=_plan()
         )
+    assert source.calls == []
+    assert len(kernel.calls) == 1
     for page in [
         {"items": [_item(1)], "has_more": True, "next_cursor": None},
         {"items": [_item(1)], "has_more": True, "next_cursor": "x" * 769},
@@ -230,4 +254,5 @@ async def test_kernel_denial_and_corrupt_page_fail_closed():
             await FileExplorerInventoryHost(kernel=kernel, source=source).list_owner_page(
                 context=_context(), plan=_plan(), limit=1
             )
-        assert kernel.calls == []
+        assert len(kernel.calls) == 1
+        assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
