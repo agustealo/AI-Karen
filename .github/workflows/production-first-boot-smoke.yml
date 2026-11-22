@@ -23,6 +23,7 @@ on:
       - "tests/architecture/test_first_run_system_contract.py"
       - ".github/workflows/production-first-boot-smoke.yml"
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
     branches:
       - main
     paths:
@@ -52,6 +53,7 @@ permissions:
 
 jobs:
   first-boot:
+    if: github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -231,3 +233,24 @@ jobs:
 
           docker logs "$container" >&2 || true
           exit 1
+
+  first-boot-acceptance:
+    # Required decision is never skipped: a skipped build is NOT acceptance.
+    if: ${{ always() }}
+    name: first-boot-acceptance
+    runs-on: ubuntu-latest
+    needs: [first-boot]
+    env:
+      ACCEPTANCE_REQUESTED: ${{ github.event_name != 'pull_request' || (!github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:merge-gate')) }}
+      FIRST_BOOT_RESULT: ${{ needs.first-boot.result }}
+    steps:
+      - name: Require completed first-boot proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$ACCEPTANCE_REQUESTED" != "true" || "$FIRST_BOOT_RESULT" != "success" ]]; then
+            echo "::error::First-boot acceptance missing or unsuccessful: $FIRST_BOOT_RESULT"
+            exit 1
+          fi
+          echo "FIRST-BOOT ACCEPTANCE PASSED"
+          echo "sha=$GITHUB_SHA"
