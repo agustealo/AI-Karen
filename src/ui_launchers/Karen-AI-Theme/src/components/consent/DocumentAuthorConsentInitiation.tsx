@@ -58,6 +58,14 @@ function isCandidate(value: OwnerArtifact): boolean {
   );
 }
 
+function isDraftProfile(value: unknown): value is DraftProfile {
+  if (value == null || typeof value !== 'object') return false;
+  const profile = value as Partial<DraftProfile>;
+  return typeof profile.profile_id === 'string' && UUID.test(profile.profile_id) &&
+    typeof profile.label === 'string' && profile.label.trim().length > 0 &&
+    typeof profile.kind === 'string';
+}
+
 function isValidOwnerPage(page: OwnerArtifactPage | null | undefined, cursor: string | null): page is OwnerArtifactPage {
   if (!page || !Array.isArray(page.items) || page.items.length > 100 ||
       typeof page.has_more !== 'boolean') return false;
@@ -99,12 +107,7 @@ export function DocumentAuthorConsentInitiation() {
       setDocuments(page.items.filter(isCandidate));
       setLoadedPages(1);
       setNextCursor(page.has_more ? page.next_cursor : null);
-      setProfiles(drafts.filter((profile) =>
-        UUID.test(profile.profile_id) &&
-        typeof profile.label === 'string' &&
-        profile.label.trim().length > 0 &&
-        typeof profile.kind === 'string'
-      ));
+      setProfiles(drafts.filter(isDraftProfile));
     }).catch(() => {
       if (active) setError('Your documents and draft profiles could not be verified.');
     }).finally(() => {
@@ -140,7 +143,7 @@ export function DocumentAuthorConsentInitiation() {
   const selected = documents.find((item) => item.id === selectedDocument);
   const canSubmit = Boolean(
     selected && profiles.some((profile) => profile.profile_id === profileId) &&
-    !loading && !submitting,
+    !loading && !submitting && !error,
   );
 
   async function initiate() {
