@@ -338,6 +338,8 @@ async def test_rollback_preflight_never_acquires_new_connection():
     from ai_karen_engine.persistence.postgres import transactions
 
     session = MagicMock(spec=transactions.AsyncSession)
+    # sync_session is an instance attribute, not part of the class spec.
+    session.sync_session = MagicMock()
     session.in_transaction.return_value = True
     session.is_active = True
     transaction = MagicMock()
@@ -359,6 +361,8 @@ async def test_rollback_preflight_uses_existing_connection_only():
     from ai_karen_engine.persistence.postgres import transactions
 
     session = MagicMock(spec=transactions.AsyncSession)
+    # sync_session is an instance attribute, not part of the class spec.
+    session.sync_session = MagicMock()
     session.in_transaction.return_value = True
     session.is_active = True
     connection = MagicMock()
