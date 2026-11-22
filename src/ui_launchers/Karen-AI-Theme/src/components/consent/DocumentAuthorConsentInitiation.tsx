@@ -15,6 +15,12 @@ interface OwnerArtifact {
   deleted_at: string | null;
 }
 
+interface OwnerArtifactPage {
+  items: OwnerArtifact[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
 interface DraftProfile {
   profile_id: string;
   label: string;
@@ -49,6 +55,8 @@ function isCandidate(value: OwnerArtifact): boolean {
 export function DocumentAuthorConsentInitiation() {
   const router = useRouter();
   const [documents, setDocuments] = useState<OwnerArtifact[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [profiles, setProfiles] = useState<DraftProfile[]>([]);
   const [selectedDocument, setSelectedDocument] = useState('');
   const [profileId, setProfileId] = useState('');
@@ -60,15 +68,20 @@ export function DocumentAuthorConsentInitiation() {
   useEffect(() => {
     let active = true;
     void Promise.all([
-      apiClient.get<OwnerArtifact[]>('/api/artifacts/'),
+      apiClient.get<OwnerArtifactPage>('/api/artifacts/owner-page?limit=100'),
       apiClient.get<DraftProfile[]>('/api/approvals/document-consent/profiles'),
-    ]).then(([artifacts, drafts]) => {
+    ]).then(([page, drafts]) => {
       if (!active) return;
-      if (!Array.isArray(artifacts) || !Array.isArray(drafts)) {
+      if (!page || !Array.isArray(page.items) ||
+          typeof page.has_more !== 'boolean' ||
+          (page.has_more && (typeof page.next_cursor !== 'string' ||
+            page.next_cursor.length === 0 || page.next_cursor.length > 768)) ||
+          !Array.isArray(drafts)) {
         setError('Document and draft-profile inventory is unavailable.');
         return;
       }
-      setDocuments(artifacts.filter(isCandidate));
+      setDocuments(page.items.filter(isCandidate));
+      setNextCursor(page.has_more ? page.next_cursor : null);
       setProfiles(drafts.filter((profile) =>
         UUID.test(profile.profile_id) &&
         typeof profile.label === 'string' &&
@@ -82,6 +95,33 @@ export function DocumentAuthorConsentInitiation() {
     });
     return () => { active = false; };
   }, []);
+
+  async function loadMoreDocuments() {
+    if (!nextCursor || loading || loadingMore || submitting) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const page = await apiClient.get<OwnerArtifactPage>(
+        '/api/artifacts/owner-page?limit=100&cursor=' + encodeURIComponent(nextCursor),
+      );
+      if (!page || !Array.isArray(page.items) ||
+          typeof page.has_more !== 'boolean' ||
+          (page.has_more && (typeof page.next_cursor !== 'string' ||
+            !page.next_cursor || page.next_cursor.length > 768 ||
+            page.next_cursor === nextCursor))) {
+        throw new Error('Invalid owner page');
+      }
+      setDocuments((previous) => {
+        const seen = new Set(previous.map((item) => item.id));
+        return [...previous, ...page.items.filter((item) => isCandidate(item) && !seen.has(item.id))];
+      });
+      setNextCursor(page.has_more ? page.next_cursor : null);
+    } catch {
+      setError('The next owned document page could not be verified. No new selection was authorized.');
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   const selected = documents.find((item) => item.id === selectedDocument);
   const canSubmit = Boolean(
@@ -156,6 +196,16 @@ export function DocumentAuthorConsentInitiation() {
             ))}
           </select>
         </label>
+      )}
+      {nextCursor && (
+        <button
+          type="button"
+          onClick={() => { void loadMoreDocuments(); }}
+          disabled={loading || loadingMore || submitting}
+          className="rounded-md border border-border px-4 py-2 disabled:opacity-50"
+        >
+          {loadingMore ? 'Loading documents…' : 'Load more owned documents'}
+        </button>
       )}
       {selected && (
         <dl className="space-y-2 break-all text-sm">
