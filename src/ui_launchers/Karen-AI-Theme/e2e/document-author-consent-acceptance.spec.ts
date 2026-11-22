@@ -90,6 +90,26 @@ async function selectSource(page: Page, origin: URL): Promise<Locator> {
   return selector;
 }
 
+/** Live same-origin recovery probe: never expose bearer or response body to test logs. */
+async function receiptRecoveryStatus(page: Page, approvalId: string): Promise<number> {
+  if (!uuid.test(approvalId)) throw new Error("A verified approval UUID is required");
+  return page.evaluate(async (id) => {
+    const token = window.localStorage.getItem("access_token");
+    if (!token) throw new Error("Authenticated browser bearer unavailable");
+    const response = await fetch(
+      "/api/approvals/document-consent/" + encodeURIComponent(id) + "/receipt",
+      {
+        method: "GET",
+        credentials: "same-origin",
+        redirect: "error",
+        headers: { Authorization: "Bearer " + token, Accept: "application/json" },
+        cache: "no-store",
+      },
+    );
+    return response.status;
+  }, approvalId);
+}
+
 async function expectExactSource(review: Locator): Promise<void> {
   // Poll the actual asynchronously loaded review values, not the section shell.
   // This avoids logging source identifiers in failing locator selectors.
@@ -146,6 +166,8 @@ test("WS-04A9Y: author issues and recovers, then revokes from a fresh login", as
   await initiate.click();
   await expect(page).toHaveURL(/\/approvals\/document-consent\/[0-9a-f-]{36}$/);
 
+  const approvalId = new URL(page.url()).pathname.split("/").pop() || "";
+  expect(uuid.test(approvalId), "Live approval ID must be canonical").toBe(true);
   const review = page.getByRole("region", { name: "Document author consent" });
   await expectExactSource(review);
   const confirm = review.getByRole("button", { name: "Confirm author consent" });
@@ -163,6 +185,8 @@ test("WS-04A9Y: author issues and recovers, then revokes from a fresh login", as
   await expectExactSource(recovered);
   await expect(recovered.getByText(/Verified receipt ID:/).first()).toBeVisible();
   await expect(recovered.getByRole("button", { name: "Confirm author consent" })).toHaveCount(0);
+  // Verify the original bearer can recover the current receipt before revocation.
+  expect(await receiptRecoveryStatus(page, approvalId)).toBe(200);
   // A separate browser context creates a genuinely new bearer token. The
   // original session remains mandatory for issuance, but not revocation.
   const rotated = await browser.newContext();
@@ -194,6 +218,10 @@ test("WS-04A9Y: author issues and recovers, then revokes from a fresh login", as
     await expect(afterRevoke.getByRole("button", {
       name: "Confirm author consent",
     })).toHaveCount(0);
+    // The SAME original bearer must now receive a real backend denial.
+    const denied = await receiptRecoveryStatus(page, approvalId);
+    expect([403, 404], "Revoked original bearer must not recover a receipt")
+      .toContain(denied);
   } finally {
     await rotated.close();
   }
