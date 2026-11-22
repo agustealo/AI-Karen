@@ -112,6 +112,38 @@ class WritingStyleProfileRepository:
             ),
         )
 
+    async def list_owned_drafts(
+        self, *, tenant_id: str, actor_id: str, limit: int = 100,
+    ) -> list[dict[str, str]]:
+        """Read only current author-owned, unpublished drafts under tenant RLS.
+
+        This is a presentation inventory, not a grant, author attestation or
+        publication authorization. Initiation revalidates the selected row.
+        """
+        tenant, actor = map(_uuid, (tenant_id, actor_id))
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("invalid_style_profile_page_limit")
+        async with self._client_factory().get_async_session() as session:
+            await self._scope(session, tenant, actor)
+            result = await session.execute(
+                text(
+                    "SELECT profile_id, label, kind FROM public.writing_style_profiles "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) "
+                    "AND owner_actor_id=CAST(:actor AS uuid) "
+                    "AND state='draft' AND publication_revision=0 "
+                    "ORDER BY created_at DESC, profile_id DESC LIMIT :limit"
+                ),
+                {"tenant": tenant, "actor": actor, "limit": limit},
+            )
+            return [
+                {
+                    "profile_id": str(row["profile_id"]),
+                    "label": str(row["label"]),
+                    "kind": str(row["kind"]),
+                }
+                for row in result.mappings().all()
+            ]
+
     async def create_draft(
         self,
         *,
