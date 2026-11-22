@@ -149,3 +149,53 @@ test("WS-04A9T: dedicated author gesture issues or recovers real durable consent
   await expect(replay.getByText(/Verified receipt ID:/).first()).toBeVisible();
   await expect(replay.getByRole("checkbox")).toHaveCount(0);
 });
+
+
+test("WS-04A9X: real author initiates a source-bound pending review without granting consent", async ({ page }) => {
+  test.skip(
+    !enabled || !mutationEnabled,
+    "Initiating an approval requires the separate disposable-fixture mutation gate",
+  );
+  test.setTimeout(120_000);
+  requireApprovalEvidence();
+  const approved = approvedOrigin();
+  await signInApprovedKaren(page, email!, password!, { allowLocalLoopback: local });
+  await page.goto(
+    new URL("/approvals/document-consent/new", approved).toString(),
+  );
+  expect(new URL(page.url()).origin).toBe(approved.origin);
+  const selector = page.getByRole("region", { name: "Initiate document author consent" });
+  await expect(selector).toBeVisible();
+  const item = selector.getByRole("option", { name: /bytes/ }).filter({
+    hasText: expectedName!,
+  });
+  // A missing owner-listed source is a denial, not permission to type an ID.
+  await expect(item).toHaveCount(1);
+  await selector.getByRole("combobox", { name: "Your document" })
+    .selectOption(expectedArtifact!);
+  await selector.getByRole("textbox", {
+    name: "Existing draft writing-style profile ID",
+  }).fill(process.env.KAREN_DOCUMENT_AUTHOR_PROFILE_ID || "");
+  const start = selector.getByRole("button", { name: "Continue to author review" });
+  await expect(start).toBeEnabled();
+  await start.click();
+  await expect(page).toHaveURL(
+    /\/approvals\/document-consent\/[0-9a-f-]{36}$/,
+  );
+  const review = page.getByRole("region", { name: "Document author consent" });
+  await expect(review).toBeVisible();
+  const matched = await review.evaluate((root, expected) => {
+    const values = Array.from(root.querySelectorAll("dd"))
+      .map((element) => element.textContent?.trim());
+    return values.includes(expected.artifact) &&
+      values.includes(expected.digest) &&
+      values.includes(expected.name);
+  }, {
+    artifact: expectedArtifact!, digest: expectedDigest!, name: expectedName!,
+  });
+  expect(matched, "Pending review must display the original canonical source").toBe(true);
+  const confirm = review.getByRole("button", { name: "Confirm author consent" });
+  await expect(confirm).toBeDisabled();
+  await expect(review.getByRole("checkbox")).not.toBeChecked();
+  await expect(review.getByText(/Verified receipt ID:/)).toHaveCount(0);
+});
