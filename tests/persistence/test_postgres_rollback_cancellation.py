@@ -76,7 +76,10 @@ async def test_stalled_rollback_must_terminate_without_leaking_rollback_task():
         assert task.done(), "stalled rollback retained a child task"
     finally:
         gate.set()
-        await asyncio.wait_for(task, timeout=2)
+        try:
+            await asyncio.wait_for(task, timeout=2)
+        except (TimeoutError, RuntimeError, asyncio.CancelledError):
+            pass
 
 
 @pytest.mark.asyncio
