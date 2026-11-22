@@ -49,6 +49,7 @@ def client_and_service(monkeypatch):
         "reason_codes": [],
     }
     service = SimpleNamespace(
+        initiate_document_consent=AsyncMock(return_value=record),
         get_document_consent_confirmation=AsyncMock(return_value=(record, scope)),
         get_document_consent_review=AsyncMock(return_value=(
             record, scope, {
@@ -189,4 +190,71 @@ async def test_receipt_recovery_never_mints_or_infers_receipt(client_and_service
             "/api/approvals/document-consent/" + approval_id + "/receipt",
         )
         assert denied.status_code == 403
+    service.issue_stored_document_consent.assert_not_awaited()
+
+
+async def test_initiation_accepts_only_source_selectors(client_and_service):
+    app, _, scope, service = client_and_service
+    payload = {
+        "profile_id": scope.profile_id,
+        "artifact_id": scope.artifact_id,
+        "style_use_allowed": False,
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        for forbidden in (
+            {"source_sha256": "b" * 64},
+            {"author_actor_id": str(uuid.uuid4())},
+            {"session_id": "forged-session"},
+            {"tenant_id": str(uuid.uuid4())},
+            {"expires_at": "2099-01-01T00:00:00Z"},
+            {"analysis_allowed": True},
+        ):
+            denied = await client.post(
+                "/api/approvals/document-consent/initiate",
+                json={**payload, **forbidden},
+            )
+            assert denied.status_code == 422
+        malformed = await client.post(
+            "/api/approvals/document-consent/initiate",
+            json={**payload, "style_use_allowed": "true"},
+        )
+        assert malformed.status_code == 422
+        success = await client.post(
+            "/api/approvals/document-consent/initiate",
+            json=payload,
+            headers={"Authorization": "Bearer dedicated-author"},
+        )
+    assert success.status_code == 200
+    assert success.json()["status"] == "pending"
+    kwargs = service.initiate_document_consent.await_args.kwargs
+    assert kwargs["request"].headers["authorization"] == "Bearer dedicated-author"
+    assert kwargs["profile_id"] == scope.profile_id
+    assert kwargs["artifact_id"] == scope.artifact_id
+    assert kwargs["style_use_allowed"] is False
+    assert "source_sha256" not in kwargs
+    assert "tenant_id" not in kwargs
+    assert "session_id" not in kwargs
+    service.issue_stored_document_consent.assert_not_awaited()
+
+
+async def test_initiation_denial_has_no_approval_or_receipt_claim(client_and_service):
+    app, _, scope, service = client_and_service
+    service.initiate_document_consent.side_effect = ApprovalScopeError("source unavailable")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        denied = await client.post(
+            "/api/approvals/document-consent/initiate",
+            json={
+                "profile_id": scope.profile_id,
+                "artifact_id": scope.artifact_id,
+                "style_use_allowed": True,
+            },
+        )
+    assert denied.status_code == 403
+    assert "approval_id" not in denied.json()
     service.issue_stored_document_consent.assert_not_awaited()
