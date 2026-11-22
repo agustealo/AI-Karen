@@ -27,7 +27,11 @@ const document = {
 describe('document author source initiation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.get.mockResolvedValue([document]);
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url === '/api/artifacts/' ? [document] : [{
+        profile_id: profileId, label: 'My style', kind: 'personal',
+      }],
+    ));
     api.post.mockResolvedValue({
       approval_id: approvalId,
       status: 'pending',
@@ -39,6 +43,7 @@ describe('document author source initiation', () => {
     render(<DocumentAuthorConsentInitiation />);
     await screen.findByText(/author-original.txt/);
     expect(api.get).toHaveBeenCalledWith('/api/artifacts/');
+    expect(api.get).toHaveBeenCalledWith('/api/approvals/document-consent/profiles');
     const button = screen.getByRole('button', { name: 'Continue to author review' });
     expect((button as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByRole('combobox', { name: 'Your document' }), {
@@ -46,7 +51,7 @@ describe('document author source initiation', () => {
     });
     expect((button as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(
-      screen.getByRole('textbox', { name: 'Existing draft writing-style profile ID' }),
+      screen.getByRole('combobox', { name: 'Your draft writing-style profile' }),
       { target: { value: profileId } },
     );
     expect((button as HTMLButtonElement).disabled).toBe(false);
@@ -74,7 +79,7 @@ describe('document author source initiation', () => {
       target: { value: documentId },
     });
     fireEvent.change(
-      screen.getByRole('textbox', { name: 'Existing draft writing-style profile ID' }),
+      screen.getByRole('combobox', { name: 'Your draft writing-style profile' }),
       { target: { value: profileId } },
     );
     fireEvent.click(screen.getByRole('checkbox'));
@@ -91,12 +96,12 @@ describe('document author source initiation', () => {
   });
 
   it('does not offer altered, deleted, oversized or research artifacts', async () => {
-    api.get.mockResolvedValue([
+    api.get.mockImplementation((url: string) => Promise.resolve(url === '/api/artifacts/' ? [
       { ...document, id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', kind: 'search_article' },
       { ...document, id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', deleted_at: '2026-01-01' },
       { ...document, id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', size_bytes: 65537 },
       { ...document, id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', sha256: '' },
-    ]);
+    ] : [{ profile_id: profileId, label: 'My style', kind: 'personal' }]));
     render(<DocumentAuthorConsentInitiation />);
     expect(await screen.findByText(/No eligible documents/)).toBeTruthy();
     expect(screen.queryByRole('combobox', { name: 'Your document' })).toBeNull();
@@ -112,7 +117,7 @@ describe('document author source initiation', () => {
       target: { value: documentId },
     });
     fireEvent.change(
-      screen.getByRole('textbox', { name: 'Existing draft writing-style profile ID' }),
+      screen.getByRole('combobox', { name: 'Your draft writing-style profile' }),
       { target: { value: profileId } },
     );
     fireEvent.click(screen.getByRole('button', { name: 'Continue to author review' }));
@@ -132,11 +137,21 @@ describe('document author source initiation', () => {
       target: { value: documentId },
     });
     fireEvent.change(
-      screen.getByRole('textbox', { name: 'Existing draft writing-style profile ID' }),
+      screen.getByRole('combobox', { name: 'Your draft writing-style profile' }),
       { target: { value: profileId } },
     );
     fireEvent.click(screen.getByRole('button', { name: 'Continue to author review' }));
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(navigate.push).not.toHaveBeenCalled();
+  });
+  it('does not submit when the authenticated draft inventory is empty', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url === '/api/artifacts/' ? [document] : [],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    expect(await screen.findByText(/No eligible author-owned draft profiles/)).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'Your draft writing-style profile' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Continue to author review' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.post).not.toHaveBeenCalled();
   });
 });
