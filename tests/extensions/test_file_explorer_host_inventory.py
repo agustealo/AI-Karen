@@ -199,6 +199,9 @@ async def test_kernel_denial_and_corrupt_page_fail_closed():
         )
     for page in [
         {"items": [_item(1)], "has_more": True, "next_cursor": None},
+        {"items": [_item(1)], "has_more": True, "next_cursor": "x" * 769},
+        {"items": [_item(1)], "has_more": True, "next_cursor": 123},
+        {"items": [_item(1)], "has_more": True, "next_cursor": ""},
         {"items": [], "has_more": True, "next_cursor": "x"},
         {"items": [_item(1)], "has_more": False, "next_cursor": "x"},
         {"items": [_item(1), _item(2)], "has_more": False, "next_cursor": None},
