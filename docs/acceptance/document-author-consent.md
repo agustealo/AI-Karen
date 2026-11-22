@@ -157,3 +157,10 @@ A **Load more owned documents** control fetches successive pages. The UI still f
 HTTP and component tests cover owner/tenant binding, pagination, malformed cursors, invalid limits, foreign source rows, malformed pages and page-two source selection. The source table remains `public.files` throughout; no parallel registry, plugin authority or storage adapter is introduced.
 
 **Release:** Passing exact-head CI is separate from approved-host acceptance. The complete 19/19 green prior head was `8ef95ab8997a17ebaeb418e6a4572a8d27936648`. This owner-pagination change requires its own fresh exact-head checks. Consumer ingestion remains disabled until authorized browser-to-storage source read and revocation behavior are observed on the target host.
+
+
+### WS-04A9AJ: exact-head evidence for owned-source discovery
+
+The existing `KariSignature PostgreSQL Principal and Revocation Proof` workflow now explicitly compiles and runs the source-owner HTTP regression suite `tests/api_routes/test_document_author_owned_artifacts_http.py` alongside the consent HTTP and PostgreSQL tests. Its existing branch path filters include the owner endpoint and canonical ArtifactStore adapter so changes to their authority cannot silently bypass this dedicated source-consent proof.
+
+The first owner-pagination head's `Web pnpm 11 Build Proof` failed on a malformed **test fixture** in the empty-draft-inventory case. The revised fixture returns the complete paginated metadata shape and no longer has the parser error. This latest head must independently pass CI. A test status on an older head is not accepted as proof for the revised branch.
