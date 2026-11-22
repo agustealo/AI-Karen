@@ -50,6 +50,9 @@ def client_and_service(monkeypatch):
     }
     service = SimpleNamespace(
         initiate_document_consent=AsyncMock(return_value=record),
+        list_document_author_draft_profiles=AsyncMock(return_value=[{
+            "profile_id": scope.profile_id, "label": "Author draft", "kind": "personal",
+        }]),
         get_document_consent_confirmation=AsyncMock(return_value=(record, scope)),
         get_document_consent_review=AsyncMock(return_value=(
             record, scope, {
@@ -258,3 +261,34 @@ async def test_initiation_denial_has_no_approval_or_receipt_claim(client_and_ser
     assert denied.status_code == 403
     assert "approval_id" not in denied.json()
     service.issue_stored_document_consent.assert_not_awaited()
+
+
+async def test_draft_profile_inventory_is_only_server_authenticated_metadata(
+    client_and_service,
+):
+    app, _, scope, service = client_and_service
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        result = await client.get(
+            "/api/approvals/document-consent/profiles",
+            headers={"Authorization": "Bearer author-inventory"},
+        )
+        assert result.status_code == 200
+        assert result.json() == [{
+            "profile_id": scope.profile_id,
+            "label": "Author draft",
+            "kind": "personal",
+        }]
+        called = service.list_document_author_draft_profiles.await_args.kwargs
+        assert called["request"].headers["authorization"] == "Bearer author-inventory"
+        assert "tenant_id" not in called
+        assert "actor_id" not in called
+
+        service.list_document_author_draft_profiles.side_effect = ApprovalScopeError(
+            "denied"
+        )
+        denied = await client.get("/api/approvals/document-consent/profiles")
+        assert denied.status_code == 403
+        assert not isinstance(denied.json(), list)
