@@ -332,6 +332,10 @@ class UIMaterializationPipeline:
     async def materialize_plugin(self, plugin_ui: Dict[str, Any]) -> Dict[str, Any]:
         if not plugin_ui.get("registry_validated"):
             raise ValueError("refusing to materialize unvalidated UI plugin metadata")
+        if not plugin_ui.get("has_component") or not plugin_ui.get("component_path"):
+            raise ValueError(
+                f"validated UI entry component missing for {plugin_ui['plugin_id']}"
+            )
 
         generated: List[Dict[str, Any]] = []
         updated: List[Dict[str, Any]] = []
