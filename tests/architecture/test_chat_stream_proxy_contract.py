@@ -38,6 +38,10 @@ def test_chat_proxy_refuses_non_sse_and_preserves_terminal_integrity() -> None:
 def test_live_generation_forensics_demand_real_authorized_account() -> None:
     helper = LIVE_HELPER.read_text(encoding="utf-8")
     config = LIVE_CONFIG.read_text(encoding="utf-8")
+    spec = LIVE_SPEC.read_text(encoding="utf-8")
+    assert "../../e2e/fixtures/verified-search-deployment" in spec
+    assert "karen.execution_receipt.v1" in spec
+    assert "'/api/copilotkit/agent/default/run'" in spec
     assert "signInApprovedKaren(page, email, password" in helper
     assert "KAREN_CHAT_GENERATION_LIVE_ACCEPTANCE" in helper
     assert "KAREN_UX_EMAIL" in helper
