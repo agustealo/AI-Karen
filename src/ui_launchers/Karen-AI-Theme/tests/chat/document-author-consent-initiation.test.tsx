@@ -154,4 +154,47 @@ describe('document author source initiation', () => {
     expect((screen.getByRole('button', { name: 'Continue to author review' }) as HTMLButtonElement).disabled).toBe(true);
     expect(api.post).not.toHaveBeenCalled();
   });
+
+  it('pages through owned metadata without an unlisted artifact ID shortcut', async () => {
+    const later = { ...document, id: '22222222-2222-2222-2222-222222222222', filename: 'later.txt' };
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.includes('cursor=owned-next')
+        ? { items: [later], has_more: false, next_cursor: null }
+        : url.startsWith('/api/artifacts/owner-page?')
+          ? { items: [document], has_more: true, next_cursor: 'owned-next' }
+          : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    expect(await screen.findByText(/author-original.txt/)).toBeTruthy();
+    expect(screen.queryByText(/later.txt/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Load more owned documents' }));
+    expect(await screen.findByText(/later.txt/)).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/artifacts/owner-page?limit=100&cursor=owned-next',
+    );
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your document' }), {
+      target: { value: later.id },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your draft writing-style profile' }), {
+      target: { value: profileId },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to author review' }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith(
+      '/api/approvals/document-consent/initiate',
+      { profile_id: profileId, artifact_id: later.id, style_use_allowed: false },
+    ));
+  });
+
+  it('fails closed on malformed owner-page metadata', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.startsWith('/api/artifacts/owner-page?')
+        ? { items: [document], has_more: true, next_cursor: null }
+        : [{ profile_id: profileId, label: 'My style', kind: 'personal' }],
+    ));
+    render(<DocumentAuthorConsentInitiation />);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'Your document' })).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
 });
