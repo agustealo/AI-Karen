@@ -198,6 +198,9 @@ class ContentSourceHost:
                 if (
                     original is None or identifier in returned_ids
                     or item.get("name") != original["name"]
+                    # Owner-text admission never authorizes a folder. The
+                    # canonical engine emits null; non-null labels are forged.
+                    or item.get("folder_id") is not None
                     or item.get("sha256") != original["sha256"]
                     or type(item.get("characters")) is not int
                     or item["characters"] != original["characters"]
@@ -255,6 +258,7 @@ class ContentSourceHost:
                 if (
                     original is None
                     or hit.get("document_name") != original["name"]
+                    or hit.get("folder_id") is not None
                     or hit.get("sha256") != original["sha256"]
                     or type(start) is not int
                     or type(end) is not int
