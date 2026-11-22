@@ -176,7 +176,16 @@ export function DocumentAuthorConsentConfirmation({
       setReceiptId(null);
       setRevokeConfirmed(false);
     } catch {
-      setError('Revocation could not be verified. No revoked status is claimed.');
+      // A lost revocation response may mean the consent was revoked already.
+      // Re-read current server evidence rather than retaining a stale receipt.
+      const current = await recoverReceipt(preview.approval_id);
+      if (!current) {
+        setReceiptId(null);
+        setRevokeConfirmed(false);
+      }
+      setError(current
+        ? 'Revocation was not confirmed. A current receipt still exists.'
+        : 'Revocation could not be verified. No current consent receipt was recovered.');
     } finally {
       setRevoking(false);
     }
