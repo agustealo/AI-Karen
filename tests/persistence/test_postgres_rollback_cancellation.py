@@ -2,13 +2,28 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from ai_karen_engine.persistence.postgres.transactions import (
     rollback_async_transaction,
 )
+
+@pytest.fixture(autouse=True)
+def fast_cleanup_deadlines():
+    """Exercise the canonical deadlines without waiting for production limits."""
+    settings = SimpleNamespace(pool=SimpleNamespace(
+        rollback_timeout_seconds=0.1,
+        invalidate_timeout_seconds=0.1,
+    ))
+    with patch(
+        "ai_karen_engine.persistence.postgres.transactions.get_database_settings",
+        return_value=settings,
+    ):
+        yield
+
 
 
 @pytest.mark.asyncio
