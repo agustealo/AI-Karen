@@ -230,4 +230,57 @@ describe('first-party document author confirmation', () => {
     expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
   });
 
+
+  it('offers author-scoped revocation after token rotation without source recovery', async () => {
+    api.get.mockImplementation((url: string) => (
+      url.endsWith('/revoke-review')
+        ? Promise.resolve({
+            approval_id: approvalId,
+            status: 'consumed',
+            profile_id: preview.profile_id,
+            artifact_id: preview.artifact_id,
+            source_sha256: preview.source_sha256,
+          })
+        : Promise.reject(new Error('original token expired or source deleted'))
+    ));
+    api.post.mockResolvedValue({ approval_id: approvalId, status: 'revoked' });
+
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    expect(await screen.findByText(/Your current session can request/)).toBeTruthy();
+    expect(api.get).toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/revoke-review',
+    );
+    expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Confirm author consent' })).toBeNull();
+
+    const revoke = screen.getByRole('button', { name: 'Revoke document consent' });
+    expect((revoke as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'Confirm revoke document consent',
+    }));
+    fireEvent.click(revoke);
+    expect(await screen.findByText(/Document consent revocation recorded/)).toBeTruthy();
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/revoke',
+      { confirmed: true },
+    );
+  });
+
+  it('fails closed if the independent revocation metadata is malformed', async () => {
+    api.get.mockImplementation((url: string) => (
+      url.endsWith('/revoke-review')
+        ? Promise.resolve({
+            approval_id: approvalId, status: 'consumed',
+            profile_id: preview.profile_id,
+            artifact_id: preview.artifact_id,
+            source_sha256: 'invalid',
+          })
+        : Promise.reject(new Error('unavailable'))
+    ));
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Revoke document consent' })).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
 });
