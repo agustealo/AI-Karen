@@ -183,7 +183,7 @@ async def test_already_invalidated_live_connection_still_allows_rollback():
         # session still describes an active transaction. The canonical
         # capture must not let this error replace the original failure.
         with pytest.raises(PendingRollbackError):
-            await session.connection()
+            (await session.connection()).sync_connection.connection
         await rollback_async_transaction(session)
         assert not session.in_transaction()
     finally:
