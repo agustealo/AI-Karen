@@ -123,3 +123,60 @@ def test_materialized_file_explorer_is_discovered_by_real_ui_installer(tmp_path)
     assert installer.installations["file-explorer"].entry_file == (
         target / "FileExplorerPage.tsx"
     )
+
+
+@pytest.mark.asyncio
+async def test_materialize_all_reports_only_successfully_materialized_imports(tmp_path):
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=PLUGIN,
+        manifest_path=PLUGIN / "plugin_manifest.json",
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+    result = await pipeline.materialize_all()
+    assert result["status"] == "success"
+    assert result["errors"] == []
+    assert result["import_map"]["file-explorer"] == (
+        "@/plugin_repo/file-explorer/FileExplorerPage"
+    )
+    assert (tmp_path / "plugin-repo/file-explorer/FileExplorerPage.tsx").is_file()
+
+
+@pytest.mark.asyncio
+async def test_failed_ui_copy_cannot_claim_importer_or_success(tmp_path, monkeypatch):
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=PLUGIN,
+        manifest_path=PLUGIN / "plugin_manifest.json",
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+
+    async def failed_copy(plugin_ui):
+        return False
+
+    monkeypatch.setattr(pipeline, "_materialize_ui_source", failed_copy)
+    result = await pipeline.materialize_all()
+    assert result["status"] == "degraded"
+    assert result["errors"][0]["plugin_id"] == "file-explorer"
+    assert result["import_map"] == {}
+    assert not (tmp_path / "plugin-repo/file-explorer/FileExplorerPage.tsx").exists()
