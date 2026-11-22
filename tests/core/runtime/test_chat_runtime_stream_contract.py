@@ -2217,6 +2217,75 @@ async def test_revocation_after_final_stream_delta_blocks_transcript():
     memory_persist.assert_not_awaited()
 
 
+
+@pytest.mark.asyncio
+async def test_revocation_committed_while_next_stream_chunk_waits_blocks_publication():
+    """A deterministic barrier models a committed revoke before the next yield.
+
+    This proves the ChatRuntime publication fence, not a PostgreSQL transaction
+    or an atomic network-to-database revocation protocol.
+    """
+    runtime, gateway = _make_runtime()
+    request = _make_request()
+    decision = _make_decision()
+    plan = _make_plan()
+    next_chunk_ready = asyncio.Event()
+    release_next_chunk = asyncio.Event()
+    revoked = asyncio.Event()
+    producer_closed = asyncio.Event()
+    memory_persist = AsyncMock()
+
+    async def check_source(*args, **kwargs):
+        if revoked.is_set():
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
+
+    async def provider_stream(*args, **kwargs):
+        try:
+            yield ChatStreamChunk(
+                type="content", content="first", correlation_id="corr-1",
+            )
+            next_chunk_ready.set()
+            await release_next_chunk.wait()
+            yield ChatStreamChunk(
+                type="content", content="forbidden", correlation_id="corr-1",
+            )
+        finally:
+            producer_closed.set()
+
+    with patch.object(
+        ChatRuntime,
+        "_authorize_selected_memory_before_generation",
+        side_effect=check_source,
+    ):
+        task = asyncio.create_task(
+            _collect_stream(
+                runtime, request, decision, plan, provider_stream,
+                persist_memory=memory_persist,
+            )
+        )
+        try:
+            await asyncio.wait_for(next_chunk_ready.wait(), timeout=5)
+            revoked.set()
+            release_next_chunk.set()
+            chunks = await asyncio.wait_for(task, timeout=5)
+        finally:
+            release_next_chunk.set()
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    assert [chunk.content for chunk in chunks if chunk.type == "content"] == [
+        "first",
+    ]
+    assert any(chunk.type == "error" for chunk in chunks)
+    assert producer_closed.is_set()
+    memory_persist.assert_not_awaited()
+    assert not gateway.calls
+
+
 def test_post_provider_and_finality_source_fences_are_runtime_owned():
     from pathlib import Path
 
