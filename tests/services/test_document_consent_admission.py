@@ -732,3 +732,90 @@ async def test_canonical_source_metadata_denies_missing_or_drifted_file(
         await target.get_document_consent_review(
             record["approval_id"], request=object(),
         )
+
+
+async def test_initiation_uses_authenticated_source_and_never_caller_digest(
+    monkeypatch,
+):
+    from ai_karen_engine.persistence.postgres import transactions
+    from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+        PostgresDocumentStyleConsentIssuer,
+    )
+    from ai_karen_engine.services.writing_style_profile_repository import (
+        WritingStyleProfileRepository,
+    )
+
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    session = SimpleNamespace(execute=AsyncMock())
+
+    @asynccontextmanager
+    async def transaction(tenant):
+        assert tenant == scope.tenant_id
+        yield session
+
+    monkeypatch.setattr(transactions, "async_transaction_scope", transaction)
+    scoped = AsyncMock()
+    monkeypatch.setattr(WritingStyleProfileRepository, "_scope", scoped)
+    read = AsyncMock(return_value=scope.source_sha256)
+    monkeypatch.setattr(PostgresDocumentStyleConsentIssuer, "_read_source_digest", read)
+    repo = SimpleNamespace(create=AsyncMock(return_value=approval(scope)))
+    target = service(repo)
+
+    result = await target.initiate_document_consent(
+        request=object(), profile_id=scope.profile_id,
+        artifact_id=scope.artifact_id, style_use_allowed=True,
+        correlation_id="first-party-initiation",
+    )
+    assert result["status"] == "pending"
+    generated = repo.create.await_args.kwargs["request_payload"]["document_consent_scope"]
+    assert generated["tenant_id"] == scope.tenant_id
+    assert generated["author_actor_id"] == scope.author_actor_id
+    assert generated["session_id"] == scope.session_id
+    assert generated["profile_id"] == scope.profile_id
+    assert generated["artifact_id"] == scope.artifact_id
+    assert generated["source_sha256"] == scope.source_sha256
+    assert generated["style_use_allowed"] is True
+    assert generated["analysis_allowed"] is True
+    assert generated["action"] == "issue"
+    assert repo.create.await_args.kwargs["risk_level"] == "high"
+    scoped.assert_awaited()
+    read.assert_awaited()
+
+    repo.create.reset_mock()
+    read.return_value = None
+    with pytest.raises(ApprovalScopeError, match="author-owned"):
+        await target.initiate_document_consent(
+            request=object(), profile_id=scope.profile_id,
+            artifact_id=scope.artifact_id, style_use_allowed=False,
+            correlation_id="missing-source",
+        )
+    repo.create.assert_not_awaited()
+
+
+async def test_initiation_rejects_wrong_identity_and_purpose_before_sql(
+    monkeypatch,
+):
+    from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+        PostgresDocumentStyleConsentIssuer,
+    )
+
+    scope, context = evidence()
+    await wire_auth(monkeypatch, context)
+    read = AsyncMock()
+    monkeypatch.setattr(PostgresDocumentStyleConsentIssuer, "_read_source_digest", read)
+    repo = SimpleNamespace(create=AsyncMock())
+    target = service(repo)
+    for profile, artifact, purpose in (
+        ("not-a-uuid", scope.artifact_id, True),
+        (scope.profile_id, "not-a-uuid", True),
+        (scope.profile_id, scope.artifact_id, "true"),
+    ):
+        with pytest.raises(ApprovalScopeError):
+            await target.initiate_document_consent(
+                request=object(), profile_id=profile,
+                artifact_id=artifact, style_use_allowed=purpose,
+                correlation_id="invalid-selector",
+            )
+    read.assert_not_awaited()
+    repo.create.assert_not_awaited()
