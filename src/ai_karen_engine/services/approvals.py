@@ -449,6 +449,89 @@ class ApprovalService:
         )
         return record
 
+    async def initiate_document_consent(
+        self,
+        *,
+        request: "Request",
+        profile_id: str,
+        artifact_id: str,
+        style_use_allowed: bool,
+        correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Derive the pending source scope exclusively from verified host owners.
+
+        First-party callers select only a draft profile, document and requested
+        style-use purpose. The server derives author, tenant, session, current
+        file digest and a bounded expiration. Initiation cannot issue consent.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        from ai_karen_engine.auth.session import get_document_style_consent_context
+        from ai_karen_engine.core.runtime.document_consent_approval import (
+            DocumentConsentApprovalScope,
+        )
+        from ai_karen_engine.persistence.postgres.transactions import (
+            async_transaction_scope,
+        )
+        from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+            PostgresDocumentStyleConsentIssuer,
+        )
+        from ai_karen_engine.services.writing_style_profile_repository import (
+            WritingStyleProfileRepository,
+        )
+
+        if type(style_use_allowed) is not bool:
+            raise ApprovalScopeError("Explicit document use purpose is required")
+        try:
+            profile = str(uuid.UUID(profile_id))
+            artifact = str(uuid.UUID(artifact_id))
+            if profile != profile_id or artifact != artifact_id:
+                raise ValueError("Noncanonical document identity")
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise ApprovalScopeError("Invalid document source identity") from exc
+
+        context = await get_document_style_consent_context(request)
+        principal = context.require_authenticated_user()
+        tenant_id = str(principal.tenant_id)
+        actor_id = str(principal.user_id)
+        if (
+            str(context.tenant_id) != tenant_id
+            or str(context.user_id) != actor_id
+            or not isinstance(context.session_id, str)
+            or not context.session_id
+        ):
+            raise ApprovalScopeError("Authenticated document author required")
+
+        async with async_transaction_scope(tenant_id) as session:
+            await WritingStyleProfileRepository._scope(session, tenant_id, actor_id)
+            digest = await PostgresDocumentStyleConsentIssuer._read_source_digest(
+                session,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                profile_id=profile,
+                artifact_id=artifact,
+            )
+        if digest is None:
+            raise ApprovalScopeError("Current author-owned document unavailable")
+
+        scope = DocumentConsentApprovalScope(
+            tenant_id=tenant_id,
+            author_actor_id=actor_id,
+            session_id=context.session_id,
+            profile_id=profile,
+            artifact_id=artifact,
+            source_sha256=digest,
+            action="issue",
+            analysis_allowed=True,
+            style_use_allowed=style_use_allowed,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        # request_document_consent independently revalidates the bearer and
+        # current locked source digest, then asks canonical RuntimePolicy.
+        return await self.request_document_consent(
+            request=request, scope=scope, correlation_id=correlation_id,
+        )
+
     async def request_document_consent(
         self,
         *,
