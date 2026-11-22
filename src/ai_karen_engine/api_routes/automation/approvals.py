@@ -258,6 +258,46 @@ async def issue_document_author_consent(
         raise HTTPException(status_code=409, detail="Document receipt not issued") from exc
 
 
+class DocumentAuthorRevocation(BaseModel):
+    """Deliberate human revocation; no caller-controlled receipt scope."""
+
+    model_config = {"extra": "forbid"}
+    confirmed: StrictBool
+
+
+class DocumentAuthorRevocationResponse(BaseModel):
+    approval_id: UUID
+    status: str
+
+
+@router.post(
+    "/document-consent/{approval_id}/revoke",
+    response_model=DocumentAuthorRevocationResponse,
+)
+async def revoke_document_author_consent(
+    approval_id: UUID,
+    request: Request,
+    body: DocumentAuthorRevocation,
+):
+    """Revoke an issued author receipt through runtime policy and SQL owner."""
+    from uuid import uuid4
+
+    try:
+        await get_approval_service().revoke_stored_document_consent(
+            str(approval_id), request=request, confirmed=body.confirmed,
+            correlation_id=str(uuid4()),
+        )
+        return DocumentAuthorRevocationResponse(
+            approval_id=approval_id, status="revoked",
+        )
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Document approval not found") from exc
+    except (ApprovalScopeError, PermissionError) as exc:
+        raise HTTPException(status_code=403, detail="Author revocation denied") from exc
+    except ApprovalStateError as exc:
+        raise HTTPException(status_code=409, detail="Author revocation not recorded") from exc
+
+
 @router.get("/", response_model=List[ApprovalResponse])
 async def list_approvals(
     conversation_id: Optional[UUID] = None,
