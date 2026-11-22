@@ -133,3 +133,89 @@ def test_install_fails_closed_when_registry_metadata_is_missing(monkeypatch):
 
     assert exc_info.value.status_code == 404
     assert service.install_calls == []
+
+
+@pytest.mark.asyncio
+async def test_import_map_requires_installer_integrity_not_discovery_only(monkeypatch):
+    class Pipeline:
+        async def discover_ui_plugins(self):
+            return [
+                {
+                    "plugin_id": "file-explorer",
+                    "registry_validated": True,
+                    "has_component": True,
+                    "component_path": "/canonical/file-explorer/ui/FileExplorerPage.tsx",
+                },
+                {
+                    "plugin_id": "uninstalled-ui",
+                    "registry_validated": True,
+                    "has_component": True,
+                    "component_path": "/canonical/uninstalled-ui/ui/PluginPage.tsx",
+                },
+            ]
+
+        async def generate_import_map(self, plugins):
+            return {
+                item["plugin_id"]: "@/plugin_repo/"
+                + item["plugin_id"]
+                + "/"
+                + item["component_path"].rsplit("/", 1)[-1].split(".")[0]
+                for item in plugins
+            }
+
+    class Service:
+        def list_installed_ui(self):
+            return [
+                {"plugin_id": "file-explorer", "state": "installed", "status": "success"}
+            ]
+
+        def validate_ui_package(self, plugin_id):
+            assert plugin_id == "file-explorer"
+            return SimpleNamespace(status=SimpleNamespace(value="success"))
+
+    monkeypatch.setattr(routes, "get_ui_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(routes, "get_ui_service", lambda: Service())
+
+    result = await routes.get_import_map()
+    assert result["status"] == "success"
+    assert result["data"]["import_map"] == {
+        "file-explorer": "@/plugin_repo/file-explorer/FileExplorerPage"
+    }
+    assert result["data"]["deployment_verified"] is False
+    assert result["data"]["artifact_scope"] == "backend_verified_installed_packages"
+    assert result["data"]["total_entries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_import_map_never_advertises_unverified_installed_package(monkeypatch):
+    class Pipeline:
+        async def discover_ui_plugins(self):
+            return [{
+                "plugin_id": "file-explorer",
+                "registry_validated": True,
+                "has_component": True,
+                "component_path": "/canonical/file-explorer/ui/FileExplorerPage.tsx",
+            }]
+
+        async def generate_import_map(self, plugins):
+            assert plugins == []
+            return {}
+
+    class Service:
+        def list_installed_ui(self):
+            return [
+                {"plugin_id": "file-explorer", "state": "installed", "status": "success"}
+            ]
+
+        def validate_ui_package(self, plugin_id):
+            return SimpleNamespace(
+                status=SimpleNamespace(value="validation_failed")
+            )
+
+    monkeypatch.setattr(routes, "get_ui_pipeline", lambda: Pipeline())
+    monkeypatch.setattr(routes, "get_ui_service", lambda: Service())
+
+    result = await routes.get_import_map()
+    assert result["data"]["import_map"] == {}
+    assert result["data"]["total_entries"] == 0
+    assert result["data"]["deployment_verified"] is False
