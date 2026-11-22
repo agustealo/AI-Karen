@@ -1,14 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 
-/**
- * WS-04A9T: approved-host, real-account document-author acceptance.
- *
- * No route interception, fabricated source rows, prefilled confirmation,
- * auth bypass, source-byte capture, screenshots, trace, video, or model output
- * accepted as authorship proof. The ordinary opt-in is read-only; the mutation
- * trial requires a second, explicit owner-approved gate and disposable source.
- */
+/** Live-source test; no API mocks, credentials or document bytes in reports. */
 test.use({ screenshot: "off", video: "off", trace: "off" });
 
 const enabled = process.env.KAREN_DOCUMENT_AUTHOR_ACCEPTANCE === "true";
@@ -16,13 +9,13 @@ const mutationEnabled =
   process.env.KAREN_DOCUMENT_AUTHOR_MUTATION_ACCEPTANCE === "true";
 const email = process.env.KAREN_UX_EMAIL;
 const password = process.env.KAREN_UX_PASSWORD;
-const approvalId = process.env.KAREN_DOCUMENT_AUTHOR_APPROVAL_ID;
 const expectedArtifact = process.env.KAREN_DOCUMENT_AUTHOR_ARTIFACT_ID;
 const expectedDigest = process.env.KAREN_DOCUMENT_AUTHOR_SOURCE_SHA256;
 const expectedName = process.env.KAREN_DOCUMENT_AUTHOR_SOURCE_NAME;
+const expectedProfile = process.env.KAREN_DOCUMENT_AUTHOR_PROFILE_ID;
 const local = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const digest = /^[0-9a-f]{64}$/;
+const digest = /^[a-f0-9]{64}$/;
 
 function approvedOrigin(): URL {
   const raw = process.env.KAREN_BASE_URL;
@@ -40,166 +33,95 @@ function approvedOrigin(): URL {
   return origin;
 }
 
-function requireApprovalEvidence(): void {
-  if (!email || !password) {
-    throw new Error("Dedicated approved author test credentials required");
-  }
-  if (
-    !approvalId || !uuid.test(approvalId) ||
-    !expectedArtifact || !uuid.test(expectedArtifact) ||
+function requireEvidence(mutation: boolean): void {
+  if (!email || !password || !expectedArtifact || !uuid.test(expectedArtifact) ||
     !expectedDigest || !digest.test(expectedDigest) ||
-    !expectedName || expectedName.length > 160
-  ) {
-    throw new Error("A verified dedicated author approval/source fixture is required");
+    !expectedName || expectedName.length > 160 ||
+    (mutation && (!expectedProfile || !uuid.test(expectedProfile)))) {
+    throw new Error("Dedicated authenticated author and canonical source fixture required");
   }
 }
 
-test("WS-04A9T: real bearer review does not authorize without deliberate gesture", async ({ page }) => {
-  test.skip(!enabled, "Enable real author review acceptance explicitly");
-  test.setTimeout(120_000);
-  requireApprovalEvidence();
-  const approved = approvedOrigin();
-  await signInApprovedKaren(page, email!, password!, { allowLocalLoopback: local });
-  await page.goto(
-    new URL("/approvals/document-consent/" + approvalId, approved).toString(),
-  );
-  expect(new URL(page.url()).origin).toBe(approved.origin);
-  const review = page.getByRole("region", { name: "Document author consent" });
-  await expect(review).toBeVisible();
-  // Compare real rendered values without putting filenames, IDs or hashes
-  // into Playwright locator failure messages or retained traces.
-  const matched = await review.evaluate(
-    (root, expected) => {
-      const values = Array.from(root.querySelectorAll("dd"))
-        .map(element => element.textContent?.trim());
-      return values.includes(expected.artifact) &&
-        values.includes(expected.digest) &&
-        values.includes(expected.name);
-    },
-    { artifact: expectedArtifact!, digest: expectedDigest!, name: expectedName! },
-  );
-  expect(matched, "The live document identity must match the approved author fixture")
-    .toBe(true);
-  await expect(review.getByText("Document author confirmation")).toBeVisible();
-  await expect(review.getByText(/Document approval could not be verified/)).toHaveCount(0);
-
-  const confirm = review.getByRole("button", { name: "Confirm author consent" });
-  const checkbox = review.getByRole("checkbox");
-  if (await confirm.count()) {
-    await expect(confirm).toBeDisabled();
-    await expect(checkbox).not.toBeChecked();
-    // A read-only trial must never click the consent checkbox or submit.
-  } else {
-    await expect(checkbox).toHaveCount(0);
-    await expect(review.getByText(/already approved|approval was consumed/i))
-      .toBeVisible();
-  }
-});
-
-test("WS-04A9T: dedicated author gesture issues or recovers real durable consent", async ({ page }) => {
-  test.skip(
-    !enabled || !mutationEnabled,
-    "Mutation acceptance requires separate explicit authorization",
-  );
-  test.setTimeout(120_000);
-  requireApprovalEvidence();
-  const approved = approvedOrigin();
-  await signInApprovedKaren(page, email!, password!, { allowLocalLoopback: local });
-  await page.goto(
-    new URL("/approvals/document-consent/" + approvalId, approved).toString(),
-  );
-  expect(new URL(page.url()).origin).toBe(approved.origin);
-  const review = page.getByRole("region", { name: "Document author consent" });
-  // Compare real rendered values without putting filenames, IDs or hashes
-  // into Playwright locator failure messages or retained traces.
-  const matched = await review.evaluate(
-    (root, expected) => {
-      const values = Array.from(root.querySelectorAll("dd"))
-        .map(element => element.textContent?.trim());
-      return values.includes(expected.artifact) &&
-        values.includes(expected.digest) &&
-        values.includes(expected.name);
-    },
-    { artifact: expectedArtifact!, digest: expectedDigest!, name: expectedName! },
-  );
-  expect(matched, "The live document identity must match the approved author fixture")
-    .toBe(true);
-
-  const confirm = review.getByRole("button", { name: "Confirm author consent" });
-  if (await confirm.count()) {
-    await expect(confirm).toBeDisabled();
-    await review.getByRole("checkbox").check();
-    await expect(confirm).toBeEnabled();
-    await confirm.click();
-  } else {
-    const issue = review.getByRole("button", { name: "Issue approved consent receipt" });
-    if (await issue.count()) await issue.click();
-  }
-  const recovered = review.getByRole("button", {
-    name: "Recheck current consent receipt",
-  });
-  if (await recovered.isVisible().catch(() => false)) {
-    await recovered.click();
-  }
-  await expect(review.getByText(/Verified receipt ID:/).first()).toBeVisible();
-  await expect(review.getByText(/Document ingestion is not confirmed/).first())
-    .toBeVisible();
-  await page.reload();
-  const replay = page.getByRole("region", { name: "Document author consent" });
-  await expect(replay.getByText(/Verified receipt ID:/).first()).toBeVisible();
-  await expect(replay.getByRole("checkbox")).toHaveCount(0);
-});
-
-
-test("WS-04A9X: real author initiates a source-bound pending review without granting consent", async ({ page }) => {
-  test.skip(
-    !enabled || !mutationEnabled,
-    "Initiating an approval requires the separate disposable-fixture mutation gate",
-  );
-  test.setTimeout(120_000);
-  requireApprovalEvidence();
-  const expectedProfile = process.env.KAREN_DOCUMENT_AUTHOR_PROFILE_ID;
-  if (!expectedProfile || !uuid.test(expectedProfile)) {
-    throw new Error("A dedicated author-owned draft profile fixture is required");
-  }
-  const approved = approvedOrigin();
-  await signInApprovedKaren(page, email!, password!, { allowLocalLoopback: local });
-  await page.goto(
-    new URL("/approvals/document-consent/new", approved).toString(),
-  );
-  expect(new URL(page.url()).origin).toBe(approved.origin);
+async function selectSource(page: Page, origin: URL): Promise<Locator> {
+  await page.goto(new URL("/approvals/document-consent/new", origin).toString());
+  expect(new URL(page.url()).origin).toBe(origin.origin);
   const selector = page.getByRole("region", { name: "Initiate document author consent" });
   await expect(selector).toBeVisible();
-  const item = selector.getByRole("option", { name: /bytes/ }).filter({
-    hasText: expectedName!,
-  });
-  // A missing owner-listed source is a denial, not permission to type an ID.
-  await expect(item).toHaveCount(1);
-  await selector.getByRole("combobox", { name: "Your document" })
-    .selectOption(expectedArtifact!);
-  await selector.getByRole("textbox", {
-    name: "Existing draft writing-style profile ID",
-  }).fill(expectedProfile);
-  const start = selector.getByRole("button", { name: "Continue to author review" });
-  await expect(start).toBeEnabled();
-  await start.click();
-  await expect(page).toHaveURL(
-    /\/approvals\/document-consent\/[0-9a-f-]{36}$/,
-  );
-  const review = page.getByRole("region", { name: "Document author consent" });
-  await expect(review).toBeVisible();
-  const matched = await review.evaluate((root, expected) => {
+  const document = selector.getByRole("combobox", { name: "Your document" });
+  await expect(document).toBeVisible();
+  // Compare IDs inside the page; do not print sensitive source metadata.
+  const found = await document.evaluate((node, id) => (
+    Array.from((node as HTMLSelectElement).options).some(option => option.value === id)
+  ), expectedArtifact!);
+  expect(found, "Expected source must be in the authenticated owner inventory").toBe(true);
+  return selector;
+}
+
+async function expectExactSource(review: Locator): Promise<void> {
+  // Poll the actual asynchronously loaded review values, not the section shell.
+  // This avoids logging source identifiers in failing locator selectors.
+  await expect.poll(async () => review.evaluate((root, expected) => {
     const values = Array.from(root.querySelectorAll("dd"))
-      .map((element) => element.textContent?.trim());
+      .map(element => element.textContent?.trim());
     return values.includes(expected.artifact) &&
       values.includes(expected.digest) &&
       values.includes(expected.name);
   }, {
     artifact: expectedArtifact!, digest: expectedDigest!, name: expectedName!,
-  });
-  expect(matched, "Pending review must display the original canonical source").toBe(true);
+  }), {
+    message: "The real consent preview must match the authenticated source",
+    timeout: 20_000,
+  }).toBe(true);
+}
+
+test("WS-04A9Y: read-only authenticated inventory never initiates approval", async ({ page }) => {
+  test.skip(!enabled, "Enable read-only author inventory acceptance explicitly");
+  test.setTimeout(120_000);
+  requireEvidence(false);
+  const origin = approvedOrigin();
+  await signInApprovedKaren(page, email!, password!, { allowLocalLoopback: local });
+  const selector = await selectSource(page, origin);
+  const initiate = selector.getByRole("button", { name: "Continue to author review" });
+  await expect(initiate).toBeDisabled();
+  await expect(selector.getByText(/Document ingestion remains disabled/)).toBeVisible();
+  // Do not click, mutate, initiate, confirm, issue or read document content.
+});
+
+test("WS-04A9Y: same author session initiates, confirms and recovers a real receipt", async ({ page }) => {
+  test.skip(
+    !enabled || !mutationEnabled,
+    "Mutation trial requires explicit disposable fixture authorization",
+  );
+  test.setTimeout(120_000);
+  requireEvidence(true);
+  const origin = approvedOrigin();
+  await signInApprovedKaren(page, email!, password!, { allowLocalLoopback: local });
+  const selector = await selectSource(page, origin);
+  await selector.getByRole("combobox", { name: "Your document" })
+    .selectOption(expectedArtifact!);
+  await selector.getByRole("textbox", {
+    name: "Existing draft writing-style profile ID",
+  }).fill(expectedProfile!);
+  const initiate = selector.getByRole("button", { name: "Continue to author review" });
+  await expect(initiate).toBeEnabled();
+  await initiate.click();
+  await expect(page).toHaveURL(/\/approvals\/document-consent\/[0-9a-f-]{36}$/);
+
+  const review = page.getByRole("region", { name: "Document author consent" });
+  await expectExactSource(review);
   const confirm = review.getByRole("button", { name: "Confirm author consent" });
   await expect(confirm).toBeDisabled();
   await expect(review.getByRole("checkbox")).not.toBeChecked();
   await expect(review.getByText(/Verified receipt ID:/)).toHaveCount(0);
+  await review.getByRole("checkbox").check();
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect(review.getByText(/Verified receipt ID:/).first()).toBeVisible();
+  await expect(review.getByText(/Document ingestion is not confirmed/).first()).toBeVisible();
+
+  await page.reload();
+  const recovered = page.getByRole("region", { name: "Document author consent" });
+  await expectExactSource(recovered);
+  await expect(recovered.getByText(/Verified receipt ID:/).first()).toBeVisible();
+  await expect(recovered.getByRole("checkbox")).toHaveCount(0);
 });
