@@ -440,7 +440,8 @@ class PostgresDocumentStyleConsentIssuer:
                         "AND owner_actor_id=CAST(:actor AS uuid) "
                         "AND author_actor_id=CAST(:actor AS uuid) "
                         "AND artifact_id=CAST(:artifact AS uuid) "
-                        "AND (:expected_source IS NULL OR source_sha256=:expected_source) "
+                        "AND (CAST(:expected_source AS text) IS NULL "
+                        "OR source_sha256=CAST(:expected_source AS text)) "
                         "AND revoked_at IS NULL RETURNING receipt_id"
                     ),
                     dict(
