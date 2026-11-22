@@ -44,9 +44,10 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
     invalidation_attempts = 0
     session = engine.async_session_factory()
 
-    def hold_real_rollback(sync_session, previous_transaction):
-        # Called from SQLAlchemy's actual rollback transition, in its
-        # greenlet. await_only suspends without blocking the event loop.
+    def hold_real_rollback(connection):
+        # SQLAlchemy's ConnectionEvents.rollback is dispatched before the
+        # DBAPI rollback and before SessionTransaction.close can release
+        # this connection. The connection is still checked out here.
         entered_rollback.set()
         try:
             await_only(release_rollback.wait())
@@ -56,7 +57,7 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
 
     try:
         await session.execute(text("SELECT 1"))
-        event.listen(session.sync_session, "after_soft_rollback", hold_real_rollback)
+        event.listen(engine.async_engine.sync_engine, "rollback", hold_real_rollback)
         with patch(
             "ai_karen_engine.persistence.postgres.transactions.get_database_settings",
             return_value=settings,
@@ -65,6 +66,9 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
         ) as invalidate_spy:
             rollback_task = asyncio.create_task(rollback_async_transaction(session))
             await asyncio.wait_for(entered_rollback.wait(), timeout=5)
+            assert engine.async_engine.pool.checkedout() == baseline + 1, (
+                "rollback hook did not suspend a checked-out connection"
+            )
             # Explicitly assert no session-state transition is attempted
             # while the real SQLAlchemy rollback remains suspended.
             try:
@@ -82,7 +86,7 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
                 await asyncio.wait_for(rollback_task, timeout=5)
             except BaseException:
                 pass
-        event.remove(session.sync_session, "after_soft_rollback", hold_real_rollback)
+        event.remove(engine.async_engine.sync_engine, "rollback", hold_real_rollback)
         await asyncio.wait_for(session.close(), timeout=5)
 
     recovered_checkout_count = engine.async_engine.pool.checkedout()
