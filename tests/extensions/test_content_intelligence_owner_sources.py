@@ -319,3 +319,51 @@ async def test_kernel_mutation_cannot_redefine_authorized_source_evidence():
         )
     assert store.calls == [(FILE_ID, TENANT, OWNER)]
     assert len(kernel.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("relationship", [
+    {"left_id": FILE_ID, "right_id": OTHER},
+    {"left_id": OTHER, "right_id": FILE_ID},
+    {"left_id": FILE_ID, "right_id": FILE_ID},
+    {"left_id": FILE_ID, "right_id": 42},
+])
+async def test_analysis_relationship_cannot_reference_unauthorized_source(relationship):
+    """Plugin success cannot endorse a foreign or invalid source pair."""
+    kernel = TamperingKernel(
+        lambda payload: payload.update({"relationships": [relationship]})
+    )
+    with pytest.raises(RuntimeError, match="content_source_output_invalid"):
+        await ContentSourceHost(store=Store(), kernel=kernel).execute_owner_text(
+            context=context(), plan=plan(), operation="analyze", references=REFS,
+        )
+
+
+@pytest.mark.asyncio
+async def test_analysis_relationship_between_verified_sources_is_preserved():
+    """Authorized pair relationships remain usable by clients."""
+    second_id = "44444444-4444-4444-8444-000000000002"
+
+    class TwoSources(Store):
+        async def read_owner_active_code(self, source_id, tenant_id, user_id):
+            result = await super().read_owner_active_code(
+                source_id, tenant_id, user_id
+            )
+            if source_id == second_id:
+                result.data = SimpleNamespace(
+                    artifact_id=second_id, tenant_id=TENANT, user_id=OWNER,
+                    filename="second.txt", text=TEXT, sha256=DIGEST,
+                )
+            return result
+
+    pair = {"left_id": FILE_ID, "right_id": second_id}
+    kernel = TamperingKernel(
+        lambda payload: payload.update({"relationships": [pair]})
+    )
+    result = await ContentSourceHost(
+        store=TwoSources(), kernel=kernel
+    ).execute_owner_text(
+        context=context(), plan=plan(), operation="analyze",
+        references=REFS + [{"source_id": second_id, "revision": DIGEST}],
+    )
+    assert result["relationships"] == [pair]
