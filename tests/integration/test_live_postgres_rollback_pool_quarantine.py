@@ -164,3 +164,32 @@ async def test_ordinary_rollback_preserves_healthy_pool_connection():
     finally:
         await session.close()
     assert engine.async_engine.pool.checkedout() == baseline
+
+
+@pytest.mark.timeout(30)
+async def test_already_invalidated_live_connection_still_allows_rollback():
+    """Connection loss during a live transaction must not block rollback."""
+    from sqlalchemy.exc import PendingRollbackError
+
+    engine = get_postgres_engine()
+    baseline = engine.async_engine.pool.checkedout()
+    session = engine.async_session_factory()
+    try:
+        await session.execute(text("SELECT 1"))
+        connection = await session.connection()
+        await connection.invalidate()
+        assert session.in_transaction()
+        # SQLAlchemy refuses reconnection until rollback, even if the ORM
+        # session still describes an active transaction. The canonical
+        # capture must not let this error replace the original failure.
+        with pytest.raises(PendingRollbackError):
+            await session.connection()
+        await rollback_async_transaction(session)
+        assert not session.in_transaction()
+    finally:
+        await session.close()
+
+    assert engine.async_engine.pool.checkedout() == baseline
+    async with engine.async_session_factory() as healthy:
+        assert (await healthy.execute(text("SELECT 1"))).scalar_one() == 1
+    assert engine.async_engine.pool.checkedout() == baseline
