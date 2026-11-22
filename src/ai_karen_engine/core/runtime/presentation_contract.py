@@ -63,6 +63,19 @@ def redact_revocable_code_metadata(metadata: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+
+# One host-enforced component vocabulary. Card Studio proposals can only name
+# safe subsets of these existing types; they cannot register a new renderer.
+PRESENTATION_COMPONENT_TYPES = frozenset({
+    "weather.observation", "weather.comparison", "planner.task_list",
+    "time.observation", "date.observation", "surface.composition",
+    "search.results", "data.table", "chart.bar", "code.artifact",
+})
+CARD_TEMPLATE_COMPONENT_TYPES = frozenset(
+    PRESENTATION_COMPONENT_TYPES - {"surface.composition", "code.artifact"}
+)
+
+
 def validate_presentation(raw: Any) -> dict[str, Any] | None:
     """Allow only bounded, JSON-native, evidence-referenced UI envelopes.
 
@@ -80,7 +93,7 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if set(raw) - allowed or raw.get("schema_version") != 1 or type(raw.get("schema_version")) is not int:
         return None
     component_type = raw.get("component_type")
-    if not isinstance(component_type, str) or component_type not in {"weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table", "chart.bar", "code.artifact"}:
+    if not isinstance(component_type, str) or component_type not in PRESENTATION_COMPONENT_TYPES:
         return None
     for key in ("presentation_id", "evidence_ref"):
         value = raw.get(key)
@@ -552,3 +565,164 @@ def compose_authorized_surface(
     if correlation_id is not None:
         envelope["correlation_id"] = correlation_id
     return validate_presentation(envelope)
+
+
+def validate_card_template_draft(raw: Any) -> dict[str, Any] | None:
+    """Admit an inert, bounded Card Studio layout draft.
+
+    A draft names only host-rendered component types and their positions.
+    It deliberately contains no evidence, source data, executable instructions,
+    permissions, tenant identity, published revision, or network references.
+    This is NOT authorization to persist, execute, publish or replay a card.
+    Those operations belong to the canonical runtime and its scoped services.
+    """
+    import json
+    import re
+
+    if not isinstance(raw, Mapping):
+        return None
+    required = {
+        "schema_version", "template_key", "title", "layout",
+        "density", "interaction_mode", "slots",
+    }
+    if not required <= set(raw) or set(raw) - (required | {"description"}):
+        return None
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+        return None
+    key = raw["template_key"]
+    if (
+        not isinstance(key, str)
+        or not 1 <= len(key) <= 64
+        or re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", key) is None
+    ):
+        return None
+    title = raw["title"]
+    if not isinstance(title, str):
+        return None
+    title = title.strip()
+    if (
+        not 1 <= len(title) <= 100
+        or any(ord(character) < 32 or ord(character) == 127 or character in "<>" for character in title)
+    ):
+        return None
+    if raw["layout"] not in ("stack", "grid"):
+        return None
+    if raw["density"] not in ("compact", "comfortable"):
+        return None
+    if raw["interaction_mode"] != "read_only":
+        return None
+    slots = raw["slots"]
+    if not isinstance(slots, list) or not 1 <= len(slots) <= 6:
+        return None
+    seen: set[str] = set()
+    safe_slots: list[dict[str, str]] = []
+    for slot in slots:
+        if not isinstance(slot, Mapping) or set(slot) != {"slot_id", "component_type"}:
+            return None
+        slot_id, component = slot["slot_id"], slot["component_type"]
+        if (
+            not isinstance(slot_id, str)
+            or len(slot_id) > 32
+            or re.fullmatch(r"[a-z][a-z0-9_]*", slot_id) is None
+            or slot_id in seen
+            or not isinstance(component, str)
+            or component not in CARD_TEMPLATE_COMPONENT_TYPES
+        ):
+            return None
+        seen.add(slot_id)
+        safe_slots.append({"slot_id": slot_id, "component_type": component})
+    normalized: dict[str, Any] = {
+        "schema_version": 1,
+        "template_key": key,
+        "title": title,
+        "layout": raw["layout"],
+        "density": raw["density"],
+        "interaction_mode": "read_only",
+        "slots": safe_slots,
+    }
+    if "description" in raw:
+        description = raw["description"]
+        if not isinstance(description, str):
+            return None
+        description = description.strip()
+        if (
+            not 1 <= len(description) <= 240
+            or any(ord(character) < 32 or ord(character) == 127 or character in "<>" for character in description)
+        ):
+            return None
+        normalized["description"] = description
+    try:
+        encoded = json.dumps(normalized, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return normalized if len(encoded.encode("utf-8")) <= 4096 else None
+
+
+def built_in_card_template_catalog() -> list[dict[str, Any]]:
+    """Project immutable system seed descriptions from the host's real types.
+
+    These are inert templates, not a persisted or healthy card inventory.
+    Each call returns fresh definitions so callers cannot mutate a global seed.
+    """
+    catalog: list[dict[str, Any]] = []
+    for component in sorted(CARD_TEMPLATE_COMPONENT_TYPES):
+        definition = validate_card_template_draft({
+            "schema_version": 1,
+            "template_key": "system-" + component.replace(".", "-"),
+            "title": component.replace(".", " ").title(),
+            "layout": "stack",
+            "density": "comfortable",
+            "interaction_mode": "read_only",
+            "slots": [{"slot_id": "primary", "component_type": component}],
+        })
+        if definition is None:
+            raise RuntimeError("Canonical system card definition is invalid")
+        catalog.append({
+            "origin": "system",
+            "editable": False,
+            "definition": definition,
+        })
+    return catalog
+
+
+def compose_card_template_with_verified_parts(
+    *,
+    template: Any,
+    authorized_parts_by_slot: Any,
+    presentation_id: str,
+    evidence_ref: str,
+    correlation_id: str | None = None,
+    authorized_evidence_refs: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Bind an inert layout to runtime-authorized evidence only.
+
+    Caller MUST supply parts already admitted through the original scoped
+    execution plan/receipt. This helper checks shape, type, identity and
+    evidence references, and delegates actual presentation admission to
+    compose_authorized_surface; it cannot independently authorize sources.
+    """
+    definition = validate_card_template_draft(template)
+    if definition is None or not isinstance(authorized_parts_by_slot, Mapping):
+        return None
+    slots = definition["slots"]
+    if set(authorized_parts_by_slot) != {slot["slot_id"] for slot in slots}:
+        return None
+    parts = []
+    for slot in slots:
+        verified = validate_presentation(authorized_parts_by_slot[slot["slot_id"]])
+        if verified is None or verified["component_type"] != slot["component_type"]:
+            return None
+        parts.append(verified)
+    if len({part["presentation_id"] for part in parts}) != len(parts):
+        return None
+    return compose_authorized_surface(
+        presentation_id=presentation_id,
+        evidence_ref=evidence_ref,
+        authorized_parts=parts,
+        proposed_layout={
+            "layout": definition["layout"],
+            "part_ids": [part["presentation_id"] for part in parts],
+        },
+        correlation_id=correlation_id,
+        authorized_evidence_refs=authorized_evidence_refs,
+    )

@@ -180,3 +180,33 @@ time/news provider probes; one bad card leaves chat plus peers readable;
 old/revoked/unknown templates fail closed; tenant isolation and RBAC; concurrent
 edits with revision conflict; cross-process persistence; historical replay;
 responsive browser tests; accessibility, structured telemetry and no secret logs.
+
+## KGUI-CARD-STUDIO-01A: Canonical inert template schema (source candidate)
+
+The first Card Studio foundation is deliberately **declarative and read-only**.
+The existing \`presentation_contract.py\` now owns the strict v1 draft layout,
+its built-in template seed projection and evidence-bound composition adapter.
+This is one extension of the existing presentation owner, not a second
+renderer registry, frontend code generator, execution pipeline or template store.
+
+A draft contains only \`schema_version=1\`, a bounded slug \`template_key\`,
+\`title\`, optional \`description\`, \`layout\` (stack/grid), \`density\`
+(compact/comfortable), \`interaction_mode=read_only\`, and 1–6 uniquely named
+\`slots\` whose \`component_type\` is already host-validated. The system
+projection derives eight reusable primitives from the canonical vocabulary.
+Nested compositions and revocable \`code.artifact\` are not template authoring
+primitives. No dynamic imports, scripts, HTML, executable callback definitions,
+unverified URLs, tenant claims, source content or permission grants are admitted.
+
+The binding adapter composes **only the caller's runtime-authorized existing
+presentation parts**, with exact slot/type matching and the current
+\`compose_authorized_surface\` evidence-reference validator. It grants no
+tool, memory, network, storage or replay authorization and is not yet wired to
+ChatRuntime, AG-UI, a Studio editor or user persistence.
+
+**Not yet implemented:** tenant-scoped PostgreSQL revisions, authoring API,
+RBAC/approval receipts, user template CRUD, shared library, chat-to-draft
+PromptRegistry, template publication, migration, plugin UI, authenticated
+consumer acceptance or local-provider health. All remain separate gates.
+Source CI is required before merge; a successful source test does not certify
+end-user deployment.
