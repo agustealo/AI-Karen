@@ -151,6 +151,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             # Keep it exact so "time complexity" or "time in physics" remain
             # ordinary model conversations instead of clock lookups.
             r"^time[?!.]*$",
+            # Short contextual calendar requests must not become model guesses.
+            r"^(?:the\s+)?date[?!.]*$",
             r"^what\s+time\s+is\s+it(?:\s+right\s+now)?(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^what(?:'s|s|\s+is)\s+the\s+(?:current\s+)?time(?:\s+(?:in|for)\s+.+)?[?!.]*$",
             r"^current\s+time(?:\s+(?:in|for)\s+.+)?[?!.]*$",

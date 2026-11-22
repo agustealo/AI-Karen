@@ -4265,10 +4265,10 @@ class ChatRuntime:
         if result.success and decision.intent in {
             "search.general", "search.weather", "time.current"
         }:
-            # A short clock query needs a verified current reading, not a
-            # second lengthy LLM generation. Richer observation questions
-            # retain the grounded model path with a bounded output budget.
-            simple_clock = False
+            # Simple clock/calendar questions need verified observations,
+            # not a second LLM answer that can invent the weekday.
+            # Richer observation questions retain bounded grounded synthesis.
+            simple_observation = False
             if decision.intent == "time.current" and request is not None:
                 latest = next(
                     (str(message.get("content") or "")
@@ -4276,12 +4276,15 @@ class ChatRuntime:
                      if isinstance(message, dict) and message.get("role") == "user"),
                     "",
                 ).strip().casefold().rstrip("?!.,")
-                simple_clock = latest in {
+                simple_observation = latest in {
                     "time", "current time", "time now", "what time is it",
                     "what's the time", "what is the time",
+                    "date", "the date", "current date", "today's date",
+                    "what's the date", "what is the date",
+                    "what's today's date", "what is today's date",
                 }
             synthesized = (
-                None if simple_clock else
+                None if simple_observation else
                 await self._synthesize_search_evidence(
                     request, decision, plan, meter, result
                 )
