@@ -170,9 +170,10 @@ async def test_memory_authorization_load_report() -> None:
     
         # Warm-up is excluded from measured samples and explicitly reported.
         for _ in range(4):
-            assert await gate.authorize_selected_records(
-                tenant_id=str(tenant), user_id=str(user), origins=[origin],
-            ) is True
+            async with asyncio.timeout(15):
+                assert await gate.authorize_selected_records(
+                    tenant_id=str(tenant), user_id=str(user), origins=[origin],
+                ) is True
         for concurrency in levels:
             results.append(await _measure(
                 gate, tenant=tenant, user=user, origin=origin,
