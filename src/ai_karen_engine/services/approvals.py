@@ -1050,14 +1050,14 @@ class ApprovalService:
         self, approval_id: str, *, request: "Request",
         confirmed: bool, correlation_id: str,
     ) -> bool:
-        """Revoke only the live server-bound receipt after explicit author action.
+        """Revoke the durable source-bound consent after explicit author action.
 
         A browser cannot choose tenant, actor, profile, artifact or receipt.
         Existing bearer, consent and RuntimePolicy owners enforce revocation.
         """
         if confirmed is not True:
             raise ApprovalScopeError("Explicit revocation confirmation required")
-        record, scope = await self.get_document_consent_revocation_scope(
+        _, scope = await self.get_document_consent_revocation_scope(
             approval_id, request=request,
         )
         revoked = await self.revoke_document_consent(
