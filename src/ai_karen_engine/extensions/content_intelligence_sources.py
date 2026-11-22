@@ -163,8 +163,86 @@ class ContentSourceHost:
         if getattr(result, "status", None) != "success":
             raise PermissionError("content_source_execution_denied")
         output = getattr(result, "payload", None)
-        if not isinstance(output, dict) or output.get("operation") != operation:
+        if (
+            not isinstance(output, dict)
+            or output.get("operation") != operation
+            or output.get("persisted") is not False
+        ):
             raise RuntimeError("content_source_output_invalid")
+
+        # Kernel status is not source-lineage evidence. Check the returned
+        # reference identities against the bytes already authorized and read.
+        # No output may add, substitute or re-label an owner source.
+        authorized = {
+            document["id"]: {
+                "name": document["name"],
+                "sha256": hashlib.sha256(document["text"].encode("utf-8")).hexdigest(),
+                "characters": len(document["text"]),
+                "text": document["text"],
+            }
+            for document in documents
+        }
+        if operation == "analyze":
+            analyzed = output.get("documents")
+            if not isinstance(analyzed, list) or len(analyzed) != len(authorized):
+                raise RuntimeError("content_source_output_invalid")
+            returned_ids: set[str] = set()
+            for item in analyzed:
+                if not isinstance(item, dict):
+                    raise RuntimeError("content_source_output_invalid")
+                identifier = item.get("id")
+                original = authorized.get(identifier) if isinstance(identifier, str) else None
+                if (
+                    original is None or identifier in returned_ids
+                    or item.get("name") != original["name"]
+                    or item.get("sha256") != original["sha256"]
+                    or type(item.get("characters")) is not int
+                    or item["characters"] != original["characters"]
+                    or not isinstance(item.get("top_terms"), list)
+                    or len(item["top_terms"]) > 12
+                    or any(
+                        not isinstance(term, dict)
+                        or not isinstance(term.get("term"), str)
+                        or not term["term"]
+                        or type(term.get("count")) is not int
+                        or term["count"] < 1
+                        for term in item["top_terms"]
+                    )
+                ):
+                    raise RuntimeError("content_source_output_invalid")
+                returned_ids.add(identifier)
+        elif operation == "compare":
+            if (
+                output.get("left_id") != left_id
+                or output.get("right_id") != right_id
+                or output.get("left_sha256") != authorized[left_id]["sha256"]
+                or output.get("right_sha256") != authorized[right_id]["sha256"]
+            ):
+                raise RuntimeError("content_source_output_invalid")
+        else:
+            matches = output.get("matches")
+            if (
+                output.get("query") != query
+                or not isinstance(matches, list)
+                or len(matches) > 12
+            ):
+                raise RuntimeError("content_source_output_invalid")
+            for hit in matches:
+                if not isinstance(hit, dict):
+                    raise RuntimeError("content_source_output_invalid")
+                identifier = hit.get("document_id")
+                original = authorized.get(identifier) if isinstance(identifier, str) else None
+                start, end, excerpt = hit.get("offset"), hit.get("end_offset"), hit.get("excerpt")
+                if (
+                    original is None
+                    or hit.get("document_name") != original["name"]
+                    or hit.get("sha256") != original["sha256"]
+                    or type(start) is not int
+                    or type(end) is not int
+                    or not 0 <= start < end <= original["characters"]
+                    or excerpt != original["text"][start:end]
+                ):
+                    raise RuntimeError("content_source_output_invalid")
         logger.info("content_source_execution_completed", extra={
             "request_id": context.request_id,
             "correlation_id": context.correlation_id,
