@@ -133,6 +133,11 @@ async def test_committed_revocation_visible_across_independent_processes():
         assert {item[0] for item in results} == {pid for pid, _ in observed}
         assert all(len(item) == 3 and item[1:] == (False, False)
                    for item in results), results
+        for process in workers:
+            await asyncio.to_thread(process.join, 5)
+            assert process.exitcode == 0, (
+                f"reader process {process.pid} exited with {process.exitcode}"
+            )
     finally:
         release.set()
         for process in workers:
