@@ -66,8 +66,33 @@ export async function openChat(page: Page): Promise<void> {
     throw new Error('Approved live chat generation acceptance is not configured');
   }
   const local = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === '1';
+  const configured = process.env.KAREN_BASE_URL;
+  if (!configured) throw new Error('Approved chat-generation origin is required');
+  const base = new URL(configured);
+  const clean = !base.username && !base.password && base.pathname === '/' &&
+    !base.search && !base.hash;
+  const approvedRelease = base.protocol === 'https:' && !base.port;
+  const approvedLoopback = local && base.protocol === 'http:' &&
+    ['localhost', '127.0.0.1'].includes(base.hostname) && !!base.port;
+  if (!clean || !(approvedRelease || approvedLoopback)) {
+    throw new Error('Chat generation acceptance requires an approved exact origin');
+  }
+  // Never send credentials to a deployment without its real canonical API.
+  const health = await page.context().request.get(
+    new URL('/api/health', base).toString(),
+    { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
+  );
+  if (health.status() !== 200 ||
+      !/^application\\/json(?:;|$)/i.test(health.headers()['content-type'] || '')) {
+    throw new Error('Canonical chat backend is not ready for live acceptance');
+  }
+  const readiness: unknown = await health.json();
+  if (!readiness || typeof readiness !== 'object' ||
+      (readiness as Record<string, unknown>).status !== 'ok' ||
+      (readiness as Record<string, unknown>).backend_ready !== true) {
+    throw new Error('Canonical chat backend did not report verified readiness');
+  }
   await signInApprovedKaren(page, email, password, { allowLocalLoopback: local });
-  const base = new URL(process.env.KAREN_BASE_URL!);
   await page.goto(new URL('/dashboard', base).toString());
   expect(new URL(page.url()).origin).toBe(base.origin);
   await expect(page.getByTestId('karen-copilot-consumer-chat')).toBeVisible({ timeout: 60_000 });
