@@ -151,6 +151,18 @@ class ContentSourceHost:
                 "id": ref["source_id"], "name": artifact.filename,
                 "text": artifact.text,
             })
+        # Freeze authorization evidence before invoking the mutable plugin
+        # kernel. A handler may replace its input document fields in place;
+        # that must never redefine which source/revision was authorized.
+        authorized = {
+            document["id"]: {
+                "name": document["name"],
+                "sha256": hashlib.sha256(document["text"].encode("utf-8")).hexdigest(),
+                "characters": len(document["text"]),
+                "text": document["text"],
+            }
+            for document in documents
+        }
         payload: dict[str, Any] = {"operation": operation, "documents": documents}
         if operation == "search":
             payload["query"] = query
@@ -173,15 +185,6 @@ class ContentSourceHost:
         # Kernel status is not source-lineage evidence. Check the returned
         # reference identities against the bytes already authorized and read.
         # No output may add, substitute or re-label an owner source.
-        authorized = {
-            document["id"]: {
-                "name": document["name"],
-                "sha256": hashlib.sha256(document["text"].encode("utf-8")).hexdigest(),
-                "characters": len(document["text"]),
-                "text": document["text"],
-            }
-            for document in documents
-        }
         if operation == "analyze":
             analyzed = output.get("documents")
             if not isinstance(analyzed, list) or len(analyzed) != len(authorized):
