@@ -207,9 +207,27 @@ describe('first-party document author confirmation', () => {
       name: 'Confirm revoke document consent',
     }));
     fireEvent.click(screen.getByRole('button', { name: 'Revoke document consent' }));
-    expect(await screen.findByText(/Revocation could not be verified/)).toBeTruthy();
+    expect(await screen.findByText(/Revocation was not confirmed/)).toBeTruthy();
     expect(screen.queryByText(/Document consent revocation recorded/)).toBeNull();
     expect(screen.getByText(/Verified receipt ID:/)).toBeTruthy();
+  });
+
+
+  it('clears a stale receipt after an uncertain revocation and failed recovery', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.endsWith('/receipt')
+        ? { approval_id: approvalId, status: 'issued', receipt_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' }
+        : { ...preview, status: 'consumed' },
+    ));
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    expect(await screen.findByText(/Verified receipt ID:/)).toBeTruthy();
+    api.post.mockRejectedValue(new Error('lost response'));
+    api.get.mockRejectedValue(new Error('receipt now unavailable'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Confirm revoke document consent' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke document consent' }));
+    expect(await screen.findByText(/No current consent receipt was recovered/)).toBeTruthy();
+    expect(screen.queryByText(/Document consent revocation recorded/)).toBeNull();
+    expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
   });
 
 });
