@@ -258,6 +258,43 @@ async def issue_document_author_consent(
         raise HTTPException(status_code=409, detail="Document receipt not issued") from exc
 
 
+class DocumentAuthorRevocationPreview(BaseModel):
+    """Stored provenance only; does not claim the receipt is still current."""
+    approval_id: UUID
+    status: str
+    profile_id: UUID
+    artifact_id: UUID
+    source_sha256: str
+
+
+@router.get(
+    "/document-consent/{approval_id}/revoke-review",
+    response_model=DocumentAuthorRevocationPreview,
+)
+async def review_document_author_revocation(
+    approval_id: UUID,
+    request: Request,
+):
+    """Present immutable consumed-approval scope without original token/file."""
+    try:
+        record, scope = await get_approval_service().get_document_consent_revocation_scope(
+            str(approval_id), request=request,
+        )
+        return DocumentAuthorRevocationPreview(
+            approval_id=approval_id,
+            status=record["status"],
+            profile_id=UUID(scope.profile_id),
+            artifact_id=UUID(scope.artifact_id),
+            source_sha256=scope.source_sha256,
+        )
+    except ApprovalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Document approval not found") from exc
+    except (ApprovalScopeError, PermissionError) as exc:
+        raise HTTPException(status_code=403, detail="Revocation review denied") from exc
+    except ApprovalStateError as exc:
+        raise HTTPException(status_code=409, detail="No issued author consent") from exc
+
+
 class DocumentAuthorRevocation(BaseModel):
     """Deliberate human revocation; no caller-controlled receipt scope."""
 
