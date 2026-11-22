@@ -145,7 +145,7 @@ describe('first-party document author confirmation', () => {
       '/api/approvals/document-consent/' + approvalId + '/receipt',
     );
     expect(api.post).not.toHaveBeenCalled();
-    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /I authored this document/ })).toBeNull();
   });
 
   it('denies review when the server has no valid source identity', async () => {
@@ -162,4 +162,54 @@ describe('first-party document author confirmation', () => {
     expect(api.get).not.toHaveBeenCalled();
     expect(api.post).not.toHaveBeenCalled();
   });
+
+  it('requires a separate revocation gesture and only acknowledges backend finality', async () => {
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    await screen.findByText(preview.artifact_id);
+    fireEvent.click(screen.getByRole('checkbox', { name: /I authored this document/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm author consent' }));
+    expect(await screen.findByText(/Document-consent receipt issued/)).toBeTruthy();
+
+    const revoke = screen.getByRole('button', { name: 'Revoke document consent' });
+    expect((revoke as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(revoke);
+    expect(api.post).not.toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/revoke',
+      { confirmed: true },
+    );
+    api.post.mockImplementation((url: string) => Promise.resolve(
+      url.endsWith('/revoke')
+        ? { approval_id: approvalId, status: 'revoked' }
+        : { approval_id: approvalId, status: 'approved' },
+    ));
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'Confirm revoke document consent',
+    }));
+    fireEvent.click(revoke);
+    expect(await screen.findByText(/Document consent revocation recorded/)).toBeTruthy();
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/revoke',
+      { confirmed: true },
+    );
+    expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
+  });
+
+  it('does not claim revoked consent on failed backend revocation', async () => {
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url.endsWith('/receipt')
+        ? { approval_id: approvalId, status: 'issued', receipt_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' }
+        : { ...preview, status: 'consumed' },
+    ));
+    api.post.mockRejectedValue(new Error('409'));
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    expect(await screen.findByText(/Verified receipt ID:/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'Confirm revoke document consent',
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke document consent' }));
+    expect(await screen.findByText(/Revocation could not be verified/)).toBeTruthy();
+    expect(screen.queryByText(/Document consent revocation recorded/)).toBeNull();
+    expect(screen.getByText(/Verified receipt ID:/)).toBeTruthy();
+  });
+
 });
