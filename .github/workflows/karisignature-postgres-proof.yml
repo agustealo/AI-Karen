@@ -101,6 +101,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/chat.txt
+          # Artifact HTTP ingress declares UploadFile; FastAPI requires multipart
+          # at route-import time even when this test exercises metadata only.
+          python -m pip install 'python-multipart>=0.0.9,<1'
       - name: Create new dedicated disposable style test database
         run: |
           python - <<'PY'
