@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from ai_karen_engine.config.database import get_database_settings
 from ai_karen_engine.persistence.postgres import get_postgres_engine
 
 logger = logging.getLogger(__name__)
@@ -41,26 +42,93 @@ def transaction_scope(
         session.close()
 
 
-async def rollback_async_transaction(session: AsyncSession) -> None:
-    """Complete rollback despite repeated cancellation, invalidating on failure."""
-    rollback_task = asyncio.create_task(session.rollback())
-    while not rollback_task.done():
+async def _bounded_transaction_cleanup(
+    operation,
+    *,
+    seconds: float,
+    label: str,
+) -> None:
+    """Drain an async SQLAlchemy cleanup operation within a finite budget.
+
+    Repeated caller cancellations cannot bypass rollback safety. If the
+    driver ignores its own cancellation, fail closed and report an uncertain
+    session, rather than claim the connection was returned cleanly.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    task = asyncio.create_task(operation)
+    while not task.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
         try:
-            await asyncio.shield(rollback_task)
+            await asyncio.wait({task}, timeout=remaining)
         except asyncio.CancelledError:
-            if rollback_task.done():
-                break
+            # The original cancellation is re-raised by the transaction
+            # owner once cleanup is complete or its deadline has expired.
+            continue
+    if task.done():
+        await task
+        return
+
+    task.cancel()
+    # A driver that supports cancellation should finish teardown promptly.
+    grace_deadline = loop.time() + min(1.0, seconds)
+    while not task.done() and loop.time() < grace_deadline:
+        try:
+            await asyncio.wait(
+                {task}, timeout=max(0.0, grace_deadline - loop.time())
+            )
+        except asyncio.CancelledError:
+            continue
+
+    if task.done():
+        # Consume cancellation/failure so the abandoned task cannot emit a
+        # never-retrieved exception or be mistaken for clean rollback.
+        try:
+            await task
+        except BaseException:
+            pass
+        raise TimeoutError(f"postgres_{label}_deadline_exceeded")
+
+    def _observe_late_completion(completed: asyncio.Task) -> None:
+        try:
+            completed.result()
+        except BaseException:
+            pass
+
+    task.add_done_callback(_observe_late_completion)
+    logger.critical(
+        "postgres.transaction_cleanup_unresponsive",
+        extra={"operation": label, "deadline_seconds": seconds},
+    )
+    raise RuntimeError(f"postgres_{label}_unresponsive_connection_uncertain")
+
+
+async def rollback_async_transaction(session: AsyncSession) -> None:
+    """Rollback within configured deadlines; invalidate after uncertain outcome."""
+    settings = get_database_settings().pool
     try:
-        await rollback_task
+        await _bounded_transaction_cleanup(
+            session.rollback(),
+            seconds=settings.rollback_timeout_seconds,
+            label="rollback",
+        )
     except BaseException:
-        invalidate_task = asyncio.create_task(session.invalidate())
-        while not invalidate_task.done():
-            try:
-                await asyncio.shield(invalidate_task)
-            except asyncio.CancelledError:
-                if invalidate_task.done():
-                    break
-        await invalidate_task
+        try:
+            await _bounded_transaction_cleanup(
+                session.invalidate(),
+                seconds=settings.invalidate_timeout_seconds,
+                label="invalidate",
+            )
+        except BaseException:
+            logger.exception(
+                "postgres.transaction_invalidation_failed",
+                extra={"rollback_state": "uncertain"},
+            )
+            raise RuntimeError(
+                "postgres_transaction_cleanup_failed_connection_uncertain"
+            ) from None
         raise
 
 
