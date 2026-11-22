@@ -992,12 +992,16 @@ class PluginKernel:
                     "Required plugin dependencies must be enabled first: "
                     + ", ".join(sorted(missing))
                 )
-        if any(
-            capability.id == "communication_channel"
-            for capability in getattr(registration.manifest, "capabilities", ())
-        ):
+        # Specialized capabilities are managed by their authoritative hosts,
+        # not by the general plugin lifecycle or its local enable markers.
+        # Keep this symmetric with verified lifecycle finalization.
+        if manifest is not None and manifest.capabilities.communication_channel is not None:
             raise ValueError(
                 "Communication channel activation requires the governed Channel Gateway"
+            )
+        if manifest is not None and manifest.capabilities.voice_modality is not None:
+            raise ValueError(
+                "Voice plugin activation requires the governed voice runtime"
             )
         marker = self.extensions_root / plugin_id / ".karen-manual-disabled"
         enabled_marker = self.extensions_root / plugin_id / self.MANUAL_ENABLED_MARKER
@@ -1042,6 +1046,15 @@ class PluginKernel:
         registration = self.runtime_registry.get(plugin_id)
         if registration is None:
             return False
+        manifest = self._catalog_manifests.get(plugin_id)
+        if manifest is not None and manifest.capabilities.communication_channel is not None:
+            raise ValueError(
+                "Communication channel deactivation requires the governed Channel Gateway"
+            )
+        if manifest is not None and manifest.capabilities.voice_modality is not None:
+            raise ValueError(
+                "Voice plugin deactivation requires the governed voice runtime"
+            )
         # A running handler cannot be shut down from under its execution.
         # Explicit disable remains a separate governed operation.
         if plugin_id in self._active.values():
