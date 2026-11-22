@@ -1,13 +1,13 @@
 # Document author consent: real browser acceptance
 
-**Slice:** WS-04A9T, PR #1183. This is a source-specific, first-party author workflow, not a generic chat approval or proof of third-party authorship.
+**Slice:** WS-04A9T through WS-04A9Y, PR #1183. This is a source-specific, first-party author workflow, not a generic chat approval or proof of third-party authorship.
 
 ## Execution authority
 
 - The approved original is a **real existing** author-owned plain-text file, 1–65536 bytes, present in the canonical tenant-scoped PostgreSQL file registry. The approved writing-style profile must be a permitted draft.
 - Only `ApprovalService` creates/decides document approval and issues consent through canonical `RuntimePolicyEnforcer` and `PostgresDocumentStyleConsentIssuer`. A browser button and chat metadata are not approval authorities.
 - Receipt issuance consumes the approved request once, atomically with insertion and a locked canonical source check. The immutable consumed scope remains available for read-only recovery; recovered receipts are verified against current source SHA-256, permissions, revocation and expiry.
-- The test does **not** upload a document, create an approval, fabricate a consent receipt, or enable ingestion. Source initiation must be independently verified through canonical runtime owners.
+- The test does **not** upload a document, fabricate a consent receipt, or enable ingestion. Its opt-in mutation trial now creates its own pending approval through authenticated source initiation in the SAME live browser session used for confirmation.
 
 ## Real host trial, disabled by default
 
@@ -19,13 +19,13 @@ Run from `src/ui_launchers/Karen-AI-Theme` on an approved isolated test installa
 | `KAREN_BASE_URL` | Clean approved HTTPS origin, or explicit local loopback |
 | `KAREN_LOCAL_CHAT_ACCEPTANCE=1` | Required only for a loopback host |
 | `KAREN_UX_EMAIL`, `KAREN_UX_PASSWORD` | Real dedicated sanitized author account |
-| `KAREN_DOCUMENT_AUTHOR_APPROVAL_ID` | Existing real author-scope approval UUID |
+| `KAREN_DOCUMENT_AUTHOR_PROFILE_ID` | Real author-owned eligible draft profile UUID for the mutation trial |
 | `KAREN_DOCUMENT_AUTHOR_ARTIFACT_ID` | Expected canonical file UUID |
 | `KAREN_DOCUMENT_AUTHOR_SOURCE_SHA256` | Expected live file digest |
 | `KAREN_DOCUMENT_AUTHOR_SOURCE_NAME` | Expected original filename |
 | `KAREN_DOCUMENT_AUTHOR_MUTATION_ACCEPTANCE=true` | **Separate explicit permission** to confirm and issue a real receipt from the disposable fixture |
 
-Run `npm run test:e2e:document-author`. Default opt-in performs **read-only** review and proves confirmation is disabled until a deliberate author gesture. The independent mutation gate uses a disposable, author-controlled fixture to exercise human confirmation, live issuance, page reload and receipt recovery. Real HTTP responses and actual credentials are used. There is no request interception, fixture mocking, trace, screenshot, video, JSON report or automatic retry. Authentication is origin locked and uses the existing approved-host login helper.
+Run `npm run test:e2e:document-author`. Default opt-in performs **read-only** authenticated document inventory inspection without initiating an approval. The independent mutation gate uses a disposable, author-controlled source and profile to initiate a fresh approval in the same bearer session, verify the review's canonical identity, exercise explicit human confirmation, live issuance, page reload and receipt recovery. Real HTTP responses and actual credentials are used. There is no request interception, fixture mocking, trace, screenshot, video, JSON report or automatic retry. Authentication is origin locked and uses the existing approved-host login helper.
 
 ## Acceptance evidence and boundaries
 
@@ -94,3 +94,14 @@ The page requires an explicit existing draft-profile UUID because no verified au
 The existing real-browser acceptance suite now includes a **separate opt-in mutation-gated initiation** test: the author logs into the approved origin, selects the exact owner-listed source, requests a pending approval, and verifies canonical source identity on the dedicated confirmation page while the confirmation checkbox remains unselected and the confirm action disabled. Set `KAREN_DOCUMENT_AUTHOR_PROFILE_ID` to the real author-owned eligible draft profile UUID in the same protected, non-logged environment as the existing test fixtures. A skipped test or missing profile fixture is not acceptance evidence.
 
 This is the **first-party source-selection and pending-approval UX**, not completed browser-to-PostgreSQL certification, a profile-discovery UI, document-text ingestion, publication, or use authorization. Consumer document ingestion remains disabled. Fresh exact-head frontend and PostgreSQL checks, independently observed host trial, signed storage read and revocation/use proof are release requirements.
+
+
+### WS-04A9Y: canonical draft-profile inventory and P2 browser repairs
+
+The first-party selector now lists only author-owned draft profiles from `WritingStyleProfileRepository.list_owned_drafts`, invoked by `ApprovalService.list_document_author_draft_profiles` after fresh high-risk bearer validation and exposed through the thin `GET /api/approvals/document-consent/profiles` route. The SQL query scopes tenant and owner, requires `state='draft'` and `publication_revision=0`, and runs under existing RLS. The browser does **not** accept free-form profile IDs or infer eligibility from displayed records. Initiation performs its own authorization and locked source verification.
+
+The live-browser suite no longer attempts to review approvals created under an unrelated login token, which would correctly fail the server's session binding. The read-only trial checks only the authenticated source inventory. The explicitly authorized mutation trial initiates a new approval in its live author session, checks the pending state before confirmation, then verifies receipt issuance and durable readback. Both source and profile selectors must return the dedicated fixture; missing inventory is denial, not permission to type an ID.
+
+Playwright now polls the actual canonical review values after the asynchronous preview request instead of asserting immediately after the section container appears. No sensitive source IDs, filenames, digests or auth tokens are placed in assertion error messages or artifacts. The review fixes do not weaken the runtime approval session binding, nor do they certify a live trial until executed on a target host.
+
+**Remaining:** complete fresh exact-head CI and independent review, observe the real approved-host browser trial and Supabase storage proof, verify current source consent through publication and every delegated use. Keep draft/unmerged and consumer ingestion disabled.
