@@ -198,7 +198,8 @@ async def async_transaction_scope(
     rollback task; this caller never races close against a pending rollback.
     """
     engine = get_postgres_engine()
-    session = engine.async_session_factory()
+    context_manager = engine.async_session_factory()
+    session = await context_manager.__aenter__()
     close_in_caller = True
     try:
         try:
@@ -233,7 +234,7 @@ async def async_transaction_scope(
             raise
     finally:
         if close_in_caller:
-            await session.close()
+            await context_manager.__aexit__(None, None, None)
 
 
 def _apply_tenant_context_sync(session: Session, tenant_id: str) -> None:
