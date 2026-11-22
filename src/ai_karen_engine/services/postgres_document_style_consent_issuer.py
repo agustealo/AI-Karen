@@ -385,6 +385,7 @@ class PostgresDocumentStyleConsentIssuer:
     async def revoke_first_party(
         self, *, tenant_id: str, actor_id: str, profile_id: str,
         artifact_id: str, correlation_id: str, request: Request,
+        expected_source_sha256: str | None = None,
     ) -> bool:
         """Revoke only on a fresh author bearer session and host policy.
 
@@ -397,6 +398,13 @@ class PostgresDocumentStyleConsentIssuer:
             or not isinstance(request, Request)
             or not self._valid_mutation(
                 tenant_id, actor_id, profile_id, artifact_id, correlation_id
+            )
+            or (
+                expected_source_sha256 is not None
+                and (
+                    not isinstance(expected_source_sha256, str)
+                    or _DIGEST.fullmatch(expected_source_sha256) is None
+                )
             )
         ):
             return False
@@ -432,11 +440,13 @@ class PostgresDocumentStyleConsentIssuer:
                         "AND owner_actor_id=CAST(:actor AS uuid) "
                         "AND author_actor_id=CAST(:actor AS uuid) "
                         "AND artifact_id=CAST(:artifact AS uuid) "
+                        "AND (:expected_source IS NULL OR source_sha256=:expected_source) "
                         "AND revoked_at IS NULL RETURNING receipt_id"
                     ),
                     dict(
                         tenant=tenant_id, profile=profile_id, actor=actor_id,
                         artifact=artifact_id,
+                        expected_source=expected_source_sha256,
                     ),
                 )
                 return result.first() is not None
