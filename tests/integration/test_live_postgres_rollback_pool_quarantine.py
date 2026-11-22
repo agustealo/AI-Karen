@@ -45,9 +45,11 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
     session = engine.async_session_factory()
 
     def hold_real_rollback(connection):
-        # SQLAlchemy's ConnectionEvents.rollback is dispatched before the
-        # DBAPI rollback and before SessionTransaction.close can release
-        # this connection. The connection is still checked out here.
+        # Only suspend the target connection. Independent queries must be
+        # able to roll back normally while this rollback is held.
+        if connection.connection.driver_connection is not held_driver:
+            return
+        # The event fires before DBAPI rollback/transaction closure.
         entered_rollback.set()
         try:
             await_only(release_rollback.wait())
