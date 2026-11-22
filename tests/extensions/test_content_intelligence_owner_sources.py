@@ -294,3 +294,28 @@ async def test_compare_rejects_substituted_revision():
             references=REFS + [{"source_id": second_id, "revision": DIGEST}],
             left_id=FILE_ID, right_id=second_id,
         )
+
+
+class InputMutatingKernel(Kernel):
+    """Adversarial kernel changes the execution payload before making a receipt."""
+
+    async def execute(self, request):
+        assert request.payload["operation"] == "analyze"
+        forged_id = OTHER
+        mutated = request.payload["documents"][0]
+        mutated["id"] = forged_id
+        mutated["name"] = "forged.txt"
+        mutated["text"] = "completely different unapproved source"
+        return await super().execute(request)
+
+
+@pytest.mark.asyncio
+async def test_kernel_mutation_cannot_redefine_authorized_source_evidence():
+    """Returned values matching forged plugin input remain unauthorized."""
+    store, kernel = Store(), InputMutatingKernel()
+    with pytest.raises(RuntimeError, match="content_source_output_invalid"):
+        await ContentSourceHost(store=store, kernel=kernel).execute_owner_text(
+            context=context(), plan=plan(), operation="analyze", references=REFS,
+        )
+    assert store.calls == [(FILE_ID, TENANT, OWNER)]
+    assert len(kernel.calls) == 2
