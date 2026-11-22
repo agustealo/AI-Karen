@@ -295,6 +295,7 @@ class UIMaterializationPipeline:
         updated: List[Dict[str, Any]] = []
         removed: List[Dict[str, Any]] = []
         errors: List[Dict[str, str]] = []
+        materialized_ui_plugins: List[Dict[str, Any]] = []
 
         for plugin_ui in ui_plugins:
             try:
@@ -302,6 +303,10 @@ class UIMaterializationPipeline:
                 generated.extend(result["generated"])
                 updated.extend(result["updated"])
                 removed.extend(result["removed"])
+                if plugin_ui.get("has_component") and plugin_ui.get("component_path"):
+                    # Discovery is not materialization. Never advertise a UI
+                    # importer for a plugin whose source copy failed.
+                    materialized_ui_plugins.append(plugin_ui)
             except Exception as exc:
                 logger.exception(
                     "Failed to materialize governed UI plugin %s",
@@ -312,7 +317,7 @@ class UIMaterializationPipeline:
                 )
 
         removed.extend(await self.cleanup_stale_artifacts(ui_plugins))
-        import_map = await self.generate_import_map(ui_plugins)
+        import_map = await self.generate_import_map(materialized_ui_plugins)
         return {
             "status": "success" if not errors else "degraded",
             "timestamp": datetime.utcnow().isoformat(),
@@ -327,6 +332,10 @@ class UIMaterializationPipeline:
     async def materialize_plugin(self, plugin_ui: Dict[str, Any]) -> Dict[str, Any]:
         if not plugin_ui.get("registry_validated"):
             raise ValueError("refusing to materialize unvalidated UI plugin metadata")
+        if not plugin_ui.get("has_component") or not plugin_ui.get("component_path"):
+            raise ValueError(
+                f"validated UI entry component missing for {plugin_ui['plugin_id']}"
+            )
 
         generated: List[Dict[str, Any]] = []
         updated: List[Dict[str, Any]] = []
@@ -457,25 +466,70 @@ class UIMaterializationPipeline:
         }
 
     async def _materialize_ui_source(self, plugin_ui: Dict[str, Any]) -> bool:
+        """Copy only regular governed UI assets into a non-linked package.
+
+        Validate all source and destination paths before writing so an unsafe
+        link cannot produce a partial published package or escape plugin_repo.
+        """
         plugin_id = plugin_ui["plugin_id"]
         plugin_dir = Path(plugin_ui["plugin_dir"])
         manifest_path = Path(plugin_ui["manifest_path"])
         ui_config = plugin_ui.get("ui_config", {})
-        source_dir = plugin_dir / str(ui_config.get("source_path") or "ui")
-        if not source_dir.exists():
-            logger.error(
-                "Validated UI contract source is missing for %s: %s",
-                plugin_id,
-                source_dir,
-            )
-            return False
-
+        source_rel = Path(str(ui_config.get("source_path") or "ui"))
         target_dir = self.plugins_ui_dir / plugin_id.replace("_", "-")
-        target_dir.mkdir(parents=True, exist_ok=True)
-        allowed_suffixes = {".tsx", ".jsx", ".ts", ".js", ".css", ".svg", ".png", ".jpg", ".jpeg"}
+        allowed_suffixes = {
+            ".tsx", ".jsx", ".ts", ".js", ".css",
+            ".svg", ".png", ".jpg", ".jpeg",
+        }
 
         try:
-            for file_path in source_dir.rglob("*"):
+            if (
+                not re.fullmatch(r"[a-zA-Z0-9_-]+", plugin_id)
+                or source_rel.is_absolute()
+                or not source_rel.parts
+                or any(part in {".", ".."} for part in source_rel.parts)
+            ):
+                raise ValueError("unsafe UI source path or plugin identifier")
+
+            source_dir = plugin_dir / source_rel
+            if (
+                not source_dir.is_dir()
+                or source_dir.is_symlink()
+                or not source_dir.resolve().is_relative_to(plugin_dir.resolve())
+                or any((plugin_dir / Path(*source_rel.parts[:index])).is_symlink()
+                       for index in range(1, len(source_rel.parts) + 1))
+                or plugin_dir.is_symlink()
+                or not manifest_path.is_file()
+                or manifest_path.is_symlink()
+                or not manifest_path.resolve().is_relative_to(plugin_dir.resolve())
+            ):
+                raise ValueError("missing or unsafe governed UI source")
+
+            # Validate all links before any copy. rglob includes link entries,
+            # even where a linked directory is not traversed.
+            source_assets = list(source_dir.rglob("*"))
+            if any(asset.is_symlink() for asset in source_assets):
+                raise ValueError("linked UI source files are not allowed")
+
+            # The frontend publication root may itself be nested beneath a
+            # linked parent. Check every lexical ancestor without resolving the
+            # link, or mkdir/copy can escape into an unrelated directory.
+            publication_root = self.plugins_ui_dir.absolute()
+            if any(
+                candidate.is_symlink()
+                for candidate in (publication_root, *publication_root.parents)
+            ):
+                raise ValueError("linked UI publication ancestry is not allowed")
+            if target_dir.is_symlink():
+                raise ValueError("linked UI target directory is not allowed")
+            if target_dir.exists():
+                if not target_dir.is_dir():
+                    raise ValueError("UI package target is not a directory")
+                if any(item.is_symlink() for item in target_dir.rglob("*")):
+                    raise ValueError("linked published UI assets are not allowed")
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for file_path in source_assets:
                 if not file_path.is_file() or file_path.suffix.lower() not in allowed_suffixes:
                     continue
                 relative_path = file_path.relative_to(source_dir)
