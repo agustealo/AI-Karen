@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { ApiError, apiClient } from '../../src/lib/api';
 import type { ExtensionAPI } from '../../src/lib/extensions/hooks/usePluginExtension';
 import { TimeQueryApi } from '../../src/plugin_repo/time-query/services/timeQueryApi';
@@ -66,7 +66,7 @@ describe('Time Query HTTP 429 recovery and non-replay contract', () => {
     const error = new ApiError(429, 'Throttled', {}, 4);
     const execute = vi.fn().mockRejectedValue(error);
     const api = new TimeQueryApi(extension(execute));
-    await expect(api.createAlarm({} as Parameters<typeof api.createAlarm>[0])).rejects.toBe(error);
+    await expect(api.createAlarm({ title: 'Morning reminder', alarm_datetime: '2026-11-23T09:00:00', timezone: 'America/Detroit', enabled: true })).rejects.toBe(error);
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
