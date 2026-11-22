@@ -41,6 +41,9 @@ export function DocumentAuthorConsentConfirmation({
   const [decision, setDecision] = useState<ApprovalDecision | null>(null);
   const [receiptId, setReceiptId] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
+  const [revokeConfirmed, setRevokeConfirmed] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [revoked, setRevoked] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -49,6 +52,8 @@ export function DocumentAuthorConsentConfirmation({
     setConfirmed(false);
     setDecision(null);
     setReceiptId(null);
+    setRevokeConfirmed(false);
+    setRevoked(false);
     setError(null);
     if (!ID.test(approvalId)) {
       setError('Invalid approval reference.');
@@ -151,6 +156,29 @@ export function DocumentAuthorConsentConfirmation({
       }
     } finally {
       setIssuing(false);
+    }
+  }
+
+  async function handleRevoke() {
+    if (!receiptId || !revokeConfirmed || revoking || revoked || !preview) return;
+    setRevoking(true);
+    setError(null);
+    try {
+      const result = await apiClient.post<{
+        approval_id: string; status: string;
+      }>('/api/approvals/document-consent/' + preview.approval_id + '/revoke', {
+        confirmed: true,
+      });
+      if (result.approval_id !== preview.approval_id || result.status !== 'revoked') {
+        throw new Error('Revocation could not be verified.');
+      }
+      setRevoked(true);
+      setReceiptId(null);
+      setRevokeConfirmed(false);
+    } catch {
+      setError('Revocation could not be verified. No revoked status is claimed.');
+    } finally {
+      setRevoking(false);
     }
   }
 
@@ -284,6 +312,31 @@ export function DocumentAuthorConsentConfirmation({
             </button>
           )}
           {issuing && <p role="status">Issuing consent receipt…</p>}
+        </div>
+      )}
+      {revoked && (
+        <p role="status">Document consent revocation recorded. No current receipt is claimed.</p>
+      )}
+      {receiptId && !revoked && (
+        <div className="space-y-2 rounded-md border border-border p-3">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label="Confirm revoke document consent"
+              checked={revokeConfirmed}
+              onChange={(event) => setRevokeConfirmed(event.target.checked)}
+              disabled={revoking}
+            />
+            <span>Revoke this document consent and its dependent writing-style permissions.</span>
+          </label>
+          <button
+            type="button"
+            disabled={!revokeConfirmed || revoking}
+            onClick={() => { void handleRevoke(); }}
+            className="rounded-md border border-border px-4 py-2 disabled:opacity-50"
+          >
+            {revoking ? 'Revoking…' : 'Revoke document consent'}
+          </button>
         </div>
       )}
     </section>
