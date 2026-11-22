@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.presentation_contract import redact_revocable_code_metadata
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     ConversationRuntimeGateway,
     ConversationSnapshot,
@@ -210,7 +211,7 @@ class ConversationListResponse(BaseModel):
 
 
 def _canonical_message_to_response(message: Any) -> MessageResponse:
-    metadata = dict(getattr(message, "metadata", {}) or {})
+    metadata = redact_revocable_code_metadata(dict(getattr(message, "metadata", {}) or {}))
     return MessageResponse(
         id=str(message.id),
         role=str(message.role),
@@ -235,7 +236,7 @@ def _canonical_snapshot_to_response(
     snapshot: ConversationSnapshot,
 ) -> ConversationResponse:
     conversation = snapshot.conversation
-    metadata = dict(conversation.metadata or {})
+    metadata = redact_revocable_code_metadata(dict(conversation.metadata or {}))
     messages = [_canonical_message_to_response(message) for message in snapshot.messages]
     last_message_at = (
         snapshot.messages[-1].created_at.isoformat() if snapshot.messages else None
