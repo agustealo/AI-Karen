@@ -748,8 +748,20 @@ async def test_first_party_author_consent_postgres(
             "status": auth_middleware.TokenStatus.VALID,
             "payload": claims,
         }
+        # Deleting/archiving the canonical file must not strand a still-live
+        # author-attested consent or its dependent delegated grants.
+        await raw.execute(
+            "UPDATE public.files SET deleted_at=clock_timestamp() "
+            "WHERE file_id=$1", str(artifact),
+        )
+        assert await issuer.verify_current(**scope) is None
+        assert await issuer.revoke_first_party(
+            **scope, correlation_id="wrong-source-revoke",
+            request=bearer_request, expected_source_sha256="b" * 64,
+        ) is False
         assert await issuer.revoke_first_party(
             **scope, correlation_id="author-revoke", request=bearer_request,
+            expected_source_sha256=digest,
         ) is True
         assert await issuer.verify_current(**scope) is None
         with pytest.raises(asyncpg.PostgresError):
