@@ -441,3 +441,54 @@ async def test_noncooperative_invalidation_defers_scope_exit_until_retirement():
     session.invalidate.assert_awaited_once()
     session.close.assert_awaited_once()
     session.__aexit__.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retirement_registry_keeps_cleanup_alive_after_exception_discard():
+    """GC cannot abandon a pending session retirement when the caller drops it."""
+    import gc
+    import weakref
+
+    from ai_karen_engine.persistence.postgres import transactions
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    session = MagicMock()
+    session.invalidate = AsyncMock()
+    session.close = AsyncMock()
+
+    async def held_rollback():
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        finally:
+            finished.set()
+
+    rollback = asyncio.create_task(held_rollback())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    retirement = transactions._schedule_quarantined_session_retirement(
+        session, rollback, None
+    )
+    retirement_ref = weakref.ref(retirement)
+    assert retirement in transactions._PENDING_SESSION_RETIREMENTS
+    del retirement
+    gc.collect()
+    await asyncio.sleep(0)
+    assert retirement_ref() is not None
+    assert retirement_ref() in transactions._PENDING_SESSION_RETIREMENTS
+    session.close.assert_not_awaited()
+    session.invalidate.assert_not_awaited()
+    try:
+        release.set()
+        await asyncio.wait_for(rollback, timeout=2)
+        await asyncio.wait_for(retirement_ref(), timeout=2)
+        await asyncio.sleep(0)
+        assert finished.is_set()
+        session.invalidate.assert_awaited_once()
+        session.close.assert_awaited_once()
+        assert retirement_ref() not in transactions._PENDING_SESSION_RETIREMENTS
+    finally:
+        release.set()
