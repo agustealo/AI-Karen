@@ -13,6 +13,7 @@ export type PluginImporter = () => Promise<{
 export type PluginImportMap = Record<string, PluginImporter>;
 
 export const PLUGIN_IMPORT_MAP: PluginImportMap = {
+  "file-explorer": () => import("@/plugin_repo/file-explorer/FileExplorerPage"),
   "intelligent-search": () => import("@/plugin_repo/intelligent-search/IntelligentSearchPage"),
   "time-query": () => import("@/plugin_repo/time-query/TimeQueryPage"),
 };
