@@ -96,3 +96,52 @@ async def test_owner_inventory_denies_broken_pagination_metadata(owner_page):
         response = await client.get("/api/artifacts/owner-page")
     assert response.status_code == 503
     assert "owner.txt" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("data_override", "metadata", "cursor"),
+    [
+        (None, {"has_more": False, "next_cursor": None}, None),
+        ("not-a-page", {"has_more": False, "next_cursor": None}, None),
+        ("original", {}, None),
+        ("original", {"has_more": "false", "next_cursor": None}, None),
+        ("original", {"has_more": True, "next_cursor": None}, None),
+        ("original", {"has_more": True, "next_cursor": "x" * 769}, None),
+        ("original", {"has_more": True, "next_cursor": "reused"}, "reused"),
+        ("empty", {"has_more": True, "next_cursor": "cursor"}, None),
+        ("original", {"has_more": False, "next_cursor": "unexpected"}, None),
+    ],
+)
+async def test_owner_inventory_rejects_inconsistent_repository_page(
+    owner_page, data_override, metadata, cursor,
+):
+    app, store, entry, *_ = owner_page
+    data = [entry] if data_override == "original" else (
+        [] if data_override == "empty" else data_override
+    )
+    store.list_owner_artifacts_page.return_value = RepositoryResult(
+        success=True, data=data, metadata=metadata,
+    )
+    query = "/api/artifacts/owner-page?limit=1"
+    if cursor is not None:
+        query += "&cursor=" + cursor
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+    ) as client:
+        response = await client.get(query)
+    assert response.status_code == 503
+    assert "owner.txt" not in response.text
+
+
+async def test_owner_inventory_rejects_more_rows_than_requested(owner_page):
+    app, store, entry, *_ = owner_page
+    store.list_owner_artifacts_page.return_value = RepositoryResult(
+        success=True, data=[entry, entry],
+        metadata={"has_more": False, "next_cursor": None},
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/artifacts/owner-page?limit=1")
+    assert response.status_code == 503
+    assert "owner.txt" not in response.text
