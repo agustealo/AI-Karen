@@ -193,3 +193,24 @@ async def test_already_invalidated_live_connection_still_allows_rollback():
     async with engine.async_session_factory() as healthy:
         assert (await healthy.execute(text("SELECT 1"))).scalar_one() == 1
     assert engine.async_engine.pool.checkedout() == baseline
+
+
+@pytest.mark.timeout(30)
+async def test_live_logical_transaction_without_checkout_rolls_back_cleanly():
+    """A transaction opened without SQL must not acquire a driver on cleanup."""
+    from ai_karen_engine.persistence.postgres import transactions
+
+    engine = get_postgres_engine()
+    baseline = engine.async_engine.pool.checkedout()
+    session = engine.async_session_factory()
+    try:
+        await session.begin()
+        assert session.in_transaction()
+        assert engine.async_engine.pool.checkedout() == baseline
+        assert await transactions._capture_rollback_connection(session) is None
+        assert engine.async_engine.pool.checkedout() == baseline
+        await rollback_async_transaction(session)
+        assert not session.in_transaction()
+        assert engine.async_engine.pool.checkedout() == baseline
+    finally:
+        await session.close()
