@@ -143,7 +143,7 @@ export function DocumentAuthorConsentInitiation() {
   const selected = documents.find((item) => item.id === selectedDocument);
   const canSubmit = Boolean(
     selected && profiles.some((profile) => profile.profile_id === profileId) &&
-    !loading && !submitting && !error,
+    !loading && !loadingMore && !submitting && !error,
   );
 
   async function initiate() {
