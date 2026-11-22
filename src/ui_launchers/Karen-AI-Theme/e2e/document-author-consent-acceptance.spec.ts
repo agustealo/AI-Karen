@@ -99,9 +99,15 @@ test("WS-04A9Y: same author session initiates, confirms and recovers a real rece
   const selector = await selectSource(page, origin);
   await selector.getByRole("combobox", { name: "Your document" })
     .selectOption(expectedArtifact!);
-  await selector.getByRole("textbox", {
-    name: "Existing draft writing-style profile ID",
-  }).fill(expectedProfile!);
+  const profileChoice = selector.getByRole("combobox", {
+    name: "Your draft writing-style profile",
+  });
+  await expect.poll(async () => profileChoice.evaluate((node, id) => (
+    Array.from((node as HTMLSelectElement).options).some(option => option.value === id)
+  ), expectedProfile!), {
+    message: "Expected draft profile must be in the authenticated inventory",
+  }).toBe(true);
+  await profileChoice.selectOption(expectedProfile!);
   const initiate = selector.getByRole("button", { name: "Continue to author review" });
   await expect(initiate).toBeEnabled();
   await initiate.click();
