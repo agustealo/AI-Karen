@@ -413,6 +413,7 @@ async def test_revoke_composition_uses_same_authority_and_one_way_issuer(
         profile_id=scope.profile_id,
         artifact_id=scope.artifact_id,
         correlation_id="confirmed-revoke",
+        expected_source_sha256=None,
     )
     target._audit.log_audit_event.assert_called_once()
 
