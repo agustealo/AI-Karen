@@ -315,3 +315,33 @@ async def test_ui_source_path_cannot_escape_validated_plugin_root(tmp_path):
     }
     assert await pipeline._materialize_ui_source(authorized) is False
     assert not (tmp_path / "published/file-explorer").exists()
+
+
+@pytest.mark.asyncio
+async def test_linked_publication_parent_does_not_redirect_copy(tmp_path):
+    """A linked ancestor of plugin_repo cannot redirect publication outside it."""
+    import os
+
+    external = tmp_path / "external"
+    external.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    os.symlink(external, linked_parent, target_is_directory=True)
+    output = linked_parent / "plugin_repo"
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(output),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(PLUGIN / "ui/FileExplorerPage.tsx"),
+        "plugin_dir": str(PLUGIN),
+        "manifest_path": str(PLUGIN / "plugin_manifest.json"),
+        "ui_config": {"source_path": "ui", "entry_file": "FileExplorerPage.tsx"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert not (external / "plugin_repo/file-explorer").exists()
