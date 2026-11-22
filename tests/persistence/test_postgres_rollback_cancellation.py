@@ -251,12 +251,19 @@ async def test_detach_failure_still_assigns_rollback_retirement_owner():
     session.rollback = AsyncMock()
     session.invalidate = AsyncMock()
     session.close = AsyncMock()
+
+    async def failed_cleanup(operation, *, seconds, label):
+        # The supervisor is mocked here; explicitly close its incoming
+        # coroutine so a never-awaited AsyncMock does not leak from the test.
+        operation.close()
+        raise pending
+
     with patch.object(
         transactions, "_capture_rollback_connection", new_callable=AsyncMock,
         return_value=object(),
     ), patch.object(
-        transactions, "_bounded_transaction_cleanup", new_callable=AsyncMock,
-        side_effect=pending,
+        transactions, "_bounded_transaction_cleanup",
+        side_effect=failed_cleanup,
     ), patch.object(
         transactions, "_detach_pending_rollback_connection",
         side_effect=RuntimeError("pool proxy already invalidated"),
