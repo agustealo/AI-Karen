@@ -214,6 +214,22 @@ class ContentSourceHost:
                 ):
                     raise RuntimeError("content_source_output_invalid")
                 returned_ids.add(identifier)
+            # The analysis engine may return document-pair relationships.
+            # Validate every embedded source reference against the same
+            # pre-kernel authorized snapshot used for document receipts.
+            relationships = output.get("relationships", [])
+            if not isinstance(relationships, list) or len(relationships) > 66:
+                raise RuntimeError("content_source_output_invalid")
+            for relationship in relationships:
+                if (
+                    not isinstance(relationship, dict)
+                    or not isinstance(relationship.get("left_id"), str)
+                    or not isinstance(relationship.get("right_id"), str)
+                    or relationship["left_id"] not in authorized
+                    or relationship["right_id"] not in authorized
+                    or relationship["left_id"] == relationship["right_id"]
+                ):
+                    raise RuntimeError("content_source_output_invalid")
         elif operation == "compare":
             if (
                 output.get("left_id") != left_id
