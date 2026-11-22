@@ -66,8 +66,20 @@ async function selectSource(page: Page, origin: URL): Promise<Locator> {
     if (found) break;
     const more = selector.getByRole("button", { name: "Load more owned documents" });
     if (!await more.isVisible().catch(() => false)) break;
+    // Wait for the real owner-page response, not a button whose accessible
+    // name changes while loading. A resolved response alone is insufficient:
+    // also require the rendered loading state to settle before reading options.
+    const nextPageResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/artifacts/owner-page" &&
+        url.searchParams.has("cursor") && response.request().method() === "GET";
+    }, { timeout: 20_000 });
     await more.click();
-    await expect(more).not.toHaveText("Loading documents…");
+    const response = await nextPageResponse;
+    expect(response.ok(), "Owned document page request must succeed").toBe(true);
+    await expect(selector.getByRole("button", { name: "Loading documents…" }))
+      .toHaveCount(0, { timeout: 20_000 });
+    await expect(selector.getByRole("alert")).toHaveCount(0);
   }
   expect(found, "Expected source must be in the authenticated owner inventory").toBe(true);
   return selector;
