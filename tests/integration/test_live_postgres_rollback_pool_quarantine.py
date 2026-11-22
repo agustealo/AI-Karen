@@ -126,3 +126,30 @@ async def test_live_sqlalchemy_rollback_cannot_race_invalidation_or_leak_pool():
         "session.invalidate raced an active SQLAlchemy rollback: "
         f"attempts={invalidation_attempts}"
     )
+
+
+@pytest.mark.timeout(30)
+async def test_ordinary_rollback_preserves_healthy_pool_connection():
+    """A successful rollback must not discard a healthy connection every time."""
+    engine = get_postgres_engine()
+    baseline = engine.async_engine.pool.checkedout()
+    session = engine.async_session_factory()
+    try:
+        await session.execute(text("SELECT 1"))
+        original_driver = (
+            (await session.connection()).sync_connection.connection.driver_connection
+        )
+        await rollback_async_transaction(session)
+        assert engine.async_engine.pool.checkedout() == baseline
+        # A successful rollback is not an uncertain driver state. The same
+        # healthy connection should remain available to the pool.
+        async with engine.async_session_factory() as another:
+            connection = await another.connection()
+            assert (
+                connection.sync_connection.connection.driver_connection
+                is original_driver
+            ), "ordinary rollback discarded a healthy pooled connection"
+            assert (await another.execute(text("SELECT 1"))).scalar_one() == 1
+    finally:
+        await session.close()
+    assert engine.async_engine.pool.checkedout() == baseline
