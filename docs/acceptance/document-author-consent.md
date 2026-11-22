@@ -201,3 +201,24 @@ This is a **presentation eligibility guard**, not an authorization mechanism. Th
 The existing opt-in, mutation-gated browser acceptance now verifies the **same authenticated original bearer** on both sides of revocation: its canonical receipt recovery endpoint must return **HTTP 200** immediately after issuance and reload, then **HTTP 403 or 404** after the author revokes from a freshly logged-in, separate browser context. This verifies a real server-side denial, not merely that the receipt has disappeared from the UI. The browser-only status probe reads its own authentication token internally and returns **only the numeric status** to the test runner; it never exports bearer credentials, document contents, receipt JSON or signed URLs. Screenshots, traces and videos remain disabled.
 
 This new assertion requires explicit `KAREN_DOCUMENT_AUTHOR_MUTATION_ACCEPTANCE=true` and an approved disposable author fixture on the target host. A CI build or skipped Playwright test is **not** evidence that the live scenario ran. The assertion proves receipt recovery is fenced after revocation; **delegated writing-style use denial still requires independent runtime evidence**, and actual Supabase Storage bounded reads remain a separate release gate. Draft PR and consumer ingestion OFF remain mandatory.
+
+
+### WS-04A9 live storage-read probe (read-only, opt-in)
+
+The repository now includes `tests/integration/test_document_author_storage_live.py`, an independent **real-host**, read-only acceptance probe using the existing `DatabaseServiceFactory` and canonical `SupabaseArtifactStore.read_owner_active_text_bounded`. It does **not** construct a new storage client, bypass the artifact owner, fetch an unsigned URL or read a mocked response.
+
+Run it **inside the approved isolated target installation**, with actual PostgreSQL and Supabase Storage connectivity and a pre-existing disposable text artifact. Supply these values in a protected, non-logged environment:
+
+| Variable | Value |
+| --- | --- |
+| `KAREN_DOCUMENT_STORAGE_LIVE_ACCEPTANCE=true` | Explicitly enable real storage acceptance |
+| `KAREN_DOCUMENT_AUTHOR_ARTIFACT_ID` | Canonical UUID for the existing disposable `files` row and storage object |
+| `KAREN_DOCUMENT_AUTHOR_TENANT_ID` | Canonical UUID of its authenticated tenant |
+| `KAREN_DOCUMENT_AUTHOR_USER_ID` | Canonical UUID of its authenticated owner |
+| `KAREN_DOCUMENT_AUTHOR_SOURCE_SHA256` | Expected lowercase SHA-256 of exact stored UTF-8 source bytes |
+
+Use `PYTHONPATH=src python -m pytest -q -s tests/integration/test_document_author_storage_live.py` in the approved host runtime. This is *not* a CI release step by default. If the opt-in flag is absent, pytest skips; skipped acceptance is **not a pass**. If opted in with missing fixture data, unavailable storage, absent 206/Content-Range semantics, an invalid digest or wrong-principal data leak, the test fails. It verifies current source bytes using the canonical owner's already bounded streaming and digest-checking path, rejects wrong-tenant and wrong-owner access using actual repository calls, and emits only sanitized read duration and byte count through structured logging. Do not publish source text, tokens, object URLs, fixture IDs or SQL rows to test artifacts.
+
+The test proves **storage availability, bounded integrity and owner isolation at the tested installation and time** only. It does not establish first-party authorship, receipt issuance, later runtime delegated-use revocation, or consumer readiness. Run the separately opt-in authenticated Playwright consent/revoke trial, and obtain fresh runtime-owned delegated-use denial evidence before lifting the release hold.
+
+**Execution status:** added to source; **no approved target-host execution or result is claimed**. Do not automatically turn this test on in ordinary PR CI or infer that previous PostgreSQL integration tests ran against real external Supabase Storage.
