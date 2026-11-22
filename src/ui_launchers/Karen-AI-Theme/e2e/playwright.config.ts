@@ -9,12 +9,14 @@ import { defineConfig, devices } from '@playwright/test';
 // This mode runs the existing approved local-only acceptance test repeatedly.
 // Never hide intermittent failures with CI retries or require a desktop display.
 const localBenchmark = process.env.KAREN_LOCAL_LATENCY_BENCHMARK === '1';
-const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'true';
+// Document-author acceptance uses the existing private, no-retry authenticated
+// browser contract; do not introduce a competing capture/retry authority.
+const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'true' ||
+  process.env.KAREN_DOCUMENT_AUTHOR_ACCEPTANCE === 'true';
 const navigationAcceptance = process.env.KAREN_NAV_VISUAL_ACCEPTANCE === 'true';
 const fileExplorerAcceptance = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === 'true';
 const pinReadbackAcceptance = process.env.KAREN_PIN_READBACK_ACCEPTANCE === '1';
 const documentAuthorAcceptance = process.env.KAREN_DOCUMENT_AUTHOR_ACCEPTANCE === 'true';
-const secureAuthorAcceptance = documentAuthorAcceptance;
 // A local benchmark signs in with real credentials. Disable sensitive
 // recordings at configuration authority, even if a future spec forgets
 // its own test.use privacy override or someone opts into capture video.
@@ -25,7 +27,6 @@ const privateBrowserRun = localBenchmark ||
   settingsAcceptance ||
   fileExplorerAcceptance ||
   pinReadbackAcceptance;
-const protectedBrowserRun = privateBrowserRun || secureAuthorAcceptance;
 
 export default defineConfig({
   testDir: './',
@@ -57,10 +58,10 @@ export default defineConfig({
     baseURL: process.env.KAREN_BASE_URL || 'http://localhost:8010',
     headless: localBenchmark || !!process.env.CI,
     viewport: { width: 1280, height: 720 },
-    screenshot: protectedBrowserRun ? 'off' : 'only-on-failure',
+    screenshot: privateBrowserRun ? 'off' : 'only-on-failure',
     // Opt in only on an approved sanitized test installation. Full-session
     // recordings may contain sensitive conversation text or browser state.
-    video: protectedBrowserRun
+    video: privateBrowserRun
       ? 'off'
       : process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'
         ? 'on'
@@ -68,7 +69,7 @@ export default defineConfig({
     // This opt-in suite types a real credential during sign-in.
     // Playwright traces retain fill action parameters, including passwords.
     // Never record such traces or include them in uploaded artifacts.
-    trace: protectedBrowserRun
+    trace: privateBrowserRun
       ? 'off'
       : 'retain-on-failure',
     actionTimeout: 15000,
