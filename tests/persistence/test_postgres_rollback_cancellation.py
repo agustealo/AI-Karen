@@ -275,3 +275,58 @@ async def test_detach_failure_still_assigns_rollback_retirement_owner():
     await asyncio.wait_for(pending.retirement_task, timeout=2)
     session.invalidate.assert_awaited_once()
     session.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_detach_failure_defers_session_teardown_until_rollback_finishes():
+    """Even a broken pool proxy cannot authorize concurrent session mutation."""
+    from ai_karen_engine.persistence.postgres import transactions
+
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    finished = asyncio.Event()
+    session = MagicMock()
+    invalidation_during_rollback = []
+
+    async def blocked_rollback():
+        entered.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            await release.wait()
+        finally:
+            finished.set()
+
+    async def invalidate():
+        if not finished.is_set():
+            invalidation_during_rollback.append(True)
+
+    session.rollback = AsyncMock(side_effect=blocked_rollback)
+    session.invalidate = AsyncMock(side_effect=invalidate)
+    session.close = AsyncMock()
+    with patch.object(
+        transactions, "_capture_rollback_connection", new_callable=AsyncMock,
+        return_value=object(),
+    ), patch.object(
+        transactions, "_detach_pending_rollback_connection",
+        side_effect=RuntimeError("pool proxy unavailable"),
+    ):
+        task = asyncio.create_task(transactions.rollback_async_transaction(session))
+        pending = None
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            with pytest.raises(transactions._RollbackStillActive) as caught:
+                await asyncio.wait_for(task, timeout=3)
+            pending = caught.value
+            assert pending.retirement_task is not None
+            assert not finished.is_set()
+            session.invalidate.assert_not_awaited()
+            session.close.assert_not_awaited()
+        finally:
+            release.set()
+            await asyncio.wait_for(finished.wait(), timeout=2)
+            if pending is not None and pending.retirement_task is not None:
+                await asyncio.wait_for(pending.retirement_task, timeout=2)
+    assert not invalidation_during_rollback
+    session.invalidate.assert_awaited_once()
+    session.close.assert_awaited_once()
