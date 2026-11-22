@@ -142,3 +142,43 @@ async def test_noncooperative_rollback_is_reported_uncertain_not_success():
     finally:
         release.set()
         await asyncio.wait_for(finished.wait(), timeout=2)
+
+
+
+@pytest.mark.asyncio
+async def test_invalidation_never_overlaps_active_noncooperative_rollback():
+    """Regression for SQLAlchemy's concurrent transaction-state transition guard."""
+    rollback_started = asyncio.Event()
+    release_rollback = asyncio.Event()
+    rollback_finished = asyncio.Event()
+    overlap = []
+    session = MagicMock()
+
+    async def rollback():
+        rollback_started.set()
+        try:
+            await release_rollback.wait()
+        except asyncio.CancelledError:
+            await release_rollback.wait()
+        finally:
+            rollback_finished.set()
+
+    async def invalidate():
+        if not rollback_finished.is_set():
+            overlap.append("invalidate_during_rollback")
+            raise RuntimeError("IllegalStateChangeError: rollback still active")
+
+    session.rollback = AsyncMock(side_effect=rollback)
+    session.invalidate = AsyncMock(side_effect=invalidate)
+    task = asyncio.create_task(rollback_async_transaction(session))
+    try:
+        await asyncio.wait_for(rollback_started.wait(), timeout=1)
+        with pytest.raises((RuntimeError, TimeoutError)):
+            await asyncio.wait_for(task, timeout=3)
+        assert not overlap, (
+            "SQLAlchemy invalidation raced an active rollback; "
+            "the connection cannot be assumed quarantined"
+        )
+    finally:
+        release_rollback.set()
+        await asyncio.wait_for(rollback_finished.wait(), timeout=2)
