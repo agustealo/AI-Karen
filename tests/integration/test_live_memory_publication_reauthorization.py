@@ -143,52 +143,56 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
                     await release_readers.wait()
                     yield session
 
-            with patch(
-                "ai_karen_engine.platform.memory.postgres.event_source."
-                "async_transaction_scope",
-                reader_transaction,
-            ):
-                # TaskGroup drains both readers if either fails or the
-                # rendezvous times out, before the writer is released.
-                async with asyncio.TaskGroup() as readers:
-                    first_reader = readers.create_task(
-                        gate.authorize_selected_records(
-                            tenant_id=str(tenant), user_id=str(user),
-                            origins=selected,
+            # Bound the entire group, including SQL execution and commit.
+            # A stalled query must not retain a reader or the writer lock.
+            async with asyncio.timeout(15):
+                with patch(
+                    "ai_karen_engine.platform.memory.postgres.event_source."
+                    "async_transaction_scope",
+                    reader_transaction,
+                ):
+                    # TaskGroup drains both readers if either fails or the
+                    # rendezvous times out, before the writer is released.
+                    async with asyncio.TaskGroup() as readers:
+                        first_reader = readers.create_task(
+                            gate.authorize_selected_records(
+                                tenant_id=str(tenant), user_id=str(user),
+                                origins=selected,
+                            )
                         )
-                    )
-                    second_reader = readers.create_task(
-                        separate_gate.authorize_selected_records(
-                            tenant_id=str(tenant), user_id=str(user),
-                            origins=selected,
+                        second_reader = readers.create_task(
+                            separate_gate.authorize_selected_records(
+                                tenant_id=str(tenant), user_id=str(user),
+                                origins=selected,
+                            )
                         )
-                    )
-                    try:
-                        await asyncio.wait_for(connected.wait(), timeout=15)
-                        assert connections_acquired == 2
-                    finally:
-                        release_readers.set()
-                assert [first_reader.result(), second_reader.result()] == [
-                    True, True,
-                ]
+                        try:
+                            await asyncio.wait_for(connected.wait(), timeout=15)
+                            assert connections_acquired == 2
+                        finally:
+                            release_readers.set()
+                    assert [first_reader.result(), second_reader.result()] == [
+                        True, True,
+                    ]
         finally:
             release.set()
             await asyncio.wait_for(writer_task, timeout=15)
 
-        # TaskGroup also drains sibling readers on postcommit query failure.
-        async with asyncio.TaskGroup() as readers:
-            first_reader = readers.create_task(
-                gate.authorize_selected_records(
-                    tenant_id=str(tenant), user_id=str(user),
-                    origins=selected,
+        # Bound the entire postcommit query/transaction lifetime too.
+        async with asyncio.timeout(15):
+            async with asyncio.TaskGroup() as readers:
+                first_reader = readers.create_task(
+                    gate.authorize_selected_records(
+                        tenant_id=str(tenant), user_id=str(user),
+                        origins=selected,
+                    )
                 )
-            )
-            second_reader = readers.create_task(
-                separate_gate.authorize_selected_records(
-                    tenant_id=str(tenant), user_id=str(user),
-                    origins=selected,
+                second_reader = readers.create_task(
+                    separate_gate.authorize_selected_records(
+                        tenant_id=str(tenant), user_id=str(user),
+                        origins=selected,
+                    )
                 )
-            )
         assert [first_reader.result(), second_reader.result()] == [
             False, False,
         ]
