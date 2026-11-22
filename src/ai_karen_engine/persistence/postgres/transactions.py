@@ -105,20 +105,36 @@ def _observe_postgres_cleanup_task(task: asyncio.Task) -> None:
         pass
 
 
-async def _quarantine_rollback_connection(session: AsyncSession):
-    """Detach a currently owned SQLAlchemy connection before rollback begins.
+async def _capture_rollback_connection(session: AsyncSession):
+    """Capture pool ownership without changing it during healthy rollback.
 
-    Connection.detach is pool-level, not a session state transition. A detached
-    connection cannot be checked out by another tenant even when its rollback
-    later becomes unresponsive. It is discarded when eventually closed.
+    A failed flush leaves AsyncSession inactive and forbids connection()
+    access until rollback. Never replace its original IntegrityError with
+    PendingRollbackError merely to inspect a connection.
     """
-    if not isinstance(session, AsyncSession) or not session.in_transaction():
+    if (
+        not isinstance(session, AsyncSession)
+        or not session.in_transaction()
+        or not session.is_active
+    ):
         return None
     connection = await session.connection()
-    pool_proxy = connection.sync_connection.connection
+    return connection.sync_connection.connection
+
+
+def _detach_pending_rollback_connection(pool_proxy) -> object | None:
+    """Remove a still-checked-out connection from the reusable pool.
+
+    Called only after the rollback deadline has elapsed, while that original
+    rollback task remains its sole SQLAlchemy session owner. This operates
+    on the pool proxy, without session.invalidate or transaction.close.
+    """
+    if pool_proxy is None:
+        logger.critical("postgres.pending_rollback_without_pool_proxy")
+        return None
     driver = pool_proxy.driver_connection
-    connection.sync_connection.detach()
-    logger.warning("postgres.transaction_connection_detached_for_rollback")
+    pool_proxy.detach()
+    logger.warning("postgres.pending_rollback_connection_detached")
     return driver
 
 
@@ -158,7 +174,7 @@ def _schedule_quarantined_session_retirement(
 async def rollback_async_transaction(session: AsyncSession) -> None:
     """Quarantine a connection before rollback; never race session teardown."""
     settings = get_database_settings().pool
-    driver = await _quarantine_rollback_connection(session)
+    pool_proxy = await _capture_rollback_connection(session)
     try:
         await _bounded_transaction_cleanup(
             session.rollback(),
@@ -166,6 +182,7 @@ async def rollback_async_transaction(session: AsyncSession) -> None:
             label="rollback",
         )
     except _RollbackStillActive as pending:
+        driver = _detach_pending_rollback_connection(pool_proxy)
         pending.retirement_task = _schedule_quarantined_session_retirement(
             session, pending.task, driver
         )
