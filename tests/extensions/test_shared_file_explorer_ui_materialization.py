@@ -123,3 +123,225 @@ def test_materialized_file_explorer_is_discovered_by_real_ui_installer(tmp_path)
     assert installer.installations["file-explorer"].entry_file == (
         target / "FileExplorerPage.tsx"
     )
+
+
+@pytest.mark.asyncio
+async def test_materialize_all_reports_only_successfully_materialized_imports(tmp_path):
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=PLUGIN,
+        manifest_path=PLUGIN / "plugin_manifest.json",
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+    result = await pipeline.materialize_all()
+    assert result["status"] == "success"
+    assert result["errors"] == []
+    assert result["import_map"]["file-explorer"] == (
+        "@/plugin_repo/file-explorer/FileExplorerPage"
+    )
+    assert (tmp_path / "plugin-repo/file-explorer/FileExplorerPage.tsx").is_file()
+
+
+@pytest.mark.asyncio
+async def test_failed_ui_copy_cannot_claim_importer_or_success(tmp_path, monkeypatch):
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=PLUGIN,
+        manifest_path=PLUGIN / "plugin_manifest.json",
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+
+    async def failed_copy(plugin_ui):
+        return False
+
+    monkeypatch.setattr(pipeline, "_materialize_ui_source", failed_copy)
+    result = await pipeline.materialize_all()
+    assert result["status"] == "degraded"
+    assert result["errors"][0]["plugin_id"] == "file-explorer"
+    assert result["import_map"] == {}
+    assert not (tmp_path / "plugin-repo/file-explorer/FileExplorerPage.tsx").exists()
+
+
+@pytest.mark.asyncio
+async def test_missing_validated_ui_entry_fails_closed_without_false_success(tmp_path):
+    """A registry-valid provides_ui plugin still needs an actual component."""
+    plugin_dir = tmp_path / "missing-ui"
+    plugin_dir.mkdir()
+    manifest_path = plugin_dir / "plugin_manifest.json"
+    manifest_path.write_bytes((PLUGIN / "plugin_manifest.json").read_bytes())
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=plugin_dir,
+        manifest_path=manifest_path,
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+    discovered = await pipeline.discover_ui_plugins()
+    assert len(discovered) == 1
+    assert discovered[0]["registry_validated"] is True
+    assert discovered[0]["has_component"] is False
+
+    result = await pipeline.materialize_all()
+    assert result["status"] == "degraded"
+    assert result["plugins_processed"] == 1
+    assert result["errors"][0]["plugin_id"] == "file-explorer"
+    assert "entry component missing" in result["errors"][0]["error"]
+    assert result["import_map"] == {}
+    assert not (tmp_path / "plugin-repo/file-explorer").exists()
+
+
+@pytest.mark.asyncio
+async def test_linked_source_asset_does_not_materialize_or_copy_private_content(tmp_path):
+    """A validated registry record does not make linked source bytes safe."""
+    import os
+
+    source = tmp_path / "plugin"
+    ui = source / "ui"
+    ui.mkdir(parents=True)
+    original = PLUGIN / "plugin_manifest.json"
+    (source / "plugin_manifest.json").write_bytes(original.read_bytes())
+    (ui / "FileExplorerPage.tsx").write_bytes(
+        (PLUGIN / "ui/FileExplorerPage.tsx").read_bytes()
+    )
+    private = tmp_path / "private.tsx"
+    private.write_text("private content", encoding="utf-8")
+    os.symlink(private, ui / "leak.tsx")
+
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "published"),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(ui / "FileExplorerPage.tsx"),
+        "plugin_dir": str(source),
+        "manifest_path": str(source / "plugin_manifest.json"),
+        "ui_config": {"source_path": "ui", "entry_file": "FileExplorerPage.tsx"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert not (tmp_path / "published/file-explorer").exists()
+    assert private.read_text(encoding="utf-8") == "private content"
+
+
+@pytest.mark.asyncio
+async def test_linked_published_target_never_receives_materialized_assets(tmp_path):
+    """Existing links in the target are not overwritten or followed."""
+    import os
+
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "keep.tsx"
+    sentinel.write_text("unchanged", encoding="utf-8")
+    output = tmp_path / "published"
+    output.mkdir()
+    os.symlink(external, output / "file-explorer")
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(output),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(PLUGIN / "ui/FileExplorerPage.tsx"),
+        "plugin_dir": str(PLUGIN),
+        "manifest_path": str(PLUGIN / "plugin_manifest.json"),
+        "ui_config": {"source_path": "ui", "entry_file": "FileExplorerPage.tsx"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert sentinel.read_text(encoding="utf-8") == "unchanged"
+    assert not (external / "FileExplorerPage.tsx").exists()
+
+
+@pytest.mark.asyncio
+async def test_ui_source_path_cannot_escape_validated_plugin_root(tmp_path):
+    source = tmp_path / "plugin"
+    source.mkdir()
+    (source / "plugin_manifest.json").write_bytes(
+        (PLUGIN / "plugin_manifest.json").read_bytes()
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "published"),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(PLUGIN / "ui/FileExplorerPage.tsx"),
+        "plugin_dir": str(source),
+        "manifest_path": str(source / "plugin_manifest.json"),
+        "ui_config": {"source_path": "../"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert not (tmp_path / "published/file-explorer").exists()
+
+
+@pytest.mark.asyncio
+async def test_linked_publication_parent_does_not_redirect_copy(tmp_path):
+    """A linked ancestor of plugin_repo cannot redirect publication outside it."""
+    import os
+
+    external = tmp_path / "external"
+    external.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    os.symlink(external, linked_parent, target_is_directory=True)
+    output = linked_parent / "plugin_repo"
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(output),
+    )
+    authorized = {
+        "plugin_id": "file-explorer",
+        "registry_validated": True,
+        "has_component": True,
+        "component_path": str(PLUGIN / "ui/FileExplorerPage.tsx"),
+        "plugin_dir": str(PLUGIN),
+        "manifest_path": str(PLUGIN / "plugin_manifest.json"),
+        "ui_config": {"source_path": "ui", "entry_file": "FileExplorerPage.tsx"},
+        "icons": [],
+        "menu_config": [],
+    }
+    assert await pipeline._materialize_ui_source(authorized) is False
+    assert not (external / "plugin_repo/file-explorer").exists()
