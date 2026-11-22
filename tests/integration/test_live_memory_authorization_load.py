@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import platform
+import sys
 import time
 import uuid
 from datetime import timezone
@@ -96,7 +97,7 @@ async def _measure(
     }
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 @pytest.mark.skipif(
     os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1"
     or os.getenv("KAREN_MEMORY_AUTH_LOAD") != "1",
@@ -258,3 +259,48 @@ async def test_memory_authorization_load_report() -> None:
     assert all(row["attempted"] == per_level for row in results)
     assert all(row["errors"] == 0 and row["authorization_mismatches"] == 0
                for row in results), report_path.as_posix()
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1"
+    or os.getenv("KAREN_MEMORY_AUTH_LOAD") != "1",
+    reason="requires isolated migrated PostgreSQL for failure evidence",
+)
+async def test_authorization_load_keeps_partial_report_on_revoked_batch_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Failure after a measured batch must not erase verified observations."""
+    report_path = tmp_path / "failed-memory-authorization-load.json"
+    monkeypatch.setenv("KAREN_MEMORY_AUTH_LOAD_LEVELS", "1")
+    monkeypatch.setenv("KAREN_MEMORY_AUTH_LOAD_SAMPLES", "1")
+    monkeypatch.setenv("KAREN_MEMORY_AUTH_LOAD_REPORT", str(report_path))
+
+    real_measure = _measure
+    completed_batches = 0
+
+    async def measure_then_fail(*args, **kwargs):
+        nonlocal completed_batches
+        if completed_batches:
+            # The first, real PostgreSQL measurement must survive a later
+            # failure in the revoked-condition batch.
+            raise RuntimeError("injected revoked authorization batch failure")
+        result = await real_measure(*args, **kwargs)
+        completed_batches += 1
+        return result
+
+    monkeypatch.setattr(sys.modules[__name__], "_measure", measure_then_fail)
+    with pytest.raises(RuntimeError, match="injected revoked authorization batch failure"):
+        await test_memory_authorization_load_report()
+
+    assert report_path.is_file(), "failed batch erased evidence artifact"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "incomplete"
+    assert report["failure_type"] == "RuntimeError"
+    assert report["cleanup_failure_type"] is None
+    assert report["concurrency_levels"] == [1]
+    assert len(report["measurements"]) == 1
+    assert report["measurements"][0]["expected_authorized"] is True
+    assert report["measurements"][0]["attempted"] == 1
+    assert report["measurements"][0]["errors"] == 0
+    assert report["measurements"][0]["authorization_mismatches"] == 0
