@@ -8,6 +8,7 @@ import platform
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import timezone
 from pathlib import Path
 
@@ -304,3 +305,57 @@ async def test_authorization_load_keeps_partial_report_on_revoked_batch_failure(
     assert report["measurements"][0]["attempted"] == 1
     assert report["measurements"][0]["errors"] == 0
     assert report["measurements"][0]["authorization_mismatches"] == 0
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1"
+    or os.getenv("KAREN_MEMORY_AUTH_LOAD") != "1",
+    reason="requires isolated migrated PostgreSQL for cleanup failure evidence",
+)
+async def test_authorization_load_preserves_report_after_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Post-cleanup failure must be explicit and preserve all real samples."""
+    report_path = tmp_path / "cleanup-failed-memory-authorization-load.json"
+    monkeypatch.setenv("KAREN_MEMORY_AUTH_LOAD_LEVELS", "1")
+    monkeypatch.setenv("KAREN_MEMORY_AUTH_LOAD_SAMPLES", "1")
+    monkeypatch.setenv("KAREN_MEMORY_AUTH_LOAD_REPORT", str(report_path))
+
+    canonical_scope = async_transaction_scope
+    completed_transactions = 0
+
+    @asynccontextmanager
+    async def scope_with_post_cleanup_failure(*args, **kwargs):
+        nonlocal completed_transactions
+        async with canonical_scope(*args, **kwargs) as session:
+            yield session
+        completed_transactions += 1
+        if completed_transactions == 4:
+            # Fixture rows are already deleted and committed before this
+            # simulated error. Do not leave test data behind.
+            raise RuntimeError("injected cleanup completion failure")
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "async_transaction_scope",
+        scope_with_post_cleanup_failure,
+    )
+    with pytest.raises(RuntimeError, match="injected cleanup completion failure"):
+        await test_memory_authorization_load_report()
+
+    assert completed_transactions == 4
+    assert report_path.is_file(), "cleanup failure erased evidence artifact"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "incomplete"
+    assert report["failure_type"] is None
+    assert report["cleanup_failure_type"] == "RuntimeError"
+    assert len(report["measurements"]) == 2
+    assert [row["expected_authorized"] for row in report["measurements"]] == [
+        True, False,
+    ]
+    assert all(
+        row["attempted"] == 1
+        and row["errors"] == 0
+        and row["authorization_mismatches"] == 0
+        for row in report["measurements"]
+    )
