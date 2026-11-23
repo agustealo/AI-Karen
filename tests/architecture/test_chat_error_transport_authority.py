@@ -29,5 +29,9 @@ def test_global_error_middleware_owns_unexpected_exception_translation() -> None
     source = ERROR_MIDDLEWARE.read_text(encoding="utf-8")
 
     assert "except Exception as exc:" in source
-    assert "traceback_str = traceback.format_exc()" in source
+    # Capturing raw tracebacks is not required for unexpected transport errors.
+    # SQLAlchemy exception tracebacks may include bound private user data.
+    assert "traceback.format_exc()" not in source
+    assert 'error_message = "Internal server error"' in source
+    assert "logger.exception(" not in source
     assert "error_type = type(exc).__name__" in source
