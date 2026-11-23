@@ -6,17 +6,31 @@ export interface TimezoneResolutionMeta {
   resolutionType: string;
 }
 
+export interface ExternalSync {
+  checked: boolean;
+  available: boolean;
+  provider: string | null;
+  offset_ms: number | null;
+}
+
+export interface SourceDetail {
+  clock: string;
+  timezone_source: string;
+  external_sync_checked?: boolean;
+  storage: string;
+}
+
 export interface TimePayload {
   status: string;
   mode: string;
   source: string;
   provider: string;
   provider_status: string;
-  external_sync: any;
-  source_detail: any;
-  timestamp: string; // ISO
+  external_sync: ExternalSync;
+  source_detail: SourceDetail;
+  timestamp: string;
   timestamp_unix: number;
-  timestamp_utc: string; // ISO
+  timestamp_utc: string;
   iso: string;
   formatted: string;
   date: string;
@@ -25,9 +39,10 @@ export interface TimePayload {
   month: string;
   year: number;
   timezone: string;
-  utc_offset: string; // String now e.g. "+05:00"
+  utc_offset: string;
+  value?: string | number;
   resolution_meta?: TimezoneResolutionMeta;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ClockItem extends TimePayload {
@@ -55,12 +70,13 @@ export interface AlarmItem {
   recurrence?: string | null;
   created_at: string;
   updated_at: string;
-  metadata: any;
+  metadata: Record<string, unknown>;
 }
 
 export interface TimezoneConversionResult {
   status: string;
   mode: string;
+  error?: string;
   source_datetime: {
     datetime: string;
     timezone: string;
@@ -78,7 +94,23 @@ export interface TimezoneConversionResult {
     resolution_meta?: TimezoneResolutionMeta;
   };
   value: string;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AlarmCreateParams {
+  title: string;
+  alarm_datetime: string;
+  timezone: string;
+  enabled: boolean;
+  recurrence?: string | null;
+}
+
+export interface AlarmUpdateParams {
+  title?: string;
+  alarm_datetime?: string;
+  timezone?: string;
+  enabled?: boolean;
+  recurrence?: string | null;
 }
 
 export interface TimeQueryState {
@@ -90,5 +122,5 @@ export interface TimeQueryState {
   stopwatch: StopwatchState | null;
   alarms: AlarmItem[];
   conversion: TimezoneConversionResult | null;
-  diagnostics: Record<string, any> | null;
+  diagnostics: Record<string, unknown> | null;
 }

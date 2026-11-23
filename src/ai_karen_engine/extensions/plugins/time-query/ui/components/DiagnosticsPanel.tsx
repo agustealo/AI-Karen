@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const DiagnosticsPanel: React.FC<{ payload: any }> = ({ payload }) => {
+export const DiagnosticsPanel: React.FC<{ payload: unknown }> = ({ payload }) => {
   return (
     <div className="bg-card border border-border rounded-xl overflow-hidden mt-6">
       <div className="px-5 py-3 border-b border-border bg-muted/10">

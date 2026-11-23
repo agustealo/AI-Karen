@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
+import type { AlarmCreateParams } from '../types';
 
 interface AlarmEditorProps {
-  onSave: (data: any) => Promise<void>;
+  onSave: (data: AlarmCreateParams) => Promise<void>;
   onCancel: () => void;
 }
 
