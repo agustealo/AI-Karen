@@ -127,6 +127,37 @@ def test_gui_validator_rejects_malformed_entries(
     assert any(i.severity is ManifestValidationSeverity.ERROR for i in issues)
 
 
+@pytest.mark.parametrize("payload", [
+    None,
+    [],
+    "not a manifest",
+])
+def test_gui_validator_rejects_non_object_json(
+    tmp_path: Path, payload: object
+) -> None:
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    issues = ManifestStandardsEnforcer().validate_gui_manifest(path)
+    assert any(
+        issue.field == "file"
+        and issue.severity is ManifestValidationSeverity.ERROR
+        for issue in issues
+    )
+
+
+def test_gui_validator_rejects_non_object_contributions(tmp_path: Path) -> None:
+    data = _gui_data()
+    data["contributions"] = ["not an object"]
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    issues = ManifestStandardsEnforcer().validate_gui_manifest(path)
+    assert any(
+        issue.field == "contributions"
+        and issue.severity is ManifestValidationSeverity.ERROR
+        for issue in issues
+    )
+
+
 def test_valid_gui_entry_survives_separate_gui_validation(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(_gui_data()), encoding="utf-8")

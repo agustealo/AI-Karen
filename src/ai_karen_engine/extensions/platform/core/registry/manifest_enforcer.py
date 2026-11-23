@@ -199,6 +199,15 @@ class ManifestStandardsEnforcer:
             ))
             return results
 
+        if not isinstance(manifest_data, dict):
+            results.append(ManifestValidationResult(
+                manifest_type=ManifestType.GUI,
+                severity=ManifestValidationSeverity.ERROR,
+                field="file",
+                message="GUI manifest must be a JSON object",
+            ))
+            return results
+
         try:
             # Validate using Pydantic model
             GUIManifestModel(**manifest_data)
@@ -211,15 +220,6 @@ class ManifestStandardsEnforcer:
                     message=error["msg"],
                     suggestion=self._get_suggestion_for_error(error)
                 ))
-
-        if not isinstance(manifest_data, dict):
-            results.append(ManifestValidationResult(
-                manifest_type=ManifestType.GUI,
-                severity=ManifestValidationSeverity.ERROR,
-                field="file",
-                message="GUI manifest must be a JSON object",
-            ))
-            return results
 
         # Additional validation checks
         results.extend(self._validate_gui_manifest_specific(manifest_data, manifest_path))
@@ -308,6 +308,14 @@ class ManifestStandardsEnforcer:
 
         # Validate contributions
         contributions = manifest_data.get("contributions", {})
+        if not isinstance(contributions, dict):
+            results.append(ManifestValidationResult(
+                manifest_type=ManifestType.GUI,
+                severity=ManifestValidationSeverity.ERROR,
+                field="contributions",
+                message="GUI contributions must be an object",
+            ))
+            return results
         for contribution_type, contribution_list in contributions.items():
             if not isinstance(contribution_list, list):
                 results.append(ManifestValidationResult(
