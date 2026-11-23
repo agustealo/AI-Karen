@@ -3015,6 +3015,20 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
         index = max(0, (len(ordered) * rank + 99) // 100 - 1)
         return round(ordered[index], 3)
 
+    async def controlled_provider(task):
+        gate_started = time.perf_counter()
+        assert task.token_sink is not None
+        await task.token_sink("part-one")
+        await task.token_sink("part-two")
+        return ExpressionResult(
+            task_id=task.task_id, text="part-onepart-two",
+            provider="controlled-provider", model="controlled-model",
+            engine_id="controlled-stream", engine_mode="test",
+            runtime_engine="controlled-stream", response_source="test_fixture",
+            attempts=[], skipped=[],
+            latency_ms=1000 * (time.perf_counter() - gate_started),
+        )
+
     async def scenario(
         memory_enabled, provider=None, on_chunk=None, gateways=None,
         shared_direct=None,
@@ -3059,20 +3073,6 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
         resolved_ms = 1000 * (time.perf_counter() - started)
         decision.cognitive_context = cognitive
 
-        async def controlled_provider(task):
-            gate_started = time.perf_counter()
-            assert task.token_sink is not None
-            await task.token_sink("part-one")
-            await task.token_sink("part-two")
-            return ExpressionResult(
-                task_id=task.task_id, text="part-onepart-two",
-                provider="controlled-provider", model="controlled-model",
-                engine_id="controlled-stream", engine_mode="test",
-                runtime_engine="controlled-stream", response_source="test_fixture",
-                attempts=[], skipped=[],
-                latency_ms=1000 * (time.perf_counter() - gate_started),
-            )
-
         chunks = []
         first_content_elapsed_ms = None
         with ExitStack() as stack:
@@ -3089,17 +3089,18 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
                 runtime, "_assemble_prompt_with_telemetry",
                 new_callable=AsyncMock, return_value=([], {"assembly_duration_ms": 0.0}),
             ))
-            stack.enter_context(patch.object(
-                runtime._composition.expression_gateway, "generate",
-                side_effect=provider or controlled_provider,
-            ))
+            if shared_direct is None:
+                stack.enter_context(patch.object(
+                    runtime._composition.expression_gateway, "generate",
+                    side_effect=provider or controlled_provider,
+                ))
             stack.enter_context(patch.object(
                 runtime, "_persist_memory", new_callable=AsyncMock,
             ))
             stack.enter_context(patch.object(runtime, "_record_trajectory_completion"))
             stack.enter_context(patch.object(runtime, "_record_execution_outcome"))
-            stack.enter_context(patch.object(runtime._emitter, "emit"))
             if shared_direct is None:
+                stack.enter_context(patch.object(runtime._emitter, "emit"))
                 direct = stack.enter_context(patch(
                     "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
                 ))
@@ -3235,9 +3236,18 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
                 await release.wait()
                 return await scenario(enabled, shared_direct=shared_direct)
 
-            with patch(
-                "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
-            ) as shared_direct:
+            shared_runtime, _ = _make_runtime()
+            with ExitStack() as batch_patches:
+                shared_direct = batch_patches.enter_context(patch(
+                    "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+                ))
+                batch_patches.enter_context(patch.object(
+                    shared_runtime._emitter, "emit",
+                ))
+                batch_patches.enter_context(patch.object(
+                    shared_runtime._composition.expression_gateway, "generate",
+                    side_effect=controlled_provider,
+                ))
                 shared_direct.return_value.can_handle.return_value = False
                 active = [
                     asyncio.create_task(concurrent_worker(index % 2 == 0))
@@ -3310,9 +3320,18 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
                 first_seen.put_nowait(True)
                 await blocked.wait()
 
-        with patch(
-            "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
-        ) as shared_direct:
+        shared_runtime, _ = _make_runtime()
+        with ExitStack() as batch_patches:
+            shared_direct = batch_patches.enter_context(patch(
+                "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+            ))
+            batch_patches.enter_context(patch.object(
+                shared_runtime._emitter, "emit",
+            ))
+            batch_patches.enter_context(patch.object(
+                shared_runtime._composition.expression_gateway, "generate",
+                side_effect=blocked_provider,
+            ))
             shared_direct.return_value.can_handle.return_value = False
             active = [
                 asyncio.create_task(scenario(
