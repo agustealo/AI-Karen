@@ -1,9 +1,10 @@
 """CK-GEN-01D2 opt-in PostgreSQL evidence for owner and archive revocation.
 
-Run only on an explicitly disposable, migrated and seeded PostgreSQL
-database called karen_code_artifact_test. This never touches production
-records. Supabase object bytes are deliberately supplied by an in-process
-test bucket; a live object-store and signed-in browser run remain separate.
+Run only on the explicitly disposable, migrated PostgreSQL database
+karen_code_artifact_test at loopback port 5432. Never connect these fixture
+writes to a remote or implicitly selected PostgreSQL target. Automatic
+tests use controlled Storage fixtures; independent opt-in tests can read
+real disposable Supabase Storage. Signed-in browser acceptance is separate.
 """
 
 from __future__ import annotations
