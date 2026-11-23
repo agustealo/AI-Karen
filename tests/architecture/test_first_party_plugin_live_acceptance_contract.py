@@ -33,6 +33,7 @@ def test_plugin_scenario_reuses_exact_main_provenance_and_env_boundary() -> None
     assert job.count("verify_deployment_revision.py") == 2
     assert "e2e/first-party-plugin-live-acceptance.spec.ts" in job
     assert "--retries=0" in job
+    assert 'test "$KAREN_PLUGIN_SURFACES_ACCEPTANCE" = "true"' in job
 
     header = job.split("\n    steps:", 1)[0]
     assert "secrets.KAREN_UX_EMAIL" not in header

@@ -948,6 +948,10 @@ jobs:
               --config=e2e/playwright.config.ts \
               --project=chromium --grep='KCONTENT-LIVE' --reporter=list --retries=0
           elif [[ "${{ inputs.scenario }}" == "plugin-surfaces" ]]; then
+            test "$KAREN_PLUGIN_SURFACES_ACCEPTANCE" = "true" || {
+              echo "::error::Refusing skipped plugin live acceptance"
+              exit 1
+            }
             npx playwright test e2e/first-party-plugin-live-acceptance.spec.ts \
               --config=e2e/playwright.config.ts \
               --project=chromium --reporter=list --retries=0
