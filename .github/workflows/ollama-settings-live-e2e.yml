@@ -7,6 +7,7 @@ on:
       - main
     paths:
       - "scripts/ci/ollama_settings_live_proof.py"
+      - "scripts/ci/ollama_live_cancellation_probe.py"
       - "scripts/ci/verification_strategy_pair_live_proof.py"
       - "scripts/ci/verification_strategy_durable_live_proof.py"
       - "tests/core/runtime/test_verification_strategy_durable_live_proof.py"
@@ -25,6 +26,7 @@ on:
       - main
     paths:
       - "scripts/ci/ollama_settings_live_proof.py"
+      - "scripts/ci/ollama_live_cancellation_probe.py"
       - "scripts/ci/verification_strategy_pair_live_proof.py"
       - "scripts/ci/verification_strategy_durable_live_proof.py"
       - "tests/core/runtime/test_verification_strategy_durable_live_proof.py"
@@ -96,6 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           docker run -d --name karen-ci-ollama \
+            -e OLLAMA_NUM_PARALLEL=2 \
             -p 11434:11434 \
             "$OLLAMA_CI_IMAGE" > /dev/null
 
@@ -118,6 +121,53 @@ jobs:
 
           curl --fail --silent http://127.0.0.1:11434/api/tags | \
             python -c 'import json,os,sys; models=json.load(sys.stdin)["models"]; wanted=os.environ["OLLAMA_CI_MODEL"]; assert wanted in {m.get("name") for m in models}, "Ollama model pull not visible in native inventory"'
+
+      - name: Install canonical stream probe transport dependency
+        run: python -m pip install 'httpx>=0.27,<1'
+
+      - name: KCHAT-SEC-04 prove installed Ollama cancellation, survival and residency recovery
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          python -m py_compile scripts/ci/ollama_live_cancellation_probe.py
+          python scripts/ci/ollama_live_cancellation_probe.py \
+            --base-url http://127.0.0.1:11434/v1 \
+            --model "$OLLAMA_CI_MODEL" \
+            --timeout-seconds 120 \
+            --report build/kchat-sec-04-real-ollama-cancellation.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          proof = json.loads(Path("build/kchat-sec-04-real-ollama-cancellation.json").read_text())
+          assert proof["scope"] == "actual_local_ollama_model_in_temporary_ci_host"
+          assert proof["source"] == "canonical_core_provider_endpoint_and_stream_transport"
+          assert proof["installed_model_verified"] is True
+          assert proof["warm_terminal_verified"] is True
+          assert proof["cancelled_generation_first_delta_observed"] is True
+          assert proof["cancelled_stream_terminal_observed"] is False
+          assert proof["cancel_to_transport_close_ms"] >= 0
+          assert proof["survivor_started_before_cancel"] is True
+          assert proof["survivor_terminal_verified"] is True
+          assert proof["explicit_native_unload_verified"] is True
+          assert proof["cold_reload_terminal_verified"] is True
+          assert proof["host_internal_compute_preemption_verified"] is False
+          assert proof["release_cause"] == "explicit_native_ollama_unload"
+          print("Real Ollama cancellation/recovery evidence validated.")
+          PY
+
+      - name: Preserve sanitized Ollama model cancellation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kchat-sec-04-real-ollama-host
+          path: build/kchat-sec-04-real-ollama-cancellation.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Build production API image
         run: |
