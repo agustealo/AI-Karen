@@ -144,4 +144,4 @@ def test_kplug09_real_storage_and_manual_browser_refresh_proof_remain_separate()
     assert "references: [{ source_id: expectedId, revision: current.sha256 }]" in browser_case
     assert "route.fulfill(" not in spec and "page.route(" not in spec
     assert "implementation ready for observation, not consumer-certified" in runbook
-    assert "| \`content-intelligence\` | Not shipped |" in LEDGER.read_text(encoding="utf-8")
+    assert "| `content-intelligence` | Not shipped |" in LEDGER.read_text(encoding="utf-8")
