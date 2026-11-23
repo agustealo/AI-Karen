@@ -971,3 +971,157 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
                 )
                 await admin.commit()
         await engine.dispose()
+
+
+
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_CODE_ARTIFACT_LIVE_RANGE") != "1",
+    reason="Requires explicitly configured real disposable Supabase signed-range acceptance",
+)
+async def test_live_signed_range_read_uses_real_storage_and_disposable_postgres_owner() -> None:
+    """Read real private Storage bytes through the canonical bounded repository.
+
+    This opt-in test never uploads, updates metadata, archives, or deletes.
+    Source metadata must already exist in the disposable migrated database,
+    with an identical preseeded object in the explicitly disposable Storage
+    project. The real client signs a URL and httpx obtains an exact 206 range.
+    The project credential may bypass Storage RLS; this is not a Storage RLS test.
+    """
+    import re
+
+    from ai_karen_engine.integrations.supabase_client import SupabasePlatformClient
+
+    if (
+        os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+        or os.getenv("KAREN_TEST_SUPABASE_DISPOSABLE") != "1"
+    ):
+        pytest.fail("Real Storage acceptance requires two disposable target attestations")
+
+    project_ref = os.getenv("KAREN_TEST_SUPABASE_PROJECT_REF", "")
+    project_url = os.getenv("SUPABASE_PROJECT_URL", "")
+    if (
+        re.fullmatch(r"[a-z0-9]{20}", project_ref) is None
+        or project_url != f"https://{project_ref}.supabase.co"
+    ):
+        pytest.fail("Real Storage target does not match the approved disposable project")
+    if not any(os.getenv(key) for key in (
+        "SUPABASE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_PUBLISHABLE_KEY",
+        "SUPABASE_ANON_KEY",
+    )):
+        pytest.fail("Explicit disposable Supabase project authentication is required")
+
+    dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
+    parsed = _disposable_database_url(dsn)
+    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
+        pytest.fail("Real Storage acceptance requires local disposable PostgreSQL")
+
+    def canonical_id(name: str) -> str:
+        value = os.getenv(name, "")
+        try:
+            canonical = str(UUID(value))
+        except (TypeError, ValueError, AttributeError):
+            pytest.fail(f"Invalid acceptance fixture identifier: {name}")
+        if canonical != value:
+            pytest.fail(f"Noncanonical acceptance fixture identifier: {name}")
+        return canonical
+
+    tenant = canonical_id("KAREN_TEST_ARTIFACT_TENANT_ID")
+    owner = canonical_id("KAREN_TEST_ARTIFACT_OWNER_ID")
+    other = canonical_id("KAREN_TEST_ARTIFACT_OTHER_USER_ID")
+    artifact = canonical_id("KAREN_TEST_LIVE_RANGE_ARTIFACT_ID")
+    if len({tenant, owner, other, artifact}) != 4:
+        pytest.fail("Range acceptance fixture identities must be distinct")
+
+    digest = os.getenv("KAREN_TEST_LIVE_RANGE_ARTIFACT_SHA256", "")
+    if re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+        pytest.fail("Explicit preseeded range source digest required")
+
+    engine = create_async_engine(parsed, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    platform = SupabasePlatformClient()
+    try:
+        async with sessions() as session:
+            assert (await session.execute(
+                text("SELECT current_database()")
+            )).scalar_one() == "karen_code_artifact_test"
+            metadata = (await session.execute(
+                text(
+                    "SELECT tenant_id, owner_user_id, name, mime_type, bytes, "
+                    "sha256, storage_uri, deleted_at FROM files "
+                    "WHERE file_id = :id"
+                ),
+                {"id": artifact},
+            )).mappings().one_or_none()
+            if metadata is None:
+                pytest.fail("Explicitly preseeded disposable range source is unavailable")
+            name = metadata["name"]
+            size = metadata["bytes"]
+            if (
+                str(metadata["tenant_id"]) != tenant
+                or str(metadata["owner_user_id"]) != owner
+                or metadata["deleted_at"] is not None
+                or not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", name) is None
+                or not name.lower().endswith((".txt", ".md"))
+                or metadata["mime_type"] != "text/plain"
+                or type(size) is not int
+                or not 1 <= size <= 65536
+                or metadata["sha256"] != digest
+                or metadata["storage_uri"] != (
+                    f"supabase://artifacts/{tenant}/{artifact}/{name}"
+                )
+            ):
+                pytest.fail("Preseeded source violates bounded owner-text schema")
+
+        platform.initialize()
+        if platform.storage is None or platform.url != project_url:
+            pytest.fail("Canonical disposable Supabase Storage client unavailable")
+        # A signed URL is not proof that the bucket itself is private.
+        # The canonical client must independently confirm private bucket state.
+        try:
+            bucket = platform.storage.get_bucket("artifacts")
+        except Exception:
+            pytest.fail("Unable to attest the disposable private artifacts bucket")
+        bucket_public = (
+            bucket.get("public") if isinstance(bucket, dict)
+            else getattr(bucket, "public", None)
+        )
+        if bucket_public is not False:
+            pytest.fail("Real signed-range acceptance requires a private Storage bucket")
+        store = SupabaseArtifactStore(sessions, platform)
+
+        # These requests must deny before a signed URL or object bytes can be
+        # returned, despite the Storage client potentially using a server key.
+        denied_owner = await store.read_owner_active_text_bounded(
+            artifact, tenant, other
+        )
+        denied_tenant = await store.read_owner_active_text_bounded(
+            artifact, str(uuid4()), owner
+        )
+        denied_budget = await store.read_owner_active_text_bounded(
+            artifact, tenant, owner, max_bytes=size - 1
+        )
+        for rejected in (denied_owner, denied_tenant, denied_budget):
+            assert not rejected.success and rejected.data is None
+            assert rejected.error == "bounded_artifact_read_unavailable"
+
+        # No HTTP transport stub, synthetic signed URL, mocked bucket, or
+        # downloaded local fixture is used for this successful read.
+        allowed = await store.read_owner_active_text_bounded(
+            artifact, tenant, owner
+        )
+        assert allowed.success and allowed.data is not None
+        assert allowed.data.artifact_id == artifact
+        assert allowed.data.tenant_id == tenant
+        assert allowed.data.user_id == owner
+        assert allowed.data.sha256 == digest
+        assert allowed.data.filename == name
+        assert hashlib.sha256(
+            allowed.data.text.encode("utf-8")
+        ).hexdigest() == digest
+        assert len(allowed.data.text.encode("utf-8")) == size
+    finally:
+        platform.reset()
+        await engine.dispose()
