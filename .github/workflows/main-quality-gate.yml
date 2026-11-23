@@ -239,7 +239,7 @@ jobs:
           pytest tests/architecture/test_local_approved_login_contract.py -q
           # Production /ready must actively check canonical Redis connectivity,
           # accept only secured targets, and match the frontend health contract.
-          pytest tests/architecture/test_operational_health_authority.py -q
+          pytest tests/architecture/test_operational_health_authority.py tests/architecture/test_health_error_transport_authority.py -q
           # Readiness is anonymously reachable, but real DB gating and all
           # private-route auth remain mandatory for consumer boot.
           pytest tests/architecture/test_public_readiness_auth_boundary.py -q

@@ -7,10 +7,11 @@ correlation-aware logging, and circuit breaker support.
 """
 
 import time
-import subprocess
-import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
 from ai_karen_engine.utils.dependency_checks import import_fastapi
 from ai_karen_engine.core.runtime.resilience.connection_health_manager import (
@@ -18,6 +19,7 @@ from ai_karen_engine.core.runtime.resilience.connection_health_manager import (
     get_connection_health_manager,
 )
 from ai_karen_engine.monitoring.correlation_service import get_request_id
+from ai_karen_engine.extensions.health import safe_extension_health_error
 from ai_karen_engine.core.logging import (
     get_logger,
     get_structured_logging_service,
@@ -25,7 +27,10 @@ from ai_karen_engine.core.logging import (
 
 logger = get_logger(__name__)
 
-APIRouter, Request = import_fastapi("APIRouter", "Request")
+_HEALTH_FAILURE = "Health check unavailable"
+_EXTENSION_FAILURE = "Extension health unavailable"
+
+APIRouter, HTTPException, Request = import_fastapi("APIRouter", "HTTPException", "Request")
 
 # ---------------------------------------------------------------------------
 # Prometheus metrics with safe fallbacks
@@ -82,7 +87,7 @@ def _collect_health(manager: ConnectionHealthManager) -> Dict[str, Any]:
                 "degraded_features": result.degraded_features,
             }
         except Exception as exc:  # pragma: no cover - defensive
-            services[name] = {"status": "unknown", "error": str(exc)}
+            services[name] = {"status": "unknown", "error": _HEALTH_FAILURE}
     return services
 
 
@@ -145,68 +150,6 @@ def _check_nlp_assets(model_name: str = "en_core_web_sm") -> Dict[str, Any]:
     }
 
 
-async def _install_nlp_assets(model_name: str = "en_core_web_sm") -> Dict[str, Any]:
-    """Attempt to install missing NLP assets on demand."""
-    actions: List[Dict[str, Any]] = []
-
-    try:
-        import spacy
-
-        try:
-            spacy.load(model_name)
-            actions.append(
-                {"asset": f"spacy:{model_name}", "status": "already_present"}
-            )
-        except Exception:
-            result = subprocess.run(
-                [sys.executable, "-m", "spacy", "download", model_name],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            actions.append(
-                {
-                    "asset": f"spacy:{model_name}",
-                    "status": "installed" if result.returncode == 0 else "failed",
-                    "detail": (result.stdout or result.stderr).strip()[-500:],
-                }
-            )
-    except Exception as exc:
-        actions.append(
-            {"asset": f"spacy:{model_name}", "status": "failed", "detail": str(exc)}
-        )
-
-    try:
-        import nltk
-
-        resource_map = {
-            "punkt": "tokenizers/punkt",
-            "stopwords": "corpora/stopwords",
-            "wordnet": "corpora/wordnet",
-        }
-        for name, resource_path in resource_map.items():
-            try:
-                nltk.data.find(resource_path)
-                actions.append({"asset": f"nltk:{name}", "status": "already_present"})
-            except LookupError:
-                ok = nltk.download(name, quiet=True)
-                actions.append(
-                    {
-                        "asset": f"nltk:{name}",
-                        "status": "installed" if ok else "failed",
-                    }
-                )
-    except Exception as exc:
-        actions.append({"asset": "nltk", "status": "failed", "detail": str(exc)})
-
-    status = _check_nlp_assets(model_name)
-    return {
-        "actions": actions,
-        "status": status,
-        "success": status["ready"],
-    }
-
-
 @router.get("")
 async def overall_health(request: Request) -> Dict[str, Any]:
     """Return overall health status for registered services."""
@@ -252,9 +195,10 @@ async def overall_health(request: Request) -> Dict[str, Any]:
             extension_status = "degraded"
     except Exception as e:
         logger.warning(
-            f"Failed to get extension health for overall health endpoint: {e}"
+            "Failed to get extension health for overall health endpoint",
+            extra={"error_type": type(e).__name__},
         )
-        extension_health = {"status": "error", "error": str(e)}
+        extension_health = {"status": "error", "error": _EXTENSION_FAILURE}
         extension_status = "degraded"
 
     # Add extension status to services
@@ -452,9 +396,10 @@ async def _build_degraded_mode_status() -> Dict[str, Any]:
             degraded_components.append("extensions")
     except Exception as e:
         logger.warning(
-            f"Failed to check extension system health for degraded mode: {e}"
+            "Failed to check extension system health for degraded mode",
+            extra={"error_type": type(e).__name__},
         )
-        extension_system_status = {"status": "error", "error": str(e)}
+        extension_system_status = {"status": "error", "error": _EXTENSION_FAILURE}
         extension_degraded = True
         degraded_components.append("extensions")
 
@@ -501,7 +446,7 @@ async def _build_degraded_mode_status() -> Dict[str, Any]:
                 models = registry.get_registered_models(provider_name, healthy_only=True)
                 llm_models_available += len(models)
         except Exception as exc:
-            logger.debug("Could not check provider registry models: %s", exc)
+            logger.debug("Could not check provider registry models", extra={"error_type": type(exc).__name__})
 
         # Local capabilities
         from pathlib import Path
@@ -727,7 +672,7 @@ async def degraded_mode_status() -> Dict[str, Any]:
     try:
         status = await _build_degraded_mode_status()
     except Exception as exc:  # pragma: no cover - defensive fallback
-        logger.exception("Failed to build degraded mode status: %s", exc)
+        logger.error("Failed to build degraded mode status", extra={"error_type": type(exc).__name__})
         status = {
             "is_active": True,
             "reason": "resource_exhaustion",
@@ -804,7 +749,7 @@ async def extension_system_health(request: Request) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Extension health endpoint failed: {e}")
+        logger.error("Extension health endpoint failed", extra={"error_type": type(e).__name__})
         duration_ms = (time.time() - start) * 1000
 
         get_structured_logging_service().log_api_request(
@@ -817,7 +762,7 @@ async def extension_system_health(request: Request) -> Dict[str, Any]:
 
         return {
             "status": "error",
-            "error": str(e),
+            "error": _EXTENSION_FAILURE,
             "correlation_id": correlation_id,
             "timestamp": time.time(),
             "response_time_ms": duration_ms,
@@ -873,7 +818,7 @@ async def individual_extension_health(
 
         return {
             "extension": extension_name,
-            "status": metrics.status.value,
+            "status": metrics.health.value,
             "response_time_ms": metrics.response_time_ms,
             "uptime_seconds": metrics.uptime_seconds,
             "error_count": metrics.error_count,
@@ -883,8 +828,8 @@ async def individual_extension_health(
             "api_calls_per_minute": metrics.api_calls_per_minute,
             "memory_usage_mb": metrics.memory_usage_mb,
             "cpu_usage_percent": metrics.cpu_usage_percent,
-            "last_check": metrics.last_check.isoformat(),
-            "error": metrics.error,
+            "last_check": metrics.last_check.isoformat() if metrics.last_check else None,
+            "error": safe_extension_health_error(metrics.error),
             "correlation_id": correlation_id,
             "timestamp": time.time(),
             "check_duration_ms": duration_ms,
@@ -892,7 +837,8 @@ async def individual_extension_health(
 
     except Exception as e:
         logger.error(
-            f"Individual extension health endpoint failed for {extension_name}: {e}"
+            "Individual extension health endpoint failed",
+            extra={"extension_name": extension_name, "error_type": type(e).__name__},
         )
         duration_ms = (time.time() - start) * 1000
 
@@ -907,7 +853,7 @@ async def individual_extension_health(
         return {
             "extension": extension_name,
             "status": "error",
-            "error": str(e),
+            "error": _EXTENSION_FAILURE,
             "correlation_id": correlation_id,
             "timestamp": time.time(),
             "check_duration_ms": duration_ms,
@@ -922,8 +868,8 @@ async def nlp_assets_health() -> Dict[str, Any]:
 
 @router.post("/nlp-assets/install")
 async def install_nlp_assets() -> Dict[str, Any]:
-    """Attempt to install missing NLP assets on demand."""
-    return await _install_nlp_assets()
+    """Reject unauthenticated runtime downloads; provision assets offline."""
+    raise HTTPException(status_code=403, detail="NLP asset installation requires trusted provisioning")
 
 
 @router.get("/{service_name}")
@@ -943,7 +889,7 @@ async def service_health(service_name: str, request: Request) -> Dict[str, Any]:
         }
         code = 200
     except Exception as exc:
-        status = {"status": "unknown", "error": str(exc)}
+        status = {"status": "unknown", "error": _HEALTH_FAILURE}
         code = 404
 
     duration_ms = (time.time() - start) * 1000
