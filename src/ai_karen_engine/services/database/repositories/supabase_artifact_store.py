@@ -59,6 +59,7 @@ class SupabaseArtifactStore(ArtifactStore):
 
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
+        commit_attempted = False
         try:
             async with await self._session() as session:
                 await session.execute(text("SELECT 1"))
@@ -131,16 +132,22 @@ class SupabaseArtifactStore(ArtifactStore):
                         "created_at": artifact.created_at,
                     },
                 )
+                commit_attempted = True
                 await session.commit()
         except Exception:
-            logger.exception("Artifact metadata commit failed for artifact_id=%s", artifact_id)
-            try:
-                bucket.remove([storage_key])
-            except Exception:
-                logger.exception(
-                    "Artifact object compensation failed; reconcile artifact_id=%s",
-                    artifact_id,
-                )
+            logger.exception("Artifact metadata persistence uncertain for artifact_id=%s", artifact_id)
+            if not commit_attempted:
+                try:
+                    bucket.remove([storage_key])
+                except Exception:
+                    logger.exception(
+                        "Artifact object compensation failed; reconcile artifact_id=%s",
+                        artifact_id,
+                    )
+            else:
+                # A commit exception can occur after the database committed.
+                # Never delete a potentially live object's bytes on uncertainty.
+                logger.error("Artifact commit outcome requires reconciliation artifact_id=%s", artifact_id)
             return RepositoryResult(success=False, error="artifact_commit_failed")
 
         latency = time.perf_counter() - start
