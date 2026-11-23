@@ -1,5 +1,16 @@
 import { SearchModeId, IntelligentSearchOptions } from '../types';
 
+// Consumer field names are translated once at the API boundary. The backend
+// handlers and runtime retain their existing snake_case strategy contract.
+const SEARCH_OPTION_KEYS: Partial<Record<keyof IntelligentSearchOptions, string>> = {
+  maxUrls: 'max_urls',
+  freshnessBias: 'freshness_bias',
+  allowedDomains: 'allowed_domains',
+  blockedDomains: 'blocked_domains',
+  timeRange: 'time_range',
+  preferRecent: 'prefer_recent',
+};
+
 export function useSearchPayload() {
   const buildPayload = (mode: SearchModeId, query: string, options: IntelligentSearchOptions) => {
     // Separate crawl options from other options
@@ -41,7 +52,17 @@ export function useSearchPayload() {
         value !== '' &&
         !crawlKeys.includes(key as keyof IntelligentSearchOptions)
       ) {
-        context[key] = value;
+        const backendKey = SEARCH_OPTION_KEYS[key as keyof IntelligentSearchOptions] ?? key;
+        if (key === 'allowedDomains' || key === 'blockedDomains') {
+          // Existing text controls supply comma-separated strings even though
+          // the public option type also accepts arrays.
+          const domains = (Array.isArray(value) ? value : String(value).split(','))
+            .map((domain) => domain.trim())
+            .filter(Boolean);
+          if (domains.length > 0) context[backendKey] = domains;
+        } else {
+          context[backendKey] = value;
+        }
       }
     });
 
