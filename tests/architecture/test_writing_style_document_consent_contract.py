@@ -108,3 +108,63 @@ def test_author_document_discovery_uses_canonical_owner_paging() -> None:
     assert "/api/artifacts/'" not in picker
     assert "loadMoreDocuments" in picker
     assert "Document ingestion remains disabled" in picker
+
+def test_canonical_file_tenant_remains_text_and_consent_uses_safe_casts() -> None:
+    """WS-04B4: UUID-shaped consent scope must not change the artifact schema."""
+    root = Path(__file__).resolve().parents[2]
+    canonical_files = (
+        root / "supabase/migrations/20260827010000_01_core_persona_runtime.sql"
+    ).read_text(encoding="utf-8")
+    assert "CREATE TABLE files (" in canonical_files
+    files_definition = canonical_files.split("CREATE TABLE files (", 1)[1].split(
+        ");", 1,
+    )[0]
+    assert "tenant_id     TEXT" in files_definition
+
+    migration = (
+        root / "supabase/migrations/"
+        "20261123030000_69_writing_style_document_file_tenant_text.sql"
+    ).read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE FUNCTION public.writing_style_document_consent_validate()" in migration
+    assert "f.tenant_id = NEW.tenant_id::text" in migration
+    assert "f.tenant_id::uuid" not in migration
+    assert "ALTER TABLE public.files" not in migration
+    for expected in (
+        "NEW.author_actor_id IS DISTINCT FROM",
+        "NEW.author_attested IS NOT TRUE",
+        "NEW.expires_at <= clock_timestamp()",
+        "f.owner_user_id = NEW.author_actor_id",
+        "f.sha256 = NEW.source_sha256",
+        "f.deleted_at IS NULL",
+        "f.bytes BETWEEN 1 AND 65536",
+        "OR OLD.revoked_at IS NOT NULL",
+    ):
+        assert expected in migration
+
+    issuer = (
+        root / "src/ai_karen_engine/services/"
+        "postgres_document_style_consent_issuer.py"
+    ).read_text(encoding="utf-8")
+    profile_repository = (
+        root / "src/ai_karen_engine/services/"
+        "writing_style_profile_repository.py"
+    ).read_text(encoding="utf-8")
+
+    assert issuer.count("p.tenant_id::text=f.tenant_id") == 2
+    assert issuer.count("f.tenant_id=CAST(:tenant AS uuid)::text") == 2
+    assert "f.tenant_id=c.tenant_id::text" in issuer
+    assert "f.tenant_id=c.tenant_id::text" in profile_repository
+
+    for source in (issuer, profile_repository):
+        assert "f.tenant_id::uuid" not in source
+
+    for name in (
+        "test_writing_style_document_consent_postgres.py",
+        "test_writing_style_identity_postgres.py",
+        "test_writing_style_sample_postgres.py",
+    ):
+        fixture = (root / "tests/integration" / name).read_text(
+            encoding="utf-8",
+        )
+        assert "tenant_id text NOT NULL" in fixture
+        assert "20261123030000_69_writing_style_document_file_tenant_text.sql" in fixture
