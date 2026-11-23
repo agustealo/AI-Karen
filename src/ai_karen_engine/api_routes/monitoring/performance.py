@@ -69,8 +69,8 @@ async def get_dashboard():
             "data": dashboard_data
         }
     except Exception as e:
-        logger.error(f"Error getting dashboard data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error getting dashboard data", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/metrics")
@@ -107,8 +107,8 @@ async def get_metrics(
             }
         }
     except Exception as e:
-        logger.error(f"Error getting metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error getting metrics", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.post("/metrics")
@@ -148,8 +148,8 @@ async def create_metric(metric: MetricRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating metric: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error creating metric", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/system")
@@ -190,8 +190,8 @@ async def get_system_metrics():
             }
         }
     except Exception as e:
-        logger.error(f"Error getting system metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error getting system metrics", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/services/{service_name}")
@@ -240,8 +240,8 @@ async def get_service_metrics(service_name: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting service metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error getting service metrics", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/regressions")
@@ -278,8 +278,8 @@ async def detect_regressions(
             }
         }
     except Exception as e:
-        logger.error(f"Error detecting regressions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error detecting regressions", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.post("/benchmarks")
@@ -300,8 +300,8 @@ async def create_benchmark(request: BenchmarkRequest):
             "data": benchmark
         }
     except Exception as e:
-        logger.error(f"Error creating benchmark: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error creating benchmark", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/benchmarks")
@@ -320,8 +320,8 @@ async def list_benchmarks():
             }
         }
     except Exception as e:
-        logger.error(f"Error listing benchmarks: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error listing benchmarks", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/benchmarks/{name}")
@@ -345,8 +345,8 @@ async def get_benchmark(name: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting benchmark: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error getting benchmark", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.post("/benchmarks/{name}/compare")
@@ -365,10 +365,10 @@ async def compare_to_benchmark(name: str, request: ComparisonRequest):
             "data": comparison
         }
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail="Performance operation unavailable")
     except Exception as e:
-        logger.error(f"Error comparing to benchmark: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error comparing to benchmark", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/health")
@@ -402,8 +402,8 @@ async def performance_health():
             }
         }
     except Exception as e:
-        logger.error(f"Error getting performance health: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error getting performance health", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.post("/cleanup")
@@ -425,8 +425,8 @@ async def cleanup_old_data(
             }
         }
     except Exception as e:
-        logger.error(f"Error cleaning up data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error cleaning up data", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/export/dashboard")
@@ -443,8 +443,8 @@ async def export_dashboard_data():
             "exported_at": datetime.now().isoformat()
         }
     except Exception as e:
-        logger.error(f"Error exporting dashboard data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error exporting dashboard data", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/prometheus")
@@ -494,8 +494,8 @@ async def prometheus_metrics():
             media_type="text/plain; version=0.0.4; charset=utf-8"
         )
     except Exception as e:
-        logger.error(f"Error exporting Prometheus metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error exporting Prometheus metrics", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 # Performance Optimization Integration Endpoints
 
 @router.get("/optimization/status")
@@ -541,24 +541,24 @@ async def get_optimization_status():
                         metrics = resource_monitor.get_current_metrics()
                         status["resource_usage"] = metrics if not asyncio.iscoroutine(metrics) else await metrics
                     except Exception as e:
-                        status["resource_usage"] = {"error": str(e)}
+                        status["resource_usage"] = {"error": "Performance operation unavailable"}
                 else:
                     status["resource_usage"] = {"error": "Resource monitor not available"}
             except Exception as e:
-                status["resource_usage"] = {"error": str(e)}
+                status["resource_usage"] = {"error": "Performance operation unavailable"}
         
         if performance_metrics:
             try:
                 # PerformanceMetrics doesn't have get_summary method, use placeholder
                 status["performance_summary"] = {"status": "placeholder", "message": "Performance summary not available"}
             except Exception as e:
-                status["performance_summary"] = {"error": str(e)}
+                status["performance_summary"] = {"error": "Performance operation unavailable"}
         
         return status
         
     except Exception as e:
-        logger.error(f"Failed to get optimization status: {e}")
-        return {"error": str(e), "optimization_enabled": False}
+        logger.error("Failed to get optimization status", extra={"error_type": type(e).__name__})
+        return {"error": "Performance operation unavailable", "optimization_enabled": False}
 
 
 @router.post("/optimization/audit")
@@ -591,8 +591,8 @@ async def run_performance_audit():
         }
         
     except Exception as e:
-        logger.error(f"Performance audit failed: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error("Performance audit failed", extra={"error_type": type(e).__name__})
+        return {"success": False, "error": "Performance operation unavailable"}
 
 
 @router.post("/optimization/trigger")
@@ -623,7 +623,7 @@ async def trigger_optimization():
                 consolidation_report = {"message": "No consolidation opportunities available", "status": "none"}
             optimization_results["service_consolidation"] = consolidation_report
         except Exception as e:
-            optimization_results["service_consolidation"] = {"error": str(e)}
+            optimization_results["service_consolidation"] = {"error": "Performance operation unavailable"}
         
         # Resource optimization
         try:
@@ -631,7 +631,7 @@ async def trigger_optimization():
             resource_report = {"message": "Resource optimization not implemented", "status": "placeholder"}
             optimization_results["resource_optimization"] = resource_report
         except Exception as e:
-            optimization_results["resource_optimization"] = {"error": str(e)}
+            optimization_results["resource_optimization"] = {"error": "Performance operation unavailable"}
         
         # Idle service cleanup
         try:
@@ -639,7 +639,7 @@ async def trigger_optimization():
             cleanup_report = {"message": "Idle cleanup not implemented", "status": "placeholder"}
             optimization_results["idle_cleanup"] = cleanup_report
         except Exception as e:
-            optimization_results["idle_cleanup"] = {"error": str(e)}
+            optimization_results["idle_cleanup"] = {"error": "Performance operation unavailable"}
         
         return {
             "success": True,
@@ -647,9 +647,11 @@ async def trigger_optimization():
             "optimization_results": optimization_results
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Performance optimization failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Performance optimization failed", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/optimization/services")
@@ -681,7 +683,7 @@ async def get_service_status():
                     for name, config in services.items()
                 }
             except Exception as e:
-                services_by_classification[classification] = {"error": str(e)}
+                services_by_classification[classification] = {"error": "Performance operation unavailable"}
         
         # Get overall statistics
         total_services = sum(
@@ -699,9 +701,11 @@ async def get_service_status():
             }
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to get service status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to get service status", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.post("/optimization/config")
@@ -731,9 +735,11 @@ async def update_optimization_config(config_updates: Dict[str, Any]):
             "applied_updates": config_updates
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to update optimization config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to update optimization config", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/optimization/config")
@@ -756,9 +762,11 @@ async def get_optimization_config():
             "validation_status": config.validate()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to get optimization config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to get optimization config", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
 
 
 @router.get("/optimization/recommendations")
@@ -794,5 +802,5 @@ async def get_optimization_recommendations():
         }
         
     except Exception as e:
-        logger.error(f"Failed to get optimization recommendations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to get optimization recommendations", extra={"error_type": type(e).__name__})
+        raise HTTPException(status_code=500, detail="Performance operation unavailable")
