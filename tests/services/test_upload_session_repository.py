@@ -152,3 +152,14 @@ async def test_committed_transition_requires_active_owner_matched_artifact():
     assert "artifact.deleted_at IS NULL" in statement
     assert "artifact.bytes = expected_bytes" in statement
     assert "artifact.sha256 = expected_sha256" in statement
+
+
+@pytest.mark.asyncio
+async def test_cannot_bind_artifact_before_verified_commit():
+    repo = UploadSessionRepository(lambda: FakeSession(record()))
+    with pytest.raises(ValueError, match="only at commit"):
+        await repo.transition(
+            tenant_id="tenant-a", owner_user_id=OWNER, session_id=SESSION,
+            expected_state="created", next_state="receiving",
+            artifact_id=str(uuid4()),
+        )
