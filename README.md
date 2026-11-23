@@ -157,7 +157,7 @@ Review the resulting `.env` before startup. Replace secrets and configure only t
 
 ### 3. Start the canonical local database and apply migrations
 
-KAREN's base Compose stack does **not** create PostgreSQL. For local development, the checked-in Supabase project owns the canonical PostgreSQL/pgvector database on port `54322`.
+KAREN's base Compose stack does **not** create PostgreSQL. For local development, the checked-in Supabase project owns the canonical PostgreSQL/pgvector database on port `54342` (configured in `supabase/config.toml`).
 
 Start it first:
 
