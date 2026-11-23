@@ -102,7 +102,6 @@ async def test_deep_crawl_observes_page_depth_domains_and_runtime_budget():
     assert attempted == [start, first, second, third]
     assert [page["depth"] for page in found] == [0, 1, 1, 2]
     assert [depth for _, _, depth in crawler.calls] == [0, 1, 2]
-    assert all(not cache for _, cache, _ in [])  # No private data needed.
     assert all(bypass for _, bypass, _ in crawler.calls)
     assert len(attempted) == 4
 
