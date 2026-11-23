@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -240,6 +241,100 @@ async def test_network_cancellation_closes_provider_stream(monkeypatch):
     assert first.kind == "delta"
     await stream.aclose()
     assert cancelled.is_set()
+
+
+
+@pytest.mark.asyncio
+async def test_runtime_downstream_cancel_closes_canonical_provider_http_stream(monkeypatch):
+    """Cancelling the token sink must close upstream SSE without awaiting GC.
+
+    This exercises real ExpressionGateway -> OpenAICompatibleEngine ->
+    stream_provider_endpoint cleanup. The HTTP bytes are controlled; model
+    inference and a remote model's internal cancellation are not asserted.
+    """
+    from ai_karen_engine.core.expression.contracts import ExpressionTask
+    from ai_karen_engine.core.expression.gateway import ExpressionGateway
+    from ai_karen_engine.core.expression.settings import ExpressionSettings
+
+    downstream_entered = asyncio.Event()
+    upstream_closed = asyncio.Event()
+    upstream_reading_stopped = asyncio.Event()
+    never_release = asyncio.Event()
+
+    class Paused(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            try:
+                yield _chunk("first provider delta").encode()
+                await never_release.wait()
+            finally:
+                upstream_reading_stopped.set()
+
+        async def aclose(self) -> None:
+            upstream_closed.set()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        assert json.loads(request.content)["model"] == "smollm2:135m"
+        return httpx.Response(
+            200, stream=Paused(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _transport_client(monkeypatch, respond)
+    endpoint = _endpoint()
+    registry = SimpleNamespace(
+        get_provider_endpoint=lambda name: (
+            endpoint if name == endpoint.provider_id else None
+        ),
+        get_provider_status=lambda name: SimpleNamespace(is_available=True),
+        canonicalize_provider_id=lambda name: name,
+    )
+    monkeypatch.setattr(
+        "ai_karen_engine.core.model_runtime.provider_registry_service."
+        "get_provider_registry_service",
+        lambda: registry,
+    )
+
+    settings = ExpressionSettings(
+        active_engine="local", engine_fallback_order=["local"],
+    )
+    settings.engines["cloud"].enabled = False
+    gateway = ExpressionGateway(settings)
+
+    async def blocked_sink(delta: str) -> None:
+        assert delta == "first provider delta"
+        downstream_entered.set()
+        await never_release.wait()
+
+    expression_task = ExpressionTask(
+        task_id="kchat-sec-03-cancelled-sink",
+        kind="chat",
+        messages=[{"role": "user", "content": "Stop after first token"}],
+        response_mode="text",
+        required_capabilities=[],
+        forbidden_capabilities=[],
+        preferred_provider=endpoint.provider_id,
+        preferred_model="smollm2:135m",
+        max_tokens=64,
+        temperature=0.1,
+        timeout_ms=10000,
+        token_sink=blocked_sink,
+    )
+    consumer = asyncio.create_task(gateway.generate(expression_task))
+    try:
+        await asyncio.wait_for(downstream_entered.wait(), timeout=5)
+        assert not upstream_closed.is_set()
+        consumer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(consumer, timeout=5)
+        await asyncio.wait_for(upstream_closed.wait(), timeout=5)
+        await asyncio.wait_for(upstream_reading_stopped.wait(), timeout=5)
+        assert expression_task.stream_started is True
+    finally:
+        never_release.set()
+        if not consumer.done():
+            consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,110 @@
+name: Chat Real CPU Inference Worker Cancellation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/ai_karen_engine/core/expression/**"
+      - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
+      - "src/ai_karen_engine/core/runtime/chat_runtime.py"
+      - "tests/integration/test_chat_real_cpu_model_cancellation.py"
+      - "tests/core/model_runtime/test_provider_execution_stream.py"
+      - ".github/workflows/chat-real-inference-worker-proof.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/ai_karen_engine/core/expression/**"
+      - "src/ai_karen_engine/core/model_runtime/provider_execution.py"
+      - "src/ai_karen_engine/core/runtime/chat_runtime.py"
+      - "tests/integration/test_chat_real_cpu_model_cancellation.py"
+      - "tests/core/model_runtime/test_provider_execution_stream.py"
+      - ".github/workflows/chat-real-inference-worker-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-cpu-model-worker-cancellation:
+    name: local-cpu-model-worker-cancellation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: src
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      KAREN_CHAT_REAL_WORKER_REPORT: build/kchat-sec-03-real-cpu-worker.json
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Attest exact source identity
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install chat contracts and CPU-only Torch
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/chat.txt
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1+cpu
+          python -m pip check
+          python -c "import torch; assert not torch.cuda.is_available(); print('Torch CPU inference ready')"
+
+      - name: Compile real worker, expression transport and tests
+        run: |
+          python -m compileall -q \
+            src/ai_karen_engine/core/expression \
+            src/ai_karen_engine/core/model_runtime/provider_execution.py \
+            tests/integration/test_chat_real_cpu_model_cancellation.py \
+            tests/core/model_runtime/test_provider_execution_stream.py
+
+      - name: Prove upstream transport closes when downstream sink is cancelled
+        run: |
+          mkdir -p build
+          pytest -q tests/core/model_runtime/test_provider_execution_stream.py \
+            --junitxml=build/kchat-sec-03-transport-junit.xml
+
+      - name: Run real local Transformer inference and verify process termination
+        run: |
+          pytest -q -rs tests/integration/test_chat_real_cpu_model_cancellation.py \
+            --junitxml=build/kchat-sec-03-worker-junit.xml
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("build/kchat-sec-03-real-cpu-worker.json").read_text())
+          assert report["worker"] == "real_torch_transformer_cpu_forward_process"
+          assert report["weights"] == "locally_initialized_untrained_test_weights"
+          assert report["remote_model_execution"] is False
+          assert report["policy"] == "real_runtime_policy_issued_and_bound"
+          assert report["aborted_model_forward_passes"] >= 1
+          assert report["aborted_worker_exit_code"] != 0
+          assert report["retry_model_forward_passes"] == 4
+          assert report["retry_exit_code"] == 0
+          assert report["orphan_worker_pids"] == []
+          assert report["cancel_to_process_release_ms"] >= 0
+          assert report["cleanup_release_ms"] >= 0
+          print("Local CPU Transformer process cancellation and retry accepted.")
+          PY
+
+      - name: Preserve sanitized test and runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kchat-sec-03-real-cpu-worker
+          path: |
+            build/kchat-sec-03-real-cpu-worker.json
+            build/kchat-sec-03-transport-junit.xml
+            build/kchat-sec-03-worker-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
