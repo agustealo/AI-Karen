@@ -266,3 +266,14 @@ The opt-in delegated-use probe now accepts any purpose valid under the existing 
 The bounded Supabase Storage probe also makes a **second read request using the same real owner/artifact but an undersized maximum-byte budget**; it must be denied and must return no text. This is distinct from the cross-tenant and cross-owner denials and does not replace the canonical storage owner's pre-transfer length, 206 range, and digest controls.
 
 Neither probe has executed against an approved target installation. These refinements supply stronger requirements for the future host trial, **not** evidence that the host passed them. Keep all live-gate statuses unverified until observed.
+
+
+## WS-04B0: governed document content-reader composition (development only)
+
+The canonical `ArtifactStore` now provides `read_owner_active_text_bounded`, so `ArtifactWritingStyleContentReader` in the existing document-source authority module adapts this **already-owned** capability for the `WritingStylePersistedSampleAuthority` reader protocol. No second storage client, download fallback, independent content cache, user-supplied URL or new authorization engine is created.
+
+The reader accepts only canonical tenant/actor/document UUID scope, delegates an explicit 65,536-byte budget to the existing storage owner, and accepts only a typed `VerifiedArtifactText` matching the requested tenant, actor, artifact, safe text filename and MIME. Unsupported sources, invalid scope, denied or unbounded storage, mismatched output and errors return no content.
+
+**Crucially, reading bytes is not itself permission to learn or imitate an author.** The surrounding persisted-sample authority continues to validate the profile-specific consent receipt and current PostgreSQL evidence before and after the source read, including the exact content digest; RuntimePolicy remains responsible for execution. This adapter is not auto-registered for consumer document ingestion and does not enable the feature.
+
+Focused source-owner unit tests exercise canonical bounded-call delegation, malformed scopes, cross-owner/tenant data, unsupported types, storage denial and exceptions. Real Supabase transport integrity and browser-to-consent revocation remain local acceptance requirements under the existing handoff; they are not inferred from tests.
