@@ -9,7 +9,11 @@ No source sample text or provider credentials are stored here.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
+import logging
 import re
 import uuid
 from typing import Any, Callable
@@ -22,9 +26,15 @@ from ai_karen_engine.core.runtime.prompt.karisignature_contract import (
     KariSignatureResolver,
 )
 from ai_karen_engine.database.client import MultiTenantPostgresClient
+from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+from ai_karen_engine.services.database.repositories.artifact_store import (
+    ArtifactStore,
+    VerifiedArtifactText,
+)
 
 _PURPOSE = re.compile(r"^[a-z][a-z0-9_-]{0,47}$")
 _KINDS = frozenset({"personal", "professional", "business", "client", "team"})
+logger = logging.getLogger(__name__)
 
 
 class WritingStyleAccessDenied(PermissionError):
@@ -67,8 +77,17 @@ class WritingStyleProfileRepository:
     def __init__(
         self,
         client_factory: Callable[[], MultiTenantPostgresClient] = MultiTenantPostgresClient,
+        *,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self._client_factory = client_factory
+        if artifact_store is not None and not callable(
+            getattr(artifact_store, "read_owner_active_text_bounded", None)
+        ):
+            raise ValueError("canonical_bounded_artifact_store_required")
+        # No hidden storage client or permissive fallback. A document-backed
+        # delegate use without the canonical capability is always denied.
+        self._artifact_store = artifact_store
 
     @staticmethod
     async def _scope(
@@ -468,40 +487,148 @@ class WritingStyleProfileRepository:
     async def authorize_use(
         self, *, request: KariSignatureRequest, revision: KariSignatureRevision,
     ) -> bool:
+        """Require both current SQL authorization and live document bytes.
+
+        Document authors' private receipts never become SELECT-visible to the
+        delegated actor. The restricted kari_internal function verifies the
+        current purpose grant and publishes only source *identities* to this
+        trusted host. This repository reads bytes using the canonical bounded
+        artifact owner and discards them; only a Boolean reaches the resolver.
+        """
         tenant, actor, profile = map(
             _uuid, (request.tenant_id, request.actor_id, request.profile_id)
         )
         if revision.tenant_id != tenant or revision.profile_id != profile:
             return False
-        async with self._client_factory().get_async_session() as session:
-            await self._scope(session, tenant, actor, purpose=request.purpose)
-            result = await session.execute(
-                text(
-                    "SELECT 1 FROM public.writing_style_profiles p "
-                    "JOIN public.writing_style_revisions r "
-                    "ON r.tenant_id=p.tenant_id AND r.profile_id=p.profile_id "
-                    "AND r.revision_id=p.current_revision_id "
-                    "JOIN public.writing_style_grants g "
-                    "ON g.tenant_id=p.tenant_id AND g.profile_id=p.profile_id "
-                    "WHERE p.tenant_id=CAST(:tenant AS uuid) "
-                    "AND p.profile_id=CAST(:profile AS uuid) "
-                    "AND p.state='published' "
-                    "AND NOT EXISTS (SELECT 1 FROM public.writing_style_sample_evidence s "
-                    "WHERE s.tenant_id=p.tenant_id AND s.profile_id=p.profile_id "
-                    "AND (s.revoked_at IS NOT NULL OR s.style_use_allowed IS NOT TRUE "
-                    "OR (s.consent_expires_at IS NOT NULL "
-                    "AND s.consent_expires_at <= clock_timestamp()))) "
-                    "AND r.revision_id=CAST(:revision AS uuid) "
-                    "AND r.revision_number=:number AND r.content_digest=:digest "
-                    "AND g.actor_id=CAST(:actor AS uuid) AND g.purpose=:purpose "
-                    "AND g.revoked_at IS NULL "
-                    "AND (g.expires_at IS NULL OR g.expires_at>clock_timestamp())"
-                ),
-                dict(tenant=tenant, profile=profile, actor=actor,
-                     purpose=request.purpose, revision=revision.revision_id,
-                     number=revision.revision_number, digest=revision.content_digest),
+        sql = text(
+            "SELECT 1 FROM public.writing_style_profiles p "
+            "JOIN public.writing_style_revisions r "
+            "ON r.tenant_id=p.tenant_id AND r.profile_id=p.profile_id "
+            "AND r.revision_id=p.current_revision_id "
+            "JOIN public.writing_style_grants g "
+            "ON g.tenant_id=p.tenant_id AND g.profile_id=p.profile_id "
+            "WHERE p.tenant_id=CAST(:tenant AS uuid) "
+            "AND p.profile_id=CAST(:profile AS uuid) "
+            "AND p.state='published' "
+            "AND NOT EXISTS (SELECT 1 FROM public.writing_style_sample_evidence s "
+            "WHERE s.tenant_id=p.tenant_id AND s.profile_id=p.profile_id "
+            "AND (s.revoked_at IS NOT NULL OR s.style_use_allowed IS NOT TRUE "
+            "OR (s.consent_expires_at IS NOT NULL "
+            "AND s.consent_expires_at <= clock_timestamp()))) "
+            "AND r.revision_id=CAST(:revision AS uuid) "
+            "AND r.revision_number=:number AND r.content_digest=:digest "
+            "AND g.actor_id=CAST(:actor AS uuid) AND g.purpose=:purpose "
+            "AND g.revoked_at IS NULL "
+            "AND (g.expires_at IS NULL OR g.expires_at>clock_timestamp())"
+        )
+        params = dict(
+            tenant=tenant, profile=profile, actor=actor,
+            purpose=request.purpose, revision=revision.revision_id,
+            number=revision.revision_number, digest=revision.content_digest,
+        )
+        private_scope_sql = text(
+            "SELECT artifact_id, owner_actor_id, source_sha256 "
+            "FROM kari_internal.writing_style_authorized_document_sources("
+            "CAST(:tenant AS uuid), CAST(:profile AS uuid), "
+            "CAST(:actor AS uuid), :purpose, CAST(:revision AS uuid), "
+            ":number, :digest)"
+        )
+        try:
+            async with self._client_factory().get_async_session() as session:
+                await self._scope(session, tenant, actor, purpose=request.purpose)
+                if (await session.execute(sql, params)).first() is None:
+                    return False
+
+                # This server-only function fails on an invalid principal,
+                # expired grant, publication drift, forged sample, or invalid
+                # private receipt. Zero rows is valid only for a style with
+                # no document-backed sources.
+                rows = (
+                    await session.execute(private_scope_sql, params)
+                ).mappings().all()
+                if not rows:
+                    return True
+                if self._artifact_store is None:
+                    return False
+
+                config = ArtifactStorageConfig.from_environment()
+                if len(rows) > config.style_use_max_document_sources:
+                    return False
+
+                # Keep the SQL-held FOR SHARE snapshot and the whole bounded
+                # Storage proof inside a single wall-clock budget. Storage
+                # bytes must be verified freshly on EVERY delegated use.
+                checked: list[tuple[str, str, str]] = []
+                async with asyncio.timeout(
+                    config.style_use_integrity_total_timeout_seconds
+                ):
+                    for source in rows:
+                        artifact = str(source["artifact_id"])
+                        owner = str(source["owner_actor_id"])
+                        digest = source["source_sha256"]
+                        if (
+                            _uuid(artifact) != artifact
+                            or _uuid(owner) != owner
+                            or not isinstance(digest, str)
+                            or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+                        ):
+                            return False
+                        result = (
+                            await self._artifact_store.read_owner_active_text_bounded(
+                                artifact, tenant, owner, max_bytes=65536,
+                            )
+                        )
+                        if (
+                            result.success is not True
+                            or not isinstance(result.data, VerifiedArtifactText)
+                        ):
+                            return False
+                        proof = result.data
+                        if (
+                            proof.artifact_id != artifact
+                            or proof.tenant_id != tenant
+                            or proof.user_id != owner
+                            or proof.mime_type != "text/plain"
+                            or not isinstance(proof.text, str)
+                            or not hmac.compare_digest(proof.sha256, digest)
+                            or not hmac.compare_digest(
+                                hashlib.sha256(proof.text.encode("utf-8")).hexdigest(),
+                                digest,
+                            )
+                        ):
+                            return False
+                        checked.append((artifact, owner, digest))
+
+                    # Expiration may occur during a slow Storage transfer.
+                    # Re-evaluate SQL authority and the complete private
+                    # receipt set after all bytes have been verified. All
+                    # source/grant rows remain locked until session exit.
+                    if (await session.execute(sql, params)).first() is None:
+                        return False
+                    final_rows = (
+                        await session.execute(private_scope_sql, params)
+                    ).mappings().all()
+                    final = [
+                        (
+                            str(r["artifact_id"]),
+                            str(r["owner_actor_id"]),
+                            str(r["source_sha256"]),
+                        )
+                        for r in final_rows
+                    ]
+                    return checked == final
+        except Exception as exc:
+            # Never send signed URL, source bytes, digest, owner ID, or SQL
+            # details to the delegate. Structured logs contain stable cause
+            # class and correlation only.
+            logger.warning(
+                "Delegated writing style storage integrity unavailable",
+                extra={
+                    "error_type": type(exc).__name__,
+                    "correlation_id": request.correlation_id,
+                },
             )
-            return result.first() is not None
+            return False
 
 
 __all__ = [

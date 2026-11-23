@@ -232,3 +232,70 @@ def test_document_style_use_fence_reuses_existing_sql_authority() -> None:
         content = path.read_text(encoding="utf-8")
         assert name in content
         assert "storage_uri text" in content
+
+def test_delegate_storage_integrity_is_internal_and_fail_closed() -> None:
+    """No public receipt RPC or style-only grant is accepted as byte proof."""
+    root = Path(__file__).resolve().parents[2]
+    migration_name = "20261123060000_72_writing_style_delegated_storage_integrity.sql"
+    sql = (root / "supabase/migrations" / migration_name).read_text(
+        encoding="utf-8"
+    )
+    for required in (
+        "CREATE SCHEMA IF NOT EXISTS kari_internal;",
+        "REVOKE ALL ON SCHEMA kari_internal FROM PUBLIC;",
+        "CREATE FUNCTION kari_internal.writing_style_authorized_document_sources(",
+        "SECURITY DEFINER",
+        "SET search_path = pg_catalog, pg_temp",
+        "SET row_security = off",
+        "p_actor IS DISTINCT FROM",
+        "current_setting('app.current_user_id', true)",
+        "current_setting('app.current_style_purpose', true)",
+        "p.state = 'published'",
+        "g.actor_id = p_actor",
+        "g.revoked_at IS NULL",
+        "p.current_revision_id",
+        "r.revision_id = p_revision",
+        "FOR SHARE OF p, r, g",
+        "PERFORM public.writing_style_document_use_expiry(",
+        "FOR SHARE OF c, f",
+        "c.style_use_allowed IS TRUE",
+        "c.author_attested IS TRUE",
+        "f.sha256 = c.source_sha256",
+        "REVOKE ALL ON FUNCTION kari_internal.writing_style_authorized_document_sources(",
+    ):
+        assert required in sql
+    assert "GRANT EXECUTE" not in sql
+    assert "GRANT USAGE" not in sql
+    assert "CREATE POLICY" not in sql
+    assert "CREATE TABLE" not in sql
+    assert "SELECT c.source_sha256" not in sql
+    assert "document_text" not in sql
+
+    style_repo = (
+        root / "src/ai_karen_engine/services/writing_style_profile_repository.py"
+    ).read_text(encoding="utf-8")
+    assert "kari_internal.writing_style_authorized_document_sources(" in style_repo
+    assert "read_owner_active_text_bounded(" in style_repo
+    assert "hashlib.sha256(proof.text.encode" in style_repo
+    assert "checked == final" in style_repo
+    assert "if self._artifact_store is None:" in style_repo
+    assert "asyncio.timeout(" in style_repo
+    assert "return False" in style_repo
+    assert ".download(" not in style_repo
+    assert "create_signed_url(" not in style_repo
+
+    factory = (
+        root / "src/ai_karen_engine/database/factory.py"
+    ).read_text(encoding="utf-8")
+    assert 'self._services["writing_style_repository"]' in factory
+    assert 'artifact_store=self._services["artifact_store"]' in factory
+
+    for fixture in (
+        "test_writing_style_document_consent_postgres.py",
+        "test_writing_style_identity_postgres.py",
+        "test_writing_style_sample_postgres.py",
+    ):
+        test_source = (
+            root / "tests/integration" / fixture
+        ).read_text(encoding="utf-8")
+        assert migration_name in test_source

@@ -77,6 +77,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_use_expiry(uuid,uuid,uuid) CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_revoke_consent_on_file_change() CASCADE;
+            DROP FUNCTION IF EXISTS kari_internal.writing_style_authorized_document_sources(uuid,uuid,uuid,text,uuid,bigint,text) CASCADE;
             DROP TABLE IF EXISTS public.files CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.files (
@@ -98,6 +99,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             "20261122010002_62_writing_style_document_author_consent.sql",
             "20261123030000_69_writing_style_document_file_tenant_text.sql",
             "20261123040000_70_writing_style_document_delegated_use_fence.sql",
+            "20261123060000_72_writing_style_delegated_storage_integrity.sql",
         ):
             await raw.execute((root / file).read_text(encoding="utf-8"))
         await raw.execute(
@@ -106,6 +108,12 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         )
         await raw.execute(f'CREATE ROLE "{role}" NOLOGIN')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+        await raw.execute(f'GRANT USAGE ON SCHEMA kari_internal TO "{role}"')
+        await raw.execute(
+            f'GRANT EXECUTE ON FUNCTION '
+            f'kari_internal.writing_style_authorized_document_sources('
+            f'uuid,uuid,uuid,text,uuid,bigint,text) TO "{role}"'
+        )
         await raw.execute(
             f'GRANT SELECT, INSERT, UPDATE ON public.writing_style_profiles, '
             f'public.writing_style_revisions, public.writing_style_grants, '
@@ -652,6 +660,12 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             await raw.execute(f'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM "{role}"')
             await raw.execute(f'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM "{role}"')
             await raw.execute(f'REVOKE USAGE ON SCHEMA public FROM "{role}"')
+            await raw.execute(
+                f'REVOKE ALL ON FUNCTION '
+                f'kari_internal.writing_style_authorized_document_sources('
+                f'uuid,uuid,uuid,text,uuid,bigint,text) FROM "{role}"'
+            )
+            await raw.execute(f'REVOKE USAGE ON SCHEMA kari_internal FROM "{role}"')
             await raw.execute(f'DROP ROLE IF EXISTS "{role}"')
         finally:
             await raw.close()

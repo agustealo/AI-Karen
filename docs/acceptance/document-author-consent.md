@@ -421,3 +421,65 @@ storage trial with a deliberately altered disposable object, independent
 author consent, and before/after delegate denial must be observed before
 claiming end-to-end acceptance. Missing/skipped host acceptance is not green.
 Consumer document ingestion and automatic style learning stay OFF.
+
+
+### WS-04B7: delegated-use Storage integrity and private receipt handoff
+
+WS-04B6 proved bounded owner reads reject altered live Supabase object bytes
+even when `files.sha256` remains unchanged. WS-04B7 closes the corresponding
+KariSignature delegated-use decision gap. The canonical
+`WritingStyleProfileRepository.authorize_use` now requires **both** a current
+purpose-specific PostgreSQL grant and a fresh live Storage digest proof for
+every author-attested document receipt, before `KariSignatureResolver`
+releases the approved style expression.
+
+Private receipts remain governed by FORCE RLS. The forward-only migration
+`72_writing_style_delegated_storage_integrity` installs a restricted
+`kari_internal.writing_style_authorized_document_sources` function in a
+**non-Data-API schema**. It accepts only the caller's transaction-local
+authenticated tenant, actor and purpose; independently validates the
+published revision, grant and existing canonical owner-consent predicate;
+then returns only artifact, owner and digest identities **inside the trusted
+server**. The function is `SECURITY DEFINER` because delegated actors may
+not read the author's receipts. It has an explicit safe search path, row
+locks, and `REVOKE ALL` from `PUBLIC`, `anon` and `authenticated`.
+The privileged function is never exposed by a chat tool, API route, model
+prompt or UI. Only the internal PostgreSQL runtime owner may invoke it.
+
+The repository uses the **same** `SupabaseArtifactStore` already registered
+by `DatabaseServiceFactory`, not a second object client or a cached
+document-derived style. It requests `read_owner_active_text_bounded` with
+the owner identity returned by the verified database function. A successful
+response is checked again against the requested artifact identity, real
+source digest, MIME and actual decoded bytes; the text is discarded and is
+never returned to the delegate. A missing or uninitialized canonical
+Storage service fails closed for document-backed styles while independently
+authored styles retain their existing grant contract.
+
+The grant and private receipt scope are revalidated after bytes are read,
+including changes to publication, grant expiry and receipt expiry. PostgreSQL
+`FOR SHARE` locks protect known rows throughout the transaction while a
+single configurable wall-clock deadline bounds the whole operation. Settings
+are validated centrally by `ArtifactStorageConfig`:
+
+- `KAREN_STYLE_DELEGATED_MAX_DOCUMENT_SOURCES`: default 16, 1–64.
+- `KAREN_STYLE_DELEGATED_INTEGRITY_DEADLINE_SECONDS`: default 25 seconds,
+  strictly positive and at most 120.
+
+A valid profile above the configured source cap or a slow/unavailable source
+is denied; no partial document set is authorized. Every delegated use
+rechecks current live Storage bytes rather than trusting the prior analysis
+or an earlier positive decision. The SQL + unit tests cover wrong principal,
+stale and forged source identity, unchanged-metadata same-length byte
+tampering, missing Storage capability, malformed responses, expiry/revocation
+races, source set changes and deadline failures. The disposable PostgreSQL
+suite separately proves private-receipt RLS and correct owner-sourced
+identity under a non-bypass role.
+
+**Release HOLD still applies.** These are controlled code/CI and disposable
+PostgreSQL proofs, not observed host-Supabase acceptance. Out-of-band object
+replacement after the last bounded check is not an atomic Storage/SQL
+transaction; author approval, approved-host first-party browsing, real
+Supabase object integrity, and delegated before/after host trials still
+require independent evidence. No consumer document ingestion or automatic
+style learning is enabled.
