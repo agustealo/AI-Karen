@@ -9,8 +9,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ai_karen_engine.services.artifact_writing_style_source_authority import (
+    ArtifactWritingStyleContentReader,
     ArtifactWritingStyleSourceAuthority,
 )
+from ai_karen_engine.services.database.repositories.artifact_store import (
+    VerifiedArtifactText,
+)
+from ai_karen_engine.services.database.repositories.base import RepositoryResult
 from ai_karen_engine.services.writing_style_sample_provenance import (
     VerifiedWritingStyleSource,
 )
@@ -317,3 +322,107 @@ async def test_source_authorization_never_downloads_storage_objects():
     artifacts.download.assert_not_awaited()
     assert artifacts.get_metadata.await_count == 2
     assert issuer.verify_current.await_count == 2
+
+
+def _bounded_result(s, **overrides):
+    values = dict(
+        artifact_id=s["source_id"],
+        tenant_id=s["tenant_id"],
+        user_id=s["actor_id"],
+        filename="approved.txt",
+        mime_type="text/plain",
+        sha256="a" * 64,
+        text="Original author text for approved analysis.",
+    )
+    values.update(overrides)
+    return RepositoryResult(success=True, data=VerifiedArtifactText(**values))
+
+
+async def test_bounded_document_reader_reuses_canonical_owner_and_returns_text():
+    s = scope()
+    store = SimpleNamespace(read_owner_active_text_bounded=AsyncMock(
+        return_value=_bounded_result(s)
+    ))
+    reader = ArtifactWritingStyleContentReader(artifacts=store)
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type="document", source_id=s["source_id"],
+    ) == "Original author text for approved analysis."
+    store.read_owner_active_text_bounded.assert_awaited_once_with(
+        s["source_id"], s["tenant_id"], s["actor_id"], max_bytes=65536,
+    )
+
+
+@pytest.mark.parametrize("source_type", ["email", "message", "transcript", "other"])
+async def test_bounded_document_reader_never_reads_unsupported_source_type(source_type):
+    s = scope()
+    store = SimpleNamespace(read_owner_active_text_bounded=AsyncMock(
+        return_value=_bounded_result(s)
+    ))
+    reader = ArtifactWritingStyleContentReader(artifacts=store)
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type=source_type, source_id=s["source_id"],
+    ) is None
+    store.read_owner_active_text_bounded.assert_not_awaited()
+
+
+@pytest.mark.parametrize("changed", [
+    {"artifact_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+    {"tenant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+    {"user_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+    {"filename": "../original.txt"},
+    {"filename": "approved.pdf"},
+    {"mime_type": "application/pdf"},
+    {"sha256": "invalid"},
+    {"text": None},
+])
+async def test_bounded_document_reader_fails_closed_on_untrusted_result(changed):
+    s = scope()
+    store = SimpleNamespace(read_owner_active_text_bounded=AsyncMock(
+        return_value=_bounded_result(s, **changed)
+    ))
+    reader = ArtifactWritingStyleContentReader(artifacts=store)
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type="document", source_id=s["source_id"],
+    ) is None
+
+
+async def test_bounded_document_reader_fails_closed_when_storage_cannot_prove_limit():
+    s = scope()
+    store = SimpleNamespace(read_owner_active_text_bounded=AsyncMock(
+        return_value=RepositoryResult(
+            success=False, error="bounded_artifact_read_unavailable"
+        )
+    ))
+    reader = ArtifactWritingStyleContentReader(artifacts=store)
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type="document", source_id=s["source_id"],
+    ) is None
+    store.read_owner_active_text_bounded.side_effect = RuntimeError(
+        "private object storage credentials"
+    )
+    assert await reader.read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type="document", source_id=s["source_id"],
+    ) is None
+
+
+async def test_bounded_document_reader_rejects_invalid_principal_before_storage_access():
+    s = scope()
+    store = SimpleNamespace(read_owner_active_text_bounded=AsyncMock())
+    reader = ArtifactWritingStyleContentReader(artifacts=store)
+    assert await reader.read_current_content(
+        tenant_id="default", actor_id=s["actor_id"],
+        source_type="document", source_id=s["source_id"],
+    ) is None
+    store.read_owner_active_text_bounded.assert_not_awaited()
+
+
+async def test_bounded_document_reader_requires_real_capability():
+    with pytest.raises(ValueError, match="bounded_artifact_source_owner_required"):
+        ArtifactWritingStyleContentReader(artifacts=None)
+    with pytest.raises(ValueError, match="bounded_artifact_source_owner_required"):
+        ArtifactWritingStyleContentReader(artifacts=SimpleNamespace())
