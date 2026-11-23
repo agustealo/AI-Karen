@@ -296,12 +296,33 @@ async def test_positive_current_consent_reverified_after_final_source_read():
 
 
 
-async def test_no_unbounded_document_content_reader_is_exposed():
-    """WS-04A4: metadata admission must never imply safe source-byte access."""
+async def test_document_content_reader_is_explicit_and_never_uses_buffered_download():
+    """WS-04B0: the canonical bounded owner replaces obsolete unbounded denial."""
     import ai_karen_engine.services.artifact_writing_style_source_authority as module
 
-    assert not hasattr(module, "ArtifactWritingStyleContentReader")
-    assert "ArtifactWritingStyleContentReader" not in module.__all__
+    assert module.ArtifactWritingStyleContentReader is ArtifactWritingStyleContentReader
+    assert "ArtifactWritingStyleContentReader" in module.__all__
+    s = scope()
+    store = SimpleNamespace(
+        read_owner_active_text_bounded=AsyncMock(return_value=_bounded_result(s)),
+        download=AsyncMock(side_effect=AssertionError(
+            "whole-object storage download forbidden during sample analysis"
+        )),
+        read_owner_active_code=AsyncMock(side_effect=AssertionError(
+            "code reader does not guarantee a transport byte budget"
+        )),
+    )
+    assert await ArtifactWritingStyleContentReader(
+        artifacts=store,
+    ).read_current_content(
+        tenant_id=s["tenant_id"], actor_id=s["actor_id"],
+        source_type="document", source_id=s["source_id"],
+    ) == "Original author text for approved analysis."
+    store.read_owner_active_text_bounded.assert_awaited_once_with(
+        s["source_id"], s["tenant_id"], s["actor_id"], max_bytes=65536,
+    )
+    store.download.assert_not_awaited()
+    store.read_owner_active_code.assert_not_awaited()
 
 
 async def test_source_authorization_never_downloads_storage_objects():
