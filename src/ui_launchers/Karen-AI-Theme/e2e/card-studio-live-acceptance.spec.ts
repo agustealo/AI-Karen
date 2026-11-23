@@ -18,6 +18,8 @@ const mutationApproved = process.env.KAREN_CARD_STUDIO_MUTATION_APPROVED === "tr
 const capture = process.env.KAREN_CARD_STUDIO_SANITIZED_CAPTURE === "true";
 const email = process.env.KAREN_UX_EMAIL;
 const password = process.env.KAREN_UX_PASSWORD;
+const isolationEmail = process.env.KAREN_UX_ISOLATION_EMAIL;
+const isolationPassword = process.env.KAREN_UX_ISOLATION_PASSWORD;
 const localLoopback = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
 const catalogPath = "/api/chat/card-studio/catalog";
 const templatesPath = "/api/chat/card-studio/templates";
@@ -376,4 +378,208 @@ test("KCARD-LIVE-MUTATION: real PostgreSQL CAS, reload, response loss and archiv
     .toContainText("archived");
   await expect(finalPage.getByRole("button", { name: new RegExp(recoveryTitle) }))
     .toContainText("archived");
+});
+
+
+/**
+ * An actual second first-party identity, never a forged access token, must
+ * fail all foreign-owner reads and writes. The two browser contexts share at
+ * most the reviewed Vercel protection cookie, not Karen authentication state.
+ */
+async function scopedCardRequest(
+  page: Page,
+  path: string,
+  method: "GET" | "PUT" | "POST",
+  body?: Record<string, unknown>,
+): Promise<{ status: number; cacheControl: string | null; payload: unknown }> {
+  return page.evaluate(async ({ path, method, body }) => {
+    const bearer = window.localStorage.getItem("access_token");
+    if (!bearer) {
+      throw new Error("Authenticated browser did not establish a bearer token.");
+    }
+    const url = new URL(path, window.location.origin);
+    if (url.origin !== window.location.origin ||
+        !url.pathname.startsWith("/api/chat/card-studio/")) {
+      throw new Error("Refusing cross-origin Card Studio authorization probe.");
+    }
+    const response = await window.fetch(url.toString(), {
+      method,
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      headers: {
+        Authorization: "Bearer " + bearer,
+        ...(method === "GET" ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
+    });
+    return {
+      status: response.status,
+      cacheControl: response.headers.get("cache-control"),
+      payload: response.ok ? await response.json() as unknown : null,
+    };
+  }, { path, method, body });
+}
+
+test("KCARD-LIVE-ISOLATION: second real user cannot read, revise or archive owner layouts", async (
+  { page, browser },
+) => {
+  test.skip(!enabled, "Opt in to approved real Card Studio browser acceptance.");
+  test.setTimeout(7 * 60_000);
+  if (!mutationApproved) {
+    throw new Error("Real owner isolation requires explicitly approved disposable preview writes.");
+  }
+  if (!email || !password || !isolationEmail || !isolationPassword ||
+      email.trim().toLowerCase() === isolationEmail.trim().toLowerCase()) {
+    throw new Error("Two distinct sanitized Card Studio accounts are required.");
+  }
+
+  const origin = await signIn(page);
+  const ownerUserId = await page.evaluate(() => {
+    const user = JSON.parse(window.localStorage.getItem("user_data") || "null") as { user_id?: unknown } | null;
+    if (typeof user?.user_id !== "string" || !user.user_id) throw new Error("Owner login did not resolve a user ID.");
+    return user.user_id;
+  });
+  const root = await openStudio(page, origin.origin);
+  const sample = randomUUID().replaceAll("-", "").slice(0, 16);
+  const key = "isolation-e2e-" + sample;
+  const title = "Card Isolation E2E " + sample;
+  await root.getByLabel("Title", { exact: true }).fill(title);
+  await root.getByLabel("Template key").fill(key);
+  const created = await verifiedCommit(
+    page, origin.origin, templatesPath, "POST",
+    () => root.getByRole("button", { name: "Create draft" }).click(),
+    "create",
+  );
+  const ownerId = created.saved.template.template_id;
+  expect(created.saved.template.revision).toBe(1);
+  expect(created.saved.template.lifecycle).toBe("draft");
+
+  try {
+    const otherContext = await browser.newContext({
+      baseURL: origin.origin,
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 800 },
+    });
+    try {
+      // Pass only immutable-host Vercel deployment access. Never inherit the
+      // owner application's kari_session, bearer, localStorage or user data.
+      const accessCookies = (await page.context().cookies(origin.origin))
+        .filter(cookie => cookie.name === "_vercel_jwt" && cookie.secure &&
+          cookie.domain.replace(/^\./, "") === origin.hostname);
+      if (origin.hostname.endsWith(".vercel.app") && accessCookies.length !== 1) {
+        throw new Error("Second browser lacks approved protected-preview admission.");
+      }
+      if (accessCookies.length > 0) {
+        await otherContext.addCookies(accessCookies);
+      }
+
+      const other = await otherContext.newPage();
+      await signInApprovedKaren(other, isolationEmail, isolationPassword, {
+        allowLocalLoopback: localLoopback,
+      });
+      expect(new URL(other.url()).origin).toBe(origin.origin);
+      const foreignUserId = await other.evaluate(() => {
+        const user = JSON.parse(window.localStorage.getItem("user_data") || "null") as { user_id?: unknown } | null;
+        if (typeof user?.user_id !== "string" || !user.user_id) throw new Error("Second login did not resolve a user ID.");
+        return user.user_id;
+      });
+      expect(foreignUserId !== ownerUserId, "Isolation requires distinct authenticated users").toBe(true);
+      const foreignRoot = await openStudio(other, origin.origin);
+      await expect(foreignRoot.getByRole("button", { name: new RegExp(title) }))
+        .toHaveCount(0);
+
+      // Explicitly prove B has their own write capability. An ordinary RBAC
+      // 403 for a read-only account would be weak cross-owner isolation proof.
+      const foreignKey = "isolation-foreign-e2e-" + sample;
+      const foreignTitle = "Foreign isolation E2E " + sample;
+      await foreignRoot.getByLabel("Title", { exact: true }).fill(foreignTitle);
+      await foreignRoot.getByLabel("Template key").fill(foreignKey);
+      const foreignCreated = await verifiedCommit(
+        other, origin.origin, templatesPath, "POST",
+        () => foreignRoot.getByRole("button", { name: "Create draft" }).click(),
+        "create",
+      );
+      const foreignId = foreignCreated.saved.template.template_id;
+      expect(foreignCreated.saved.template.revision).toBe(1);
+      expect(foreignCreated.saved.template.lifecycle).toBe("draft");
+      try {
+        // B also has functional authenticated read admission. A disabled
+        // plugin, missing bearer or missing write permission cannot count.
+        const foreignInventory = await scopedCardRequest(
+          other, templatesPath + "?limit=50&include_archived=true", "GET",
+        );
+        expect(foreignInventory.status).toBe(200);
+        expect(foreignInventory.cacheControl).toContain("no-store");
+        const owned = foreignInventory.payload as {
+          schema_version: number;
+          templates: Array<{ template_id: string; template_key: string }>;
+        };
+        expect(owned.schema_version).toBe(1);
+        expect(Array.isArray(owned.templates)).toBe(true);
+        expect(owned.templates.some(item => item.template_id === foreignId)).toBe(true);
+        expect(owned.templates.some(item =>
+          item.template_id === ownerId || item.template_key === key)).toBe(false);
+
+        // Read current source, historical list, historical source, and both
+        // write paths. 403/404 are allowable denials; 401 is not, since this
+        // account just demonstrated independent authenticated read admission.
+        const draft = created.request.draft as Record<string, unknown>;
+        const foreignProbes: Array<{
+          path: string;
+          method: "GET" | "PUT" | "POST";
+          body?: Record<string, unknown>;
+        }> = [
+          { path: templatesPath + "/" + ownerId, method: "GET" },
+          { path: templatesPath + "/" + ownerId + "/revisions", method: "GET" },
+          { path: templatesPath + "/" + ownerId + "/revisions/1", method: "GET" },
+          {
+            path: templatesPath + "/" + ownerId, method: "PUT",
+            body: {
+              idempotency_key: randomUUID(),
+              expected_revision: 1,
+              draft: { ...draft, title: "Illicit revision " + sample },
+            },
+          },
+          {
+            path: templatesPath + "/" + ownerId + "/archive", method: "POST",
+            body: { idempotency_key: randomUUID(), expected_revision: 1 },
+          },
+        ];
+        for (const probe of foreignProbes) {
+          const result = await scopedCardRequest(other, probe.path, probe.method, probe.body);
+          expect([403, 404], "Foreign " + probe.method + " " + probe.path + " must be denied")
+            .toContain(result.status);
+          expect(result.cacheControl).toContain("no-store");
+        }
+
+        // Denials must leave the actual owner's persisted PostgreSQL revision
+        // unchanged. This read is independently authorized in the owner tab.
+        const ownerRead = await scopedCardRequest(page, templatesPath + "/" + ownerId, "GET");
+        expect(ownerRead.status).toBe(200);
+        expect(ownerRead.cacheControl).toContain("no-store");
+        const ownerTemplate = ownerRead.payload as {
+          schema_version: number;
+          template: {
+            template_id: string; revision: number; lifecycle: string;
+            definition: { title: string; template_key: string };
+          };
+        };
+        expect(ownerTemplate.schema_version).toBe(1);
+        expect(ownerTemplate.template.template_id).toBe(ownerId);
+        expect(ownerTemplate.template.revision).toBe(1);
+        expect(ownerTemplate.template.lifecycle).toBe("draft");
+        expect(ownerTemplate.template.definition.title).toBe(title);
+        expect(ownerTemplate.template.definition.template_key).toBe(key);
+      } finally {
+        await archiveOwned(other, origin.origin, foreignId, 1);
+      }
+    } finally {
+      await otherContext.close();
+    }
+  } finally {
+    // Even a failed negative-auth trial attempts to archive its own fixture.
+    // A failed cleanup fails the trial rather than falsely claiming no data.
+    await archiveOwned(page, origin.origin, ownerId, 1);
+  }
 });

@@ -30,6 +30,10 @@ def test_card_studio_reuses_protected_browser_workflow() -> None:
     assert "card-studio-live-acceptance.spec.ts" in workflow
     assert "--project=chromium --reporter=list --retries=0" in workflow
     assert 'KAREN_CARD_STUDIO_SANITIZED_CAPTURE: "false"' in workflow
+    assert 'test -n "$KAREN_UX_ISOLATION_EMAIL"' in workflow
+    assert 'test -n "$KAREN_UX_ISOLATION_PASSWORD"' in workflow
+    assert 'KAREN_UX_ISOLATION_EMAIL: ${{ secrets.KAREN_UX_ISOLATION_EMAIL }}' in workflow
+    assert 'KAREN_UX_ISOLATION_PASSWORD: ${{ secrets.KAREN_UX_ISOLATION_PASSWORD }}' in workflow
     # Card Studio uses the existing protected settings job. The shared fixture
     # must run before real credentials are typed into a Vercel preview.
     assert 'KAREN_SETTINGS_VERIFIED_DEPLOYMENT: "true"' in workflow
@@ -100,3 +104,41 @@ def test_card_studio_uses_existing_scoped_protection_cookie_before_login() -> No
     assert "await use();" in fixture
     assert "route.fulfill(" not in fixture
     assert "page.addInitScript(" not in fixture
+
+
+def test_card_studio_real_second_principal_denies_all_owner_paths() -> None:
+    """No same-user stale tab or client-faked identity counts as authorization."""
+    spec = (THEME / "e2e/card-studio-live-acceptance.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    assert 'KCARD-LIVE-ISOLATION: second real user' in spec
+    assert 'process.env.KAREN_UX_ISOLATION_EMAIL' in spec
+    assert 'process.env.KAREN_UX_ISOLATION_PASSWORD' in spec
+    assert 'email.trim().toLowerCase() === isolationEmail.trim().toLowerCase()' in spec
+    assert 'await browser.newContext({' in spec
+    assert 'serviceWorkers: "block"' in spec
+    assert 'cookie.name === "_vercel_jwt"' in spec
+    assert 'await otherContext.addCookies(accessCookies)' in spec
+    assert 'await signInApprovedKaren(other, isolationEmail, isolationPassword,' in spec
+    assert 'await openStudio(other, origin.origin)' in spec
+    assert 'foreignUserId !== ownerUserId' in spec
+    assert 'const foreignCreated = await verifiedCommit(' in spec
+    assert 'const foreignId = foreignCreated.saved.template.template_id' in spec
+    assert 'item.template_id === foreignId' in spec
+    assert 'await archiveOwned(other, origin.origin, foreignId, 1)' in spec
+    assert 'foreignInventory.status).toBe(200)' in spec
+    assert 'ownerId + "/revisions"' in spec
+    assert 'ownerId + "/revisions/1"' in spec
+    assert 'method: "PUT"' in spec
+    assert 'method: "POST"' in spec
+    assert 'expect([403, 404]' in spec
+    assert 'ownerTemplate.template.revision).toBe(1)' in spec
+    assert 'await archiveOwned(page, origin.origin, ownerId, 1)' in spec
+    assert 'localStorage.getItem("access_token")' in spec
+    assert 'url.origin !== window.location.origin' in spec
+    assert 'credentials: "same-origin"' in spec
+    assert 'redirect: "error"' in spec
+    assert 'page.route(' in spec  # Response loss only; not foreign auth.
+    assert 'route.fulfill(' not in spec
+    assert 'page.addInitScript(' not in spec
+    assert 'trace: "off", screenshot: "off", video: "off"' in spec
