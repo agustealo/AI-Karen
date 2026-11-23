@@ -114,3 +114,68 @@ def test_file_explorer_dispatch_runs_only_its_real_browser_case():
     assert "KFILE-LIVE: authenticated owner files" in spec
     for other in ("KCONTENT-LIVE", "KCONTENT-DENY-LIVE", "KCONTENT-REVOKED-LIVE"):
         assert f"--grep='{other}'" not in branch.group("body")
+
+
+
+def test_kplug09_real_storage_and_manual_browser_refresh_proof_remain_separate():
+    """No simulated Storage result or browser fixture skip can certify release."""
+    storage = (
+        ROOT / "tests/integration/test_live_code_artifact_revocation_postgres.py"
+    ).read_text(encoding="utf-8")
+    spec = SPEC.read_text(encoding="utf-8")
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    assert "test_live_signed_range_read_uses_real_storage_and_disposable_postgres_owner" in storage
+    for required in (
+        'KAREN_TEST_CODE_ARTIFACT_LIVE_RANGE',
+        'KAREN_TEST_SUPABASE_DISPOSABLE',
+        'KAREN_TEST_LIVE_RANGE_ARTIFACT_ID',
+        'KAREN_TEST_LIVE_RANGE_ARTIFACT_SHA256',
+        'read_owner_active_text_bounded(',
+        'SupabasePlatformClient()',
+        'bounded_artifact_read_unavailable',
+    ):
+        assert required in storage
+    browser_case = spec.split("test('KCONTENT-LIVE:", 1)[1].split(
+        "test('KCONTENT-DENY-LIVE:", 1
+    )[0]
+    assert "analysisPosts" in browser_case
+    assert "Refresh must never silently replay Content Intelligence" in browser_case
+    assert "await explorer.getByRole('button', { name: 'Refresh' }).click()" in browser_case
+    assert "references: [{ source_id: expectedId, revision: current.sha256 }]" in browser_case
+    assert "route.fulfill(" not in spec and "page.route(" not in spec
+    assert "implementation ready for observation, not consumer-certified" in runbook
+    assert "| `content-intelligence` | Not shipped |" in LEDGER.read_text(encoding="utf-8")
+
+
+
+def test_kplug10_live_storage_owner_read_proves_actual_runtime_handoff():
+    """Prevent source-read success alone from masquerading as plugin acceptance."""
+    proof = (
+        ROOT / "tests/integration/test_live_code_artifact_revocation_postgres.py"
+    ).read_text(encoding="utf-8")
+    live = proof.split(
+        "async def test_live_supabase_object_read_with_disposable_postgres_owner_scope()",
+        1,
+    )[1].split("\n\n@pytest.mark.skipif(", 1)[0]
+
+    assert "KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE" in proof
+    for required in (
+        "KAREN_TEST_SUPABASE_DISPOSABLE",
+        "bucket_public is not False",
+        "parsed.port != 5432",
+        "granted = await store.read_owner_active_code(",
+        "FileExplorerInventoryHost(",
+        "ContentSourceHost(store=store, kernel=kernel)",
+        "ArtifactSourceAdapter(store)",
+        "explorer.list_owner_page(",
+        "explorer.revalidate_owner_selection(",
+        "content_host.execute_owner_text(",
+        "lexical_engine.execute(request.payload)",
+        "assert kernel.analysis_executions == 1",
+        "content_source_evidence_invalid",
+    ):
+        assert required in live
+    assert "MagicMock(" not in live
+    assert "MockTransport(" not in live
+    assert "No third live-storage" in RUNBOOK.read_text(encoding="utf-8")
+    assert "| `content-intelligence` | Not shipped |" in LEDGER.read_text(encoding="utf-8")

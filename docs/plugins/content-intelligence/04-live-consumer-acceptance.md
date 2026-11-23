@@ -135,3 +135,110 @@ The source implementation and protected scenario may be merged without
 declaring consumer acceptance passed. File Explorer and Content Intelligence
 remain **Not shipped** until real results, independent revocation proof and
 release-mirror parity are all recorded and approved.
+
+
+## KPLUG-09: Real Storage range proof and browser refresh continuity
+
+**Status: implementation ready for observation, not consumer-certified.**
+KPLUG-08 proved source-revision and owner races against real disposable
+PostgreSQL and a controlled in-process Storage fixture. KPLUG-09 adds a
+distinct opt-in, **real Supabase Storage signed-range** read to the existing
+`tests/integration/test_live_code_artifact_revocation_postgres.py`.
+The test invokes `SupabasePlatformClient` and the unchanged canonical
+`SupabaseArtifactStore.read_owner_active_text_bounded`, without mocked HTTP,
+synthetic signed URLs, uploads, ACL changes, or metadata mutation. The
+repository must receive an exact 206 Partial Content range, compare the
+actual bytes with the migrated disposable PostgreSQL metadata SHA-256, and
+deny wrong-owner, wrong-tenant, and undersized transfer-budget requests.
+
+Preconditions, in addition to the existing disposable PostgreSQL proof:
+an explicitly disposable Supabase project with a real private
+`artifacts` bucket, a preseeded nonsensitive `.txt` or `.md` object,
+and an exact matching active, owner-owned `files` row in the local
+`karen_code_artifact_test` database. Use exactly the same tested owner
+and tenant IDs as the current CK-GEN PostgreSQL fixture. The existing
+private acceptance configuration supplies:
+
+- `KAREN_TEST_DISPOSABLE_DATABASE=1` and
+  `KAREN_TEST_CODE_ARTIFACT_LIVE_RANGE=1`
+- `KAREN_TEST_SUPABASE_DISPOSABLE=1`,
+  `KAREN_TEST_SUPABASE_PROJECT_REF` and exact
+  `SUPABASE_PROJECT_URL=https://<project_ref>.supabase.co`
+- `KAREN_TEST_CODE_ARTIFACT_DATABASE_URL` pointing only to local
+  `127.0.0.1:5432/karen_code_artifact_test`
+- `KAREN_TEST_ARTIFACT_TENANT_ID`,
+  `KAREN_TEST_ARTIFACT_OWNER_ID`,
+  `KAREN_TEST_ARTIFACT_OTHER_USER_ID`,
+  `KAREN_TEST_LIVE_RANGE_ARTIFACT_ID` and
+  `KAREN_TEST_LIVE_RANGE_ARTIFACT_SHA256`
+- The canonical platform's configured Supabase project credential,
+  held only in the protected acceptance environment, never in GitHub
+  source, PR descriptions, or browser variables
+
+On the approved disposable test host, run the existing test file with
+`pytest tests/integration/test_live_code_artifact_revocation_postgres.py -q -rs`
+and explicitly confirm the live signed-range test **executed and passed**.
+A skipped test, a missing preseeded row or a Storage 200 response that
+ignored `Range` **does not** satisfy this gate. Existing automatic CK-GEN
+CI continues to test PostgreSQL without live Supabase credentials and
+must not be described as a successful live Storage run.
+
+For the authenticated consumer proof, reuse the protected existing
+`content-intelligence` browser dispatch in
+`.github/workflows/karen-history-browser-acceptance.yml`, only on an
+immutable exact-`main` approved deployment with sanitized credentials.
+Its `KCONTENT-LIVE` test now checks that after successful real analysis,
+a real owner-inventory refresh clears the prior selection and displayed
+analysis **without automatically replaying a POST**. The user must
+explicitly reselect the fresh source reference and click Analyze for
+a second backend-verified result. Existing `content-intelligence-denial`
+and `content-intelligence-revocation` are still required independent
+negative browser scenarios. The refresh-only proof is **not** a substitute
+for a controlled live byte-revision change between selection and execution;
+the real PostgreSQL concurrency test remains that separate authority.
+
+A successful browser or Storage run requires the actual run URL,
+reviewed/deployed SHA, source metadata provenance and sanitized
+pass/fail receipt before the release ledger changes. An unconfigured
+protected environment, unavailable live Storage fixture, or blocked
+Vercel deployment stays **unverified**, not silently passed.
+
+
+## KPLUG-10: Prove the real Storage handoff to Content Intelligence
+
+**Status: source contract, not an observed live-service pass.** The existing
+opt-in `test_live_supabase_object_read_with_disposable_postgres_owner_scope`
+now goes beyond downloading the selected object from real Storage. It uses
+the same canonical `SupabaseArtifactStore` as the owner-scoped File Explorer
+adapter and both runtime hosts. An artifact must appear on the first real
+owner inventory page, pass independent source/revision revalidation, and
+produce an exact source-ID/SHA-256 lexical analysis after its bytes have
+been reread and checked from real Storage. A forged revision must deny
+without publishing an additional analysis result.
+
+The test reuses `KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE=1` and the
+`KAREN_TEST_LIVE_ARTIFACT_ID` / `KAREN_TEST_LIVE_ARTIFACT_SHA256`
+fixture from the original live object-read proof. No third live-storage
+test flag or workflow is introduced. The named Storage bucket must be
+independently attested as private and the PostgreSQL target must be local
+`karen_code_artifact_test` on port 5432, with an exact disposable
+Supabase project URL and credentials. All of these prerequisites must
+fail closed if missing; the fixture must be the same active,
+nonsensitive artifact selected by the protected browser scenario.
+
+The test-only kernel admission fixture checks the hosts' request contracts
+and executes the canonical Content Intelligence lexical engine. **It is not
+a production PluginKernel or an authenticated HTTP request**, so it
+cannot certify effective RuntimePolicy, RBAC, browser authentication or
+deployment wiring. Preserve those independent proof paths through the
+existing protected browser workflow and API contract suites.
+
+A normal CK-GEN run keeps both live Storage proofs skipped. Only a
+successful explicitly opted-in run with a real object read, validated
+source receipt, and sanitized evidence counts toward live Storage
+acceptance. Record the exact run URL, source commit and deployment SHA,
+approved tenant/owner segregation results, Storage private-bucket
+attestation, protected browser scenario results, and reviewer approval.
+Never log content bytes, filenames, signing tokens, authentication headers,
+or private Storage URLs. File Explorer and Content Intelligence remain
+**Not shipped** until those separate proofs have actually passed.

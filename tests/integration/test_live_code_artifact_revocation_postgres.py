@@ -241,6 +241,8 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
     if not dsn:
         pytest.fail("Missing disposable PostgreSQL connection URL")
     parsed = _disposable_database_url(dsn)
+    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
+        pytest.fail("Real Storage owner proof requires local disposable PostgreSQL")
 
     def required_uuid(name: str) -> str:
         raw = os.getenv(name, "")
@@ -313,6 +315,16 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
         platform.initialize()
         if platform.storage is None or platform.url != project_url:
             pytest.fail("Canonical Supabase Storage client is unavailable")
+        try:
+            bucket = platform.storage.get_bucket("artifacts")
+        except Exception:
+            pytest.fail("Private disposable Storage bucket cannot be attested")
+        bucket_public = (
+            bucket.get("public") if isinstance(bucket, dict)
+            else getattr(bucket, "public", None)
+        )
+        if bucket_public is not False:
+            pytest.fail("Live Storage handoff requires a private artifacts bucket")
         store = SupabaseArtifactStore(sessions, platform)
 
         foreign = await store.read_owner_active_code(artifact, tenant, foreign_owner)
@@ -330,6 +342,162 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
         assert granted.data.artifact_id == artifact
         assert granted.data.tenant_id == tenant
         assert granted.data.user_id == owner
+
+        # Real Storage was read above. Now drive the existing authorized
+        # runtime hosts using that SAME real store, rather than just checking
+        # a successful repository download in isolation. Only the kernel is
+        # a test double: its production lifecycle/RBAC checks are independently
+        # covered by dedicated kernel and API suites.
+        from importlib import import_module
+
+        from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+        from ai_karen_engine.extensions.content_intelligence_sources import (
+            ContentSourceHost,
+        )
+        from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+        from ai_karen_engine.extensions.file_explorer_inventory import (
+            FileExplorerInventoryHost,
+        )
+
+        explorer_source = import_module(
+            "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
+        )
+        lexical_engine = import_module(
+            "ai_karen_engine.extensions.plugins.content-intelligence.engine"
+        )
+
+        class ContractKernel:
+            """Admission fixture only; not live PluginKernel or RuntimePolicy."""
+
+            def __init__(self):
+                self.content_admissions = 0
+                self.analysis_executions = 0
+
+            def get_record(self, plugin_id):
+                assert plugin_id in {"file-explorer", "content-intelligence"}
+                return {"status": "enabled", "dependencies_resolved": True}
+
+            async def admit(self, request):
+                assert request.plugin_id == "content-intelligence"
+                assert request.payload == {}
+                assert request.authorized_plan.policy_decision_id == "live-storage-proof"
+                self.content_admissions += 1
+                return SimpleNamespace(status="admitted")
+
+            async def execute(self, request):
+                assert request.authorized_plan.policy_decision_id == "live-storage-proof"
+                if request.plugin_id == "file-explorer":
+                    assert request.context.resource_scope["file_explorer_grant"] == "host_verified"
+                    return SimpleNamespace(
+                        status="success",
+                        payload={
+                            "operation": "list",
+                            "items": request.context.resource_scope[
+                                "file_explorer_entries"
+                            ],
+                        },
+                    )
+                assert request.plugin_id == "content-intelligence"
+                self.analysis_executions += 1
+                return SimpleNamespace(
+                    status="success",
+                    payload=lexical_engine.execute(request.payload),
+                )
+
+        kernel = ContractKernel()
+        explorer = FileExplorerInventoryHost(
+            kernel=kernel,
+            source=explorer_source.ArtifactSourceAdapter(store),
+        )
+        content_host = ContentSourceHost(store=store, kernel=kernel)
+        capabilities = ["file-explorer", "content-intelligence", "data:read"]
+        context = ExtensionExecutionContext(
+            request_id="kplug-10-real-storage",
+            correlation_id="kplug-10-real-storage-correlation",
+            user_id=owner,
+            tenant_id=tenant,
+            session_id="kplug-10-proof-session",
+            policy_decision_id="live-storage-proof",
+            allowed_capabilities=capabilities,
+            resource_scope={},
+            audit_context={"user_roles": ["user"], "permissions": ["data:read"]},
+        )
+        plan = AuthorizedExecutionPlan(
+            execution_id="kplug-10-real-storage-execution",
+            policy_decision_id="live-storage-proof",
+            authorized_user_id=owner,
+            authorized_tenant_id=tenant,
+            authorized_session_id="kplug-10-proof-session",
+            allowed_plugins=["file-explorer", "content-intelligence"],
+            allowed_capabilities=capabilities,
+        )
+
+        owner_page = await explorer.list_owner_page(
+            context=context, plan=plan, limit=100
+        )
+        selected = next(
+            (entry for entry in owner_page["items"]
+             if entry["source_id"] == artifact),
+            None,
+        )
+        if selected is None:
+            pytest.fail(
+                "Preseeded source must appear on the actual owner's first "
+                "inventory page, matching the protected browser fixture"
+            )
+        assert selected["revision"] == expected_sha
+        assert selected["sha256"] == expected_sha
+        assert selected["kind"] == "file"
+        assert "storage_uri" not in selected
+
+        revalidated = await explorer.revalidate_owner_selection(
+            context=context,
+            plan=plan,
+            source_id=artifact,
+            expected_revision=selected["revision"],
+        )
+        assert revalidated["owner_scope_verified"] is True
+        assert revalidated["source_id"] == artifact
+
+        analyzed = await content_host.execute_owner_text(
+            context=context,
+            plan=plan,
+            operation="analyze",
+            references=[{
+                "source_id": artifact,
+                "revision": selected["revision"],
+            }],
+        )
+        assert analyzed["operation"] == "analyze"
+        assert analyzed["persisted"] is False
+        assert len(analyzed["documents"]) == 1
+        assert analyzed["documents"][0]["id"] == artifact
+        assert analyzed["documents"][0]["sha256"] == expected_sha
+        assert analyzed["documents"][0]["characters"] == len(granted.data.text)
+        assert kernel.content_admissions == 1
+        assert kernel.analysis_executions == 1
+
+        # An old or fabricated digest remains invalid even when the same
+        # artifact is present in the real owner inventory. No analysis output
+        # is allowed to publish from a mismatched source/revision.
+        forged = ("b" if expected_sha[0] == "a" else "a") + expected_sha[1:]
+        with pytest.raises(
+            PermissionError, match="file_explorer_source_revision_changed"
+        ):
+            await explorer.revalidate_owner_selection(
+                context=context, plan=plan,
+                source_id=artifact, expected_revision=forged,
+            )
+        with pytest.raises(
+            PermissionError, match="content_source_evidence_invalid"
+        ):
+            await content_host.execute_owner_text(
+                context=context,
+                plan=plan,
+                operation="analyze",
+                references=[{"source_id": artifact, "revision": forged}],
+            )
+        assert kernel.analysis_executions == 1
     finally:
         platform.reset()
         await engine.dispose()
@@ -970,4 +1138,158 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
                     {"id": artifact, "tenant": tenant},
                 )
                 await admin.commit()
+        await engine.dispose()
+
+
+
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_CODE_ARTIFACT_LIVE_RANGE") != "1",
+    reason="Requires explicitly configured real disposable Supabase signed-range acceptance",
+)
+async def test_live_signed_range_read_uses_real_storage_and_disposable_postgres_owner() -> None:
+    """Read real private Storage bytes through the canonical bounded repository.
+
+    This opt-in test never uploads, updates metadata, archives, or deletes.
+    Source metadata must already exist in the disposable migrated database,
+    with an identical preseeded object in the explicitly disposable Storage
+    project. The real client signs a URL and httpx obtains an exact 206 range.
+    The project credential may bypass Storage RLS; this is not a Storage RLS test.
+    """
+    import re
+
+    from ai_karen_engine.integrations.supabase_client import SupabasePlatformClient
+
+    if (
+        os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+        or os.getenv("KAREN_TEST_SUPABASE_DISPOSABLE") != "1"
+    ):
+        pytest.fail("Real Storage acceptance requires two disposable target attestations")
+
+    project_ref = os.getenv("KAREN_TEST_SUPABASE_PROJECT_REF", "")
+    project_url = os.getenv("SUPABASE_PROJECT_URL", "")
+    if (
+        re.fullmatch(r"[a-z0-9]{20}", project_ref) is None
+        or project_url != f"https://{project_ref}.supabase.co"
+    ):
+        pytest.fail("Real Storage target does not match the approved disposable project")
+    if not any(os.getenv(key) for key in (
+        "SUPABASE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_PUBLISHABLE_KEY",
+        "SUPABASE_ANON_KEY",
+    )):
+        pytest.fail("Explicit disposable Supabase project authentication is required")
+
+    dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
+    parsed = _disposable_database_url(dsn)
+    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
+        pytest.fail("Real Storage acceptance requires local disposable PostgreSQL")
+
+    def canonical_id(name: str) -> str:
+        value = os.getenv(name, "")
+        try:
+            canonical = str(UUID(value))
+        except (TypeError, ValueError, AttributeError):
+            pytest.fail(f"Invalid acceptance fixture identifier: {name}")
+        if canonical != value:
+            pytest.fail(f"Noncanonical acceptance fixture identifier: {name}")
+        return canonical
+
+    tenant = canonical_id("KAREN_TEST_ARTIFACT_TENANT_ID")
+    owner = canonical_id("KAREN_TEST_ARTIFACT_OWNER_ID")
+    other = canonical_id("KAREN_TEST_ARTIFACT_OTHER_USER_ID")
+    artifact = canonical_id("KAREN_TEST_LIVE_RANGE_ARTIFACT_ID")
+    if len({tenant, owner, other, artifact}) != 4:
+        pytest.fail("Range acceptance fixture identities must be distinct")
+
+    digest = os.getenv("KAREN_TEST_LIVE_RANGE_ARTIFACT_SHA256", "")
+    if re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+        pytest.fail("Explicit preseeded range source digest required")
+
+    engine = create_async_engine(parsed, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    platform = SupabasePlatformClient()
+    try:
+        async with sessions() as session:
+            assert (await session.execute(
+                text("SELECT current_database()")
+            )).scalar_one() == "karen_code_artifact_test"
+            metadata = (await session.execute(
+                text(
+                    "SELECT tenant_id, owner_user_id, name, mime_type, bytes, "
+                    "sha256, storage_uri, deleted_at FROM files "
+                    "WHERE file_id = :id"
+                ),
+                {"id": artifact},
+            )).mappings().one_or_none()
+            if metadata is None:
+                pytest.fail("Explicitly preseeded disposable range source is unavailable")
+            name = metadata["name"]
+            size = metadata["bytes"]
+            if (
+                str(metadata["tenant_id"]) != tenant
+                or str(metadata["owner_user_id"]) != owner
+                or metadata["deleted_at"] is not None
+                or not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", name) is None
+                or not name.lower().endswith((".txt", ".md"))
+                or metadata["mime_type"] != "text/plain"
+                or type(size) is not int
+                or not 1 <= size <= 65536
+                or metadata["sha256"] != digest
+                or metadata["storage_uri"] != (
+                    f"supabase://artifacts/{tenant}/{artifact}/{name}"
+                )
+            ):
+                pytest.fail("Preseeded source violates bounded owner-text schema")
+
+        platform.initialize()
+        if platform.storage is None or platform.url != project_url:
+            pytest.fail("Canonical disposable Supabase Storage client unavailable")
+        # A signed URL is not proof that the bucket itself is private.
+        # The canonical client must independently confirm private bucket state.
+        try:
+            bucket = platform.storage.get_bucket("artifacts")
+        except Exception:
+            pytest.fail("Unable to attest the disposable private artifacts bucket")
+        bucket_public = (
+            bucket.get("public") if isinstance(bucket, dict)
+            else getattr(bucket, "public", None)
+        )
+        if bucket_public is not False:
+            pytest.fail("Real signed-range acceptance requires a private Storage bucket")
+        store = SupabaseArtifactStore(sessions, platform)
+
+        # These requests must deny before a signed URL or object bytes can be
+        # returned, despite the Storage client potentially using a server key.
+        denied_owner = await store.read_owner_active_text_bounded(
+            artifact, tenant, other
+        )
+        denied_tenant = await store.read_owner_active_text_bounded(
+            artifact, str(uuid4()), owner
+        )
+        denied_budget = await store.read_owner_active_text_bounded(
+            artifact, tenant, owner, max_bytes=size - 1
+        )
+        for rejected in (denied_owner, denied_tenant, denied_budget):
+            assert not rejected.success and rejected.data is None
+            assert rejected.error == "bounded_artifact_read_unavailable"
+
+        # No HTTP transport stub, synthetic signed URL, mocked bucket, or
+        # downloaded local fixture is used for this successful read.
+        allowed = await store.read_owner_active_text_bounded(
+            artifact, tenant, owner
+        )
+        assert allowed.success and allowed.data is not None
+        assert allowed.data.artifact_id == artifact
+        assert allowed.data.tenant_id == tenant
+        assert allowed.data.user_id == owner
+        assert allowed.data.sha256 == digest
+        assert allowed.data.filename == name
+        assert hashlib.sha256(
+            allowed.data.text.encode("utf-8")
+        ).hexdigest() == digest
+        assert len(allowed.data.text.encode("utf-8")) == size
+    finally:
+        platform.reset()
         await engine.dispose()
