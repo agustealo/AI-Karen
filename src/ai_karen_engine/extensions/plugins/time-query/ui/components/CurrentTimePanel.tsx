@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { TimePayload } from '../types';
 
 export const CurrentTimePanel: React.FC<{ payload: TimePayload | null }> = ({ payload }) => {

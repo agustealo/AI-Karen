@@ -2,6 +2,14 @@ import React from 'react';
 import { ClockItem } from '../types';
 import { EmptyState } from './EmptyState';
 
+interface ClockItemWithError extends ClockItem {
+  error?: string;
+}
+
+const isClockWithError = (clock: ClockItem): clock is ClockItemWithError => {
+  return 'error' in clock && typeof clock.error === 'string';
+};
+
 export const MultiClockGrid: React.FC<{ clocks: ClockItem[]; onRemove: (tz: string) => void }> = ({ clocks, onRemove }) => {
   if (clocks.length === 0) {
     return <EmptyState title="No Clocks Saved" message="Search and add a world clock to keep track of it here." />;
@@ -11,10 +19,10 @@ export const MultiClockGrid: React.FC<{ clocks: ClockItem[]; onRemove: (tz: stri
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {clocks.map((c, i) => {
         // if there's an error in the payload it might not have standard payload fields
-        if ((c as any).error) {
+        if (isClockWithError(c)) {
           return (
             <div key={i} className="bg-card/80 border border-destructive/50 rounded flex justify-between items-center p-4">
-              <span className="text-destructive text-sm">{(c as any).error}</span>
+              <span className="text-destructive text-sm">{c.error}</span>
               <button className="text-muted-foreground hover:text-foreground" onClick={() => onRemove(c.timezone)}>×</button>
             </div>
           );

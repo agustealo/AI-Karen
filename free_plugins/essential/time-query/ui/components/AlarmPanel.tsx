@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { AlarmItem } from '../types';
 import { AlarmList } from './AlarmList';
 import { AlarmEditor } from './AlarmEditor';
+import type { AlarmCreateParams } from '../types';
 
 interface AlarmPanelProps {
   alarms: AlarmItem[];
-  onCreate: (data: any) => Promise<void>;
+  onCreate: (data: AlarmCreateParams) => Promise<void>;
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
 }

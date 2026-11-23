@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { TimePayload } from '../types';
 
-export const useTimePayload = (payload: TimePayload | null) => {
+export function useTimePayload(payload: TimePayload | null) {
   return useMemo(() => {
     if (!payload) return null;
     return {
@@ -9,4 +9,4 @@ export const useTimePayload = (payload: TimePayload | null) => {
       isSystem: payload.source === 'system_clock',
     };
   }, [payload]);
-};
+}

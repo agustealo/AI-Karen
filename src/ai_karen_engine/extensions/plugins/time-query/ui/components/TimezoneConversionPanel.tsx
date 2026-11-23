@@ -1,30 +1,28 @@
 import React, { useState } from 'react';
 import { COMMON_TIMEZONES } from '../utils/timezoneLabels';
+import type { TimezoneConversionResult } from '../types';
 
 interface ConversionPanelProps {
-  onConvert: (datetime: string, fromTz: string, toTz: string) => Promise<any>;
+  onConvert: (datetime: string, fromTz: string, toTz: string) => Promise<TimezoneConversionResult>;
 }
 
 export const TimezoneConversionPanel: React.FC<ConversionPanelProps> = ({ onConvert }) => {
   const [datetime, setDatetime] = useState('');
   const [fromTz, setFromTz] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   const [toTz, setToTz] = useState('UTC');
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<TimezoneConversionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleConvert = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!datetime) return;
-    
+
     setError(null);
     try {
-      // Local datetime needs to be sent ideally in ISO format. The input is local.
-      // So let's construct a full ISO string. If it lacks 'Z', backend handles it by timezone
-      const isoDatetime = new Date(datetime).toISOString(); 
       // Actually standard datetime-local is missing seconds and Z. We should just pass it
       // as YYYY-MM-DDTHH:MM:SS and let backend apply the timezone.
       const formattedDT = datetime + ":00"; // roughly ISO without offset
-      
+
       const res = await onConvert(formattedDT, fromTz, toTz);
       if (res && res.status === 'success') {
         setResult(res);
