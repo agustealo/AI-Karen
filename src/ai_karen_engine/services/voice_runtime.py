@@ -292,9 +292,26 @@ class VoiceRuntime:
         Manifest voice declarations are intent, not readiness. Every candidate
         is probed through PluginService's real execution admission gate.
         """
+        return await self._engine_catalog_for_identity(
+            self._voice_principal(principal),
+            correlation_id=correlation_id,
+        )
+
+    async def _engine_catalog_for_identity(
+        self,
+        identity: Mapping[str, Any],
+        *,
+        correlation_id: str | None,
+        engine_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Check only the requested engine during synthesis, never skip admission.
+
+        Full catalog discovery still checks every eligible plugin. The caller
+        supplies the principal already projected by _voice_principal, avoiding
+        a second RBAC permission lookup on synthesis requests.
+        """
         from ai_karen_engine.services.plugin_service import get_plugin_service
 
-        identity = self._voice_principal(principal)
         service = get_plugin_service()
         installed = await service.list_plugins(enabled_only=True)
         engines: list[dict[str, Any]] = []
@@ -302,6 +319,8 @@ class VoiceRuntime:
             manifest = record.get("manifest")
             declaration = getattr(getattr(manifest, "capabilities", None), "voice_modality", None)
             plugin_id = str(getattr(manifest, "name", "") or "")
+            if engine_id is not None and plugin_id != engine_id:
+                continue
             if (
                 not plugin_id
                 or not re.fullmatch(r"[a-z][a-z0-9-]{0,49}", plugin_id)
@@ -382,7 +401,9 @@ class VoiceRuntime:
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,49}", engine_id):
             raise VoiceContractError("invalid_synthesis_engine")
         identity = self._voice_principal(principal)
-        catalog = await self.engine_catalog(identity, correlation_id=correlation_id)
+        catalog = await self._engine_catalog_for_identity(
+            identity, correlation_id=correlation_id, engine_id=engine_id
+        )
         chosen = next(
             (entry for entry in catalog["engines"] if entry["engine_id"] == engine_id),
             None,
