@@ -168,3 +168,56 @@ def test_canonical_file_tenant_remains_text_and_consent_uses_safe_casts() -> Non
         )
         assert "tenant_id text NOT NULL" in fixture
         assert "20261123030000_69_writing_style_document_file_tenant_text.sql" in fixture
+
+def test_document_style_use_fence_reuses_existing_sql_authority() -> None:
+    """The forward-only fence must not grant delegates receipt visibility."""
+    root = Path(__file__).resolve().parents[2]
+    name = "20261123040000_70_writing_style_document_delegated_use_fence.sql"
+    migration = (root / "supabase/migrations" / name).read_text(
+        encoding="utf-8",
+    )
+    for clause in (
+        "CREATE FUNCTION public.writing_style_document_use_expiry(",
+        "SECURITY INVOKER",
+        "c.author_attested IS TRUE",
+        "c.style_use_allowed IS TRUE",
+        "c.receipt_id = s.consent_receipt_id",
+        "c.artifact_id = s.source_id",
+        "f.tenant_id = c.tenant_id::text",
+        "f.owner_user_id = c.author_actor_id",
+        "f.sha256 = c.source_sha256",
+        "document_expiry := public.writing_style_document_use_expiry(",
+        "PERFORM public.writing_style_document_use_expiry(",
+        "CREATE FUNCTION public.writing_style_revoke_consent_on_file_change()",
+        "SECURITY DEFINER",
+        "SET row_security = off",
+        "AFTER UPDATE OF file_id, tenant_id, owner_user_id, name, mime_type, bytes,",
+        "sha256, storage_uri, deleted_at OR DELETE",
+        "SET revoked_at = clock_timestamp()",
+        "OLD.tenant_id",
+        "REVOKE ALL ON FUNCTION public.writing_style_revoke_consent_on_file_change()",
+    ):
+        assert clause in migration
+
+    assert "ALTER TABLE public.files" not in migration
+    assert "CREATE TABLE public.writing_style_grants" not in migration
+    assert "CREATE TRIGGER writing_style_grant_consent_fence" not in migration
+    # No direct grant or profile revocation implementation is duplicated in
+    # the new file-trigger function: existing receipt UPDATE owns both.
+    file_fence = migration.split(
+        "CREATE FUNCTION public.writing_style_revoke_consent_on_file_change()", 1,
+    )[1].split("$style_file_mutation_revoke$;", 1)[0]
+    assert "UPDATE public.writing_style_document_consents" in file_fence
+    assert "UPDATE public.writing_style_profiles" not in file_fence
+    assert "UPDATE public.writing_style_grants" not in file_fence
+    assert "RETURN NEW;" in file_fence
+
+    for test in (
+        "test_writing_style_document_consent_postgres.py",
+        "test_writing_style_identity_postgres.py",
+        "test_writing_style_sample_postgres.py",
+    ):
+        path = root / "tests/integration" / test
+        content = path.read_text(encoding="utf-8")
+        assert name in content
+        assert "storage_uri text" in content
