@@ -1104,3 +1104,20 @@ completion, content-size or presentation validation to silence the UI.
 - **KCON-770 source candidate, PR #1209:** Existing `AgentErrorBoundary` contains each individual read-only `KarenPresentationRegistry` render in saved CopilotKit assistant messages and response rail. One throwing card does not have to collapse its sibling cards and saved answer text. Strict owned-history event authorization, validation and replay denial stay unchanged; a rejected/unauthorized event is not silently converted into accepted card data.
 - **Proof under review:** Python tests `tests/core/runtime/test_bare_time_capability_route.py` cover shorthand routing, preserved conceptual intent, timezone propagation and tool-observation answer without a second model. Frontend `tests/chat/KarenSafePresentation.test.tsx` introduces a throwing-renderer case proving neighboring content remains visible. Source CI and post-reconciliation gates are pending; do not mark browser acceptance complete.
 - **Still open:** A real authenticated reproduction of the reported intermittent card crash, verified live news provider health, observed time zone/session behavior, real first-prompt and reload card acceptance, accessible failure recovery and consumer-host proof. Source tests alone do not certify production behavior.
+
+## KGUI-CARD-STUDIO-01A / KCON-720 / KCON-770: Declarative card template foundation (2026-11-22)
+
+- **KCON-720/KCON-770 source candidate:** Extend the single canonical
+  `core/runtime/presentation_contract.py` owner with a bounded, read-only
+  draft schema and immutable-origin built-in seed projection, not a new
+  presentation registry. Runtime-authorized source parts remain the only
+  permissible inputs to the existing evidence-bound composition admission.
+- **Proof:** `tests/core/runtime/test_card_template_contract.py` checks
+  host vocabulary, no revocable code, unknown/executable/secret fields,
+  immutable builtin definitions, duplicate and malformed slots, sanitized
+  source-bound composition and multi-source evidence manifests. Existing
+  `tests/core/runtime/test_presentation_contract.py` protects the original
+  envelope semantics. Exact-head CI is required.
+- **Not certified:** tenant/user CRUD, publish/share permissions, frontend
+  Card Studio, template-to-chat integration, deployed consumer acceptance,
+  action-card authorization, live card render latency and provider health.
