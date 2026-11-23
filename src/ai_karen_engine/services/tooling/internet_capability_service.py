@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -164,6 +165,23 @@ class InternetSearchRequest:
         crawl_depth = max(0, min(int(raw_depth), 5)) if raw_depth is not None else (
             1 if crawl_enabled else 0
         )
+        extraction = safe_payload.get("extraction")
+        if isinstance(extraction, Mapping):
+            extraction = dict(extraction)
+            schema = extraction.get("schema")
+            if isinstance(schema, str) and schema.strip():
+                if len(schema) > 16_384:
+                    raise ValueError("Extraction schema exceeds the supported size.")
+                try:
+                    parsed_schema = json.loads(schema)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("Extraction schema must be valid JSON.") from exc
+                if not isinstance(parsed_schema, (dict, list)):
+                    raise ValueError("Extraction schema must be an object or field list.")
+                extraction["schema"] = parsed_schema
+            elif isinstance(schema, str):
+                extraction["schema"] = None
+
         cache_enabled = crawl_policy.get("use_cache")
         bypass_cache = (not cache_enabled) if isinstance(cache_enabled, bool) else bool(
             safe_payload.get("bypass_cache", False)
@@ -198,7 +216,7 @@ class InternetSearchRequest:
             crawl_blocked_domains=_normalize_domain_list(crawl_policy.get("exclude_domains")),
             sources=safe_payload.get("sources"),
             content_limits=safe_payload.get("content_limits"),
-            extraction=safe_payload.get("extraction"),
+            extraction=extraction,
         )
 
     def strategy_overrides(self) -> Dict[str, Any]:

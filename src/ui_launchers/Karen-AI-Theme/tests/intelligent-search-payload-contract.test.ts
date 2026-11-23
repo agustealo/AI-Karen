@@ -85,3 +85,30 @@ describe('Intelligent Search governed deep-crawl transport', () => {
     expect(payload).toEqual({mode: 'general', query: 'public sources', context: {}});
   });
 });
+
+
+describe('Intelligent Search supported mode inputs', () => {
+  const { buildPayload } = useSearchPayload();
+
+  it('preserves explicit weather location even with an empty free-text query', () => {
+    expect(buildPayload('weather', '', { location: 'Detroit, MI' })).toEqual({
+      mode: 'weather', query: '', context: { location: 'Detroit, MI' },
+    });
+  });
+
+  it('translates company name for an empty market research query', () => {
+    expect(buildPayload('stock_market', '', { companyName: 'Example Holdings' })).toEqual({
+      mode: 'stock_market', query: '', context: { company_name: 'Example Holdings' },
+    });
+  });
+
+  it('passes extraction JSON for the canonical runtime parser', () => {
+    expect(buildPayload('structured_extract', 'extract price', {
+      schema: '{"fields":{"price":"USD ([0-9]+)"}}',
+    })).toEqual({
+      mode: 'structured_extract',
+      query: 'extract price',
+      context: { schema: '{"fields":{"price":"USD ([0-9]+)"}}' },
+    });
+  });
+});

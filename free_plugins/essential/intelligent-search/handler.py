@@ -164,11 +164,11 @@ class WebSearchDispatcher(ExtensionBase):
     async def run(
         self, params: Dict[str, Any], execution_context: ExtensionExecutionContext | None = None
     ) -> Dict[str, Any]:
-        safe_params = params or {}
-        query = safe_params.get("query", "") or ""
-        context = safe_params.get("context", {}) or {}
-
+        safe_params = params if isinstance(params, dict) else {}
+        context = safe_params.get("context")
+        context = context if isinstance(context, dict) else {}
         mode = self._resolve_mode(safe_params)
+        query = self._effective_mode_query(safe_params.get("query"), mode, context)
         handler = self._get_handler(mode)
 
         if not handler:
@@ -179,6 +179,22 @@ class WebSearchDispatcher(ExtensionBase):
                 "plugin_id": self._get_manifest_id(),
                 "mode": mode,
                 "query": query,
+            }
+
+        if not query:
+            missing = "location" if mode == "weather" else "query"
+            return {
+                "success": False,
+                "can_execute": False,
+                "status": "needs_location" if mode == "weather" else "needs_query",
+                "reason": f"Provide a {missing} to search.",
+                "missing_requirements": ["location.current"] if mode == "weather" else ["query"],
+                "plugin_id": self._get_manifest_id(),
+                "mode": mode,
+                "query": "",
+                "results": [],
+                "sources": [],
+                "citations": [],
             }
 
         try:
@@ -281,6 +297,30 @@ class WebSearchDispatcher(ExtensionBase):
             }
 
         return result
+
+    @staticmethod
+    def _effective_mode_query(query: Any, mode: str, context: Dict[str, Any]) -> str:
+        """Derive only missing queries from explicitly selected mode fields.
+
+        Never synthesize market prices or source data. The same effective query
+        reaches both the mode strategy and canonical internet execution owner.
+        """
+        normalized = " ".join(query.split()) if isinstance(query, str) else ""
+        if normalized:
+            return normalized
+
+        if mode == "weather":
+            location = context.get("location")
+            if isinstance(location, str) and location.strip():
+                return f"weather in {' '.join(location.split())[:120]}"
+
+        if mode == "stock_market":
+            for key in ("ticker", "company_name"):
+                target = context.get(key)
+                if isinstance(target, str) and target.strip():
+                    return f"{' '.join(target.split())[:120]} stock market news"
+
+        return ""
 
     def _resolve_mode(self, params: Dict[str, Any]) -> str:
         mode = params.get("mode")

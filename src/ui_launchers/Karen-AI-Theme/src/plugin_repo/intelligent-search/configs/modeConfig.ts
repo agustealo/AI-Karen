@@ -47,13 +47,16 @@ export const MODE_CONFIG: Record<SearchModeId, ModeConfigItem> = {
   weather: {
     label: 'Weather',
     description: 'Current conditions and forecast',
-    visibleControls: ['location', 'units', 'includeCurrent', 'includeHourly', 'includeDaily', 'includeAlerts'],
+    // Only user-selected location is currently consumed by the canonical
+    // live observation provider; do not claim optional hourly/units controls.
+    visibleControls: ['location'],
     resultTabs: ['results', 'extractedData', 'diagnostics'],
   },
   stock_market: {
     label: 'Stock Market',
     description: 'Market context and company signals',
-    visibleControls: ['ticker', 'companyName', 'exchange', 'includePriceAction', 'includeCompanyNews', 'includeEarnings'],
+    // This mode performs market-related web research, not live price feeds.
+    visibleControls: ['ticker', 'companyName'],
     resultTabs: ['results', 'sources', 'extractedData', 'diagnostics'],
   },
 };
