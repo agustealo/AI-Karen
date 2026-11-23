@@ -1,0 +1,115 @@
+name: Card Studio Real PostgreSQL Proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/migrations/*card_studio_template_drafts.sql"
+      - "src/ai_karen_engine/persistence/repositories/card_studio_template_repository.py"
+      - "src/ai_karen_engine/core/runtime/presentation_contract.py"
+      - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "tests/core/runtime/test_card_studio_template_repository.py"
+      - "tests/integration/test_card_studio_templates_postgres.py"
+      - ".github/workflows/card-studio-postgres-proof.yml"
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/*card_studio_template_drafts.sql"
+      - "src/ai_karen_engine/persistence/repositories/card_studio_template_repository.py"
+      - "src/ai_karen_engine/core/runtime/presentation_contract.py"
+      - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "tests/core/runtime/test_card_studio_template_repository.py"
+      - "tests/integration/test_card_studio_templates_postgres.py"
+      - ".github/workflows/card-studio-postgres-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: card-studio-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  card-studio-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      KAREN_TEST_CARD_STUDIO_POSTGRES: "1"
+      KAREN_TEST_DISPOSABLE_DATABASE: "1"
+      KAREN_TEST_CARD_STUDIO_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_card_studio_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm exact checked-out commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Start existing canonical disposable PostgreSQL container
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+
+      - name: Install existing runtime and PostgreSQL test dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements/ci/chat.txt
+
+      - name: Create a fresh disposable DB and representative Supabase client roles
+        shell: bash
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def prepare():
+              admin = await asyncpg.connect(
+                  "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
+              )
+              try:
+                  existing = await admin.fetchval(
+                      "SELECT 1 FROM pg_database WHERE datname=$1",
+                      "karen_card_studio_test",
+                  )
+                  if existing:
+                      raise RuntimeError("Refusing preexisting Card Studio test database")
+                  for role in ("anon", "authenticated"):
+                      if not await admin.fetchval(
+                          "SELECT 1 FROM pg_roles WHERE rolname=$1", role
+                      ):
+                          await admin.execute(f'CREATE ROLE "{role}" NOLOGIN')
+                  await admin.execute("CREATE DATABASE karen_card_studio_test")
+              finally:
+                  await admin.close()
+
+          asyncio.run(prepare())
+          PY
+
+      - name: Prove actual migration rollback, RLS, immutable history, CAS and replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q \
+            src/ai_karen_engine/persistence/repositories/card_studio_template_repository.py \
+            tests/integration/test_card_studio_templates_postgres.py
+          pytest tests/core/runtime/test_card_studio_template_repository.py \
+            tests/core/runtime/test_card_template_contract.py -q -rs
+          pytest tests/integration/test_card_studio_templates_postgres.py -q -rs
+
+      - name: Declare scope of achieved evidence
+        if: always()
+        shell: bash
+        run: |
+          echo "Card Studio database proof runs the actual migration and repository under a real least-privilege PostgreSQL login." >> "$GITHUB_STEP_SUMMARY"
+          echo "Disposable database: karen_card_studio_test. No production data is touched." >> "$GITHUB_STEP_SUMMARY"
+          echo "The proof covers rollback, tenant/user RLS, CAS competition, immutable history and idempotent retries." >> "$GITHUB_STEP_SUMMARY"
+          echo "It does NOT certify authenticated HTTP ingress, browser editor, hosted deployment, template publication or chat actions." >> "$GITHUB_STEP_SUMMARY"
