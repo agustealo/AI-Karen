@@ -27,7 +27,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from ai_karen_engine.integrations.web.web_utils import canonicalize_url, is_content_type_binary
 from ai_karen_engine.integrations.web.robots_policy import RobotsPolicy
@@ -71,6 +71,12 @@ CRAWL4AI_BATCH_SIZE = Histogram(
     "Number of URLs requested per Crawl4AI batch.",
 )
 
+CRAWL4AI_EGRESS_DENIED = Counter(
+    "karen_crawl4ai_egress_denied_total",
+    "Browser requests rejected by the canonical egress policy.",
+    ["reason"],
+)
+
 
 class CrawlFailureCode(str, Enum):
     """Stable failure codes for caller-side routing and observability."""
@@ -86,6 +92,7 @@ class CrawlFailureCode(str, Enum):
     CRAWLER_ERROR = "crawler_error"
     EMPTY_RESULT = "empty_result"
     PARTIAL_BATCH_FAILURE = "partial_batch_failure"
+    EGRESS_POLICY_UNAVAILABLE = "egress_policy_unavailable"
 
 
 @dataclass(frozen=True)
@@ -111,6 +118,8 @@ class Crawl4AISettings:
     resolve_dns_for_safety: bool = True
     allow_private_networks: bool = False
     respect_robots_txt: bool = True
+    max_browser_requests: int = 64
+    max_redirects: int = 5
     allowed_schemes: Sequence[str] = field(default_factory=lambda: ("http", "https"))
     blocked_hosts: Sequence[str] = field(
         default_factory=lambda: (
@@ -196,6 +205,8 @@ class Crawl4AIIntegration:
         resolve_dns_for_safety: bool = True,
         allow_private_networks: bool = False,
         respect_robots_txt: bool = True,
+        max_browser_requests: int = 64,
+        max_redirects: int = 5,
     ) -> None:
         default_settings = Crawl4AISettings()
 
@@ -215,6 +226,8 @@ class Crawl4AIIntegration:
             resolve_dns_for_safety=bool(resolve_dns_for_safety),
             allow_private_networks=bool(allow_private_networks),
             respect_robots_txt=bool(respect_robots_txt),
+            max_browser_requests=max(1, min(int(max_browser_requests), 512)),
+            max_redirects=max(0, min(int(max_redirects), 10)),
             blocked_hosts=tuple(blocked_hosts)
             if blocked_hosts is not None
             else default_settings.blocked_hosts,
@@ -260,6 +273,11 @@ class Crawl4AIIntegration:
             allowed_schemes=settings.allowed_schemes,
             resolve_dns_for_safety=settings.resolve_dns_for_safety,
             allow_private_networks=settings.allow_private_networks,
+            respect_robots_txt=settings.respect_robots_txt,
+            max_concurrency_per_domain=settings.max_concurrency_per_domain,
+            max_response_bytes=settings.max_response_bytes,
+            max_browser_requests=settings.max_browser_requests,
+            max_redirects=settings.max_redirects,
         )
 
     def health(self) -> Dict[str, Any]:
@@ -280,6 +298,10 @@ class Crawl4AIIntegration:
             "allow_private_networks": self.settings.allow_private_networks,
             "allowed_schemes": list(self.settings.allowed_schemes),
             "blocked_hosts": list(self.settings.blocked_hosts),
+            "max_browser_requests": self.settings.max_browser_requests,
+            "max_redirects": self.settings.max_redirects,
+            "javascript_enabled": False,
+            "egress_policy": "browser_route_guard",
         }
 
     async def fetch_url(
@@ -380,6 +402,9 @@ class Crawl4AIIntegration:
 
         try:
             async with crawler_factory(config=self.browser_config) as crawler:
+                # A missing route-capable Crawl4AI SDK must fail closed.
+                # This is installed before any public page navigation.
+                self._install_browser_egress_hook(crawler)
                 semaphore = asyncio.Semaphore(self.settings.max_concurrency)
 
                 async def crawl_one(index: int, req: CrawlRequest) -> None:
@@ -430,6 +455,112 @@ class Crawl4AIIntegration:
         CRAWL4AI_BATCHES.labels(status=status).inc()
 
         return final_results
+
+    def _install_browser_egress_hook(self, crawler: Any) -> None:
+        """Install one network gate in the canonical acquisition owner.
+
+        Crawl4AI exposes on_page_context_created before page navigation.
+        Do not use an unguarded SDK when that hook is unavailable.
+        """
+        strategy = getattr(crawler, "crawler_strategy", None)
+        set_hook = getattr(strategy, "set_hook", None)
+        if not callable(set_hook):
+            raise RuntimeError("Crawl4AI browser egress hook is unavailable.")
+
+        async def on_page_context_created(page: Any, context: Any, **kwargs: Any) -> Any:
+            route = getattr(context, "route", None)
+            if not callable(route):
+                raise RuntimeError("Browser context cannot enforce request routing.")
+            # Each browser context receives its own cap and lock. Reuse of the
+            # crawler across pages cannot reset or borrow another budget.
+            budget = {"count": 0, "lock": asyncio.Lock()}
+
+            async def guard(request_route: Any) -> None:
+                await self._guard_browser_request(request_route, budget)
+
+            await route("**/*", guard)
+            return page
+
+        set_hook("on_page_context_created", on_page_context_created)
+
+    async def _guard_browser_request(
+        self,
+        route: Any,
+        budget: Dict[str, Any],
+    ) -> None:
+        """Validate each target before fetching; follow redirects ourselves.
+
+        Playwright route.continue_() implicitly follows redirects and cannot
+        inspect intermediate targets. route.fetch(max_redirects=0) never
+        delegates redirect-following to the browser.
+        """
+        reason = "request_blocked"
+        response = None
+        try:
+            async with budget["lock"]:
+                if budget["count"] >= self.settings.max_browser_requests:
+                    reason = "request_budget"
+                    raise PermissionError("Browser request budget exceeded.")
+                budget["count"] += 1
+
+            candidate = str(route.request.url)
+            is_navigation = bool(route.request.is_navigation_request())
+            for hop in range(self.settings.max_redirects + 1):
+                # URL/DNS resolution may block; keep it off the event loop.
+                policy_error = await asyncio.wait_for(
+                    asyncio.to_thread(self._validate_url, candidate),
+                    timeout=5.0,
+                )
+                if policy_error:
+                    reason = "unsafe_destination"
+                    raise PermissionError("Unsafe crawl destination.")
+
+                if is_navigation and self.settings.respect_robots_txt:
+                    allowed, _ = await self.robots_policy.is_allowed(candidate)
+                    if not allowed:
+                        reason = "robots_blocked"
+                        raise PermissionError("Redirect target denied by robots policy.")
+
+                response = await route.fetch(
+                    url=candidate,
+                    max_redirects=0,
+                    timeout=int(min(self.settings.timeout_seconds, 30.0) * 1000),
+                )
+                status = int(response.status)
+                location = response.headers.get("location", "")
+                if 300 <= status < 400 and location:
+                    if hop >= self.settings.max_redirects:
+                        reason = "redirect_limit"
+                        raise PermissionError("Browser redirect limit exceeded.")
+                    candidate = urljoin(candidate, location)
+                    await response.dispose()
+                    response = None
+                    continue
+
+                size_header = response.headers.get("content-length")
+                if size_header and size_header.isdecimal():
+                    if int(size_header) > self.settings.max_response_bytes:
+                        reason = "response_size"
+                        raise PermissionError("Browser response size limit exceeded.")
+                content = await response.body()
+                if len(content) > self.settings.max_response_bytes:
+                    reason = "response_size"
+                    raise PermissionError("Browser response size limit exceeded.")
+                await route.fulfill(response=response, body=content)
+                return
+
+            reason = "redirect_limit"
+        except Exception as exc:
+            logger.warning(
+                "crawl4ai.browser_request_denied",
+                extra={"reason": reason, "error_type": type(exc).__name__},
+            )
+        finally:
+            if response is not None:
+                await response.dispose()
+
+        CRAWL4AI_EGRESS_DENIED.labels(reason=reason).inc()
+        await route.abort()
 
     async def close(self) -> None:
         """
@@ -634,6 +765,12 @@ class Crawl4AIIntegration:
         kwargs: Dict[str, Any] = {
             "headless": self.settings.headless,
             "verbose": self.settings.verbose,
+            # Public crawling is untrusted. Disabling page scripts prevents
+            # Service Worker and WebSocket paths from bypassing HTTP routing.
+            # A JavaScript-capable browser needs separate SW/WS egress proof.
+            "java_script_enabled": False,
+            "use_persistent_context": False,
+            "accept_downloads": False,
         }
 
         if self.settings.user_agent:
@@ -1021,6 +1158,12 @@ class Crawl4AIIntegration:
         if not parsed.netloc:
             return {
                 "error": "URL must include a valid hostname.",
+                "failure_code": CrawlFailureCode.INVALID_URL.value,
+            }
+
+        if parsed.username is not None or parsed.password is not None:
+            return {
+                "error": "Credential-bearing browser URLs are not allowed.",
                 "failure_code": CrawlFailureCode.INVALID_URL.value,
             }
 
