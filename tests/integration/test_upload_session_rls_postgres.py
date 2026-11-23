@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -108,10 +109,17 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                 text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
                 {"tenant": tenant},
             )
-            assert (await db.execute(text(
-                "SELECT count(*) FROM public.artifact_upload_sessions"
-            ))).scalar_one() == 0
-            with pytest.raises(Exception):
+            # The migration revokes table privileges as well as providing
+            # default-deny FORCE RLS. PostgreSQL may deny before RLS executes.
+            with pytest.raises(ProgrammingError, match="permission denied"):
+                await db.execute(text(
+                    "SELECT count(*) FROM public.artifact_upload_sessions"
+                ))
+            await db.rollback()
+
+        async with factory() as db:
+            await db.execute(text("SET LOCAL ROLE ckgen_artifact_rls_actor"))
+            with pytest.raises(ProgrammingError, match="permission denied"):
                 await db.execute(text(
                     "UPDATE public.artifact_upload_sessions "
                     "SET state='cancelled' WHERE session_id=:id"
