@@ -6,7 +6,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.artifact_upload_sessions (
     session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
+    tenant_id TEXT NOT NULL,
     owner_user_id UUID NOT NULL REFERENCES public.auth_users(user_id) ON DELETE CASCADE,
     destination_id TEXT NOT NULL,
     recipe TEXT NOT NULL,
