@@ -99,7 +99,7 @@ async def test_live_canonical_redis_graph_postgres_memory_composition() -> None:
         report["real_services"]["postgres"] = True
         assert await redis.initialize(), "Actual Redis service is required"
         assert not redis.is_degraded(), "Redis fallback cannot certify this test"
-        client = redis.client()
+        client = redis.client
         assert client is not None and await client.ping()
         stm = RedisSTMAdapter(redis_manager=redis)
         report["real_services"]["redis"] = True
