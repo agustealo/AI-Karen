@@ -1078,6 +1078,18 @@ async def test_live_signed_range_read_uses_real_storage_and_disposable_postgres_
         platform.initialize()
         if platform.storage is None or platform.url != project_url:
             pytest.fail("Canonical disposable Supabase Storage client unavailable")
+        # A signed URL is not proof that the bucket itself is private.
+        # The canonical client must independently confirm private bucket state.
+        try:
+            bucket = platform.storage.get_bucket("artifacts")
+        except Exception:
+            pytest.fail("Unable to attest the disposable private artifacts bucket")
+        bucket_public = (
+            bucket.get("public") if isinstance(bucket, dict)
+            else getattr(bucket, "public", None)
+        )
+        if bucket_public is not False:
+            pytest.fail("Real signed-range acceptance requires a private Storage bucket")
         store = SupabaseArtifactStore(sessions, platform)
 
         # These requests must deny before a signed URL or object bytes can be
