@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -124,6 +124,41 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                     "UPDATE public.artifact_upload_sessions "
                     "SET state='cancelled' WHERE session_id=:id"
                 ), {"id": UUID(first.session_id)})
+            await db.rollback()
+
+        # One canonical artifact cannot be bound to two durable sessions,
+        # even if concurrent workers carry distinct idempotency keys.
+        second = await repo.create_or_get(
+            tenant_id=tenant, owner_user_id=owner, destination_id="explorer",
+            recipe="store_only", idempotency_key_hash=uuid4().hex + uuid4().hex,
+            manifest_sha256=digest, expected_bytes=42,
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+        artifact_id = str(uuid4())
+        async with factory() as db:
+            await db.execute(text(
+                "INSERT INTO public.files "
+                "(file_id, tenant_id, owner_user_id, name, mime_type, bytes, "
+                "storage_uri, sha256, metadata, created_at) VALUES "
+                "(:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
+                "'proof.bin', 'application/octet-stream', 42, :uri, "
+                ":digest, '{}'::jsonb, now())"
+            ), {
+                "id": artifact_id, "tenant": tenant, "owner": owner,
+                "uri": f"supabase://artifacts/{tenant}/{artifact_id}/content",
+                "digest": digest,
+            })
+            await db.execute(text(
+                "UPDATE public.artifact_upload_sessions SET artifact_id=:artifact "
+                "WHERE session_id=:session"
+            ), {"artifact": artifact_id, "session": UUID(first.session_id)})
+            await db.commit()
+        async with factory() as db:
+            with pytest.raises(IntegrityError):
+                await db.execute(text(
+                    "UPDATE public.artifact_upload_sessions SET artifact_id=:artifact "
+                    "WHERE session_id=:session"
+                ), {"artifact": artifact_id, "session": UUID(second.session_id)})
             await db.rollback()
 
         receiving = await repo.transition(
