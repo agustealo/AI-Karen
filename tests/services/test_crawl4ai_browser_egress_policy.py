@@ -242,3 +242,22 @@ def test_incompatible_sdk_browser_config_fails_closed(monkeypatch):
     monkeypatch.setattr(module, "BrowserConfig", OldBrowserConfig)
     with pytest.raises(RuntimeError, match="secure browser settings"):
         Crawl4AIIntegration(resolve_dns_for_safety=False)
+
+
+def test_domain_name_cannot_bypass_safety_when_dns_checks_are_disabled():
+    crawler = Crawl4AIIntegration(resolve_dns_for_safety=False)
+    denied = crawler._validate_url("https://public.example/page")
+    assert denied["failure_code"] == "dns_resolution_failed"
+    assert crawler._validate_url("https://8.8.8.8/page") is None
+
+
+def test_empty_dns_answer_is_fail_closed(monkeypatch):
+    from ai_karen_engine.integrations.web import crawl4ai_integration as module
+
+    def no_addresses(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(module.socket, "getaddrinfo", no_addresses)
+    crawler = Crawl4AIIntegration(resolve_dns_for_safety=True)
+    denied = crawler._validate_dns_safety("public.example")
+    assert denied["failure_code"] == "dns_resolution_failed"

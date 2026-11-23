@@ -1189,10 +1189,21 @@ class Crawl4AIIntegration:
                     "failure_code": CrawlFailureCode.PRIVATE_NETWORK_BLOCKED.value,
                 }
 
-        if self.settings.resolve_dns_for_safety and not self.settings.allow_private_networks:
-            dns_error = self._validate_dns_safety(hostname)
-            if dns_error is not None:
-                return dns_error
+        if not self.settings.allow_private_networks:
+            if self.settings.resolve_dns_for_safety:
+                dns_error = self._validate_dns_safety(hostname)
+                if dns_error is not None:
+                    return dns_error
+            else:
+                # Disabling DNS checks must not silently allow arbitrary
+                # hostnames (including localhost. or custom internal DNS).
+                try:
+                    ipaddress.ip_address(hostname)
+                except ValueError:
+                    return {
+                        "error": "Domain-name crawling requires DNS safety checks.",
+                        "failure_code": CrawlFailureCode.DNS_RESOLUTION_FAILED.value,
+                    }
 
         return None
 
@@ -1223,6 +1234,12 @@ class Crawl4AIIntegration:
             ip_value = sockaddr[0]
             if ip_value:
                 resolved_ips.add(str(ip_value))
+
+        if not resolved_ips:
+            return {
+                "error": "DNS resolution yielded no usable IP addresses.",
+                "failure_code": CrawlFailureCode.DNS_RESOLUTION_FAILED.value,
+            }
 
         for ip_value in resolved_ips:
             if self._is_ip_private_or_reserved(ip_value):
