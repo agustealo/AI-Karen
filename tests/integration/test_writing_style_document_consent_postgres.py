@@ -106,6 +106,8 @@ async def test_first_party_author_consent_postgres(
             DROP FUNCTION IF EXISTS public.writing_style_prevent_revision_mutation() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_validate() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_use_expiry(uuid,uuid,uuid) CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_revoke_consent_on_file_change() CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY);
             CREATE TABLE public.files (
@@ -1018,7 +1020,12 @@ async def test_first_party_author_consent_postgres(
             )
             before = await direct_repo.read_current_published(request=prior)
             assert before is not None, label
-            if replacement is None:
+            if label == "digest":
+                # A non-owner file actor cannot bypass the SECURITY DEFINER
+                # consent fence (fixture privileges are disposable only).
+                await scoped(other_actor, tenant, update_statement,
+                             str(case_file), replacement)
+            elif replacement is None:
                 await raw.execute(update_statement, str(case_file))
             else:
                 await raw.execute(update_statement, str(case_file), replacement)
