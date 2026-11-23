@@ -74,7 +74,7 @@ describe("authenticated persisted composer draft synchronization", () => {
       get: () => visibility !== "visible",
     });
     vi.stubGlobal("BroadcastChannel", DraftBroadcastChannel);
-    getDraft.mockResolvedValue({ text: "", revision: 0 });
+    getDraft.mockResolvedValue({ text: "", revision: 0 } as never);
   });
 
   afterEach(() => {
@@ -124,12 +124,12 @@ describe("authenticated persisted composer draft synchronization", () => {
 
   it("notifies another tab with revision only, then rereads canonical server text", async () => {
     let canonical: DraftRecord = { text: "", revision: 0 };
-    getDraft.mockImplementation(async () => ({ ...canonical }));
+    getDraft.mockImplementation(async () => ({ ...canonical } as never));
     putDraft.mockImplementation(async (_endpoint, payload) => {
       const request = payload as { text: string; expected_revision: number };
       expect(request.expected_revision).toBe(canonical.revision);
       canonical = { text: request.text, revision: canonical.revision + 1 };
-      return { ...canonical };
+      return { ...canonical } as never;
     });
 
     const first = renderHook(() => useKarenPersistedDraft(conversationId));
