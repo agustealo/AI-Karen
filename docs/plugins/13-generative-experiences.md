@@ -379,3 +379,28 @@ capture remains optional; protected GitHub jobs upload no private browser
 artifacts. The existing Card Studio PostgreSQL workflow checks the source
 wiring contract; passing that source check is **not evidence that an
 actual approved deployment/browser trial ran successfully**.
+
+
+## KGUI-CARD-STUDIO-01F: principal-scoped editor state
+
+The account-authenticated `CardStudioWorkspace` is a thin identity wrapper
+around the existing editor. Its private `PrincipalCardStudioWorkspace`
+subtree is **keyed by the canonical authenticated tenant ID and user ID**,
+using the same principal scope as the existing unverified-idempotency
+`sessionStorage` record. A logout or principal transition immediately
+unmounts all previous owner-scoped template inventory, selected revision,
+unsaved draft, authorization error, pending mutation and preview state;
+a late fetch/commit completion from the previous component cannot populate
+the newly authenticated owner's view. The backend remains the sole RLS,
+RBAC, session and RuntimePolicy authority.
+
+The existing focused Vitest suite explicitly covers A-to-B principal
+switching with selected private data, a late A list response after B loads,
+a retained uncertain A mutation that cannot appear in B's retry panel,
+and immediate logout isolation. Source proof does **not** establish
+an authenticated two-account browser run or certify cross-tenant enforcement
+beyond the server's already existing real PostgreSQL tests.
+
+`KARI_ENABLE_CARD_STUDIO_CRUD` stays disabled by default. The separate
+approved disposable-preview browser release gate described above remains
+mandatory for consumer promotion.
