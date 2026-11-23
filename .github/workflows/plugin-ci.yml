@@ -50,6 +50,7 @@ on:
       - 'tests/auth/test_plugin_lifecycle_session.py'
       - 'tests/services/test_plugin_lifecycle_resume.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
+      - 'tests/architecture/test_first_party_plugin_live_acceptance_contract.py'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
       - '.github/workflows/plugin-ci.yml'
@@ -102,6 +103,7 @@ on:
       - 'tests/auth/test_plugin_lifecycle_session.py'
       - 'tests/services/test_plugin_lifecycle_resume.py'
       - 'tests/architecture/test_plugin_runtime_authority.py'
+      - 'tests/architecture/test_first_party_plugin_live_acceptance_contract.py'
       - 'docker/Dockerfile.plugins'
       - 'deploy/compose/docker-compose.plugins.yml'
       - '.github/workflows/plugin-ci.yml'
@@ -262,6 +264,7 @@ jobs:
             tests/architecture/test_shared_file_explorer_ui_boundary.py \
             tests/architecture/test_plugin_lifecycle_ingress_fence.py \
             tests/architecture/test_plugin_runtime_authority.py \
+            tests/architecture/test_first_party_plugin_live_acceptance_contract.py \
             tests/architecture/test_plugin_store_api_shape_guards.py \
             -v \
             --cov=src/ai_karen_engine/extensions \
