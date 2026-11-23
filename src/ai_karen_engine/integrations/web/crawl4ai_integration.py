@@ -497,15 +497,17 @@ class Crawl4AIIntegration:
         reason = "request_blocked"
         response = None
         try:
-            async with budget["lock"]:
-                if budget["count"] >= self.settings.max_browser_requests:
-                    reason = "request_budget"
-                    raise PermissionError("Browser request budget exceeded.")
-                budget["count"] += 1
-
             candidate = str(route.request.url)
             is_navigation = bool(route.request.is_navigation_request())
             for hop in range(self.settings.max_redirects + 1):
+                # Charge each redirect hop, not just the initial request. The
+                # counter is context-local and shared across concurrent pages.
+                async with budget["lock"]:
+                    if budget["count"] >= self.settings.max_browser_requests:
+                        reason = "request_budget"
+                        raise PermissionError("Browser request budget exceeded.")
+                    budget["count"] += 1
+
                 # URL/DNS resolution may block; keep it off the event loop.
                 policy_error = await asyncio.wait_for(
                     asyncio.to_thread(self._validate_url, candidate),

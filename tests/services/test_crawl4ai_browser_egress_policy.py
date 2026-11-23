@@ -261,3 +261,17 @@ def test_empty_dns_answer_is_fail_closed(monkeypatch):
     crawler = Crawl4AIIntegration(resolve_dns_for_safety=True)
     denied = crawler._validate_dns_safety("public.example")
     assert denied["failure_code"] == "dns_resolution_failed"
+
+
+@pytest.mark.asyncio
+async def test_each_redirect_hop_counts_against_external_browser_budget():
+    origin = "https://public.example/start"
+    second = "https://public.example/second"
+    crawler = integration(allowed_urls=[origin, second], max_browser_requests=1)
+    route = Route(origin, [Response(302, {"location": second}, b"")])
+    usage = budget()
+    await crawler._guard_browser_request(route, usage)
+    assert [call["url"] for call in route.fetched] == [origin]
+    assert route.aborted == 1
+    assert route.fulfilled == []
+    assert usage["count"] == 1
