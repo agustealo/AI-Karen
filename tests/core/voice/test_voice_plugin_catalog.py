@@ -169,3 +169,78 @@ async def test_missing_user_or_tenant_fails_before_plugin_discovery(monkeypatch)
             await VoiceRuntime().engine_catalog(user)
     fake.list_plugins.assert_not_awaited()
     fake.execute_plugin.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_full_catalog_and_targeted_synthesis_share_governance_without_extra_probes(monkeypatch):
+    """A targeted synthesis cannot load unrelated plugins or repeat RBAC lookup."""
+    fake = service(monkeypatch)
+    pocket_manifest = fake.list_plugins.return_value[0]["manifest"]
+    unrelated = SimpleNamespace(
+        name="unrelated-tts",
+        display_name="Unrelated TTS",
+        version="1.0.0",
+        capabilities=pocket_manifest.capabilities,
+    )
+    fake.list_plugins.return_value.insert(
+        0, {"manifest": unrelated, "status": "enabled"}
+    )
+
+    from ai_karen_engine.auth import rbac_middleware
+    from ai_karen_engine.services.plugin_service import ExecutionStatus
+
+    authorized_principals = []
+
+    def permissions(principal):
+        authorized_principals.append(dict(principal))
+        return []
+
+    monkeypatch.setattr(
+        rbac_middleware, "get_rbac_manager",
+        lambda: SimpleNamespace(get_user_permissions=permissions),
+    )
+
+    probed_plugins = []
+
+    async def execute_plugin(**kwargs):
+        probed_plugins.append(kwargs["plugin_name"])
+        if kwargs["parameters"]["operation"] == "catalog":
+            payload = {**catalog_payload(), "engine_id": kwargs["plugin_name"]}
+        else:
+            payload = {
+                "engine": kwargs["plugin_name"],
+                "voice_id": "alba",
+                "content_type": "audio/wav",
+                "audio_base64": base64.b64encode(wav()).decode("ascii"),
+            }
+        return SimpleNamespace(status=ExecutionStatus.COMPLETED, result=payload)
+
+    fake.execute_plugin = AsyncMock(side_effect=execute_plugin)
+    runtime = VoiceRuntime()
+
+    # Discovery must still inspect every enabled, governed voice candidate.
+    full_catalog = await runtime.engine_catalog(USER)
+    assert [entry["engine_id"] for entry in full_catalog["engines"]] == [
+        "unrelated-tts", "pocket-tts"
+    ]
+    assert probed_plugins == ["unrelated-tts", "pocket-tts"]
+
+    probed_plugins.clear()
+    authorized_principals.clear()
+    result = await runtime.synthesize_with_plugin(
+        SynthesisInput(text="Local synthesis", voice_id="alba"),
+        engine_id="pocket-tts", principal=USER,
+    )
+    assert result.audio == wav()
+    assert probed_plugins == ["pocket-tts", "pocket-tts"]
+    assert len(authorized_principals) == 1
+    assert authorized_principals[0]["tenant_id"] == TENANT
+
+    # An unknown engine must not trigger another installed model's catalog.
+    probed_plugins.clear()
+    with pytest.raises(RuntimeError, match="local_synthesis_unavailable"):
+        await runtime.synthesize_with_plugin(
+            SynthesisInput(text="No unrelated model probing"),
+            engine_id="missing-tts", principal=USER,
+        )
+    assert probed_plugins == []
