@@ -142,6 +142,21 @@ class InternetSearchRequest:
         timeout_seconds = safe_payload.get("timeout_seconds", 30.0)
         timeout_seconds = max(3.0, min(float(timeout_seconds), 90.0))
 
+        # Mode handlers have always emitted these structured policies. Read
+        # them here, at the canonical request-normalization boundary, rather
+        # than adding another runtime strategy adapter or trusting UI hints
+        # as user, tenant, or capability authority.
+        def nested_policy(name: str) -> Mapping[str, Any]:
+            value = safe_payload.get(name)
+            return value if isinstance(value, Mapping) else {}
+
+        search_profile = nested_policy("search_profile")
+        domain_policy = nested_policy("domain_policy")
+        time_policy = nested_policy("time_policy")
+
+        def policy_option(key: str, policy: Mapping[str, Any]) -> Any:
+            return safe_payload.get(key, policy.get(key))
+
         return cls(
             query=normalized_query,
             mode=safe_payload.get("mode"),
@@ -150,14 +165,14 @@ class InternetSearchRequest:
             depth=safe_payload.get("depth"),
             freshness_bias=safe_payload.get("freshness_bias"),
             query_strategy=safe_payload.get("query_strategy"),
-            prefer_recent=safe_payload.get("prefer_recent"),
-            prefer_official_sources=safe_payload.get("prefer_official_sources"),
-            allow_forum_results=safe_payload.get("allow_forum_results"),
-            allowed_domains=_normalize_domain_list(safe_payload.get("allowed_domains")),
-            blocked_domains=_normalize_domain_list(safe_payload.get("blocked_domains")),
-            time_range=safe_payload.get("time_range"),
-            published_after=safe_payload.get("published_after"),
-            published_before=safe_payload.get("published_before"),
+            prefer_recent=policy_option("prefer_recent", search_profile),
+            prefer_official_sources=policy_option("prefer_official_sources", search_profile),
+            allow_forum_results=policy_option("allow_forum_results", search_profile),
+            allowed_domains=_normalize_domain_list(policy_option("allowed_domains", domain_policy)),
+            blocked_domains=_normalize_domain_list(policy_option("blocked_domains", domain_policy)),
+            time_range=policy_option("time_range", time_policy),
+            published_after=policy_option("published_after", time_policy),
+            published_before=policy_option("published_before", time_policy),
             bypass_cache=bool(safe_payload.get("bypass_cache", False)),
             timeout_seconds=timeout_seconds,
             crawl_concurrency=crawl_concurrency,
@@ -1598,9 +1613,11 @@ class InternetCapabilityService:
         strategy: Mapping[str, Any],
     ) -> bool:
         parsed = urlparse(url)
-        domain = parsed.netloc.lower().removeprefix("www.")
+        # netloc includes ports and userinfo; domain restrictions apply to the
+        # actual hostname, regardless of those URL decorations.
+        domain = (parsed.hostname or "").lower().removeprefix("www.")
 
-        if parsed.scheme not in {"http", "https"}:
+        if parsed.scheme not in {"http", "https"} or not domain:
             return False
 
         blocked_domains = {
