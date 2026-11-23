@@ -59,7 +59,6 @@ class SupabaseArtifactStore(ArtifactStore):
 
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
-        commit_attempted = False
         try:
             async with await self._session() as session:
                 await session.execute(text("SELECT 1"))
@@ -106,6 +105,7 @@ class SupabaseArtifactStore(ArtifactStore):
             storage_backend="supabase",
             metadata=request.metadata,
         )
+        commit_attempted = False
         try:
             async with await self._session() as session:
                 await session.execute(
