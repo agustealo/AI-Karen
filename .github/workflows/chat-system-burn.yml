@@ -259,6 +259,47 @@ jobs:
       - name: Run durable transcript continuity and tenant isolation proof
         run: pytest tests/integration/test_chat_transcript_continuity.py -q
 
+      - name: KIS-GRAPH-01C2R-K prove real PostgreSQL auth, SSE and transcript
+        env:
+          KAREN_TEST_DISPOSABLE_DATABASE: "1"
+          KAREN_CHAT_AUTH_TRANSCRIPT_REPORT: build/kis-graph-01c2r-k-auth-transcript.json
+        run: |
+          pytest tests/integration/test_chat_http_sse_auth_transcript_postgres.py -q -rs \
+            --junitxml=build/kis-graph-01c2r-k-auth-transcript-junit.xml
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("build/kis-graph-01c2r-k-auth-transcript.json").read_text())
+          assert report["status"] == "complete"
+          assert report["jwt_authority"] == "real_secure_auth_middleware"
+          assert report["durable_session_authority"] == "real_auth_service_postgresql"
+          assert report["transcript_authority"] == "real_conversation_runtime_gateway_postgresql"
+          assert report["model_tokens"] == "controlled_fixture"
+          assert report["authorization_denials"] == 4
+          assert report["completed_streams"] == 2
+          assert report["disconnect_finalized"] is True
+          assert report["aborted_transcript_rows"] == 0
+          assert report["retry_committed_pair"] is True
+          assert report["tenant_history_isolation"] is True
+          assert report["durable_message_rows"] == 4
+          assert report["checked_out_after_cleanup"] == 0
+          assert report["error_type"] is None
+          assert report["cleanup_error_type"] is None
+          print("Real PostgreSQL session and transcript wire proof passed.")
+          PY
+
+      - name: Preserve KIS-GRAPH-01C2R-K sanitized live SQL and HTTP evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kis-graph-01c2r-k-live-auth-transcript
+          path: |
+            build/kis-graph-01c2r-k-auth-transcript.json
+            build/kis-graph-01c2r-k-auth-transcript-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Burn canonical transcript isolation against real PostgreSQL
         run: pytest tests/integration/test_chat_transcript_postgres_isolation.py -q
 
