@@ -190,7 +190,7 @@ async def confirm_document_author_consent(
     except (ApprovalScopeError, PermissionError) as exc:
         raise HTTPException(status_code=403, detail="Document confirmation denied") from exc
     except ApprovalStateError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail="Document confirmation conflict") from exc
 
 
 class DocumentAuthorConsentReceipt(BaseModel):
@@ -350,11 +350,15 @@ async def list_approvals(
         )
         return [_response(record) for record in records]
     except ApprovalScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail="Approval access denied") from exc
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "approvals.list.failed",
-            extra={"user_id": user.user_id, "tenant_id": user.tenant_id},
+            extra={
+                "user_id": user.user_id,
+                "tenant_id": user.tenant_id,
+                "error_type": type(exc).__name__,
+            },
         )
         raise HTTPException(status_code=500, detail="Failed to list approvals") from exc
 
@@ -371,7 +375,7 @@ async def get_approval(
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Approval not found") from exc
     except ApprovalScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail="Approval access denied") from exc
 
 
 @router.post("/{approval_id}/decision", response_model=ApprovalResponse)
@@ -397,16 +401,17 @@ async def decide_approval(
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Approval not found") from exc
     except ApprovalScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail="Approval access denied") from exc
     except ApprovalStateError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail="Approval state conflict") from exc
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "approvals.decision.failed",
             extra={
                 "approval_id": approval_id,
                 "user_id": user.user_id,
                 "tenant_id": user.tenant_id,
+                "error_type": type(exc).__name__,
             },
         )
         raise HTTPException(status_code=500, detail="Failed to decide approval") from exc

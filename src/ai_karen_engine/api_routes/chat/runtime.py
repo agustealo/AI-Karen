@@ -1730,9 +1730,9 @@ async def resume_approved_chat(
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Approval not found") from exc
     except ApprovalScopeError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail="Approval scope denied") from exc
     except ApprovalStateError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail="Approval cannot be resumed") from exc
 
     return StreamingResponse(
         _sse(runtime_request),
