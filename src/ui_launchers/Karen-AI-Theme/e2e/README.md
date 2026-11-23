@@ -697,3 +697,29 @@ reads. The runtime, repository, API route, migrations, and production feature
 default are unchanged. The real browser proof still requires the approved,
 sanitized, disposable preview and protected workflow dispatch. GitHub source
 and database gates alone do not certify that this browser scenario executed.
+
+
+### KGUI-CARD-STUDIO-01K: server-verified same-tenant dual-principal admission
+
+For the protected `card-studio` scenario, the two sanitized, independently
+authenticated Card Studio users must have **distinct user IDs within the same
+tenant**. Two users in different tenants would only establish tenant-level
+isolation and must not qualify as evidence of owner isolation within a tenant.
+
+The existing `/api/auth/validate-session` endpoint now provides a fresh,
+authenticated HTTP 200 server identity for both browser contexts before the
+second owner's foreign-read and mutation probes. The test requires the
+server's affirmative session-validity envelope, canonical user and tenant UUIDs,
+and agreement with the browser's post-login identity. It rejects an unavailable
+auth endpoint, mismatched browser/server identity, same user, or different
+tenants. This check does not trust a browser-injected identity or introduce
+another authorization mechanism. Both users must still independently create
+real PostgreSQL-backed templates before negative authorization assertions
+count. All prior archive and retry-proof requirements remain unchanged.
+
+The approved preview operator must provision two separate **write-authorized
+sanitized users in one disposable tenant** and explicitly authorize the
+preview-only mutations. An account in another tenant is not a substitute.
+The existing real PostgreSQL test independently covers cross-tenant isolation.
+The protected workflow and production default-disabled Card Studio setting are
+unchanged. No source-only test proves that the live Chromium trial ran.
