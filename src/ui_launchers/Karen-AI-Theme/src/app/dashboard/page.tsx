@@ -35,6 +35,7 @@ import CronJobsPage from "@/components/automation/CronJobsPage";
 import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
 import { SessionProvider, useSession } from "@/components/chat/SessionProvider";
+import { CardStudioWorkspace } from "@/components/card-studio/CardStudioWorkspace";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
 import { Button } from "@/components/ui/button";
@@ -301,6 +302,7 @@ function DashboardWorkspace() {
     () => ({
 
       settings: <SettingsDialogComponent initialSection={settingsInitialSection} />,
+      cardStudio: <CardStudioWorkspace />,
       personaStudio: (
         <section data-testid="persona-studio-workspace" className="mx-auto w-full max-w-5xl space-y-5 overflow-y-auto p-4 md:p-7">
           <div className="flex flex-wrap items-center justify-between gap-3">

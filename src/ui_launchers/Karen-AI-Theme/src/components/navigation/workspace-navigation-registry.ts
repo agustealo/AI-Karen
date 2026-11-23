@@ -4,6 +4,7 @@ import {
   Clock3,
   Drama,
   LayoutGrid,
+  PanelsTopLeft,
   MessageSquare,
   PlugZap,
   ScrollText,
@@ -27,6 +28,7 @@ export const WORKSPACE_PRIMARY_NAV: readonly WorkspaceDestination[] = [
 ];
 
 export const WORKSPACE_ADVANCED_NAV: readonly WorkspaceDestination[] = [
+  { key: "cardStudio", label: "Card Studio", icon: PanelsTopLeft },
   { key: "agents", label: "Agents", icon: Bot },
   { key: "jobs", label: "Jobs", icon: LayoutGrid },
   { key: "cronJobs", label: "Cron Jobs", icon: Clock3 },

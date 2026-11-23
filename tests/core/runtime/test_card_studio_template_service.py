@@ -226,3 +226,22 @@ async def test_unsupported_mutations_fail_before_policy_or_database():
     backend.create_draft.assert_not_awaited()
     backend.revise_draft.assert_not_awaited()
     backend.archive_draft.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_system_catalog_uses_runtime_policy_and_canonical_host_contract():
+    backend = repository()
+    service = CardStudioTemplateService(repository=backend)
+    values = await service.system_catalog(context=context())
+    assert values
+    assert all(entry["origin"] == "system" and entry["editable"] is False for entry in values)
+    assert all(entry["definition"]["interaction_mode"] == "read_only" for entry in values)
+    assert all(
+        "code.artifact" != slot["component_type"]
+        and "surface.composition" != slot["component_type"]
+        for entry in values for slot in entry["definition"]["slots"]
+    )
+    backend.list_owned.assert_not_awaited()
+    backend.create_draft.assert_not_awaited()
+    with pytest.raises(CardStudioAuthorizationError):
+        await service.system_catalog(context=context(role="readonly"))

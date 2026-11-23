@@ -273,3 +273,20 @@ async def test_unknown_publication_and_unbounded_revision_not_exposed(monkeypatc
     )
     assert response.status_code == 422
     execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_card_studio_catalog_uses_authorized_runtime_owner(monkeypatch):
+    host = [{
+        "origin": "system", "editable": False,
+        "definition": definition(),
+    }]
+    get_catalog = AsyncMock(return_value=host)
+    monkeypatch.setattr(CardStudioTemplateService, "system_catalog", get_catalog)
+    app = make_app(monkeypatch)
+    result = await request(app, "GET", "/chat/card-studio/catalog")
+    assert result.status_code == 200, result.text
+    assert result.json() == {"schema_version": 1, "catalog": host}
+    assert get_catalog.await_args.kwargs["context"].user_id == USER
+    assert get_catalog.await_args.kwargs["context"].tenant_id == TENANT
+    assert result.headers["cache-control"] == "private, no-store"
