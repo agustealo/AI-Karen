@@ -396,6 +396,10 @@ describe('first-party document author confirmation', () => {
     expect(screen.getByRole('button', {
       name: 'Confirm author consent',
     })).toBeTruthy();
+    expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post).not.toHaveBeenCalledWith(
+      '/api/approvals/document-consent/' + approvalId + '/issue',
+    );
   });
 
 });
