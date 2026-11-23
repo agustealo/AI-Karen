@@ -4,30 +4,31 @@ import { formatMsToStopwatch } from '../utils/timeFormatters';
 
 interface StopwatchPanelProps {
   state: StopwatchState | null;
-  loading: boolean;
   onAction: (action: string) => void;
 }
 
-export const StopwatchPanel: React.FC<StopwatchPanelProps> = ({ state, loading, onAction }) => {
+export const StopwatchPanel: React.FC<StopwatchPanelProps> = ({ state, onAction }) => {
   // We use local client ticking if the stopwatch is active to avoid hammering backend
   const [localDisplay, setLocalDisplay] = React.useState<number>(0);
 
   React.useEffect(() => {
     if (!state) return;
 
-    let interval: any;
+    let interval: NodeJS.Timeout | null = null;
     if (state.running && !state.paused && state.last_updated_at) {
       // It's actively running, tick locally based on last known state
       interval = setInterval(() => {
         const nowMs = Date.now();
-        const lastUpdatedMs = new Date(state.last_updated_at).getTime();
+        const lastUpdatedMs = new Date(state.last_updated_at!).getTime();
         setLocalDisplay(state.elapsed_ms + (nowMs - lastUpdatedMs));
       }, 50); // fast UI tick
     } else {
       setLocalDisplay(state.elapsed_ms || 0);
     }
 
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [state]);
 
   const displayMs = state ? localDisplay : 0;

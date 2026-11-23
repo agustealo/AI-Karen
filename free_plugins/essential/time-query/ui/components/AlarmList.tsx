@@ -1,7 +1,6 @@
 import React from 'react';
 import { AlarmItem } from '../types';
 import { EmptyState } from './EmptyState';
-import { getAlarmStatusLabel } from '../utils/alarmHelpers';
 
 interface AlarmListProps {
   alarms: AlarmItem[];

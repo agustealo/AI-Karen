@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect } from 'react';
 import { TimeQueryApi } from '../services/timeQueryApi';
-import { AlarmItem } from '../types';
-import { PluginExtensionError } from '@/lib/extensions/hooks/usePluginExtension';
+import type { AlarmItem, AlarmCreateParams } from '../types';
+import { ApiError } from '@/lib/api';
 
 const isRateLimitError = (error: unknown) =>
-  error instanceof PluginExtensionError && error.status === 429;
+  error instanceof ApiError && error.status === 429;
 
-export const useAlarms = (api: TimeQueryApi) => {
+export function useAlarms(api: TimeQueryApi) {
   const [alarms, setAlarms] = useState<AlarmItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchAlarms = useCallback(async () => {
     setLoading(true);
@@ -16,8 +17,10 @@ export const useAlarms = (api: TimeQueryApi) => {
       const res = await api.getAlarms();
       if (res && res.status === 'success' && res.alarms) {
         setAlarms(res.alarms);
+        setError(null);
       }
     } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load alarms');
       if (!isRateLimitError(e)) {
         console.error(e);
       }
@@ -26,24 +29,24 @@ export const useAlarms = (api: TimeQueryApi) => {
     }
   }, [api]);
 
-  const createAlarm = async (data: any) => {
+  const createAlarm = useCallback(async (data: AlarmCreateParams) => {
     await api.createAlarm(data);
     await fetchAlarms();
-  };
+  }, [api, fetchAlarms]);
 
-  const deleteAlarm = async (id: string) => {
+  const deleteAlarm = useCallback(async (id: string) => {
     await api.deleteAlarm(id);
     await fetchAlarms();
-  };
+  }, [api, fetchAlarms]);
 
-  const toggleAlarm = async (id: string, enabled: boolean) => {
+  const toggleAlarm = useCallback(async (id: string, enabled: boolean) => {
     await api.setAlarmStatus(id, enabled);
     await fetchAlarms();
-  };
+  }, [api, fetchAlarms]);
 
   useEffect(() => {
     fetchAlarms();
   }, [fetchAlarms]);
 
-  return { alarms, loading, fetchAlarms, createAlarm, deleteAlarm, toggleAlarm };
-};
+  return { alarms, loading, error, fetchAlarms, createAlarm, deleteAlarm, toggleAlarm };
+}
