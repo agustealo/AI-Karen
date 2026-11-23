@@ -1,6 +1,6 @@
 # File Explorer: Reusable Plugin UI Contract
 
-**Status: controlled frontend component implemented; live host inventory integration not implemented.**
+**Status: dashboard host and selection-to-analysis API wiring implemented in source; consumer release acceptance remains outstanding.**
 
 ## Single owner
 
@@ -30,7 +30,7 @@ The existing `SharedFileExplorer` now accepts `hasMore`, `nextCursor`, `onNextPa
 
 The host **must** produce a new `pageKey` on every accepted page or identity/authorization-scope transition. That remounts the controlled viewer and clears local folder, filter and selection state. Host callers must also cancel or ignore stale/out-of-order responses, never combine pages from different users, tenants or authorizations, and resolve errors separately from genuinely empty inventories. `onRefresh` clears selection before the host requests a fresh authorized page. This is not an authorization boundary: consumers still revalidate source ACL, deletion status and revision at the canonical owner before bytes are accessed.
 
-**Outstanding:** The authenticated UI host has not yet connected these props to `FileExplorerInventoryHost` through a canonical runtime endpoint. No successful live uploaded-file browser acceptance, cross-page persistent selection or authorized download is claimed. UI contract regression: `pytest tests/architecture/test_shared_file_explorer_ui_boundary.py -q`.
+**Outstanding:** No successful hosted browser/real-database acceptance, cross-page persistent selection or authorized download is claimed. The authenticated dashboard host wiring described below is now present in source. UI contract regression: `pytest tests/architecture/test_shared_file_explorer_ui_boundary.py -q`.
 
 ## Authenticated dashboard host wiring
 
@@ -51,3 +51,11 @@ closed with selection cleared. This guard does not convert a selection into a
 storage authorization receipt; all future byte consumers still need fresh
 server-side owner and revision checks. Regression coverage lives in the
 existing `FileExplorerInventoryHost.test.tsx` suite.
+
+## Content Intelligence analysis recovery
+
+The dashboard-owned `FileExplorerInventoryHost` passes only the selected `source_id` and SHA-256 `revision` to the existing Content Intelligence source endpoint. This is a request, not a transferable storage grant. The consuming runtime independently reauthorizes the caller and reads the current owner-active artifact only after kernel admission; changed bytes, revoked ownership, deleted sources, and failed checks do not produce analysis success.
+
+When analysis fails, the panel never displays synthetic or partial results. The user may retry a transient failure against the current selection, or choose **Refresh inventory and reselect**. That action invalidates the in-flight presentation attempt, clears the prior selection, and requests a new owner-scoped inventory page through the authenticated host. The user must select the new reference before another analysis; the browser never silently substitutes a new revision for the requested one. A denial does not disclose whether a particular source exists, changed, or belongs to a different owner.
+
+Source integration tests cover a rejected stale revision, metadata refresh with a changed SHA-256, mandatory re-selection, a new analysis request carrying the refreshed revision, a transient retry, and suppression of private API errors. This is mock-backed frontend regression evidence, **not** observed production PostgreSQL or browser certification. The independent backend output-lineage validation is separately tracked in PR #1206 and must not be duplicated in this UI slice.
