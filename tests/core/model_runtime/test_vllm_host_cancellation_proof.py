@@ -113,7 +113,8 @@ def test_source_identity_checks_actual_checkout(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(host.socket, "gethostname", lambda: "target-host")
     monkeypatch.setattr(
         host.subprocess, "run",
-        lambda *args, **kwargs: SimpleNamespace(stdout=sha + "\n"),
+        lambda command, **kwargs: SimpleNamespace(
+            stdout=sha + "\n" if command[1] == "rev-parse" else "",\n        ),
     )
     host.validate_identity(
         "target-model", "target-host", sha, repo_root=tmp_path,
