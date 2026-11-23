@@ -148,6 +148,18 @@ class CardStudioTemplateService:
         if not allowed:
             raise CardStudioAuthorizationError("Card Studio permission denied")
 
+    async def system_catalog(self, *, context: ChatExecutionContext) -> list[dict[str, Any]]:
+        """List host-owned, inert component definitions under read admission.
+
+        This is the existing presentation-contract catalog, not an extra
+        plugin registry or a source of evidence-bearing rendered data.
+        """
+        await self._authorize(context, operation="catalog", access="read")
+        from ai_karen_engine.core.runtime.presentation_contract import (
+            built_in_card_template_catalog,
+        )
+        return built_in_card_template_catalog()
+
     async def list_owned(
         self, *, context: ChatExecutionContext, limit: int = 20,
         include_archived: bool = False,

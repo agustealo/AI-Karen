@@ -78,7 +78,7 @@ def _public_template(template: SavedCardTemplate) -> dict[str, Any]:
 
 async def _call(
     *, user: dict[str, Any], operation: Literal[
-        "list", "read", "history", "create", "revise", "archive"
+        "catalog", "list", "read", "history", "create", "revise", "archive"
     ], **kwargs: Any,
 ) -> JSONResponse:
     """One mapping of runtime outcomes to guarded HTTP responses."""
@@ -107,7 +107,13 @@ async def _call(
 
     service = CardStudioTemplateService()
     try:
-        if operation == "list":
+        if operation == "catalog":
+            catalog = await service.system_catalog(context=context)
+            content: dict[str, Any] = {
+                "schema_version": 1,
+                "catalog": catalog,
+            }
+        elif operation == "list":
             templates = await service.list_owned(context=context, **kwargs)
             content: dict[str, Any] = {
                 "schema_version": 1,
@@ -169,6 +175,14 @@ async def _call(
             detail="Card Studio temporarily unavailable",
             headers=headers,
         ) from exc
+
+
+@router.get("/chat/card-studio/catalog")
+async def list_card_studio_catalog(
+    user: dict[str, Any] = Depends(bypass_user_context_func),
+) -> JSONResponse:
+    """Catalog of host-supported inert template types, never live content."""
+    return await _call(user=user, operation="catalog")
 
 
 @router.get("/chat/card-studio/templates")

@@ -295,3 +295,48 @@ operation, revision and latency, never template source content or credentials.
 **Not included:** Template publication/activation, shared-library roles,
 plugin execution, CORTEX chat proposals, custom components, visual editor,
 model-generated HTML or direct frontend SQL.
+
+
+## KGUI-CARD-STUDIO-01D: visual layout editor (DEV_FAST candidate)
+
+The existing dashboard navigation now exposes **Card Studio** as an Advanced
+Tools workspace. It delegates to `CardStudioWorkspace`, while the original
+`KarenPresentationRegistry` remains the sole renderer for runtime-evidenced
+cards. The editor intentionally previews **unbound layout geometry only**.
+It cannot invent time, weather, search results, task data, metrics or receipts.
+
+- **Host source of truth:** `GET /api/chat/card-studio/catalog` is an
+  authenticated, feature-gated, RuntimePolicy-authorized read of the canonical
+  `built_in_card_template_catalog()` in `presentation_contract.py`. The
+  frontend does not register a component renderer or extend the allowlist.
+  The catalog is inert and non-editable. Backend template validation remains
+  authoritative.
+- **Editing:** Edit bounded title, immutable new-template key, optional
+  description, stack/grid layout, density and one to six safe slots. Keyboard
+  move buttons supplement drag ordering. The preview is explicitly labeled
+  as a layout with no runtime-bound evidence. No custom HTML, CSS, JS, model
+  prompts or source references may be stored.
+- **Storage:** API reads use the shared `apiClient`; creates, revisions and
+  archives use the existing server-authorized CRUD endpoints. A revision save
+  carries the backend head's `expected_revision`. Success is shown **only**
+  after the exact committed receipt is checked against the original operation,
+  key, template, revision and definition.
+- **Uncertain responses:** No automatic POST/PUT retry. Before sending a
+  mutation, the editor keeps an immutable key and request payload in
+  principal-scoped **tab sessionStorage**, or refuses to send if that recovery
+  write fails. Network/5xx/protocol errors lock editing and retain the
+  request, offering manual replay of the exact same idempotency key and
+  payload. A confirmed 409 requires an explicit reload; no optimistic
+  "saved" toast or hidden fallback response is permitted.
+- **Default off:** `KARI_ENABLE_CARD_STUDIO_CRUD=false` still governs every
+  endpoint, including catalog discovery. When disabled, the UI must show
+  unavailable and refuse editing rather than inventing local templates.
+- **Separate acceptance:** Real responsive browser acceptance at 390, 768,
+  1024 and 1440 px; actual local operator feature enablement; accessible drag
+  and keyboard ordering; screenshot evidence; multi-tab CAS and uncertain
+  browser reload acceptance must be observed before consumer promotion.
+
+Focused client tests live in the **existing Vitest configuration** under
+`card-studio-api.test.ts` and `CardStudioWorkspace.test.tsx`. Python
+runtime and HTTP catalog tests run in the existing Card Studio PostgreSQL gate.
+The existing `DEV_FAST` job remains the focused PR entrypoint.

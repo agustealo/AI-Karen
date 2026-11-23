@@ -16,6 +16,8 @@ export default defineConfig({
       'src/components/plugins/PluginOverviewPage.test.tsx',
       'src/components/plugins/FileExplorerInventoryHost.test.tsx',
       'src/components/comms/CommsCenterPage.test.tsx',
+      'src/lib/card-studio-api.test.ts',
+      'src/components/card-studio/CardStudioWorkspace.test.tsx',
     ],
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],

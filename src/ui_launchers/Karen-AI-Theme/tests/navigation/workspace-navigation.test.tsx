@@ -90,9 +90,18 @@ describe("task-first Kari workspace navigation", () => {
       "chat", "commsCenter", "agentsOverview", "tasks", "pluginOverview",
     ]);
     expect(WORKSPACE_PLUGIN_NAV.map((item) => item.key)).toEqual(["pocketTts"]);
-    expect(WORKSPACE_ADVANCED_NAV.map((item) => item.key)).toEqual(["agents", "jobs", "cronJobs"]);
+    expect(WORKSPACE_ADVANCED_NAV.map((item) => item.key)).toEqual(["cardStudio", "agents", "jobs", "cronJobs"]);
+    expect(isNestedWorkspaceView("cardStudio", [pluginEntry])).toBe(true);
     expect(isNestedWorkspaceView(pluginEntry.viewKey, [pluginEntry])).toBe(true);
     expect(isNestedWorkspaceView("account", [pluginEntry])).toBe(false);
+  });
+
+  it("navigates to Card Studio using the same advanced workspace owner", () => {
+    const { onNavigate } = mount({ activeView: "cardStudio" });
+    expect(screen.getByTestId("advanced-tools-toggle").getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Card Studio" }));
+    expect(onNavigate).toHaveBeenCalledWith("cardStudio");
+    expect(screen.getByRole("button", { name: "Card Studio" }).getAttribute("aria-current")).toBe("page");
   });
 
   it("routes the five primary destinations through the parent without fake execution", () => {
