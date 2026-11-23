@@ -2,8 +2,10 @@
 
 A genuine Uvicorn listener and httpx TCP client exercise the actual FastAPI
 chat ingress, signed JWT verification and strict session-identity checks.
-The canonical AuthService's durable-session result and ChatRuntime's model
-stream are controlled, not claims of real PostgreSQL authentication or inference.
+The J test controls AuthService readback and model generation. The K companion
+uses real isolated PostgreSQL session rows and the canonical AuthService's
+validate_session() over the same Uvicorn/httpx network path. Model generation
+and durable chat persistence remain controlled, not production claims.
 """
 
 from __future__ import annotations
@@ -343,3 +345,339 @@ async def _disconnect_after_content(
     assert not runtime.disconnect_finalized.is_set() or (
         runtime.disconnect_started.is_set()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(90)
+async def test_live_postgres_session_revocation_over_authenticated_sse_tcp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """K: real PostgreSQL auth decisions must govern every HTTP SSE admission.
+
+    Only a randomized isolated PostgreSQL schema is created or dropped. This
+    deliberately retains a controlled ChatRuntime producer, not a fake auth
+    session table or an in-process HTTP transport shortcut.
+    """
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy import select, text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from ai_karen_engine.database.models import AuthSession, AuthUser, Base, Tenant
+    from ai_karen_engine.services.auth.auth_service import AuthService
+    from ai_karen_engine.services.auth.config import AuthConfig, Environment
+
+    db_url = os.environ["CHAT_TEST_DATABASE_URL"]
+    parsed = make_url(db_url)
+    if (
+        parsed.drivername != "postgresql+asyncpg"
+        or parsed.host not in ("localhost", "127.0.0.1")
+        or parsed.database != "ai_karen"
+    ):
+        raise RuntimeError("K wire auth proof requires the isolated local CI PostgreSQL target")
+
+    schema = f"ci_chat_wire_{uuid4().hex}"
+    secret = f"ci-chat-wire-{uuid4().hex}{uuid4().hex}"
+    engine = create_async_engine(
+        db_url, pool_pre_ping=True,
+        connect_args={"server_settings": {"search_path": schema}},
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    auth_config_instance = AuthConfig(
+        environment=Environment.LOCAL,
+        jwt_secret_key=secret,
+        bcrypt_rounds=10,
+    )
+    auth_config_instance.validate()
+    service = AuthService(auth_config_instance)
+    # The test creates its own isolated schema; normal preflight explicitly
+    # checks public migration tables. Only that preflight is test-controlled.
+    # Every per-request AuthService.validate_session SQL query remains real.
+    service._initialized = True
+
+    @asynccontextmanager
+    async def actual_postgres_session():
+        async with factory() as session:
+            yield session
+
+    monkeypatch.setattr(service, "_session_scope", actual_postgres_session)
+
+    async def active_auth_service() -> AuthService:
+        return service
+
+    middleware = object.__new__(auth_middleware.SecureAuthMiddleware)
+    middleware.jwt_secret = secret
+    middleware.jwt_algorithm = "HS256"
+    middleware.redis_client = None
+    monkeypatch.setattr(
+        auth_middleware, "get_auth_middleware", lambda: middleware,
+    )
+    monkeypatch.setattr(auth_service, "get_auth_service", active_auth_service)
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+
+    tenant_a, tenant_b = uuid4(), uuid4()
+    owner_a, owner_b = uuid4(), uuid4()
+
+    def issue(owner, tenant, *, signing_secret=secret):
+        now = datetime.now(timezone.utc)
+        return jwt.encode(
+            {
+                "sub": str(owner),
+                "tenant_id": str(tenant),
+                "roles": ["admin"],
+                "permissions": ["unsafe:grant"],
+                "email": "stale@example.invalid",
+                "iss": "ai-karen",
+                "aud": "ai-karen-users",
+                "iat": int(now.timestamp()),
+                "exp": int((now + timedelta(minutes=10)).timestamp()),
+            },
+            signing_secret, algorithm="HS256",
+        )
+
+    token_a = issue(owner_a, tenant_a)
+    token_b = issue(owner_b, tenant_b)
+    wrong_tenant = issue(owner_a, tenant_b)
+    wrong_signature = issue(owner_b, tenant_b, signing_secret="wrong-secret")
+
+    class ControlledProducer:
+        def __init__(self):
+            self.requests = []
+
+        async def execute_stream(self, request):
+            self.requests.append(request)
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.CONTENT,
+                content="controlled output, real SQL authorization",
+                correlation_id=request.context.correlation_id,
+            )
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.COMPLETE, content="",
+                correlation_id=request.context.correlation_id,
+            )
+
+    producer = ControlledProducer()
+    monkeypatch.setattr(chat_ingress, "get_chat_runtime", lambda: producer)
+
+    app = FastAPI()
+    app.include_router(chat_ingress.router, prefix="/api")
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(16)
+    listener.setblocking(False)
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(
+        app, log_level="error", lifespan="off", access_log=False,
+    ))
+    server_task = None
+    schema_created = False
+    failures = None
+    cleanup_failure = None
+    accepted = rejected = 0
+    revoked = disabled = False
+    checked_out = None
+    report = {
+        "schema_version": 1,
+        "test": "KIS-GRAPH-01C2R-K",
+        "status": "incomplete",
+        "wire_transport": "real_loopback_tcp_http",
+        "jwt_verification": "actual",
+        "auth_session_readback": "actual_postgresql",
+        "auth_schema_preflight": "controlled_isolated_test_schema",
+        "runtime_stream": "controlled",
+        "transcript_persistence": "not_tested",
+        "accepted": 0,
+        "rejected_before_runtime": 0,
+        "revocation_committed": False,
+        "user_deactivation_committed": False,
+        "pool_connections_outstanding": None,
+        "limitations": [
+            "No real password login or refresh token lifecycle",
+            "Model inference, memory retrieval and transcript writes not exercised",
+            "No production-host or end-to-end database-to-wire revocation timing claim",
+        ],
+    }
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            schema_created = True
+            await conn.run_sync(lambda sync: Base.metadata.create_all(
+                sync, tables=[
+                    Tenant.__table__, AuthUser.__table__, AuthSession.__table__,
+                ], checkfirst=True,
+            ))
+
+        async with factory() as db:
+            async with db.begin():
+                for tenant, label in ((tenant_a, "A"), (tenant_b, "B")):
+                    db.add(Tenant(
+                        id=tenant, name=f"Wire Auth Tenant {label}",
+                        slug=f"wire-auth-{label.lower()}-{uuid4().hex}",
+                        subscription_tier="basic", settings={}, is_active=True,
+                    ))
+                for owner, tenant, label in (
+                    (owner_a, tenant_a, "a"), (owner_b, tenant_b, "b"),
+                ):
+                    db.add(AuthUser(
+                        user_id=owner, tenant_id=tenant,
+                        email=f"{label}-{uuid4().hex}@example.invalid",
+                        username=f"wire-{label}-{uuid4().hex}",
+                        full_name=f"Wire Auth {label.upper()}",
+                        password_hash="not-used-for-login",
+                        roles=["user"], preferences={}, is_verified=True,
+                        is_active=True,
+                    ))
+            async with db.begin():
+                for owner, token in (
+                    (owner_a, token_a), (owner_b, token_b),
+                    (owner_a, wrong_tenant), (owner_b, wrong_signature),
+                ):
+                    db.add(AuthSession(
+                        session_token=uuid4(), user_id=owner,
+                        access_token=token, refresh_token=f"unused-{uuid4().hex}",
+                        expires_in=3600, is_active=True,
+                    ))
+
+        server_task = asyncio.create_task(server.serve(sockets=[listener]))
+        for _ in range(200):
+            if server.started:
+                break
+            if server_task.done():
+                await server_task
+                raise AssertionError("Uvicorn exited before authenticated TCP traffic")
+            await asyncio.sleep(0.025)
+        assert server.started, "Uvicorn TCP startup failed"
+
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{port}",
+            timeout=httpx.Timeout(7.0, connect=3.0),
+            trust_env=False,
+        ) as client:
+            async def send(token, *, expected, owner=None, tenant=None):
+                nonlocal accepted, rejected
+                before = len(producer.requests)
+                headers = {"Authorization": f"Bearer {token}"} if token else {}
+                if expected == 200:
+                    headers["X-Correlation-Id"] = f"postgres-wire-{uuid4().hex[:12]}"
+                response = await client.post(
+                    "/api/chat/stream",
+                    json={"message": "durable scoped auth", "session_id": "wire-auth"},
+                    headers=headers,
+                )
+                assert response.status_code == expected
+                if expected != 200:
+                    assert len(producer.requests) == before
+                    assert "controlled output, real SQL authorization" not in response.text
+                    rejected += 1
+                    return
+
+                packets = [
+                    line.removeprefix("data: ")
+                    for line in response.text.splitlines()
+                    if line.startswith("data: ")
+                ]
+                assert packets[-1] == "[DONE]"
+                assert [json.loads(packet)["type"] for packet in packets[:-1]] == [
+                    "content", "complete",
+                ]
+                assert response.headers["content-type"].startswith("text/event-stream")
+                assert len(producer.requests) == before + 1
+                request = producer.requests[-1]
+                assert request.context.user_id == str(owner)
+                assert request.context.tenant_id == str(tenant)
+                assert request.context.roles == ["user"]
+                assert request.context.permissions == []
+                assert packets[0] and response.headers["x-correlation-id"] == (
+                    json.loads(packets[0])["correlation_id"]
+                )
+                accepted += 1
+
+            await send(token_a, expected=200, owner=owner_a, tenant=tenant_a)
+            await send(token_b, expected=200, owner=owner_b, tenant=tenant_b)
+            await send(None, expected=401)
+            await send(wrong_signature, expected=401)
+            # The mismatched JWT is signed and has a matching active session
+            # row, but the durable AuthUser tenant is different.
+            await send(wrong_tenant, expected=401)
+
+            async with factory() as db:
+                async with db.begin():
+                    row = (await db.execute(select(AuthSession).where(
+                        AuthSession.access_token == token_a,
+                    ))).scalar_one()
+                    row.is_active = False
+                    row.invalidation_reason = "ci_observed_revocation"
+                    row.invalidated_at = datetime.utcnow()
+            async with factory() as db:
+                row = (await db.execute(select(AuthSession).where(
+                    AuthSession.access_token == token_a,
+                ))).scalar_one()
+                assert not row.is_active
+            revoked = True
+            await send(token_a, expected=401)
+            # Tenant B remains authorized after tenant A's durable revocation.
+            await send(token_b, expected=200, owner=owner_b, tenant=tenant_b)
+
+            async with factory() as db:
+                async with db.begin():
+                    row = (await db.execute(select(AuthUser).where(
+                        AuthUser.user_id == owner_b,
+                    ))).scalar_one()
+                    row.is_active = False
+            async with factory() as db:
+                row = (await db.execute(select(AuthUser).where(
+                    AuthUser.user_id == owner_b,
+                ))).scalar_one()
+                assert not row.is_active
+            disabled = True
+            await send(token_b, expected=401)
+
+        assert accepted == 3
+        assert rejected == 5
+        assert len(producer.requests) == 3
+        checked_out = engine.pool.checkedout()
+        assert checked_out == 0, "Canonical auth leaked a database connection"
+        report["status"] = "complete"
+    except BaseException as exc:
+        failures = type(exc).__name__
+        raise
+    finally:
+        server.should_exit = True
+        try:
+            if server_task is not None:
+                await asyncio.wait_for(server_task, timeout=10)
+            else:
+                listener.close()
+            if schema_created:
+                async with engine.begin() as conn:
+                    await conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+            assert engine.pool.checkedout() == 0
+        except BaseException as exc:
+            cleanup_failure = type(exc).__name__
+        finally:
+            listener.close()
+            await engine.dispose()
+            report.update({
+                "accepted": accepted,
+                "rejected_before_runtime": rejected,
+                "revocation_committed": revoked,
+                "user_deactivation_committed": disabled,
+                "pool_connections_outstanding": checked_out,
+                "error_type": failures,
+                "cleanup_error_type": cleanup_failure,
+            })
+            if failures or cleanup_failure:
+                report["status"] = "incomplete"
+            destination = Path(os.getenv(
+                "KAREN_CHAT_PG_WIRE_REPORT",
+                str(tmp_path / "postgres-sse-wire-report.json"),
+            ))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        if failures is None:
+            assert cleanup_failure is None, "Isolated PostgreSQL cleanup failed"

@@ -188,7 +188,7 @@ jobs:
         env:
           KAREN_CHAT_WIRE_REPORT: build/kis-graph-01c2r-j-http-sse-wire.json
         run: |
-          pytest tests/core/runtime/test_chat_http_sse_wire_acceptance.py -q -rs \
+          pytest tests/core/runtime/test_chat_http_sse_wire_acceptance.py::test_canonical_chat_sse_over_signed_authenticated_http_socket -q -rs \
             --junitxml=build/kis-graph-01c2r-j-http-sse-wire-junit.xml
           python - <<'PY'
           import json
@@ -216,6 +216,45 @@ jobs:
           path: |
             build/kis-graph-01c2r-j-http-sse-wire.json
             build/kis-graph-01c2r-j-http-sse-wire-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: KIS-GRAPH-01C2R-K prove real PostgreSQL sessions over authenticated SSE TCP
+        env:
+          KAREN_CHAT_PG_WIRE_REPORT: build/kis-graph-01c2r-k-postgres-auth-sse.json
+        run: |
+          pytest tests/core/runtime/test_chat_http_sse_wire_acceptance.py::test_live_postgres_session_revocation_over_authenticated_sse_tcp -q -rs \
+            --junitxml=build/kis-graph-01c2r-k-postgres-auth-sse-junit.xml
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          evidence = json.loads(Path("build/kis-graph-01c2r-k-postgres-auth-sse.json").read_text())
+          assert evidence["status"] == "complete"
+          assert evidence["wire_transport"] == "real_loopback_tcp_http"
+          assert evidence["jwt_verification"] == "actual"
+          assert evidence["auth_session_readback"] == "actual_postgresql"
+          assert evidence["auth_schema_preflight"] == "controlled_isolated_test_schema"
+          assert evidence["runtime_stream"] == "controlled"
+          assert evidence["transcript_persistence"] == "not_tested"
+          assert evidence["accepted"] == 3
+          assert evidence["rejected_before_runtime"] == 5
+          assert evidence["revocation_committed"] is True
+          assert evidence["user_deactivation_committed"] is True
+          assert evidence["pool_connections_outstanding"] == 0
+          assert evidence["error_type"] is None
+          assert evidence["cleanup_error_type"] is None
+          print("Canonical AuthService PostgreSQL session and SSE TCP evidence accepted.")
+          PY
+
+      - name: Preserve sanitized PostgreSQL-backed SSE authentication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kis-graph-01c2r-k-postgres-auth-sse
+          path: |
+            build/kis-graph-01c2r-k-postgres-auth-sse.json
+            build/kis-graph-01c2r-k-postgres-auth-sse-junit.xml
           if-no-files-found: warn
           retention-days: 14
 
