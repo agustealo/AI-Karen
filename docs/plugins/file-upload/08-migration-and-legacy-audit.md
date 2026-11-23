@@ -88,3 +88,18 @@ Also run `python -m compileall src`, `ruff check src tests`, `mypy src`, full ba
 **Additional evidence:** `src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py` implements `SupabaseArtifactStore` with upload/download, owner metadata paging and bounded owner-text methods. `src/ai_karen_engine/extensions/content_intelligence_sources.py` uses kernel-governed owner text reads. These are implemented source paths, **not proof that production Supabase or processing jobs are healthy**.
 
 **Audit status remains open:** exhaustive dynamic imports, exact runtime configuration, actual storage limits, route registration, migration/RLS coverage, browser acceptance and exact-head CI are not yet established.
+
+
+## U0 follow-up: canonical storage transaction and key risks
+
+Inspected `SupabaseArtifactStore.upload()` on live `main`:
+
+1. **Orphan-object risk (confirmed code path):** object storage `_bucket().upload(storage_key, data, ...)` completes **before** the `files` PostgreSQL INSERT and commit. If database persistence fails, the broad exception handler returns failure without compensating object deletion. This is a non-atomic cross-system write. U2 requires a durable staging/finalization protocol and orphan reconciliation, not an imaginary distributed transaction.
+2. **Untrusted filename in storage key (confirmed):** `storage_key = f"{request.tenant_id}/{artifact_id}/{request.filename}"` directly interpolates the request filename. The route passes `file.filename` without visible normalization. Object-store path semantics, backend validation and traversal impact require testing; do **not** assert filesystem traversal without proof. U2 must use server-generated opaque keys and store display names only as validated metadata.
+3. **Unbounded byte materialization (confirmed):** repository uses `data = request.data or b""` and `_bucket().upload(..., data, ...)`; download also materializes storage bytes into `io.BytesIO(data)`. The new transfer contract must enforce streaming bounds for both upload and download where applicable.
+4. **Failure information exposure (requires ingress trace):** storage errors include `str(exc)` in `RepositoryResult.error`; upload API passes `result.error` into HTTP 500. Verify secret/path redaction and stable client-safe error codes.
+5. **Cross-resource binding (requires proof):** `conversation_id` and `message_id` are copied from request parameters to artifact metadata without visible conversation-ownership validation in the upload route. Add owner-scoped binding checks before associating an artifact with a conversation/message.
+
+**Priorities:** P1 orphan reconciliation and filename/key hardening; P1 bounded memory and transfer quotas; P1 authenticated cross-resource binding; P2 sanitized errors. Severity is provisional until deployment controls and exploitation conditions are established.
+
+**Do not hot-patch by replacing the canonical route with a new plugin endpoint.** First write focused failing tests against the actual `SupabaseArtifactStore` and artifact route, then implement compatible hardening and exact-head validation.
