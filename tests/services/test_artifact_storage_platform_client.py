@@ -2,8 +2,10 @@
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+import asyncio
 import hashlib
 import logging
+import time
 
 import httpx
 
@@ -143,11 +145,13 @@ class FakeSession:
     def __init__(self, row):
         self.row = row
         self.queries = []
+        self.exits = 0
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
+        self.exits += 1
         return False
 
     async def execute(self, stmt, args):
@@ -441,3 +445,101 @@ def test_signed_url_redaction_covers_short_and_encoded_tokens():
         result = redact_text(raw)
         assert f"token={token}" not in result
         assert "token=[REDACTED]" in result
+
+
+
+def test_artifact_storage_deadline_config_validation(monkeypatch):
+    from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+
+    monkeypatch.delenv("KAREN_ARTIFACT_SIGNED_RANGE_DEADLINE_SECONDS", raising=False)
+    assert ArtifactStorageConfig.from_environment().signed_range_total_timeout_seconds == 20.0
+
+    for raw in ("0", "-1", "121", "nan", "inf", "-inf", "false", "", "1e999"):
+        monkeypatch.setenv("KAREN_ARTIFACT_SIGNED_RANGE_DEADLINE_SECONDS", raw)
+        with pytest.raises(ValueError, match="Invalid artifact signed-range deadline"):
+            ArtifactStorageConfig.from_environment()
+
+    for raw in ("0.02", "1", "120"):
+        monkeypatch.setenv("KAREN_ARTIFACT_SIGNED_RANGE_DEADLINE_SECONDS", raw)
+        assert ArtifactStorageConfig.from_environment().signed_range_total_timeout_seconds == float(raw)
+
+
+@pytest.mark.asyncio
+async def test_bounded_signed_range_total_deadline_denies_slow_trickle(monkeypatch):
+    """An endpoint may trickle bytes forever without hitting idle timeouts."""
+
+    class SlowTrickle(httpx.AsyncByteStream):
+        def __init__(self):
+            self.chunks = 0
+
+        async def __aiter__(self):
+            for _ in range(len(_BODY)):
+                await asyncio.sleep(0.025)
+                self.chunks += 1
+                yield b"x"
+
+    trickle = SlowTrickle()
+
+    def responder(request):
+        return httpx.Response(
+            206,
+            stream=trickle,
+            headers={
+                "Content-Range": f"bytes 0-{len(_BODY)-1}/{len(_BODY)}",
+                "Content-Length": str(len(_BODY)),
+            },
+        )
+
+    store, bucket, session = bounded_store(
+        monkeypatch, transport=httpx.MockTransport(responder)
+    )
+    monkeypatch.setenv("KAREN_ARTIFACT_SIGNED_RANGE_DEADLINE_SECONDS", "0.05")
+    started = time.monotonic()
+    denied = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER
+    )
+    elapsed = time.monotonic() - started
+
+    assert not denied.success and denied.data is None
+    assert denied.error == "bounded_artifact_read_unavailable"
+    assert elapsed < 0.75
+    assert trickle.chunks < len(_BODY)
+    assert len(bucket.signatures) == 1
+    assert session.exits == 1
+
+
+@pytest.mark.asyncio
+async def test_bounded_signed_range_total_deadline_denies_slow_signer(monkeypatch):
+    """A slow synchronous SDK call runs in a worker but cannot hold the lock forever."""
+    store, bucket, session = bounded_store(monkeypatch)
+
+    def slow_sign(path, expiry):
+        time.sleep(0.2)
+        return {"signedURL": (
+            f"/storage/v1/object/sign/artifacts/{path}?token=private-signed-token"
+        )}
+
+    monkeypatch.setattr(bucket, "create_signed_url", slow_sign)
+    monkeypatch.setenv("KAREN_ARTIFACT_SIGNED_RANGE_DEADLINE_SECONDS", "0.05")
+    started = time.monotonic()
+    denied = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER
+    )
+    elapsed = time.monotonic() - started
+
+    assert not denied.success and denied.data is None
+    assert denied.error == "bounded_artifact_read_unavailable"
+    assert elapsed < 0.75
+    assert session.exits == 1
+
+
+@pytest.mark.asyncio
+async def test_bounded_signed_range_total_deadline_allows_fast_real_range(monkeypatch):
+    store, _, session = bounded_store(monkeypatch)
+    monkeypatch.setenv("KAREN_ARTIFACT_SIGNED_RANGE_DEADLINE_SECONDS", "1.0")
+    passed = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER
+    )
+    assert passed.success and passed.data is not None
+    assert passed.data.sha256 == hashlib.sha256(_BODY).hexdigest()
+    assert session.exits == 1
