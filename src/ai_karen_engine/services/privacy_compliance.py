@@ -31,6 +31,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_PRIVACY_PROCESSING_FAILED = "Privacy request processing failed"
+
+
+def safe_privacy_failure_message(value: object) -> Optional[str]:
+    """Use one safe reason for new failures and historical exception-bearing rows."""
+    return _PRIVACY_PROCESSING_FAILED if value else None
+
 
 class DataExportFormat(str, Enum):
     JSON = "json"
@@ -868,13 +875,13 @@ class PrivacyComplianceService:
                 request_id=request_id,
                 user_id=user_id,
                 tenant_id=tenant_id,
-                error_message=str(exc),
+                error_message=_PRIVACY_PROCESSING_FAILED,
             )
             self._audit(
                 outcome="failure",
                 request=request,
                 correlation_id=correlation_id,
-                error_message=str(exc),
+                error_message=_PRIVACY_PROCESSING_FAILED,
             )
             raise
 
@@ -942,14 +949,14 @@ class PrivacyComplianceService:
                 request_id=request.request_id,
                 user_id=user_id,
                 tenant_id=tenant_id,
-                error_message=str(exc),
+                error_message=_PRIVACY_PROCESSING_FAILED,
                 include_pending=True,
             )
             self._audit(
                 outcome="failure",
                 request=request,
                 correlation_id=correlation_id,
-                error_message=str(exc),
+                error_message=_PRIVACY_PROCESSING_FAILED,
             )
             raise
 
@@ -1096,7 +1103,7 @@ class PrivacyComplianceService:
         error_message: str,
         include_pending: bool = False,
     ) -> None:
-        safe_error = (error_message or "privacy processing failed")[:1000]
+        safe_error = safe_privacy_failure_message(error_message) or _PRIVACY_PROCESSING_FAILED
         status_predicate = (
             "status IN ('pending', 'in_progress')"
             if include_pending
@@ -1149,7 +1156,7 @@ class PrivacyComplianceService:
                 else None
             ),
             result_metadata=dict(result_metadata),
-            error_message=row.get("error_message"),
+            error_message=safe_privacy_failure_message(row.get("error_message")),
             correlation_id=row.get("correlation_id"),
         )
 
@@ -1173,14 +1180,15 @@ class PrivacyComplianceService:
                 "request_type": request.request_type,
                 "data_types": request.data_types,
                 "outcome": outcome,
-                **({"error_message": error_message[:500]} if error_message else {}),
+                **({"error_message": _PRIVACY_PROCESSING_FAILED} if error_message else {}),
             },
         }
         try:
             self.audit_logger.log_audit_event(payload)
-        except Exception:
-            logger.exception(
-                "privacy.audit.emit_failed", extra={"request_id": request.request_id}
+        except Exception as exc:
+            logger.error(
+                "privacy.audit.emit_failed",
+                extra={"request_id": request.request_id, "error_type": type(exc).__name__},
             )
 
     async def health(self) -> Dict[str, Any]:
@@ -1189,7 +1197,10 @@ class PrivacyComplianceService:
                 await session.execute(text("SELECT 1 FROM privacy_requests LIMIT 1"))
             database_ready = True
         except Exception as exc:
-            logger.warning("Privacy lifecycle database preflight failed: %s", exc)
+            logger.warning(
+                "Privacy lifecycle database preflight failed",
+                extra={"error_type": type(exc).__name__},
+            )
             database_ready = False
         return {
             "status": "healthy" if database_ready else "unavailable",
@@ -1245,5 +1256,6 @@ __all__ = [
     "DataExportFormat",
     "ErasureType",
     "PrivacyRequestStatus",
+    "safe_privacy_failure_message",
     "get_privacy_compliance_service",
 ]
