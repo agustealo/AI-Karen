@@ -160,7 +160,7 @@ class SecureAuthMiddleware:
                     exc,
                 )
         except Exception as exc:
-            logger.error("Failed to initialize auth Redis client: %s", exc)
+            logger.error("Failed to initialize auth Redis client", extra={"error_type": type(exc).__name__})
             self.redis_client = None
 
     def _get_redis_key(self, key_type: str, identifier: str) -> str:
@@ -234,7 +234,7 @@ class SecureAuthMiddleware:
             raise AuthenticationError("Token has expired") from exc
         except jwt.InvalidTokenError as exc:
             logger.debug("JWT decode failed using configured algorithm")
-            raise AuthenticationError(f"Invalid token: {exc}") from exc
+            raise AuthenticationError("Invalid token") from exc
 
     def _decode_refresh_token(self, token: str) -> Dict[str, Any]:
         try:
@@ -250,7 +250,7 @@ class SecureAuthMiddleware:
         except jwt.ExpiredSignatureError as exc:
             raise AuthenticationError("Refresh token has expired") from exc
         except jwt.InvalidTokenError as exc:
-            raise AuthenticationError(f"Invalid refresh token: {exc}") from exc
+            raise AuthenticationError("Invalid refresh token") from exc
 
     def _is_token_revoked(self, token_id: str) -> bool:
         if self.redis_client is None:
@@ -258,7 +258,7 @@ class SecureAuthMiddleware:
         try:
             return bool(self.redis_client.exists(self._get_redis_key("revoked", token_id)))
         except Exception as exc:
-            logger.warning("Failed to check token revocation: %s", exc)
+            logger.warning("Failed to check token revocation", extra={"error_type": type(exc).__name__})
             return False
 
     def _revoke_token(self, token_id: str, exp: datetime) -> bool:
@@ -269,7 +269,7 @@ class SecureAuthMiddleware:
             self.redis_client.setex(self._get_redis_key("revoked", token_id), ttl, "1")
             return True
         except Exception as exc:
-            logger.warning("Failed to revoke token: %s", exc)
+            logger.warning("Failed to revoke token", extra={"error_type": type(exc).__name__})
             return False
 
     def _check_rate_limit(self, user_id: str, action: str) -> bool:
@@ -284,7 +284,7 @@ class SecureAuthMiddleware:
                     return False
                 return True
             except Exception as exc:
-                logger.warning("Redis rate limit check failed: %s", exc)
+                logger.warning("Redis rate limit check failed", extra={"error_type": type(exc).__name__})
         now = time.time()
         attempts = self.failed_attempts.get(user_id, [])
         attempts = [
@@ -308,7 +308,7 @@ class SecureAuthMiddleware:
                 pipe.execute()
                 return
             except Exception as exc:
-                logger.warning("Redis failed attempt recording failed: %s", exc)
+                logger.warning("Redis failed attempt recording failed", extra={"error_type": type(exc).__name__})
         attempts = self.failed_attempts.setdefault(user_id, [])
         attempts.append({"timestamp": time.time(), "action": action, "reason": reason})
 
@@ -397,8 +397,8 @@ class SecureAuthMiddleware:
                 "error": exc.message,
                 "http_status": exc.status_code,
             }
-        except Exception:
-            logger.exception("auth.session_validation_failed")
+        except Exception as exc:
+            logger.error("auth.session_validation_failed", extra={"error_type": type(exc).__name__})
             return {
                 "status": TokenStatus.INVALID,
                 "error": "Session verification unavailable",
@@ -483,9 +483,11 @@ class SecureAuthMiddleware:
                 except AuthenticationError as exc:
                     if not is_public:
                         logger.warning(
-                            "Authenticated session rejected for %s: %s",
-                            path,
-                            exc.message,
+                            "Authenticated session rejected",
+                            extra={
+                                "path": path,
+                                "status_code": exc.status_code,
+                            },
                         )
                         raise
 
