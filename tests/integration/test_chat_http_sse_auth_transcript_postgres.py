@@ -14,11 +14,12 @@ import json
 import os
 import socket
 import time
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import jwt
@@ -30,8 +31,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ai_karen_engine.api_routes.chat import runtime as ingress
 from ai_karen_engine.auth import auth_middleware, auth_service
+from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
-    ChatStreamChunk, ChatStreamEventType,
+    ChatStreamChunk, ChatStreamEventType, PersonaExecutionSnapshot,
+)
+from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    PolicyEvaluationRequest, RuntimePolicyEnforcer,
 )
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
     ConversationRuntimeGateway,
@@ -190,7 +196,7 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
     monkeypatch.setattr(ingress, "get_chat_runtime", lambda: producer)
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "test": "KIS-GRAPH-01C2R-K",
         "status": "incomplete",
         "transport": "real_loopback_tcp_uvicorn_httpx",
@@ -205,12 +211,21 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
         "disconnect_finalized": False,
         "retry_committed_pair": False,
         "tenant_history_isolation": False,
+        "real_chat_runtime_executed": False,
+        "runtime_policy_issuance": "not_tested",
+        "model_worker": "controlled_in_process_async_task",
+        "model_worker_cancelled_after_http_disconnect": False,
+        "worker_cancel_observed_ms": None,
+        "runtime_completed_streams": 0,
+        "runtime_tenant_history_isolation": False,
+        "cancelled_runtime_transcript_rows": None,
         "scope_guard": "local_disposable_ai_karen_only",
         "limitations": [
             "Token generation uses a controlled provider, not live inference",
-            "Canonical ChatRuntime planning/dispatch is not executed by this fixture",
+            "K fixture bypasses ChatRuntime; KCHAT-SEC-02 executes ChatRuntime "
+            "with a controlled CORTEX decision and a real RuntimePolicy evaluation",
             "One committed retry follows a disconnected socket; it is not network POST idempotency",
-            "No actual browser, reverse proxy, remote worker or model-cancellation proof",
+            "No actual browser, reverse proxy, external model, or remote worker proof",
             "No database-to-wire atomic revocation guarantee",
             "Minimal disposable test conversation schema, not a migration rollout",
         ],
@@ -462,6 +477,250 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
             assert foreign_write.status in {"failed", "rejected"}
             report["tenant_history_isolation"] = True
 
+            # KCHAT-SEC-02: reuse this authenticated socket and durable SQL
+            # authority, but exercise the real ChatRuntime execution path and
+            # its _run_simple_stream worker task. Only CORTEX selection and
+            # model-token creation are controlled. RuntimePolicy is evaluated,
+            # issued and bound normally, with no forged model authority.
+            runtime = ChatRuntime(conversation_gateway=gateway)
+            policy = RuntimePolicyEnforcer()
+            runtime_requests = []
+            runtime_worker_armed = asyncio.Event()
+            runtime_worker_cancelled = asyncio.Event()
+            runtime_worker_block = asyncio.Event()
+            runtime_worker_calls = 0
+
+            async def controlled_cortex(request):
+                issued = await policy.evaluate(PolicyEvaluationRequest(
+                    user_id=request.context.user_id,
+                    tenant_id=request.context.tenant_id,
+                    session_id=request.context.session_id,
+                    correlation_id=request.context.correlation_id,
+                    roles=list(request.context.roles),
+                    permissions=list(request.context.permissions),
+                    action="general_assist",
+                    max_model_calls=1,
+                ))
+                assert issued.allowed
+                policy.bind_chat_model_policy(
+                    context=request.context, decision=issued,
+                )
+                return ExecutionDecision(
+                    intent="general_assist",
+                    policy_decision_id=issued.decision_id,
+                    policy_version=issued.policy_version,
+                    max_model_calls=1,
+                    memory_recall_required=False,
+                    memory_write_allowed=False,
+                )
+
+            async def frozen_persona(request):
+                snapshot = PersonaExecutionSnapshot(
+                    user_id=request.context.user_id,
+                    tenant_id=request.context.tenant_id,
+                    status="none",
+                )
+                request.persona_snapshot = snapshot
+                return snapshot
+
+            async def controlled_model_worker(
+                request, decision, plan, meter, memory_recall_meta=None,
+                *, token_sink, reasoning_preflight=None,
+            ):
+                nonlocal runtime_worker_calls
+                runtime_worker_calls += 1
+                runtime_requests.append((request, plan))
+                assert plan.matches_execution_scope(
+                    user_id=request.context.user_id,
+                    tenant_id=request.context.tenant_id,
+                    session_id=request.context.session_id,
+                    policy_decision_id=decision.policy_decision_id,
+                )
+                assert request.context.original_runtime_model_plan(meter) is plan
+                should_block = request.messages[-1]["content"] == "runtime-cancel-probe"
+                if should_block:
+                    runtime_worker_armed.set()
+                await token_sink("runtime-model-delta")
+                if should_block:
+                    try:
+                        await runtime_worker_block.wait()
+                    finally:
+                        runtime_worker_cancelled.set()
+                return "runtime-model-delta", {
+                    "actual_provider": "controlled-test-provider",
+                    "actual_model": "controlled-test-model",
+                    "runtime_engine": "controlled_in_process",
+                    "response_source": "controlled_model_fixture",
+                    "fallback_level": 0,
+                    "execution_spans": [],
+                }
+
+            with ExitStack() as hooks:
+                hooks.enter_context(patch.object(
+                    runtime, "_resolve_gate", new_callable=AsyncMock,
+                    return_value=None,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_freeze_persona_snapshot",
+                    new_callable=AsyncMock, side_effect=frozen_persona,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_decide", new_callable=AsyncMock,
+                    side_effect=controlled_cortex,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_resolve_human_approval_gate",
+                    new_callable=AsyncMock, return_value=None,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_record_learning_decision",
+                    new_callable=AsyncMock, return_value=None,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_record_trajectory_completion",
+                    new_callable=AsyncMock,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_record_execution_outcome",
+                    new_callable=AsyncMock,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_grounded_personal_response",
+                    return_value=None,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_is_explicit_save_turn", return_value=False,
+                ))
+                hooks.enter_context(patch.object(
+                    runtime, "_run_simple",
+                    new_callable=AsyncMock, side_effect=controlled_model_worker,
+                ))
+                direct = hooks.enter_context(patch(
+                    "ai_karen_engine.core.runtime.chat_runtime."
+                    "get_direct_capability_executor",
+                ))
+                direct.return_value.can_handle.return_value = False
+
+                with monkeypatch.context() as active_runtime:
+                    active_runtime.setattr(
+                        ingress, "get_chat_runtime", lambda: runtime,
+                    )
+
+                    # Closing the real TCP response must stop the actual
+                    # in-process runtime worker, not just the SSE wrapper.
+                    cancelled_conversation = str(uuid4())
+                    abort_started = time.perf_counter()
+                    async with client.stream(
+                        "POST", "/api/chat/stream",
+                        headers=headers(bearer_a),
+                        json={
+                            "message": "runtime-cancel-probe",
+                            "session_id": "postgres-wire-session",
+                            "conversation_id": cancelled_conversation,
+                        },
+                    ) as response:
+                        assert response.status_code == 200
+                        content_received = False
+                        async for line in response.aiter_lines():
+                            if not line.startswith("data: ") or line == "data: [DONE]":
+                                continue
+                            event = json.loads(line[6:])
+                            if event["type"] == "content":
+                                assert event["content"] == "runtime-model-delta"
+                                content_received = True
+                                break
+                        assert content_received
+                    await asyncio.wait_for(runtime_worker_armed.wait(), timeout=7)
+                    await asyncio.wait_for(runtime_worker_cancelled.wait(), timeout=7)
+                    report["worker_cancel_observed_ms"] = round(
+                        (time.perf_counter() - abort_started) * 1000, 3,
+                    )
+                    report["model_worker_cancelled_after_http_disconnect"] = True
+                    assert runtime_worker_calls == 1
+
+                    async with sessions() as session:
+                        cancelled_rows = (await session.execute(text(
+                            "SELECT COUNT(*) FROM messages "
+                            "WHERE conversation_id = :id",
+                        ), {"id": UUID(cancelled_conversation)})).scalar_one()
+                    assert cancelled_rows == 0
+                    report["cancelled_runtime_transcript_rows"] = cancelled_rows
+
+                    async def complete_runtime(token, message):
+                        conversation = str(uuid4())
+                        frames = []
+                        async with client.stream(
+                            "POST", "/api/chat/stream",
+                            headers=headers(token),
+                            json={
+                                "message": message,
+                                "session_id": "postgres-wire-session",
+                                "conversation_id": conversation,
+                            },
+                        ) as response:
+                            assert response.status_code == 200
+                            async for line in response.aiter_lines():
+                                if line.startswith("data: "):
+                                    payload = line[6:]
+                                    frames.append(
+                                        "[DONE]" if payload == "[DONE]"
+                                        else json.loads(payload)
+                                    )
+                        types = [
+                            item["type"] if isinstance(item, dict) else item
+                            for item in frames
+                        ]
+                        assert types[0] == "status"
+                        assert types.count("content") == 1
+                        assert types.count("complete") == 1
+                        assert "error" not in types
+                        assert types[-2:] == ["complete", "[DONE]"]
+                        completed = frames[-2]["metadata"]
+                        assert completed["transcript_persistence_status"] == "persisted"
+                        assert completed["response_source"] == "controlled_model_fixture"
+                        assert completed["actual_provider"] == "controlled-test-provider"
+                        assert completed["actual_model"] == "controlled-test-model"
+                        assert isinstance(completed["latency_ms"], (int, float))
+                        assert completed["latency_ms"] >= 0
+                        ids_to_clean.append(conversation)
+                        report["runtime_completed_streams"] += 1
+                        return conversation, runtime_requests[-1][0]
+
+                    runtime_a_id, runtime_a_req = await complete_runtime(
+                        bearer_a, "runtime-tenant-a-success",
+                    )
+                    runtime_b_id, runtime_b_req = await complete_runtime(
+                        bearer_b, "runtime-tenant-b-success",
+                    )
+                    assert runtime_worker_calls == 3
+                    assert runtime_a_req.context.user_id == str(user_a)
+                    assert runtime_a_req.context.tenant_id == str(tenant_a)
+                    assert runtime_b_req.context.user_id == str(user_b)
+                    assert runtime_b_req.context.tenant_id == str(tenant_b)
+                    assert runtime_a_req.context.roles == ["user"]
+                    assert runtime_a_req.context.permissions == []
+
+                    runtime_a_snapshot = await gateway.get_owned_snapshot(
+                        runtime_a_req.context,
+                    )
+                    runtime_b_snapshot = await gateway.get_owned_snapshot(
+                        runtime_b_req.context,
+                    )
+                    assert [row.content for row in runtime_a_snapshot.messages] == [
+                        "runtime-tenant-a-success", "runtime-model-delta",
+                    ]
+                    assert [row.content for row in runtime_b_snapshot.messages] == [
+                        "runtime-tenant-b-success", "runtime-model-delta",
+                    ]
+                    foreign_runtime_context = replace(
+                        runtime_b_req.context, conversation_id=runtime_a_id,
+                    )
+                    with pytest.raises(RuntimeError, match="conversation_not_found"):
+                        await gateway.get_owned_snapshot(foreign_runtime_context)
+                    report["runtime_tenant_history_isolation"] = True
+                    report["runtime_policy_issuance"] = "real_runtime_policy"
+                    report["real_chat_runtime_executed"] = True
+
             # Canonical same-request replay is idempotent at the repository.
             # This is NOT a claim of HTTP network POST idempotency.
             duplicate = await gateway.persist_completed_turn(
@@ -508,7 +767,11 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
                 "b": UUID(receipt_b.conversation_id),
             })).scalar_one()
             assert count == 4
-            report["durable_message_rows"] = count
+            total_count = (await session.execute(text(
+                "SELECT COUNT(*) FROM messages",
+            ))).scalar_one()
+            assert total_count == 8
+            report["durable_message_rows"] = total_count
         assert engine.pool.checkedout() == 0
         report["status"] = "complete"
     except BaseException as exc:
