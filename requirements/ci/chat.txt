@@ -3,3 +3,4 @@
 langchain-core
 croniter
 psutil
+uvicorn==0.35.0
