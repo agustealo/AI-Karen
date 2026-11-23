@@ -81,7 +81,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
-                tenant_id text NOT NULL,
+                tenant_id uuid NOT NULL,
                 owner_user_id uuid NOT NULL,
                 name text NOT NULL,
                 mime_type text NOT NULL,
