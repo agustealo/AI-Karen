@@ -238,6 +238,38 @@ jobs:
           path: memory-auth-load-report.json
           if-no-files-found: warn
           retention-days: 14
+      - name: KIS-GRAPH-01C2R-F measure live PostgreSQL memory streaming
+        env:
+          KAREN_TEST_DISPOSABLE_DATABASE: "1"
+          KAREN_MEMORY_STREAM_SAMPLES: "6"
+          KAREN_MEMORY_STREAM_REPORT: memory-stream-acceptance.json
+        run: |
+          pytest tests/core/runtime/test_chat_runtime_stream_contract.py \
+            -k kis_graph_01c2r_f_live_postgres_stream_acceptance -q -rs \
+            --junitxml=memory-stream-acceptance-junit.xml
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("memory-stream-acceptance.json").read_text())
+          assert report["status"] == "complete", "Streaming acceptance incomplete"
+          assert report["modes"]["memory_enabled"]["complete"] == 6
+          assert report["modes"]["memory_free"]["complete"] == 6
+          assert report["cancellation"]["status"] == "cancelled"
+          assert report["revocation"]["status"] == "publication_denied"
+          print("Real PostgreSQL streaming evidence validated.")
+          PY
+      - name: Preserve KIS-GRAPH-01C2R-F sanitized streaming evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kis-graph-01c2r-f-live-postgres-stream
+          path: |
+            memory-stream-acceptance.json
+            memory-stream-acceptance-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: KCR-04A observe canonical durable SQL and NeuroRecall against PostgreSQL
         env:
           KCR04A_REPORT_PATH: kcr04a-live-retrieval-report.json
