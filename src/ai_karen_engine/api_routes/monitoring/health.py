@@ -8,7 +8,7 @@ correlation-aware logging, and circuit breaker support.
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from ai_karen_engine.utils.dependency_checks import import_fastapi
 from ai_karen_engine.core.runtime.resilience.connection_health_manager import (
