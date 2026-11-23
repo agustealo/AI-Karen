@@ -29,6 +29,8 @@
         "admin:system",
         "admin:write",
         "audit:read",
+        "card_studio:read",
+        "card_studio:write",
         "channel.activate",
         "channel.deactivate",
         "channel.inspect",
@@ -61,6 +63,8 @@
     "user": {
       "description": "Standard user access",
       "permissions": [
+        "card_studio:read",
+        "card_studio:write",
         "channel.consent",
         "channel.link",
         "chat:use",

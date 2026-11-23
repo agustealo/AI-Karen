@@ -87,6 +87,10 @@ class Permission(str, Enum):
     DATA_DELETE = "data:delete"
     DATA_EXPORT = "data:export"
 
+    # Card Studio inert, owner-scoped declarative templates.
+    CARD_STUDIO_READ = "card_studio:read"
+    CARD_STUDIO_WRITE = "card_studio:write"
+
     # Personal planner commitments (distinct from agent automations)
     PLANNER_READ = "planner:read"
     PLANNER_WRITE = "planner:write"
@@ -235,6 +239,8 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
                 Permission.DATA_READ.value,
                 Permission.PLANNER_READ.value,
                 Permission.PLANNER_WRITE.value,
+                Permission.CARD_STUDIO_READ.value,
+                Permission.CARD_STUDIO_WRITE.value,
                 Permission.TIMER_READ.value,
                 Permission.TIMER_WRITE.value,
             ],
