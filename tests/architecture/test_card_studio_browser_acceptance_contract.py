@@ -30,12 +30,18 @@ def test_card_studio_reuses_protected_browser_workflow() -> None:
     assert "card-studio-live-acceptance.spec.ts" in workflow
     assert "--project=chromium --reporter=list --retries=0" in workflow
     assert 'KAREN_CARD_STUDIO_SANITIZED_CAPTURE: "false"' in workflow
+    # Card Studio uses the existing protected settings job. The shared fixture
+    # must run before real credentials are typed into a Vercel preview.
+    assert 'KAREN_SETTINGS_VERIFIED_DEPLOYMENT: "true"' in workflow
+    assert 'VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}' in workflow
 
 
 def test_card_studio_browser_spec_does_not_forge_authenticated_responses() -> None:
     spec = (THEME / "e2e/card-studio-live-acceptance.spec.ts").read_text(
         encoding="utf-8"
     )
+    assert 'import { expect, test } from "./fixtures/verified-search-deployment";' in spec
+    assert 'import { expect, test, type Page' not in spec
     assert "signInApprovedKaren" in spec
     assert "page.route(" in spec
     assert "route.fetch({ maxRetries: 0 })" in spec
@@ -70,3 +76,27 @@ def test_card_studio_protects_credential_bearing_playwright_evidence() -> None:
     assert "KARI_ENABLE_CARD_STUDIO_CRUD=true" in doc
     assert "default remains" in doc
     assert "operator" in doc
+
+
+def test_card_studio_uses_existing_scoped_protection_cookie_before_login() -> None:
+    """A direct Playwright import would strand preview acceptance at Vercel SSO."""
+    fixture = (THEME / "e2e/fixtures/verified-search-deployment.ts").read_text(
+        encoding="utf-8"
+    )
+    spec = (THEME / "e2e/card-studio-live-acceptance.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    assert 'import { expect, test } from "./fixtures/verified-search-deployment";' in spec
+    assert "export const test = base.extend<" in fixture
+    assert "approvedDeploymentAccess:" in fixture
+    assert "KAREN_SETTINGS_VERIFIED_DEPLOYMENT" in fixture
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET" in fixture
+    assert "context.request.get(approved.origin," in fixture
+    assert "'x-vercel-protection-bypass': bypassSecret" in fixture
+    assert "'x-vercel-set-bypass-cookie': 'true'" in fixture
+    assert "cookie.name === '_vercel_jwt'" in fixture
+    assert "cookie.domain.replace(/^\\./, '') === approved.hostname" in fixture
+    assert "if (response.status() >= 400 || !sessionEstablished)" in fixture
+    assert "await use();" in fixture
+    assert "route.fulfill(" not in fixture
+    assert "page.addInitScript(" not in fixture

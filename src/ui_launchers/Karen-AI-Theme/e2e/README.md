@@ -594,3 +594,24 @@ screenshots. These are never automatically uploaded by the protected
 workflow. A green code/CI gate **does not** mean an authenticated real-host
 browser trial has been executed. Observe the dispatched job and its receipt
 before claiming consumer-browser certification.
+
+
+### KGUI-CARD-STUDIO-01G: protected Vercel browser session
+
+Card Studio MUST import Playwright `test` and `expect` from the existing
+`e2e/fixtures/verified-search-deployment.ts` rather than directly from
+`@playwright/test`. The protected workflow already sets
+`KAREN_SETTINGS_VERIFIED_DEPLOYMENT=true` for this scenario, and the
+shared fixture uses that flag to establish a first-party `_vercel_jwt`
+cookie before typing the sanctioned sanitized login credentials.
+
+The bypass secret is sent **once** via the existing `context.request`
+to the independently verified immutable Vercel origin with redirect
+checks. It is not added to page headers, external requests, recordings
+or saved state. The fixture rejects a missing or improperly scoped cookie.
+Locally approved disposable loopback runs omit that protected Vercel step.
+
+This fixes a false-negative release-gate path: a valid preview could
+previously show Vercel deployment protection instead of Karen's login
+page. It does NOT authorize preview deployment, feature activation or
+database mutation and does NOT itself certify real-host browser acceptance.

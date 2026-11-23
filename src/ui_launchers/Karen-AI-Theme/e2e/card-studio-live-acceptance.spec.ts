@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { expect, test, type Page, type Request, type TestInfo } from "@playwright/test";
+import type { Page, Request, TestInfo } from "@playwright/test";
+import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 
 /**
