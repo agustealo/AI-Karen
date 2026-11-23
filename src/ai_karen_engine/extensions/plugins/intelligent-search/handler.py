@@ -205,6 +205,9 @@ class WebSearchDispatcher(ExtensionBase):
                         query,
                         config_override={
                             **prepared,
+                            # UI crawl limits are untrusted request options, not
+                            # execution identity or provider authorization.
+                            **({"crawl": safe_params["crawl"]} if isinstance(safe_params.get("crawl"), dict) else {}),
                             "mode": mode,
                             "requested_mode": mode,
                         },

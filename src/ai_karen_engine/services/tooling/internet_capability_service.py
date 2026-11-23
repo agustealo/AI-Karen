@@ -29,7 +29,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urldefrag, urljoin, urlparse
 
 from prometheus_client import Counter, Histogram
 
@@ -116,6 +116,8 @@ class InternetSearchRequest:
     crawl_enabled: bool = False
     crawl_max_pages: Optional[int] = None
     crawl_max_depth: Optional[int] = None
+    crawl_allowed_domains: Optional[List[str]] = None
+    crawl_blocked_domains: Optional[List[str]] = None
     sources: Optional[List[str]] = None
     content_limits: Optional[Dict[str, Any]] = None
     extraction: Optional[Dict[str, Any]] = None
@@ -153,6 +155,19 @@ class InternetSearchRequest:
         search_profile = nested_policy("search_profile")
         domain_policy = nested_policy("domain_policy")
         time_policy = nested_policy("time_policy")
+        crawl_policy = nested_policy("crawl")
+        crawl_enabled = bool(crawl_policy.get("enabled", safe_payload.get("crawl_enabled", False)))
+        raw_pages = crawl_policy.get("max_pages", safe_payload.get("crawl_max_pages"))
+        raw_depth = crawl_policy.get("max_depth", safe_payload.get("crawl_max_depth"))
+        # The authorized external-request budget remains the final limit.
+        crawl_pages = max(1, min(int(raw_pages), 25)) if raw_pages is not None else None
+        crawl_depth = max(0, min(int(raw_depth), 5)) if raw_depth is not None else (
+            1 if crawl_enabled else 0
+        )
+        cache_enabled = crawl_policy.get("use_cache")
+        bypass_cache = (not cache_enabled) if isinstance(cache_enabled, bool) else bool(
+            safe_payload.get("bypass_cache", False)
+        )
 
         def policy_option(key: str, policy: Mapping[str, Any]) -> Any:
             return safe_payload.get(key, policy.get(key))
@@ -173,12 +188,14 @@ class InternetSearchRequest:
             time_range=policy_option("time_range", time_policy),
             published_after=policy_option("published_after", time_policy),
             published_before=policy_option("published_before", time_policy),
-            bypass_cache=bool(safe_payload.get("bypass_cache", False)),
+            bypass_cache=bypass_cache,
             timeout_seconds=timeout_seconds,
             crawl_concurrency=crawl_concurrency,
-            crawl_enabled=bool(safe_payload.get("crawl", {}).get("enabled", False) if isinstance(safe_payload.get("crawl"), dict) else safe_payload.get("crawl_enabled", False)),
-            crawl_max_pages=safe_payload.get("crawl", {}).get("max_pages") if isinstance(safe_payload.get("crawl"), dict) else safe_payload.get("crawl_max_pages"),
-            crawl_max_depth=safe_payload.get("crawl", {}).get("max_depth") if isinstance(safe_payload.get("crawl"), dict) else safe_payload.get("crawl_max_depth"),
+            crawl_enabled=crawl_enabled,
+            crawl_max_pages=crawl_pages,
+            crawl_max_depth=crawl_depth,
+            crawl_allowed_domains=_normalize_domain_list(crawl_policy.get("include_domains")),
+            crawl_blocked_domains=_normalize_domain_list(crawl_policy.get("exclude_domains")),
             sources=safe_payload.get("sources"),
             content_limits=safe_payload.get("content_limits"),
             extraction=safe_payload.get("extraction"),
@@ -331,6 +348,8 @@ class InternetCapabilityService:
         processed_chunks: List[Dict[str, Any]] = []
         search_providers: List[str] = []
         discovered_sources: List[Dict[str, Any]] = []
+        crawl_attempts: List[str] = []
+        crawl_elapsed_ms = 0
 
         logger.info(
             "internet_capability.started",
@@ -440,12 +459,27 @@ class InternetCapabilityService:
                     execution_context=execution_context,
                     search_providers=search_providers,
                 discovered_sources=discovered_sources,
+                crawl_attempts=crawl_attempts,
+                crawl_elapsed_ms=crawl_elapsed_ms,
                 )
 
-            crawl_results = await asyncio.wait_for(
-                self._crawl_many(urls, request),
-                timeout=effective_timeout,
-            )
+            crawl_started = time.perf_counter()
+            try:
+                crawl_results = await asyncio.wait_for(
+                    self._crawl_many(
+                        urls, request, page_budget=effective_max_urls,
+                        attempt_sink=crawl_attempts,
+                    ),
+                    timeout=effective_timeout,
+                )
+            finally:
+                crawl_elapsed_ms = int((time.perf_counter() - crawl_started) * 1000)
+
+            if len(crawl_attempts) > len(crawl_results):
+                degraded = True
+                warnings.append(
+                    f"{len(crawl_attempts) - len(crawl_results)} crawl attempts did not return usable pages."
+                )
 
             if not crawl_results:
                 degraded = True
@@ -478,6 +512,8 @@ class InternetCapabilityService:
                 execution_context=execution_context,
                 search_providers=search_providers,
                 discovered_sources=discovered_sources,
+                crawl_attempts=crawl_attempts,
+                crawl_elapsed_ms=crawl_elapsed_ms,
             )
 
         except asyncio.TimeoutError:
@@ -508,6 +544,8 @@ class InternetCapabilityService:
                 execution_context=execution_context,
                 search_providers=search_providers,
                 discovered_sources=discovered_sources,
+                crawl_attempts=crawl_attempts,
+                crawl_elapsed_ms=crawl_elapsed_ms,
             )
 
         except PermissionError as exc:
@@ -536,6 +574,8 @@ class InternetCapabilityService:
                 execution_context=execution_context,
                 search_providers=search_providers,
                 discovered_sources=discovered_sources,
+                crawl_attempts=crawl_attempts,
+                crawl_elapsed_ms=crawl_elapsed_ms,
                 status="permission_denied",
             )
 
@@ -566,6 +606,8 @@ class InternetCapabilityService:
                 execution_context=execution_context,
                 search_providers=search_providers,
                 discovered_sources=discovered_sources,
+                crawl_attempts=crawl_attempts,
+                crawl_elapsed_ms=crawl_elapsed_ms,
                 status="error",
             )
 
@@ -665,63 +707,119 @@ class InternetCapabilityService:
         self,
         urls: Sequence[str],
         request: InternetSearchRequest,
+        *,
+        page_budget: Optional[int] = None,
+        attempt_sink: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Crawl URLs using the configured crawler.
+        """Bounded same-site traversal using the canonical Crawl4AI acquisition path.
 
-        Uses crawler.fetch_many when available. Falls back to bounded single-URL
-        fetches for crawler implementations that only expose fetch_url.
+        Normal search fetches every authorized seed as before. Explicit deep
+        crawl reserves some capacity for links. Every URL is still revalidated
+        by Crawl4AI against its network, redirect, and robots protections.
         """
-
         if not urls:
             return []
 
-        seen_canonical: set = set()
-        unique_urls: List[str] = []
-        for url in urls:
-            canonical = self._normalize_url(url)
-            if not canonical or canonical in seen_canonical:
-                continue
-            seen_canonical.add(canonical)
-            unique_urls.append(url)
+        limit = max(1, min(page_budget or 25, 25))
+        if request.crawl_enabled:
+            limit = min(limit, request.crawl_max_pages or 5)
+        max_depth = (request.crawl_max_depth or 0) if request.crawl_enabled else 0
+        search_policy = request.strategy_overrides()
+        crawl_policy = {
+            "allowed_domains": request.crawl_allowed_domains,
+            "blocked_domains": request.crawl_blocked_domains,
+        }
 
-        extraction_strategy = None
-        if request.extraction and hasattr(self.crawler, "_build_extraction_strategy"):
-            extraction_strategy = self.crawler._build_extraction_strategy(request.extraction)
-
-        current_depth = 0
-        max_depth = request.crawl_max_depth or 0
-
-        # Optimization: use fetch_many if available and no specialized extraction requested
-        if not extraction_strategy and hasattr(self.crawler, "fetch_many"):
-            results = await self.crawler.fetch_many(
-                list(unique_urls),
-                bypass_cache=request.bypass_cache,
-                depth=current_depth,
+        def allowed(url: str) -> bool:
+            return self._is_url_allowed(url, search_policy) and (
+                not request.crawl_enabled or self._is_url_allowed(url, crawl_policy)
             )
-            return self._normalize_crawl_results(results)
 
-        semaphore = asyncio.Semaphore(request.crawl_concurrency)
+        seeds = list(dict.fromkeys(
+            canonical for url in urls
+            if (canonical := self._normalize_url(url)) and allowed(canonical)
+        ))
+        if not seeds:
+            return []
 
-        async def fetch_one(url: str) -> Optional[Dict[str, Any]]:
-            async with semaphore:
-                try:
-                    result = await self.crawler.fetch_url(
-                        url,
-                        bypass_cache=request.bypass_cache,
-                        extraction_strategy=extraction_strategy,
-                    )
-                    if isinstance(result, dict):
-                        return result
-                except Exception as exc:
-                    logger.warning(
-                        "internet_capability.crawl_url_failed",
-                        extra={"url": url, "error": str(exc)},
-                    )
-                return None
+        seed_limit = min(len(seeds), (limit + 1) // 2) if max_depth else limit
+        pending = seeds[:seed_limit]
+        seen = set(pending)
+        seed_hosts = {(urlparse(url).hostname or "").lower() for url in pending}
+        succeeded: List[Dict[str, Any]] = []
+        attempts = 0
+        extraction_strategy = (
+            self.crawler._build_extraction_strategy(request.extraction)
+            if request.extraction and hasattr(self.crawler, "_build_extraction_strategy")
+            else None
+        )
 
-        fetched = await asyncio.gather(*(fetch_one(url) for url in unique_urls))
-        return [item for item in fetched if item]
+        for depth in range(max_depth + 1):
+            batch = pending[:limit - attempts]
+            if not batch:
+                break
+            attempts += len(batch)
+            if attempt_sink is not None:
+                attempt_sink.extend(batch)
+
+            if not extraction_strategy and hasattr(self.crawler, "fetch_many"):
+                fetched = await self.crawler.fetch_many(
+                    batch, bypass_cache=request.bypass_cache, depth=depth,
+                )
+            else:
+                semaphore = asyncio.Semaphore(request.crawl_concurrency)
+
+                async def fetch_one(url: str) -> Any:
+                    async with semaphore:
+                        try:
+                            return await self.crawler.fetch_url(
+                                url,
+                                bypass_cache=request.bypass_cache,
+                                extraction_strategy=extraction_strategy,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "internet_capability.crawl_url_failed",
+                                extra={"url": url, "error_type": type(exc).__name__},
+                            )
+                            return None
+
+                fetched = await asyncio.gather(*(fetch_one(url) for url in batch))
+
+            successful = self._normalize_crawl_results(fetched)
+            for page in successful:
+                page["depth"] = depth
+            succeeded.extend(successful)
+
+            if depth >= max_depth or attempts >= limit:
+                break
+
+            pending = []
+            for page in successful:
+                links = page.get("links") or []
+                if not isinstance(links, list):
+                    continue
+                for link in links[:100]:
+                    if not isinstance(link, dict):
+                        continue
+                    href = link.get("url") or link.get("href")
+                    if not isinstance(href, str):
+                        continue
+                    absolute = self._normalize_url(urldefrag(urljoin(
+                        str(page.get("final_url") or page.get("url") or ""), href
+                    )).url)
+                    if not absolute or absolute in seen or not allowed(absolute):
+                        continue
+                    parsed = urlparse(absolute)
+                    if parsed.username or (parsed.hostname or "").lower() not in seed_hosts:
+                        continue
+                    seen.add(absolute)
+                    pending.append(absolute)
+                    if len(pending) + attempts >= limit:
+                        break
+                if len(pending) + attempts >= limit:
+                    break
+        return succeeded
 
     def _build_response(
         self,
@@ -740,6 +838,8 @@ class InternetCapabilityService:
         search_providers: Sequence[str] = (),
         discovered_sources: Sequence[Dict[str, Any]] = (),
         status: str = "ok",
+        crawl_attempts: Sequence[str] = (),
+        crawl_elapsed_ms: int = 0,
     ) -> Dict[str, Any]:
         execution_time_ms = int((time.perf_counter() - start_time) * 1000)
 
@@ -832,6 +932,20 @@ class InternetCapabilityService:
                 degraded=degraded,
             ),
             "diagnostics": diagnostics,
+            "crawl": {
+                "enabled": bool(crawl_attempts) or request.crawl_enabled,
+                "engine": "crawl4ai" if getattr(self.crawler, "available", False) else "unavailable",
+                "status": "degraded" if degraded else "ok",
+                "pages_requested": len(crawl_attempts),
+                "pages_succeeded": len(crawl_results),
+                "pages_failed": max(0, len(crawl_attempts) - len(crawl_results)),
+                "latency_ms": crawl_elapsed_ms,
+                "capabilities": {
+                    "deep_traversal": any(page.get("depth", 0) > 0 for page in crawl_results),
+                },
+                "degraded": degraded,
+                "degradation_reason": "; ".join(warnings[:2]) if degraded else None,
+            },
             "metadata": {
                 "execution_time_ms": execution_time_ms,
                 "urls_found": len(urls),
