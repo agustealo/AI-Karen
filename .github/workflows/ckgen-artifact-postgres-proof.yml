@@ -96,6 +96,7 @@ jobs:
           ARCHIVE = Path("supabase/migrations/20261121010000_66_artifact_archive_state.sql")
           UPLOAD_LEDGER = Path("supabase/migrations/20261123010000_67_artifact_upload_sessions.sql")
           UPLOAD_TENANT_UUID = Path("supabase/migrations/20261123020000_68_artifact_upload_tenant_uuid.sql")
+          UPLOAD_UNIQUE_BINDING = Path("supabase/migrations/20261123030000_69_artifact_upload_unique_binding.sql")
           DB_NAME = "karen_code_artifact_test"
           ROOT_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
           DB_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/" + DB_NAME
@@ -170,6 +171,7 @@ jobs:
                   await db.execute(ARCHIVE.read_text(encoding="utf-8"))
                   await db.execute(UPLOAD_LEDGER.read_text(encoding="utf-8"))
                   await db.execute(UPLOAD_TENANT_UUID.read_text(encoding="utf-8"))
+                  await db.execute(UPLOAD_UNIQUE_BINDING.read_text(encoding="utf-8"))
                   security = Path(
                       "supabase/migrations/20260827040000_04_tenant_security.sql"
                   ).read_text(encoding="utf-8")
