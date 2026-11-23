@@ -303,3 +303,148 @@ async def test_composed_surface_and_receipt_survive_canonical_repository_roundtr
     assert restored["structured_content"]["presentation"] == surface
     assert validate_presentation(restored["structured_content"]["presentation"]) == surface
     assert session.executions[1][1]["tenant_id"] == message.tenant_id
+
+
+
+class _SecretBearingStatementFailure:
+    """SQLAlchemy includes the SQL and bound inputs in exception text."""
+
+    marker = "SECRET_BOUND_VALUE_DO_NOT_LOG"
+
+    def __init__(self) -> None:
+        from sqlalchemy.exc import StatementError
+
+        self.exception = StatementError(
+            "private database failure",
+            "SELECT :private_input",
+            {"private_input": self.marker},
+            RuntimeError("private driver detail"),
+        )
+        assert self.marker in str(self.exception)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    def begin(self):
+        return self
+
+    async def execute(self, *_args, **_kwargs):
+        raise self.exception
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    (
+        "health_check", "create_conversation", "get_conversation",
+        "get_conversation_by_session", "list_conversations",
+        "count_conversations", "update_conversation", "delete_conversation",
+        "add_message", "get_messages", "update_message", "delete_message",
+        "add_completed_turn",
+    ),
+)
+async def test_repository_sql_error_does_not_leak_bound_values(
+    caplog: pytest.LogCaptureFixture, operation: str,
+) -> None:
+    """All repository failure paths redact SQL, parameters, and source text."""
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        Conversation, ConversationQuery,
+    )
+
+    broken = _SecretBearingStatementFailure()
+    repository = _repository(broken)
+    conversation = Conversation(
+        id="22222222-2222-2222-2222-222222222222",
+        tenant_id="tenant-secret", user_id="owner-secret", title=broken.marker,
+    )
+    assistant = Message(
+        id="11111111-1111-1111-1111-111111111111",
+        conversation_id=conversation.id, tenant_id=conversation.tenant_id,
+        role="assistant", content=broken.marker,
+        metadata={"authorized_user_id": conversation.user_id},
+    )
+    user = Message(
+        id="33333333-3333-3333-3333-333333333333",
+        conversation_id=conversation.id, tenant_id=conversation.tenant_id,
+        role="user", content=broken.marker,
+        metadata={"authorized_user_id": conversation.user_id},
+    )
+    calls = {
+        "health_check": lambda: repository.health_check(),
+        "create_conversation": lambda: repository.create_conversation(conversation),
+        "get_conversation": lambda: repository.get_conversation(
+            conversation.id, conversation.tenant_id,
+        ),
+        "get_conversation_by_session": lambda: repository.get_conversation_by_session(
+            "session-secret", conversation.tenant_id, conversation.user_id,
+        ),
+        "list_conversations": lambda: repository.list_conversations(
+            ConversationQuery(tenant_id=conversation.tenant_id),
+        ),
+        "count_conversations": lambda: repository.count_conversations(
+            ConversationQuery(tenant_id=conversation.tenant_id),
+        ),
+        "update_conversation": lambda: repository.update_conversation(conversation),
+        "delete_conversation": lambda: repository.delete_conversation(
+            conversation.id, conversation.tenant_id, user_id=conversation.user_id,
+        ),
+        "add_message": lambda: repository.add_message(assistant),
+        "get_messages": lambda: repository.get_messages(
+            conversation.id, conversation.tenant_id,
+        ),
+        "update_message": lambda: repository.update_message(assistant),
+        "delete_message": lambda: repository.delete_message(
+            assistant.id, conversation.tenant_id,
+        ),
+        "add_completed_turn": lambda: repository.add_completed_turn(user, assistant),
+    }
+    with caplog.at_level(
+        "ERROR",
+        logger="ai_karen_engine.services.database.repositories.postgres_conversation_repository",
+    ):
+        result = await calls[operation]()
+
+    assert result.success is False
+    assert result.error == (
+        "completed_turn_write_failed"
+        if operation == "add_completed_turn" else "conversation_storage_unavailable"
+    )
+    assert result.metadata["failure_class"] == "database_failure_unclassified"
+    assert broken.marker not in caplog.text
+    assert broken.marker not in repr(result)
+    assert "SELECT :private_input" not in caplog.text
+    assert "private driver detail" not in caplog.text
+    records = [
+        record for record in caplog.records
+        if record.name
+        == "ai_karen_engine.services.database.repositories.postgres_conversation_repository"
+    ]
+    assert records
+    assert all(record.exc_info is None for record in records)
+    assert any(getattr(record, "operation", None) == operation for record in records)
+
+
+@pytest.mark.asyncio
+async def test_untrusted_valueerror_text_is_not_exposed_as_completed_turn_failure() -> None:
+    broken = _SecretBearingStatementFailure()
+    broken.exception = ValueError(broken.marker)
+    repository = _repository(broken)
+    user = Message(
+        id="11111111-1111-1111-1111-111111111111",
+        conversation_id="22222222-2222-2222-2222-222222222222",
+        tenant_id="tenant-a", role="user", content="content",
+        metadata={"authorized_user_id": "user-a"},
+    )
+    assistant = Message(
+        id="33333333-3333-3333-3333-333333333333",
+        conversation_id=user.conversation_id, tenant_id=user.tenant_id,
+        role="assistant", content="content",
+        metadata={"authorized_user_id": "user-a"},
+    )
+    result = await repository.add_completed_turn(user, assistant)
+    assert result.success is False
+    assert result.error == "completed_turn_write_failed"
+    assert broken.marker not in repr(result)
