@@ -385,6 +385,14 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
                 f'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM "{role}"'
             )
             await raw.execute(f'REVOKE USAGE ON SCHEMA public FROM "{role}"')
+            await raw.execute(
+                f'REVOKE ALL ON FUNCTION '
+                f'kari_internal.writing_style_authorized_document_sources('
+                f'uuid,uuid,uuid,text,uuid,bigint,text) FROM "{role}"'
+            )
+            await raw.execute(
+                f'REVOKE USAGE ON SCHEMA kari_internal FROM "{role}"'
+            )
             await raw.execute(f'DROP ROLE IF EXISTS "{role}"')
         finally:
             await raw.close()
