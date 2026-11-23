@@ -86,6 +86,14 @@ async def test_real_bounded_storage_read_and_wrong_principal_denial() -> None:
     size = len(body.encode("utf-8"))
     assert 1 <= size <= 65536
     assert hashlib.sha256(body.encode("utf-8")).hexdigest() == expected_digest
+    # Prove that the repository refuses the same real object when the caller's
+    # transport budget is even one byte too small, rather than accepting a
+    # fully buffered oversized file. For a single byte, zero is invalid and
+    # must be denied under the canonical resource-bound contract.
+    undersized = await store.read_owner_active_text_bounded(
+        artifact, tenant, owner, max_bytes=size - 1,
+    )
+    assert undersized.success is False and undersized.data is None
     # Prove denial using real PostgreSQL + storage ownership, not a simulated
     # alternate identity or a browser-supplied authorization flag.
     foreign_owner = str(uuid.uuid4())
@@ -107,5 +115,6 @@ async def test_real_bounded_storage_read_and_wrong_principal_denial() -> None:
             "bytes_verified": size,
             "foreign_owner_denied": True,
             "foreign_tenant_denied": True,
+            "undersized_budget_denied": True,
         },
     )
