@@ -169,10 +169,13 @@ async def test_document_proposal_requires_full_consent_evidence_and_bounded_read
     assert proposal.source_digest == case.sample.digest
     assert not hasattr(proposal, "content")
     assert not hasattr(proposal, "instructions")
-    assert case.authority.evidence_reads == 2
-    assert case.store.get_metadata.await_count == 4
-    assert case.issuer.verify_current.await_count == 4
-    case.store.read_owner_active_text_bounded.assert_awaited_once_with(
+    # The proposal is only released after the entire owner/consent/read
+    # chain passes again following the heuristic.
+    assert case.authority.evidence_reads == 4
+    assert case.store.get_metadata.await_count == 8
+    assert case.issuer.verify_current.await_count == 8
+    assert case.store.read_owner_active_text_bounded.await_count == 2
+    case.store.read_owner_active_text_bounded.assert_awaited_with(
         case.verified_text.artifact_id,
         case.request.tenant_id,
         case.request.actor_id,
@@ -249,7 +252,7 @@ async def test_repeated_analysis_does_not_reuse_previously_valid_consent():
     with pytest.raises(PermissionError, match="style_sample_unavailable"):
         await case.analyzer.propose(request=case.request, sample=case.sample)
 
-    assert case.store.read_owner_active_text_bounded.await_count == 1
+    assert case.store.read_owner_active_text_bounded.await_count == 2
     case.store.download.assert_not_awaited()
 
 
@@ -266,4 +269,42 @@ async def test_consent_revoked_after_read_denies_before_style_analysis():
 
     assert case.store.read_owner_active_text_bounded.await_count == 1
     assert case.issuer.verify_current.await_count == 3
+    case.store.download.assert_not_awaited()
+
+
+async def test_document_consent_revoked_during_heuristic_denies_proposal():
+    case = _case()
+    consent = case.issuer.verify_current.return_value
+    # The first complete persisted authority pass performs four consent reads.
+    # The final proposal authorization must NOT cache those four positives.
+    case.issuer.verify_current.side_effect = [consent] * 4 + [None]
+
+    with pytest.raises(PermissionError, match="style_sample_unavailable"):
+        await case.analyzer.propose(
+            request=case.request, sample=case.sample,
+        )
+    assert case.store.read_owner_active_text_bounded.await_count == 1
+    assert case.issuer.verify_current.await_count == 5
+    assert case.store.download.await_count == 0
+
+
+async def test_persisted_evidence_revoked_between_heuristic_and_proposal():
+    case = _case()
+    read_evidence = case.authority._read_evidence
+    calls = 0
+
+    async def revoked_after_first_pass(request, sample, source_type, source_id):
+        nonlocal calls
+        calls += 1
+        if calls > 2:
+            return None
+        return await read_evidence(request, sample, source_type, source_id)
+
+    case.authority._read_evidence = revoked_after_first_pass
+    with pytest.raises(PermissionError, match="style_sample_unavailable"):
+        await case.analyzer.propose(
+            request=case.request, sample=case.sample,
+        )
+    assert calls == 3
+    assert case.store.read_owner_active_text_bounded.await_count == 1
     case.store.download.assert_not_awaited()
