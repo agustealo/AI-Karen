@@ -69,39 +69,44 @@ class SupabaseArtifactStore(ArtifactStore):
 
     @instrument_repository(operation="upload", repository="SupabaseArtifactStore")
     async def upload(self, request: ArtifactUploadRequest) -> RepositoryResult[Artifact]:
+        """Publish canonical metadata only after an object upload succeeds.
+
+        A failed database commit triggers best-effort object compensation.
+        Failed compensation is logged for operator reconciliation. This is not
+        a durable two-phase commit; U2 will supply a persistent staging ledger.
+        """
         start = time.perf_counter()
+        artifact_id = str(uuid.uuid4())
+        # Storage keys must never contain a client-controlled filename.
+        storage_key = f"{request.tenant_id}/{artifact_id}/content"
+        data = request.data or b""
+        digest = hashlib.sha256(data).hexdigest()
         try:
-            artifact_id = str(__import__("uuid").uuid4())
-            storage_key = f"{request.tenant_id}/{artifact_id}/{request.filename}"
-            data = request.data or b""
-            sha256 = __import__("hashlib").sha256(data).hexdigest()
-
-            # Resolve the canonical initialized platform client.
-            try:
-                self._bucket().upload(
-                    storage_key, data, {"content-type": request.content_type}
-                )
-            except Exception as exc:
-                logger.error("Supabase Storage upload failed: %s", exc)
-                return RepositoryResult(success=False, error=f"storage_upload_failed: {exc}")
-
-            # Store metadata in PostgreSQL
-            artifact = Artifact(
-                id=artifact_id,
-                tenant_id=request.tenant_id,
-                user_id=request.user_id,
-                conversation_id=request.conversation_id,
-                message_id=request.message_id,
-                kind=request.kind,
-                mime_type=request.content_type,
-                filename=request.filename,
-                size_bytes=len(data),
-                sha256=sha256,
-                storage_key=storage_key,
-                storage_backend="supabase",
-                metadata=request.metadata,
+            bucket = self._bucket()
+            bucket.upload(
+                storage_key, data, {"content-type": request.content_type}
             )
+        except Exception:
+            logger.exception("Artifact object upload failed for artifact_id=%s", artifact_id)
+            return RepositoryResult(success=False, error="storage_upload_failed")
 
+        artifact = Artifact(
+            id=artifact_id,
+            tenant_id=request.tenant_id,
+            user_id=request.user_id,
+            conversation_id=request.conversation_id,
+            message_id=request.message_id,
+            kind=request.kind,
+            mime_type=request.content_type,
+            filename=request.filename,
+            size_bytes=len(data),
+            sha256=digest,
+            storage_key=storage_key,
+            storage_backend="supabase",
+            metadata=request.metadata,
+        )
+        commit_attempted = False
+        try:
             async with await self._session() as session:
                 await session.execute(
                     text(
@@ -127,14 +132,27 @@ class SupabaseArtifactStore(ArtifactStore):
                         "created_at": artifact.created_at,
                     },
                 )
+                commit_attempted = True
                 await session.commit()
+        except Exception:
+            logger.exception("Artifact metadata persistence uncertain for artifact_id=%s", artifact_id)
+            if not commit_attempted:
+                try:
+                    bucket.remove([storage_key])
+                except Exception:
+                    logger.exception(
+                        "Artifact object compensation failed; reconcile artifact_id=%s",
+                        artifact_id,
+                    )
+            else:
+                # A commit exception can occur after the database committed.
+                # Never delete a potentially live object's bytes on uncertainty.
+                logger.error("Artifact commit outcome requires reconciliation artifact_id=%s", artifact_id)
+            return RepositoryResult(success=False, error="artifact_commit_failed")
 
-            latency = time.perf_counter() - start
-            logger.debug("upload artifact_id=%s latency_ms=%.2f", artifact_id, latency * 1000)
-            return RepositoryResult(success=True, data=artifact)
-        except Exception as exc:
-            logger.error("upload failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+        latency = time.perf_counter() - start
+        logger.debug("upload artifact_id=%s latency_ms=%.2f", artifact_id, latency * 1000)
+        return RepositoryResult(success=True, data=artifact)
 
     @instrument_repository(operation="download", repository="SupabaseArtifactStore")
     async def download(self, artifact_id: str, tenant_id: str) -> RepositoryResult[BinaryIO]:

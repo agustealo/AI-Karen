@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.database.factory import DatabaseServiceFactory
 from ai_karen_engine.database.id_types import coerce_tenant_id, coerce_user_id
+from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +94,19 @@ async def upload_artifact(
     current_user = Depends(get_current_user),
 ):
     """Upload an artifact."""
-    store = _get_artifact_store()
     tenant_id, user_id = _artifact_principal(current_user)
+    try:
+        limit = ArtifactStorageConfig.from_environment().max_legacy_upload_bytes
+    except ValueError:
+        logger.error("Invalid artifact upload limit configuration")
+        raise HTTPException(status_code=503, detail="Artifact upload unavailable") from None
 
-    data = await file.read()
+    # Read at most limit + 1 bytes. The extra byte detects oversized bodies
+    # without materializing the entire untrusted upload in process memory.
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(status_code=413, detail="Artifact exceeds upload limit")
+    store = _get_artifact_store()
     from ai_karen_engine.services.database.repositories.artifact_store import ArtifactUploadRequest
     request = ArtifactUploadRequest(
         tenant_id=str(tenant_id),
@@ -110,7 +120,8 @@ async def upload_artifact(
     )
     result = await store.upload(request)
     if not result.success or not result.data:
-        raise HTTPException(status_code=500, detail=result.error or "Upload failed")
+        logger.error("Artifact upload repository rejected request")
+        raise HTTPException(status_code=503, detail="Artifact upload failed")
 
     artifact = result.data
     return ArtifactUploadResponse(
