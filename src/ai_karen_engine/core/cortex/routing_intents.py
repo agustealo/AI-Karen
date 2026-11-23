@@ -41,6 +41,21 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "allow_llm_only": False,
     },
 
+    "runtime.inspect": {
+        # Exact self-inspection prompts belong to the observed runtime catalog.
+        # Descriptions from a generative model are not evidence of live tools.
+        "triggers": ["what tools can you use", "your unique capabilities"],
+        "patterns": [
+            r"^(?:first[,]?\s+)?what\s+are\s+(?:your|karen'?s)\s+(?:(?:unique|current|actual|available)\s+)?(?:capabilities|abilities|tools|features)[?!.]*$",
+            r"^what\s+(?:tools|capabilities|features)\s+do\s+(?:you|karen)\s+(?:(?:currently|actually|right\s+now)\s+)?(?:have|offer|support|have\s+available)(?:\s+(?:available|right\s+now|to\s+me))?[?!.]*$",
+            r"^(?:which|what)\s+(?:tools|capabilities)\s+are\s+(?:currently\s+)?(?:available|enabled|accessible)\s+(?:to\s+you|in\s+karen|for\s+karen)[?!.]*$",
+            r"^(?:what\s+can\s+(?:you|karen)\s+(?:actually\s+|currently\s+)?do|can\s+you\s+access\s+(?:any\s+)?tools)[?!.]*$",
+            r"^(?:please\s+)?(?:list|show|tell\s+me)\s+(?:me\s+)?(?:all\s+)?(?:your\s+)?(?:available|current|registered)\s+(?:tools|capabilities)[?!.]*$",
+        ],
+        "required_capability": "runtime.inspect",
+        "requires_live_data": True,
+        "allow_llm_only": False,
+    },
     "plugin.inspect": {
         # Read-only catalog discovery only. Side effects belong to a later,
         # separately authorized host/plugin action, never this direct route.

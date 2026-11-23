@@ -23,6 +23,8 @@ from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolv
     "Who am I?",
     "What do you know about me?",
     "What can you tell me about myself?",
+    "Tell me everything you know about me",
+    "Tell me all you remember about myself",
 ])
 def test_broad_summary_wins_over_single_attribute(question):
     assert is_profile_summary_request(question)
@@ -53,4 +55,6 @@ def test_upbringing_questions_request_upbringing_not_origin(question):
 
 def test_narrative_prompt_is_not_unrelated_user_profile_request():
     assert not is_profile_summary_request("Tell me about my project")
+    assert not is_profile_summary_request("Tell me everything you know about Python")
+    assert not is_profile_summary_request("Tell me what you know about a colleague")
     assert not is_profile_summary_request("Explain how a person grows up")

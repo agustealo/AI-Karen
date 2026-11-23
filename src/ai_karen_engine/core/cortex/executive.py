@@ -81,6 +81,15 @@ class CortexExecutionDecider:
             tool_requirements = []
             plugin_candidates = []
             required_capabilities = ["artifact.code.read"]
+        if analysis.get("intent") == "runtime.inspect":
+            # Introspection has no delegated tools or plugin execution.
+            # Only RuntimePolicy may authorize its one read-only capability.
+            tool_requirements = []
+            plugin_candidates = []
+            required_capabilities = ["runtime.inspect"]
+            analysis["agent_delegation"] = False
+            analysis["workflow_required"] = False
+
 
         if meta.get("agent_delegation"):
             analysis["agent_delegation"] = True
@@ -424,6 +433,20 @@ class CortexExecutionDecider:
                 topology["requires_resumability"] = False
                 capabilities["required"] = ["plugin.inspect"]
                 workflow = {"required": False, "workflow_id": None}
+                memory_policy["write_requested"] = False
+                memory_policy["recall_required"] = False
+
+            if capability_decision.intent == "runtime.inspect":
+                # A model's own claimed abilities cannot override registry
+                # truth or convert inspection into plugin/tool execution.
+                topology["tool_requirements"] = []
+                topology["plugin_candidates"] = []
+                topology["agent_delegation"] = False
+                topology["requires_parallel_execution"] = False
+                topology["requires_resumability"] = False
+                capabilities["required"] = ["runtime.inspect"]
+                workflow = {"required": False, "workflow_id": None}
+                reasoning_modes = []
                 memory_policy["write_requested"] = False
                 memory_policy["recall_required"] = False
 
