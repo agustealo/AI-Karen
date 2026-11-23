@@ -20,6 +20,7 @@ import pytest
 
 from ai_karen_engine.core.runtime.prompt.karisignature_contract import (
     KariSignatureRequest,
+    KariSignatureResolver,
     KariSignatureRevision,
 )
 from ai_karen_engine.services.writing_style_profile_repository import (
@@ -107,6 +108,7 @@ async def test_live_delegated_use_before_and_after_revocation() -> None:
     allowed = await repository.authorize_use(
         request=request, revision=known_revision,
     )
+    resolver = KariSignatureResolver(repository)
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
 
     if phase == "before":
@@ -117,12 +119,17 @@ async def test_live_delegated_use_before_and_after_revocation() -> None:
         assert current.revision_number == known_revision.revision_number
         assert current.content_digest == known_revision.content_digest
         assert allowed is True, "Current delegated-use grant was not authorized"
+        resolved = await resolver.resolve(request)
+        assert resolved.revision_id == known_revision.revision_id
+        assert resolved.content_digest == known_revision.content_digest
     else:
         # Must run only after the separately verified first-party author
         # revocation on the same approved fixture. This is a read-only proof
         # that the previously usable revision can no longer be delegated.
         assert current is None, "Revoked published revision remains visible"
         assert allowed is False, "Revoked delegated-use grant remains usable"
+        with pytest.raises(PermissionError, match="style_unavailable"):
+            await resolver.resolve(request)
 
     logger.info(
         "document_delegated_use_live_acceptance",
