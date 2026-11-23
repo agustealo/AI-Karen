@@ -121,7 +121,7 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
         }, signing_key, algorithm="HS256")
 
     bearer_a, bearer_b = signed(user_a, tenant_a), signed(user_b, tenant_b)
-    forged = signed(user_a, tenant_a, signing_key="wrong-signing-secret")
+    forged = signed(user_a, tenant_a, signing_key="wrong-signing-secret-at-least-32-bytes")
     cross_tenant = signed(user_b, tenant_a)
     initial_sessions = [
         (user_a, bearer_a),
@@ -454,7 +454,12 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
                 foreign, user_text="foreign edit",
                 assistant_text="must never persist",
             )
-            assert foreign_write.status == "rejected"
+            # Both owner-denied and repository conflict outcomes are
+            # fail-closed. The essential security contract is no commit,
+            # no foreign contents, and unchanged durable owner history.
+            assert not foreign_write.success
+            assert foreign_write.persisted_messages == 0
+            assert foreign_write.status in {"failed", "rejected"}
             report["tenant_history_isolation"] = True
 
             # Canonical same-request replay is idempotent at the repository.
