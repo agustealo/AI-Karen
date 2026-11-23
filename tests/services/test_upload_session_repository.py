@@ -12,6 +12,7 @@ from ai_karen_engine.services.database.repositories.upload_session import (
 )
 
 
+TENANT = str(uuid4())
 OWNER = str(uuid4())
 SESSION = str(uuid4())
 DIGEST = "a" * 64
@@ -61,7 +62,7 @@ class FakeSession:
 def record():
     return {
         "session_id": SESSION,
-        "tenant_id": "tenant-a",
+        "tenant_id": TENANT,
         "owner_user_id": OWNER,
         "destination_id": "explorer",
         "recipe": "store_only",
@@ -162,4 +163,16 @@ async def test_cannot_bind_artifact_before_verified_commit():
             tenant_id="tenant-a", owner_user_id=OWNER, session_id=SESSION,
             expected_state="created", next_state="receiving",
             artifact_id=str(uuid4()),
+        )
+
+
+@pytest.mark.asyncio
+async def test_rejects_non_uuid_tenant_before_database_access():
+    repo = UploadSessionRepository(lambda: FakeSession(record()))
+    with pytest.raises(ValueError, match="tenant_id must be a UUID"):
+        await repo.create_or_get(
+            tenant_id="tenant-a", owner_user_id=OWNER,
+            destination_id="explorer", recipe="store_only",
+            idempotency_key_hash=KEY, manifest_sha256=DIGEST,
+            expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
         )
