@@ -242,8 +242,17 @@ file execution, provider selection, active-card replay admission or public CRUD
 access. A runtime-approved authenticated caller must still supply the
 identities; declarative draft data is not a permission grant.
 
-**Release blockers:** Real PostgreSQL migration up/down/upgrade compatibility
-and simultaneous competing writes/uncertain-response retry; two-account RLS
-isolation; admin/support and tenant-deletion lifecycle proof; user-facing
-studio UI plus scoped API and RBAC; signed-in browser persistence and
-rollback. In-memory fake-session tests prove only repository SQL contracts.
+**Database acceptance:** The dedicated
+`.github/workflows/card-studio-postgres-proof.yml` gate runs the actual
+migration and canonical repository inside disposable PostgreSQL, including
+injected mid-migration rollback, a restricted non-superuser role, tenant/user
+RLS for all three tables, same-key concurrent retries, competing revision CAS,
+immutable-history triggers, archive/history readback, atomic receipt failure
+rollback and governed tenant deletion. Unit tests alone are not that proof.
+This is intentionally isolated migration acceptance, NOT evidence of a full
+production-schema upgrade or hosted release.
+
+**Remaining gates:** Full-schema migration/upgrade compatibility, production
+least-privilege role provisioning, authenticated API and RBAC, admin/support
+lifecycle, Card Studio UX, signed-in browser acceptance, and deployed rollback.
+Template publication, chat execution, and arbitrary UI code remain disabled.
