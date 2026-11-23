@@ -316,6 +316,7 @@ export function FileExplorerInventoryHost({
         <ContentIntelligenceSelectionPanel
           key={selectionKey}
           sources={selectedAnalysisSources}
+          onRefreshInventory={onRefresh}
         />
       )}
     </>
