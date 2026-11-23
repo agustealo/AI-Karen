@@ -1,17 +1,5 @@
 [
   {
-    "name": "openai",
-    "provider_class": "OpenAICompatibleProvider",
-    "description": "Execution adapter for OpenAI",
-    "supports_streaming": true,
-    "supports_embeddings": true,
-    "requires_api_key": true,
-    "default_model": "gpt-4o-mini",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
-  },
-  {
     "name": "builtin_transformers",
     "provider_class": "TransformersRuntime",
     "description": "Execution adapter for Transformers",
@@ -24,13 +12,13 @@
     "error_message": null
   },
   {
-    "name": "ollama",
+    "name": "openai",
     "provider_class": "OpenAICompatibleProvider",
-    "description": "Execution adapter for Ollama",
+    "description": "Execution adapter for OpenAI",
     "supports_streaming": true,
     "supports_embeddings": true,
-    "requires_api_key": false,
-    "default_model": "llama3.2:latest",
+    "requires_api_key": true,
+    "default_model": "gpt-4o-mini",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
@@ -42,7 +30,7 @@
     "supports_streaming": true,
     "supports_embeddings": false,
     "requires_api_key": true,
-    "default_model": "claude-sonnet-4-20250514",
+    "default_model": "claude-3-5-sonnet-20240620",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
@@ -66,7 +54,7 @@
     "supports_streaming": true,
     "supports_embeddings": false,
     "requires_api_key": true,
-    "default_model": "gemini-1.5-flash",
+    "default_model": "gemini-2.5-flash",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
@@ -150,7 +138,7 @@
     "supports_streaming": true,
     "supports_embeddings": false,
     "requires_api_key": true,
-    "default_model": "glm-5",
+    "default_model": "glm-4.5",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
@@ -180,6 +168,18 @@
     "error_message": null
   },
   {
+    "name": "ollama",
+    "provider_class": "OpenAICompatibleProvider",
+    "description": "Execution adapter for Ollama",
+    "supports_streaming": true,
+    "supports_embeddings": true,
+    "requires_api_key": false,
+    "default_model": "deepseek-r1:1.5b",
+    "health_status": "unknown",
+    "last_health_check": null,
+    "error_message": null
+  },
+  {
     "name": "together",
     "provider_class": "OpenAICompatibleProvider",
     "description": "Execution adapter for Together AI",
@@ -187,18 +187,6 @@
     "supports_embeddings": false,
     "requires_api_key": true,
     "default_model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-    "health_status": "unknown",
-    "last_health_check": null,
-    "error_message": null
-  },
-  {
-    "name": "llama-cpp",
-    "provider_class": "OpenAICompatibleProvider",
-    "description": "Execution adapter for llama.cpp",
-    "supports_streaming": false,
-    "supports_embeddings": false,
-    "requires_api_key": false,
-    "default_model": "auto-detect-gguf",
     "health_status": "unknown",
     "last_health_check": null,
     "error_message": null
