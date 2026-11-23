@@ -145,3 +145,37 @@ def test_kplug09_real_storage_and_manual_browser_refresh_proof_remain_separate()
     assert "route.fulfill(" not in spec and "page.route(" not in spec
     assert "implementation ready for observation, not consumer-certified" in runbook
     assert "| `content-intelligence` | Not shipped |" in LEDGER.read_text(encoding="utf-8")
+
+
+
+def test_kplug10_live_storage_owner_read_proves_actual_runtime_handoff():
+    """Prevent source-read success alone from masquerading as plugin acceptance."""
+    proof = (
+        ROOT / "tests/integration/test_live_code_artifact_revocation_postgres.py"
+    ).read_text(encoding="utf-8")
+    live = proof.split(
+        "async def test_live_supabase_object_read_with_disposable_postgres_owner_scope()",
+        1,
+    )[1].split("\n\n@pytest.mark.skipif(", 1)[0]
+
+    assert "KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE" in proof
+    for required in (
+        "KAREN_TEST_SUPABASE_DISPOSABLE",
+        "bucket_public is not False",
+        "parsed.port != 5432",
+        "granted = await store.read_owner_active_code(",
+        "FileExplorerInventoryHost(",
+        "ContentSourceHost(store=store, kernel=kernel)",
+        "ArtifactSourceAdapter(store)",
+        "explorer.list_owner_page(",
+        "explorer.revalidate_owner_selection(",
+        "content_host.execute_owner_text(",
+        "lexical_engine.execute(request.payload)",
+        "assert kernel.analysis_executions == 1",
+        "content_source_evidence_invalid",
+    ):
+        assert required in live
+    assert "MagicMock(" not in live
+    assert "MockTransport(" not in live
+    assert "No third live-storage" in RUNBOOK.read_text(encoding="utf-8")
+    assert "| `content-intelligence` | Not shipped |" in LEDGER.read_text(encoding="utf-8")
