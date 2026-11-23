@@ -241,7 +241,8 @@ jobs:
       - name: KIS-GRAPH-01C2R-F measure live PostgreSQL memory streaming
         env:
           KAREN_TEST_DISPOSABLE_DATABASE: "1"
-          KAREN_MEMORY_STREAM_SAMPLES: "6"
+          KAREN_MEMORY_STREAM_SAMPLES: "24"
+          KAREN_MEMORY_STREAM_CONCURRENCY: "4,8"
           KAREN_MEMORY_STREAM_REPORT: memory-stream-acceptance.json
         run: |
           pytest tests/core/runtime/test_chat_runtime_stream_contract.py \
@@ -253,8 +254,14 @@ jobs:
 
           report = json.loads(Path("memory-stream-acceptance.json").read_text())
           assert report["status"] == "complete", "Streaming acceptance incomplete"
-          assert report["modes"]["memory_enabled"]["complete"] == 6
-          assert report["modes"]["memory_free"]["complete"] == 6
+          assert report["modes"]["memory_enabled"]["complete"] == 24
+          assert report["modes"]["memory_free"]["complete"] == 24
+          assert [level["clients"] for level in report["concurrency"]] == [4, 8]
+          assert all(level["completed"] == level["clients"] for level in report["concurrency"])
+          assert report["concurrent_cancellation"]["cancelled"] == 4
+          assert report["concurrent_cancellation"]["producers_finalized"] == 4
+          assert report["concurrent_cancellation"]["transcript_commits"] == 0
+          assert report["concurrent_cancellation"]["checked_out_after"] == 0
           assert report["cancellation"]["status"] == "cancelled"
           assert report["revocation"]["status"] == "publication_denied"
           print("Real PostgreSQL streaming evidence validated.")

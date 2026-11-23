@@ -2929,6 +2929,20 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
     samples = int(os.getenv("KAREN_MEMORY_STREAM_SAMPLES", "6"))
     if not 2 <= samples <= 50:
         raise ValueError("KAREN_MEMORY_STREAM_SAMPLES must be between 2 and 50")
+    concurrency_levels = tuple(
+        int(value.strip()) for value in os.getenv(
+            "KAREN_MEMORY_STREAM_CONCURRENCY", "4,8",
+        ).split(",")
+    )
+    if (
+        not 1 <= len(concurrency_levels) <= 2
+        or tuple(sorted(set(concurrency_levels))) != concurrency_levels
+        or any(level < 2 or level > 16 or level % 2 for level in concurrency_levels)
+    ):
+        raise ValueError(
+            "KAREN_MEMORY_STREAM_CONCURRENCY must contain one or two "
+            "ascending, distinct, even levels between 2 and 16"
+        )
     report_path = Path(os.getenv(
         "KAREN_MEMORY_STREAM_REPORT", "memory-stream-acceptance.json",
     ))
@@ -2952,6 +2966,7 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
     report = {
         "schema_version": 1,
         "test": "KIS-GRAPH-01C2R-F",
+        "extensions": ["KIS-GRAPH-01C2R-G"],
         "status": "incomplete",
         "database_driver": engine.async_engine.dialect.name,
         "platform": platform.system(),
@@ -2966,6 +2981,8 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
             "Transcript gateway is a recording fixture, not durable PostgreSQL transcript",
             "No browser rendering, remote network, or production-host latency measured",
             "Revocation cannot retract previously emitted bytes or close the DB-to-wire race",
+            "Concurrent streams use controlled provider and transcript fixtures, not HTTP/SSE transport",
+            "Observed latency is CI-host smoke evidence, not production p95 or service SLO",
         ],
     }
     failure_type = None
@@ -2998,7 +3015,10 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
         index = max(0, (len(ordered) * rank + 99) // 100 - 1)
         return round(ordered[index], 3)
 
-    async def scenario(memory_enabled, provider=None, on_chunk=None, gateways=None):
+    async def scenario(
+        memory_enabled, provider=None, on_chunk=None, gateways=None,
+        shared_direct=None,
+    ):
         runtime, gateway = _make_runtime()
         if gateways is not None:
             gateways.append(gateway)
@@ -3079,9 +3099,12 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
             stack.enter_context(patch.object(runtime, "_record_trajectory_completion"))
             stack.enter_context(patch.object(runtime, "_record_execution_outcome"))
             stack.enter_context(patch.object(runtime._emitter, "emit"))
-            direct = stack.enter_context(patch(
-                "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
-            ))
+            if shared_direct is None:
+                direct = stack.enter_context(patch(
+                    "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+                ))
+            else:
+                direct = shared_direct
             direct.return_value.can_handle.return_value = False
             stack.enter_context(patch.object(
                 runtime, "_should_execute_authorized_reasoning", return_value=False,
@@ -3200,6 +3223,135 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
         }
         report["warmup_per_mode"] = 1
         report["tenant_isolation"] = "passed"
+
+        # KIS-GRAPH-01C2R-G: simultaneous callers exercise real PostgreSQL
+        # retrieval and publication fences. A single shared module patch avoids
+        # overlapping per-task patches leaking across the global capability gate.
+        report["concurrency"] = []
+        for level in concurrency_levels:
+            release = asyncio.Event()
+
+            async def concurrent_worker(enabled):
+                await release.wait()
+                return await scenario(enabled, shared_direct=shared_direct)
+
+            with patch(
+                "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+            ) as shared_direct:
+                shared_direct.return_value.can_handle.return_value = False
+                active = [
+                    asyncio.create_task(concurrent_worker(index % 2 == 0))
+                    for index in range(level)
+                ]
+                batch_started = time.perf_counter()
+                try:
+                    release.set()
+                    results = await asyncio.wait_for(
+                        asyncio.gather(*active), timeout=45,
+                    )
+                finally:
+                    for task in active:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*active, return_exceptions=True)
+
+            for chunks, gateway, timing in results:
+                assert [c.content for c in chunks if c.type == "content"] == [
+                    "part-one", "part-two",
+                ]
+                assert sum(
+                    c.type == ChatStreamEventType.COMPLETE for c in chunks
+                ) == 1
+                assert not any(c.type == ChatStreamEventType.ERROR for c in chunks)
+                assert len(gateway.calls) == 1
+                assert timing["end_to_end_first_content_ms"] is not None
+                assert timing["end_to_end_first_content_ms"] >= timing["resolved_memory_ms"]
+            async with engine.async_session_factory() as session:
+                assert (await session.execute(text("SELECT 1"))).scalar_one() == 1
+            assert engine.async_engine.pool.checkedout() == checked_out_before
+            report["concurrency"].append({
+                "clients": level,
+                "memory_enabled": level // 2,
+                "memory_free": level // 2,
+                "completed": len(results),
+                "first_content_p95_ms": percentile(
+                    [item[2]["end_to_end_first_content_ms"] for item in results], 95,
+                ),
+                "total_p95_ms": percentile(
+                    [item[2]["total_elapsed_ms"] for item in results], 95,
+                ),
+                "batch_elapsed_ms": round(
+                    (time.perf_counter() - batch_started) * 1000, 3,
+                ),
+                "checked_out_after": engine.async_engine.pool.checkedout(),
+            })
+
+        # Cancel multiple outward consumers together after their first
+        # observable content. Every producer must finalize and no transcript
+        # fixture may claim a persisted turn.
+        cancelled_clients = concurrency_levels[0]
+        blocked = asyncio.Event()
+        first_seen = asyncio.Queue()
+        finalized = 0
+        concurrent_gateways = []
+
+        async def blocked_provider(task):
+            nonlocal finalized
+            try:
+                await task.token_sink("part-one")
+                await blocked.wait()
+                await task.token_sink("unreachable")
+            finally:
+                finalized += 1
+            raise AssertionError("cancelled provider unexpectedly completed")
+
+        async def observe_blocked(chunk):
+            if chunk.type == ChatStreamEventType.CONTENT and chunk.content:
+                first_seen.put_nowait(True)
+                await blocked.wait()
+
+        with patch(
+            "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+        ) as shared_direct:
+            shared_direct.return_value.can_handle.return_value = False
+            active = [
+                asyncio.create_task(scenario(
+                    True, blocked_provider, observe_blocked,
+                    concurrent_gateways, shared_direct,
+                ))
+                for _ in range(cancelled_clients)
+            ]
+            try:
+                for _ in range(cancelled_clients):
+                    await asyncio.wait_for(first_seen.get(), timeout=20)
+                for task in active:
+                    task.cancel()
+                stopped = await asyncio.wait_for(
+                    asyncio.gather(*active, return_exceptions=True), timeout=20,
+                )
+                assert all(
+                    isinstance(result, asyncio.CancelledError) for result in stopped
+                )
+            finally:
+                for task in active:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*active, return_exceptions=True)
+                blocked.set()
+        assert finalized == cancelled_clients
+        assert len(concurrent_gateways) == cancelled_clients
+        assert all(not gateway.calls for gateway in concurrent_gateways)
+        async with engine.async_session_factory() as session:
+            assert (await session.execute(text("SELECT 1"))).scalar_one() == 1
+        assert engine.async_engine.pool.checkedout() == checked_out_before
+        report["concurrent_cancellation"] = {
+            "cancelled": cancelled_clients,
+            "producers_finalized": finalized,
+            "transcript_commits": sum(
+                len(gateway.calls) for gateway in concurrent_gateways
+            ),
+            "checked_out_after": engine.async_engine.pool.checkedout(),
+        }
 
         # Cancel the actual consumer task after its first visible delta.
         first_content, worker_finalized, never = (
