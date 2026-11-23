@@ -299,3 +299,15 @@ async def test_https_to_http_redirect_is_not_followed():
     assert [call["url"] for call in route.fetched] == [origin]
     assert route.aborted == 1
     assert route.fulfilled == []
+
+
+@pytest.mark.asyncio
+async def test_unneeded_browser_subresources_are_blocked_without_fetching():
+    url = "https://public.example/assets/site.css"
+    crawler = integration(allowed_urls=[url])
+    route = Route(url, [Response()])
+    route.request.resource_type = "stylesheet"
+    await crawler._guard_browser_request(route, budget())
+    assert route.fetched == []
+    assert route.aborted == 1
+    assert route.fulfilled == []

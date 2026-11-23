@@ -501,6 +501,13 @@ class Crawl4AIIntegration:
             original_url = urlparse(candidate)
             original_host = (original_url.hostname or "").lower()
             is_navigation = bool(route.request.is_navigation_request())
+            # Public search consumes rendered document text, not scripts,
+            # media, fonts, or CSS. Refusing them also removes optional
+            # subrequest network paths from the attack surface.
+            resource_type = getattr(route.request, "resource_type", "document")
+            if resource_type not in {"document"}:
+                reason = "non_document_resource"
+                raise PermissionError("Browser subresources are not permitted.")
             for hop in range(self.settings.max_redirects + 1):
                 # Charge each redirect hop, not just the initial request. The
                 # counter is context-local and shared across concurrent pages.
