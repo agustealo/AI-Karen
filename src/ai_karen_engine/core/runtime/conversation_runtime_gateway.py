@@ -35,6 +35,44 @@ logger = get_logger(__name__)
 _UNSPECIFIED_PERSONA_SCOPE = object()
 
 
+# Fail closed when storage adapters or exceptions return arbitrary messages.
+# Only fixed canonical codes may cross into transcript reasons or HTTP metadata.
+_SAFE_TRANSCRIPT_FAILURE_CODES = frozenset({
+    "conversation_not_found", "conversation_user_mismatch",
+    "conversation_persona_scope_mismatch", "conversation_persona_scope_invalid",
+    "conversation_not_found_or_tenant_mismatch",
+    "conversation_history_persona_scope_mismatch",
+    "conversation_storage_unavailable", "message_idempotency_conflict",
+    "incomplete_turn_replay", "invalid_completed_turn",
+    "chat_run_transcript_scope_mismatch", "chat_run_commit_not_authorized",
+    "completed_turn_write_failed", "assistant_write_failed",
+    "user_write_failed", "duplicate_conversation_id",
+    "conversation_lookup_failed", "conversation_create_failed",
+    "conversation_history_read_failed", "conversation_message_persistence_failed",
+    "composer_draft_storage_unavailable", "composer_draft_revision_conflict",
+    "composer_draft_invalid",
+})
+_SAFE_TRANSCRIPT_PERMISSION_CODES = frozenset({
+    "conversation_user_mismatch", "conversation_persona_scope_mismatch",
+    "conversation_persona_scope_immutable",
+})
+
+
+def _safe_repository_reason(reason: object, fallback: str) -> str:
+    """Keep canonical error contracts, never serialize SQL or bound values."""
+    if type(reason) is str and reason in _SAFE_TRANSCRIPT_FAILURE_CODES:
+        return reason
+    return fallback
+
+
+def _safe_permission_reason(exc: PermissionError) -> str:
+    if (len(exc.args) == 1 and type(exc.args[0]) is str
+            and exc.args[0] in _SAFE_TRANSCRIPT_PERMISSION_CODES):
+        return exc.args[0]
+    return "conversation_access_denied"
+
+
+
 def resolve_runtime_conversation_id(context: ChatExecutionContext) -> str:
     """Return the canonical durable conversation identity for one runtime request.
 
@@ -161,7 +199,7 @@ class ConversationRuntimeGateway:
             context.tenant_id,
         )
         if not existing.success:
-            raise RuntimeError(existing.error or "conversation_lookup_failed")
+            raise RuntimeError(_safe_repository_reason(existing.error, "conversation_lookup_failed"))
 
         if existing.data is not None:
             if str(existing.data.user_id) != str(context.user_id):
@@ -179,7 +217,7 @@ class ConversationRuntimeGateway:
                 )
                 if not previous.success:
                     raise RuntimeError(
-                        previous.error or "conversation_history_read_failed"
+                        _safe_repository_reason(previous.error, "conversation_history_read_failed")
                     )
                 if previous.data:
                     raise PermissionError("conversation_persona_scope_mismatch")
@@ -215,7 +253,7 @@ class ConversationRuntimeGateway:
                 if enforce_scope:
                     self._check_persona_scope(raced.data, requested_scope)
                 return conversation_id
-            raise RuntimeError(created.error or "conversation_create_failed")
+            raise RuntimeError(_safe_repository_reason(created.error, "conversation_create_failed"))
 
         return conversation_id
 
@@ -244,7 +282,7 @@ class ConversationRuntimeGateway:
         )
         if not conversation_result.success or conversation_result.data is None:
             raise RuntimeError(
-                conversation_result.error or "conversation_lookup_failed"
+                _safe_repository_reason(conversation_result.error, "conversation_lookup_failed")
             )
         if str(conversation_result.data.user_id) != str(context.user_id):
             raise PermissionError("conversation_user_mismatch")
@@ -257,7 +295,7 @@ class ConversationRuntimeGateway:
         )
         if not messages_result.success:
             raise RuntimeError(
-                messages_result.error or "conversation_history_read_failed"
+                _safe_repository_reason(messages_result.error, "conversation_history_read_failed")
             )
 
         return ConversationSnapshot(
@@ -284,7 +322,7 @@ class ConversationRuntimeGateway:
         )
         if not messages_result.success:
             raise RuntimeError(
-                messages_result.error or "conversation_history_read_failed"
+                _safe_repository_reason(messages_result.error, "conversation_history_read_failed")
             )
         return ConversationSnapshot(
             conversation=conversation,
@@ -315,7 +353,7 @@ class ConversationRuntimeGateway:
             newest_first=True,
         )
         if not result.success:
-            raise RuntimeError(result.error or "conversation_history_read_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_history_read_failed"))
         rows = result.data
         if not isinstance(rows, list) or len(rows) > message_limit:
             raise RuntimeError("invalid_recent_conversation_page")
@@ -340,7 +378,7 @@ class ConversationRuntimeGateway:
             context.user_id,
         )
         if not result.success:
-            raise RuntimeError(result.error or "conversation_lookup_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_lookup_failed"))
         if result.data is None:
             raise RuntimeError("conversation_not_found")
         scoped = replace(context, conversation_id=str(result.data.id))
@@ -366,7 +404,7 @@ class ConversationRuntimeGateway:
             )
         )
         if not result.success:
-            raise RuntimeError(result.error or "conversation_list_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_list_failed"))
 
         snapshots = []
         for conversation in result.data or []:
@@ -378,7 +416,7 @@ class ConversationRuntimeGateway:
             )
             if not messages_result.success:
                 raise RuntimeError(
-                    messages_result.error or "conversation_history_read_failed"
+                    _safe_repository_reason(messages_result.error, "conversation_history_read_failed")
                 )
             snapshots.append(
                 ConversationSnapshot(
@@ -403,7 +441,7 @@ class ConversationRuntimeGateway:
             )
         )
         if not result.success:
-            raise RuntimeError(result.error or "conversation_count_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_count_failed"))
         return int(result.data or 0)
 
     async def update_conversation_metadata(
@@ -432,7 +470,7 @@ class ConversationRuntimeGateway:
         )
         result = await self._repository.update_conversation(updated)
         if not result.success:
-            raise RuntimeError(result.error or "conversation_update_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_update_failed"))
         if result.data is not True:
             raise RuntimeError("conversation_not_found")
         return updated
@@ -445,7 +483,7 @@ class ConversationRuntimeGateway:
         updated = replace(snapshot.conversation, updated_at=datetime.utcnow())
         result = await self._repository.update_conversation(updated)
         if not result.success:
-            raise RuntimeError(result.error or "conversation_update_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_update_failed"))
         if result.data is not True:
             raise RuntimeError("conversation_not_found")
         return updated
@@ -462,7 +500,7 @@ class ConversationRuntimeGateway:
             context.tenant_id,
         )
         if not existing.success:
-            raise RuntimeError(existing.error or "conversation_lookup_failed")
+            raise RuntimeError(_safe_repository_reason(existing.error, "conversation_lookup_failed"))
         if existing.data is None:
             raise RuntimeError("conversation_not_found")
         if str(existing.data.user_id) != str(context.user_id):
@@ -493,7 +531,7 @@ class ConversationRuntimeGateway:
         )
         result = await self._repository.update_conversation(updated)
         if not result.success:
-            raise RuntimeError(result.error or "conversation_update_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_update_failed"))
         if result.data is not True:
             raise RuntimeError("conversation_not_found")
         return updated
@@ -552,7 +590,7 @@ class ConversationRuntimeGateway:
             self._log_composer_draft_storage_failure(
                 context, operation="read", metadata=result.metadata,
             )
-            raise RuntimeError(result.error or "composer_draft_read_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "composer_draft_read_failed"))
         if not isinstance(result.data, dict):
             raise RuntimeError("composer_draft_invalid_storage_response")
         logger.info("conversation_draft_read_completed", extra={
@@ -594,7 +632,7 @@ class ConversationRuntimeGateway:
             self._log_composer_draft_storage_failure(
                 context, operation="write", metadata=result.metadata,
             )
-            raise RuntimeError(result.error or "composer_draft_write_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "composer_draft_write_failed"))
         if not isinstance(result.data, dict):
             raise RuntimeError("composer_draft_invalid_storage_response")
         logger.info("conversation_draft_write_completed", extra={
@@ -615,7 +653,7 @@ class ConversationRuntimeGateway:
             user_id=context.user_id,
         )
         if not result.success:
-            raise RuntimeError(result.error or "conversation_delete_failed")
+            raise RuntimeError(_safe_repository_reason(result.error, "conversation_delete_failed"))
         if result.data is not True:
             raise RuntimeError("conversation_not_found")
         return True
@@ -667,7 +705,7 @@ class ConversationRuntimeGateway:
         write_result = await self._repository.add_message(message)
         if not write_result.success:
             raise RuntimeError(
-                write_result.error or "conversation_message_persistence_failed"
+                _safe_repository_reason(write_result.error, "conversation_message_persistence_failed")
             )
         return message
 
@@ -695,7 +733,7 @@ class ConversationRuntimeGateway:
                 return TranscriptHistoryResult(
                     status="failed",
                     conversation_id=conversation_id,
-                    reason=existing.error or "conversation_lookup_failed",
+                    reason=_safe_repository_reason(existing.error, "conversation_lookup_failed"),
                 )
             if existing.data is None:
                 return TranscriptHistoryResult(
@@ -734,7 +772,7 @@ class ConversationRuntimeGateway:
                 return TranscriptHistoryResult(
                     status="failed",
                     conversation_id=conversation_id,
-                    reason=result.error or "conversation_history_read_failed",
+                    reason=_safe_repository_reason(result.error, "conversation_history_read_failed"),
                 )
 
             # Don't exclude a prior same-request row until AFTER checking
@@ -767,11 +805,11 @@ class ConversationRuntimeGateway:
             return TranscriptHistoryResult(
                 status="rejected",
                 conversation_id=conversation_id,
-                reason=str(exc),
+                reason=_safe_permission_reason(exc),
                 error_type=type(exc).__name__,
             )
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "Canonical transcript history read failed",
                 extra={
                     "conversation_id": conversation_id,
@@ -984,7 +1022,7 @@ class ConversationRuntimeGateway:
                     user_message_id=user_message_id,
                     assistant_message_id=assistant_message_id,
                     persisted_messages=0,
-                    reason=write_result.error or "completed_turn_write_failed",
+                    reason=_safe_repository_reason(write_result.error, "completed_turn_write_failed"),
                 )
             persisted_count = int(write_result.data or 0)
             return TranscriptPersistenceResult(
@@ -1007,19 +1045,21 @@ class ConversationRuntimeGateway:
             return TranscriptPersistenceResult(
                 status="rejected",
                 conversation_id=conversation_id,
-                reason=str(exc),
+                reason=_safe_permission_reason(exc),
                 error_type=type(exc).__name__,
             )
         except RuntimeError as exc:
-            reason = str(exc)
             safe_reason = (
-                reason
-                if reason
-                in {
-                    "duplicate_conversation_id",
-                    "conversation_lookup_failed",
-                    "conversation_create_failed",
-                }
+                exc.args[0]
+                if (
+                    len(exc.args) == 1
+                    and type(exc.args[0]) is str
+                    and exc.args[0] in {
+                        "duplicate_conversation_id",
+                        "conversation_lookup_failed",
+                        "conversation_create_failed",
+                    }
+                )
                 else "transcript_persistence_failed"
             )
             logger.warning(
@@ -1040,7 +1080,7 @@ class ConversationRuntimeGateway:
                 error_type=type(exc).__name__,
             )
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "Canonical transcript persistence failed",
                 extra={
                     "conversation_id": conversation_id,

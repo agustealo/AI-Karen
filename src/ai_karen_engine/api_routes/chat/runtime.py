@@ -614,13 +614,13 @@ async def create_chat_response(
         raise
     except ValueError as exc:
         structured_logger.log_error(
-            error=str(exc),
+            error="Invalid chat request",
             endpoint="/api/chat",
             user_id=str(user.get("user_id") or "unknown"),
             correlation_id=correlation_id,
             context="validation_error",
         )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Invalid chat request") from exc
 
 
 @router.post("/chat/stream")
@@ -680,13 +680,13 @@ async def stream_chat_response(
         raise
     except ValueError as exc:
         structured_logger.log_error(
-            error=str(exc),
+            error="Invalid chat request",
             endpoint="/api/chat/stream",
             user_id=str(user.get("user_id") or "unknown"),
             correlation_id=correlation_id,
             context="validation_error",
         )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Invalid chat request") from exc
 
 
 
@@ -794,7 +794,7 @@ async def _ag_ui_sse(
         ):
             yield packet
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "AG-UI runtime projection or journal failed",
             extra={
                 "correlation_id": runtime_request.context.correlation_id,
@@ -903,14 +903,14 @@ async def get_ag_ui_run_observed_events(
     except RuntimeError as exc:
         if str(exc) == "conversation_not_found":
             raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
-        logger.exception("Observed run-event read failed", extra={
+        logger.error("Observed run-event read failed", extra={
             "correlation_id": request_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="Run event history unavailable") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid run event query") from exc
     except Exception as exc:
-        logger.exception("Observed run-event storage failed", extra={
+        logger.error("Observed run-event storage failed", extra={
             "correlation_id": request_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="Run event history unavailable") from exc
@@ -964,7 +964,7 @@ async def get_ag_ui_authorized_pins(
             status_code=403, detail="Pin readback denied",
         ) from exc
     except Exception as exc:
-        logger.exception(
+        logger.error(
             "Authorized presentation pin readback unavailable",
             extra={
                 "correlation_id": correlation_id,
@@ -1270,7 +1270,7 @@ async def get_ag_ui_owned_history(
     except RuntimeError as exc:
         if str(exc) == "conversation_not_found":
             raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
-        logger.exception("Governed history read failed", extra={
+        logger.error("Governed history read failed", extra={
             "correlation_id": correlation_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="History temporarily unavailable") from exc
@@ -1342,7 +1342,7 @@ async def get_ag_ui_owned_history(
             },
         ) from exc
     except Exception as exc:
-        logger.exception("History attestation unavailable", extra={
+        logger.error("History attestation unavailable", extra={
             "correlation_id": correlation_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(
@@ -1503,7 +1503,7 @@ async def stream_ag_ui_chat(
                 await _verified_workspace_run_reference(run_id=workspace_ref, user=user)
             )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="Invalid AG-UI request") from exc
 
     # CK-07A: admission is durable, scoped, and must precede any model work.
     # The legacy bridge remains unchanged until operators enable the opt-in
@@ -1520,7 +1520,7 @@ async def stream_ag_ui_chat(
                 status_code=409, detail="Chat execution has already been admitted",
             ) from exc
         except Exception as exc:
-            logger.exception(
+            logger.error(
                 "Durable chat run admission failed",
                 extra={
                     "correlation_id": correlation_id,
@@ -1593,7 +1593,7 @@ async def get_ag_ui_chat_run_status(
     except RuntimeError as exc:
         if str(exc) == "conversation_not_found":
             raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
-        logger.exception("Chat run status unavailable", extra={
+        logger.error("Chat run status unavailable", extra={
             "correlation_id": request_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="Chat run status unavailable") from exc
@@ -1663,7 +1663,7 @@ async def cancel_ag_ui_chat_run(
     except RuntimeError as exc:
         if str(exc) == "conversation_not_found":
             raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
-        logger.exception("Chat run cancellation unavailable", extra={
+        logger.error("Chat run cancellation unavailable", extra={
             "correlation_id": request_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="Chat cancellation unavailable") from exc
