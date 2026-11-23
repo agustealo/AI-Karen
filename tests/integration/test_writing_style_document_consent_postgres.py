@@ -116,6 +116,7 @@ async def test_first_party_author_consent_postgres(
                 mime_type text NOT NULL,
                 bytes bigint NOT NULL,
                 sha256 text,
+                storage_uri text,
                 deleted_at timestamptz
             );
         """)
@@ -125,6 +126,7 @@ async def test_first_party_author_consent_postgres(
             "20261122010001_61_writing_style_sample_evidence.sql",
             "20261122010002_62_writing_style_document_author_consent.sql",
             "20261123030000_69_writing_style_document_file_tenant_text.sql",
+            "20261123040000_70_writing_style_document_delegated_use_fence.sql",
         ):
             await raw.execute((root / filename).read_text(encoding="utf-8"))
 
