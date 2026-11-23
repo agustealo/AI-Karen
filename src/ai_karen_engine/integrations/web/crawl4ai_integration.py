@@ -498,6 +498,8 @@ class Crawl4AIIntegration:
         response = None
         try:
             candidate = str(route.request.url)
+            original_url = urlparse(candidate)
+            original_host = (original_url.hostname or "").lower()
             is_navigation = bool(route.request.is_navigation_request())
             for hop in range(self.settings.max_redirects + 1):
                 # Charge each redirect hop, not just the initial request. The
@@ -534,7 +536,18 @@ class Crawl4AIIntegration:
                     if hop >= self.settings.max_redirects:
                         reason = "redirect_limit"
                         raise PermissionError("Browser redirect limit exceeded.")
-                    candidate = urljoin(candidate, location)
+                    next_url = urljoin(candidate, location)
+                    next_parts = urlparse(next_url)
+                    # The browser will receive a synthetic response at the
+                    # original URL, so cross-host redirects would misattribute
+                    # the fetched content and might forward request secrets.
+                    if (next_parts.hostname or "").lower() != original_host:
+                        reason = "cross_host_redirect"
+                        raise PermissionError("Cross-host browser redirect denied.")
+                    if original_url.scheme == "https" and next_parts.scheme != "https":
+                        reason = "scheme_downgrade"
+                        raise PermissionError("HTTPS downgrade redirect denied.")
+                    candidate = next_url
                     await response.dispose()
                     response = None
                     continue

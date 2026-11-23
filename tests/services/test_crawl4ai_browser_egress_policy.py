@@ -275,3 +275,27 @@ async def test_each_redirect_hop_counts_against_external_browser_budget():
     assert route.aborted == 1
     assert route.fulfilled == []
     assert usage["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cross_host_redirect_is_denied_to_preserve_source_provenance():
+    origin = "https://public.example/original"
+    elsewhere = "https://other-public.example/redirect"
+    crawler = integration(allowed_urls=[origin, elsewhere])
+    route = Route(origin, [Response(302, {"location": elsewhere}, b"")])
+    await crawler._guard_browser_request(route, budget())
+    assert [call["url"] for call in route.fetched] == [origin]
+    assert route.aborted == 1
+    assert route.fulfilled == []
+
+
+@pytest.mark.asyncio
+async def test_https_to_http_redirect_is_not_followed():
+    origin = "https://public.example/original"
+    downgrade = "http://public.example/unsecured"
+    crawler = integration(allowed_urls=[origin, downgrade])
+    route = Route(origin, [Response(302, {"location": downgrade}, b"")])
+    await crawler._guard_browser_request(route, budget())
+    assert [call["url"] for call in route.fetched] == [origin]
+    assert route.aborted == 1
+    assert route.fulfilled == []
