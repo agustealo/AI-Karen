@@ -112,7 +112,7 @@ async def test_first_party_author_consent_postgres(
             CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
-                tenant_id text NOT NULL,
+                tenant_id uuid NOT NULL,
                 owner_user_id uuid NOT NULL,
                 name text NOT NULL,
                 mime_type text NOT NULL,
@@ -150,7 +150,7 @@ async def test_first_party_author_consent_postgres(
             "INSERT INTO public.files "
             "(file_id, tenant_id, owner_user_id, name, mime_type, bytes, sha256) "
             "VALUES ($1,$2,$3,'author.txt','text/plain',10,$4)",
-            str(artifact), str(tenant), owner, digest,
+            str(artifact), tenant, owner, digest,
         )
         await raw.execute(f'CREATE ROLE "{role}" NOLOGIN')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
@@ -808,7 +808,7 @@ async def test_first_party_author_consent_postgres(
             "INSERT INTO public.files "
             "(file_id,tenant_id,owner_user_id,name,mime_type,bytes,sha256) "
             "VALUES ($1,$2,$3,'pending.txt','text/plain',10,$4)",
-            str(draft_artifact), str(tenant), owner, digest,
+            str(draft_artifact), tenant, owner, digest,
         )
         await scoped(
             owner, tenant,
@@ -903,7 +903,7 @@ async def test_first_party_author_consent_postgres(
                 "INSERT INTO public.files "
                 "(file_id,tenant_id,owner_user_id,name,mime_type,bytes,sha256) "
                 "VALUES ($1,$2,$3,'document.txt','text/plain',10,$4)",
-                str(case_file), str(tenant), owner, digest,
+                str(case_file), tenant, owner, digest,
             )
             await scoped(
                 owner, tenant, insert,
@@ -999,7 +999,7 @@ async def test_first_party_author_consent_postgres(
             ("name", "UPDATE public.files SET name='changed.txt' WHERE file_id=$1", None),
             ("storage", "UPDATE public.files SET storage_uri='supabase://new-source' WHERE file_id=$1", None),
             ("owner", "UPDATE public.files SET owner_user_id=$2 WHERE file_id=$1", other_actor),
-            ("tenant", "UPDATE public.files SET tenant_id=$2 WHERE file_id=$1", str(foreign_tenant)),
+            ("tenant", "UPDATE public.files SET tenant_id=$2 WHERE file_id=$1", foreign_tenant),
             ("delete", "DELETE FROM public.files WHERE file_id=$1", None),
         )
         for label, update_statement, replacement in changes:
