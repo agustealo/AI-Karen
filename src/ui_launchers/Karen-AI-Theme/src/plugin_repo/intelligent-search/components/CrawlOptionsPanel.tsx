@@ -114,7 +114,7 @@ export function CrawlOptionsPanel({ options, onChange }: CrawlOptionsPanelProps)
 
               <p className="text-xs text-muted-foreground">
                 Crawl depth and pages are bounded by your runtime budget.
-                Robots.txt and private-network protections are always enforced.
+                Robots policy and private-network protections remain server-controlled.
               </p>
               <div className="flex items-center gap-2">
                 <input data-testid="intelligent-search-use-cache" type="checkbox"

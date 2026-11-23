@@ -786,9 +786,22 @@ class InternetCapabilityService:
 
                 fetched = await asyncio.gather(*(fetch_one(url) for url in batch))
 
-            successful = self._normalize_crawl_results(fetched)
-            for page in successful:
+            successful = []
+            for page in self._normalize_crawl_results(fetched):
+                destination = self._normalize_url(
+                    str(page.get("final_url") or page.get("url") or "")
+                )
+                # Redirects are followed inside the crawler. Never promote a
+                # redirected page to evidence or link discovery unless the
+                # final destination passes the caller's restrictions.
+                if not destination or not allowed(destination):
+                    continue
+                if request.crawl_enabled and (
+                    (urlparse(destination).hostname or "").lower() not in seed_hosts
+                ):
+                    continue
                 page["depth"] = depth
+                successful.append(page)
             succeeded.extend(successful)
 
             if depth >= max_depth or attempts >= limit:

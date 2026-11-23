@@ -145,3 +145,28 @@ async def test_page_failures_and_missing_results_do_not_become_sources():
     assert response["crawl"]["degraded"] is True
     assert response["crawl"]["capabilities"]["deep_traversal"] is False
     assert response["metadata"]["degraded"] is True
+
+
+@pytest.mark.asyncio
+async def test_redirected_pages_outside_seed_domain_are_not_evidence_or_new_seeds():
+    origin = "https://docs.example/start"
+    crawler = CrawlStub({
+        origin: {
+            "url": origin,
+            "final_url": "https://external.example/private",
+            "success": True,
+            "markdown": "Not authorized as source content",
+            "links": [{"url": "https://docs.example/should-not-follow"}],
+        },
+    })
+    service = InternetCapabilityService(crawler=crawler)
+    attempts = []
+    found = await service._crawl_many(
+        [origin],
+        request({"enabled": True, "max_pages": 4, "max_depth": 2}),
+        page_budget=4,
+        attempt_sink=attempts,
+    )
+    assert attempts == [origin]
+    assert found == []
+    assert len(crawler.calls) == 1
