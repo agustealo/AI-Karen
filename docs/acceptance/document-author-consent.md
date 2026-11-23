@@ -338,3 +338,37 @@ production `TEXT` column and apply the forward migration. This is an
 internal eligibility/SQL correctness repair, **not** a document-ingestion
 activation or approved-host acceptance result. The separate author, storage,
 browser and delegated-use live acceptance HOLD remains.
+
+### WS-04B5: document-backed publication, direct SQL grant and source-change fence
+
+PostgreSQL owner-only receipt rows are not visible to delegated actors under
+forced RLS, so delegate-side negative receipt queries cannot establish
+authorization. The canonical profile and grant triggers now use a shared
+`SECURITY INVOKER` document consent validator while executing in the
+authenticated owner scope. It requires a current author-attested style-use
+receipt and matching canonical artifact metadata; a document sample's
+`consent_receipt_id` must resolve to that same artifact and author. Direct
+owner SQL grant INSERT and UPDATE cannot sidestep the check or extend a grant
+past the earliest document receipt expiry. Profiles without document sources
+retain their established manually authored style workflow.
+
+A new, restricted `SECURITY DEFINER` trigger on canonical `public.files`
+observes relevant file-identity, ownership, digest, type, storage locator,
+name, size, archive and deletion changes. It revokes any matching immutable
+author receipt via the **existing** document-consent revocation trigger,
+atomically invalidating the published/draft profile and its grants. Restoration
+does not resurrect the one-way consent. A forward-only migration also
+reconciles already-invalid receipts, unattested document sample references,
+and unbounded historical document-use grants. The privileged trigger must be
+installed under a role permitted to bypass forced RLS; it fails closed if the
+database owner lacks that privilege.
+
+The disposable PostgreSQL proof now exercises direct SQL and all file change
+classes against a real RLS-scoped delegate. Existing mocked generic-source
+sample tests no longer pretend to possess independent document receipts.
+This proves SQL metadata and consent lifecycle behavior only. In-place storage
+object replacement **without** changing canonical file metadata remains
+undetectable at this SQL boundary and needs separately verified storage
+integrity, reconciliation, and approved-host acceptance. Consumer document
+ingestion remains **OFF**; no implicit permission or model learning is
+introduced.
