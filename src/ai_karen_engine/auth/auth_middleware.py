@@ -20,7 +20,6 @@ from ai_karen_engine.core.logging import get_logger, get_structured_logger
 from ai_karen_engine.platform.observability.metrics import (
     get_metrics_collector as get_metrics_manager,
 )
-from ai_karen_engine.server.client_identity import resolve_client_ip
 
 logger = get_logger(__name__)
 security = HTTPBearer()
@@ -380,18 +379,11 @@ class SecureAuthMiddleware:
             path.startswith(pattern) for pattern in public_patterns
         )
 
-    async def validate_token(
-        self,
-        token: str,
-        ip_address: str = "unknown",
-        user_agent: str = "",
-    ) -> Dict[str, Any]:
+    async def validate_token(self, token: str) -> Dict[str, Any]:
         """Never report JWT signature validity as authenticated session truth."""
         try:
             payload = self._verify_access_token(token)
-            canonical = await self._require_active_session(
-                token, payload, ip_address=ip_address, user_agent=user_agent
-            )
+            canonical = await self._require_active_session(token, payload)
             return {"status": TokenStatus.VALID, "payload": canonical}
         except AuthenticationError as exc:
             if "revoked" in exc.message.lower():
@@ -422,7 +414,7 @@ class SecureAuthMiddleware:
         return payload
 
     async def _require_active_session(
-        self, token: str, payload: Dict[str, Any], ip_address: str, user_agent: str
+        self, token: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Resolve canonical active-session truth after JWT verification.
 
@@ -435,12 +427,7 @@ class SecureAuthMiddleware:
             from ai_karen_engine.auth.auth_service import get_auth_service
 
             auth_service = await get_auth_service()
-            account = await auth_service.validate_session(
-                token,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                strict_errors=True,
-            )
+            account = await auth_service.validate_session(token, strict_errors=True)
         except Exception as exc:
             logger.error(
                 "auth.session_validation_unavailable",
@@ -480,16 +467,12 @@ class SecureAuthMiddleware:
 
     async def get_current_user(self, request: Request) -> Dict[str, Any]:
         path = request.url.path
-        ip_address = resolve_client_ip(request)
-        user_agent = request.headers.get("user-agent", "")
         is_public = self.is_public_endpoint(path)
         try:
             token = self._extract_token_from_request(request)
             if token:
                 try:
-                    token_result = await self.validate_token(
-                        token, ip_address=ip_address, user_agent=user_agent
-                    )
+                    token_result = await self.validate_token(token)
                     if token_result["status"] == TokenStatus.VALID:
                         return self._get_user_from_payload(token_result["payload"])
                     if not is_public:
@@ -514,9 +497,7 @@ class SecureAuthMiddleware:
             session_token = self._extract_session_token_from_request(request)
             if session_token and session_token != token:
                 try:
-                    token_result = await self.validate_token(
-                        session_token, ip_address=ip_address, user_agent=user_agent
-                    )
+                    token_result = await self.validate_token(session_token)
                     if token_result["status"] == TokenStatus.VALID:
                         return self._get_user_from_payload(token_result["payload"])
                     if not is_public:
