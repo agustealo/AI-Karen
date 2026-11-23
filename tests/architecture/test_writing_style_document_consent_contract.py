@@ -236,7 +236,7 @@ def test_document_style_use_fence_reuses_existing_sql_authority() -> None:
 def test_delegate_storage_integrity_is_internal_and_fail_closed() -> None:
     """No public receipt RPC or style-only grant is accepted as byte proof."""
     root = Path(__file__).resolve().parents[2]
-    migration_name = "20261123050000_71_writing_style_delegated_storage_integrity.sql"
+    migration_name = "20261123060000_72_writing_style_delegated_storage_integrity.sql"
     sql = (root / "supabase/migrations" / migration_name).read_text(
         encoding="utf-8"
     )
