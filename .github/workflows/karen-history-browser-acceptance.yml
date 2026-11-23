@@ -22,6 +22,7 @@ on:
           - settings
           - navigation
           - file-explorer
+          - plugin-surfaces
           - content-intelligence
           - content-intelligence-denial
           - content-intelligence-revocation
@@ -747,7 +748,7 @@ jobs:
   # KUI: protected settings, navigation, and file-explorer browser acceptance.
   # Reuse the approved main/deployment/credential boundary, not a second runner.
   authenticated-settings-visual-acceptance:
-    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'card-studio' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'card-studio' || inputs.scenario == 'file-explorer' || inputs.scenario == 'plugin-surfaces' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: karen-sanitized-browser-acceptance
@@ -755,9 +756,10 @@ jobs:
       contents: read
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
-      KAREN_BASE_URL: ${{ (inputs.scenario == 'card-studio' && vars.KAREN_CARD_STUDIO_ACCEPTANCE_URL) || ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario == 'settings' || inputs.scenario == 'navigation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
+      KAREN_BASE_URL: ${{ (inputs.scenario == 'card-studio' && vars.KAREN_CARD_STUDIO_ACCEPTANCE_URL) || ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || (inputs.scenario == 'plugin-surfaces' && vars.KAREN_PLUGIN_SURFACES_ACCEPTANCE_URL) || ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario == 'settings' || inputs.scenario == 'navigation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
       KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'settings' || inputs.scenario == 'navigation') && 'true' || 'false' }}
+      KAREN_PLUGIN_SURFACES_ACCEPTANCE: ${{ inputs.scenario == 'plugin-surfaces' && 'true' || 'false' }}
       KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence' && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID }}
@@ -945,6 +947,10 @@ jobs:
             npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
               --config=e2e/playwright.config.ts \
               --project=chromium --grep='KCONTENT-LIVE' --reporter=list --retries=0
+          elif [[ "${{ inputs.scenario }}" == "plugin-surfaces" ]]; then
+            npx playwright test e2e/first-party-plugin-live-acceptance.spec.ts \
+              --config=e2e/playwright.config.ts \
+              --project=chromium --reporter=list --retries=0
           elif [[ "${{ inputs.scenario }}" == "file-explorer" ]]; then
             npx playwright test e2e/file-explorer-real-acceptance.spec.ts \
               --config=e2e/playwright.config.ts \
