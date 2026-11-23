@@ -6,20 +6,26 @@ on:
     paths:
       - "src/ai_karen_engine/config/artifact_storage.py"
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
+      - "src/ai_karen_engine/services/database/repositories/upload_session.py"
       - "supabase/migrations/*artifact_archive_state.sql"
+      - "supabase/migrations/*artifact_upload*.sql"
       - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
+      - "tests/integration/test_upload_session_rls_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   push:
     branches: [main]
     paths:
       - "src/ai_karen_engine/config/artifact_storage.py"
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
+      - "src/ai_karen_engine/services/database/repositories/upload_session.py"
       - "supabase/migrations/*artifact_archive_state.sql"
+      - "supabase/migrations/*artifact_upload*.sql"
       - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
+      - "tests/integration/test_upload_session_rls_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   workflow_dispatch:
 
@@ -88,6 +94,8 @@ jobs:
           FINALIZATION = Path("supabase/migrations/20260827050000_05_schema_security_finalization.sql")
           TENANT_AUTHORITY = Path("supabase/migrations/20260916010000_14_auth_tenant_authority.sql")
           ARCHIVE = Path("supabase/migrations/20261121010000_66_artifact_archive_state.sql")
+          UPLOAD_LEDGER = Path("supabase/migrations/20261123010000_67_artifact_upload_sessions.sql")
+          UPLOAD_TENANT_UUID = Path("supabase/migrations/20261123020000_68_artifact_upload_tenant_uuid.sql")
           DB_NAME = "karen_code_artifact_test"
           ROOT_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
           DB_DSN = "postgresql://postgres:postgres@127.0.0.1:5432/" + DB_NAME
@@ -160,6 +168,8 @@ jobs:
                   await db.execute(tenant_type_correction(finalization, "files"))
                   await db.execute(TENANT_AUTHORITY.read_text(encoding="utf-8"))
                   await db.execute(ARCHIVE.read_text(encoding="utf-8"))
+                  await db.execute(UPLOAD_LEDGER.read_text(encoding="utf-8"))
+                  await db.execute(UPLOAD_TENANT_UUID.read_text(encoding="utf-8"))
                   security = Path(
                       "supabase/migrations/20260827040000_04_tenant_security.sql"
                   ).read_text(encoding="utf-8")
@@ -236,10 +246,12 @@ jobs:
             src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py \
             tests/services/test_artifact_storage_platform_client.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
-            tests/integration/test_artifact_rls_actor_postgres.py
+            tests/integration/test_artifact_rls_actor_postgres.py \
+            tests/integration/test_upload_session_rls_postgres.py
           pytest tests/services/test_artifact_storage_platform_client.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
+            tests/integration/test_upload_session_rls_postgres.py \
             -q -rs --junitxml=ckgen-artifact-postgres-junit.xml
 
       - name: Preserve PostgreSQL proof evidence
