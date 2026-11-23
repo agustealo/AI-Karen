@@ -1,4 +1,5 @@
 import { ArticleReader } from './ArticleReader';
+import { CrawlDiagnosticsPanel } from './CrawlDiagnosticsPanel';
 import React, { useMemo, useState } from 'react';
 import { IntelligentSearchResponse, SearchResultItem, SearchSourceItem } from '../types';
 import { Send, FileText, Code, AlignLeft, Download, ExternalLink } from 'lucide-react';
@@ -650,7 +651,9 @@ export function DiagnosticsPanel({ response }: PanelProps) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+    <div className="space-y-5">
+      <CrawlDiagnosticsPanel response={response} />
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.1fr_0.9fr]">
       <div className="rounded-3xl border border-border/60 bg-card/90 p-6 shadow-[0_24px_60px_rgba(0,0,0,0.18)]">
         <h4 className="text-[11px] font-bold uppercase tracking-[0.3em] text-muted-foreground mb-5">
           Orchestration Metadata
@@ -689,6 +692,7 @@ export function DiagnosticsPanel({ response }: PanelProps) {
             ))}
           </div>
         )}
+      </div>
       </div>
     </div>
   );
