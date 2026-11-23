@@ -24,7 +24,7 @@ def test_plugin_scenario_reuses_exact_main_provenance_and_env_boundary() -> None
     assert "inputs.scenario == 'plugin-surfaces'" in job
     assert "github.ref == 'refs/heads/main'" in job
     assert "environment: karen-sanitized-browser-acceptance" in job
-    assert "KAREN_PLUGIN_SURFACES_ACCEPTANCE_URL" in job
+    assert "KAREN_FILE_EXPLORER_ACCEPTANCE_URL" in job
     assert "KAREN_PLUGIN_SURFACES_ACCEPTANCE:" in job
     assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
     assert "branches/main" in job
