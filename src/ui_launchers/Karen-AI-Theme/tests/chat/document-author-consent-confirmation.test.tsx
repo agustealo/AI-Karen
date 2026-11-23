@@ -192,6 +192,8 @@ describe('first-party document author confirmation', () => {
       { confirmed: true },
     );
     expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry receipt issuance' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Issue approved consent receipt' })).toBeNull();
   });
 
   it('does not claim revoked consent on failed backend revocation', async () => {
@@ -359,6 +361,7 @@ describe('first-party document author confirmation', () => {
     await act(async () => { resolveInitialReceipt?.(receipt); });
     expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Revoke document consent' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Recheck current consent receipt' })).toBeNull();
     expect(api.post).toHaveBeenCalledTimes(1);
   });
 
