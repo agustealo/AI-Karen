@@ -116,11 +116,10 @@ def test_materialized_file_explorer_is_discovered_by_real_ui_installer(tmp_path)
     (target / manifest["entry"]["entry_file"]).write_bytes(
         (PLUGIN / "ui" / manifest["entry"]["entry_file"]).read_bytes()
     )
-    installer = UIInstallerService.__new__(UIInstallerService)
-    installer.plugins_repo_root = tmp_path / "plugin-repo"
-    installer.backup_dir = tmp_path / "backups"
-    installer.installations = {}
-    installer._load_installations()
+    installer = UIInstallerService(
+        plugins_repo_root=str(tmp_path / "plugin-repo"),
+        backup_dir=str(tmp_path / "backups"),
+    )
     assert "file-explorer" in installer.installations
     assert installer.installations["file-explorer"].entry_file == (
         target / "FileExplorerPage.tsx"
