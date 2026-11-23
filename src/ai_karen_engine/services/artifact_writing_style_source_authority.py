@@ -12,7 +12,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Protocol
 
-from ai_karen_engine.services.database.repositories.artifact_store import ArtifactStore
+from ai_karen_engine.services.database.repositories.artifact_store import (
+    ArtifactStore,
+    VerifiedArtifactText,
+)
 from ai_karen_engine.services.writing_style_sample_provenance import (
     VerifiedWritingStyleSource,
 )
@@ -192,12 +195,60 @@ class ArtifactWritingStyleSourceAuthority:
         )
 
 
-# WS-04A4: A content reader is deliberately not exposed. ArtifactStore's
-# current download method fully materializes storage bytes before a caller can
-# enforce a byte budget. Introducing a so-called bounded source reader here
-# would violate the source owner's resource governance contract. Reuse the
-# WS-02C content reader protocol only after the canonical storage owner offers
-# a genuinely transport-bounded read with current-owner fencing.
+class ArtifactWritingStyleContentReader:
+    """Document-only WS-02C adapter to the canonical transport-bounded owner.
+
+    This is *not* an authorization grant. The surrounding persisted-sample
+    authority independently verifies the profile-specific author consent
+    before and after calling this reader. Callers must use authenticated
+    principal IDs from the trusted runtime, never client-supplied scope.
+    """
+
+    def __init__(self, *, artifacts: ArtifactStore) -> None:
+        if artifacts is None or not callable(
+            getattr(artifacts, "read_owner_active_text_bounded", None)
+        ):
+            raise ValueError("bounded_artifact_source_owner_required")
+        self._artifacts = artifacts
+
+    async def read_current_content(
+        self, *, tenant_id: str, actor_id: str, source_type: str,
+        source_id: str,
+    ) -> str | None:
+        if source_type != "document" or any(
+            _canonical_uuid(value) is None
+            for value in (tenant_id, actor_id, source_id)
+        ):
+            return None
+        try:
+            result = await self._artifacts.read_owner_active_text_bounded(
+                source_id, tenant_id, actor_id, max_bytes=65536,
+            )
+            if not result.success or not isinstance(result.data, VerifiedArtifactText):
+                return None
+            source = result.data
+            if (
+                source.artifact_id != source_id
+                or source.tenant_id != tenant_id
+                or source.user_id != actor_id
+                or source.mime_type != "text/plain"
+                or not _valid_digest(source.sha256)
+                or not isinstance(source.filename, str)
+                or re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", source.filename
+                ) is None
+                or not source.filename.lower().endswith((".txt", ".md"))
+                or not isinstance(source.text, str)
+            ):
+                return None
+            return source.text
+        except Exception:
+            # Do not expose source bytes, storage details, errors or signed URLs.
+            return None
 
 
-__all__ = ["ArtifactWritingStyleSourceAuthority", "DocumentStyleConsentIssuer"]
+__all__ = [
+    "ArtifactWritingStyleSourceAuthority",
+    "ArtifactWritingStyleContentReader",
+    "DocumentStyleConsentIssuer",
+]
