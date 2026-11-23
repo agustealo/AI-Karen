@@ -166,3 +166,35 @@ gates are separate from live backend and authenticated browser acceptance.
 A consumer release must not pass while any of these independent live checks
 fails. Never broaden deployment protection or replay a mutating chat request
 against an alternate host to work around missing backend connectivity.
+
+## November 23, 2026: KREADY-01A exact-production-revision hold
+
+**Status: NO-GO for latest-main consumer acceptance; release of another build is not authorized by this audit.** This is an observed deployment/provenance gap, not evidence that the current production deployment is offline.
+
+| Evidence source | Observed fact |
+| --- | --- |
+| GitHub branch `main` | `573dea8e3104d8b5e1d429058917c868c13aaf7b`, PR #1262 merged |
+| Latest-main Actions | Main Quality Gate, Production First-Boot Smoke, Context Authority Contract and Cognitive Proof CI succeeded for this exact SHA |
+| GitHub combined commit status | Vercel reported failure, linking to the deployment build-rate-limit guidance |
+| Vercel production deployment | `dpl_6civMQw1LWrEZGcy8NsUppZp9Yfz`, READY, Git SHA `fbfea8f639252b9bd345b78546f2bbbba6d7b41d` (PR #1270) |
+| Production aliases on that deployment | `ai-karen-beta.vercel.app`; `ai-karen-zeustheeternal-3982.vercel.app` |
+| Exact Vercel deployment lookup for latest `main` | No matching deployment returned |
+| Authenticated end-to-end browser acceptance for latest `main` | Not observed; do not infer from source CI or static Vercel READY |
+| Runtime health from live browser-network requests | Not independently verified in this audit environment |
+| Independent release approval | No approval submission observed on PR #1262 |
+
+**Authority boundary:** The current production deployment is valid as a separate deployed artifact, but it is not proof that the later `main` changes have been deployed and accepted. The previously documented Vercel frontend environment-variable ownership and canonical FastAPI backend readiness gates remain independent and unresolved until rerun with live evidence. Absence of errors or available logs is not health proof.
+
+### Reuse the existing release gate
+
+1. Pin a reviewed **40-character** GitHub `main` commit and inspect the immutable Vercel deployment metadata, target, project ID and source SHA. If `main` advances during testing, restart the evidence run on the new head. Do not automatically promote a preview or substitute an older production alias.
+2. After operator-governed frontend credential scope remediation, run `.github/workflows/vercel-environment-boundary.yml` against the exact `main` SHA. Only the existing `scripts/ci/verify_vercel_environment_scopes.py` owns this check. Never request decrypted secrets or move backend-only credentials into frontend Preview or Production.
+3. On an explicitly approved immutable deployment hostname, run `scripts/ci/verify_vercel_deployment.py` with the matching `KAREN_VERCEL_ACCEPTANCE_TARGET` and `scripts/ci/verify_deployment_revision.py`. Demand matching platform metadata, running `/api/deployment-revision` identity and live `/api/health` backend readiness, followed by direct canonical FastAPI `GET /ready` verification from the web runtime network. A first-boot container test or frontend compile does not satisfy these checks.
+4. Execute the **existing protected** `.github/workflows/karen-history-browser-acceptance.yml` on that reviewed SHA, including the authenticated `copilotkit-consumer` flow and required failure/replay scenarios, using disposable tenant-scoped identities. Keep acceptance credentials, conversation content and traces private. The workflow's pre-/post-browser provenance checks are mandatory, not optional.
+5. Record sanitized proof links for exact GitHub run IDs, immutable Vercel deployment ID and commit, backend readiness response, authenticated browser results, independent review decision and rollback candidate. Missing evidence means **NO-GO**, not a green approximation.
+
+**Administrative follow-up:** GitHub branch metadata reported `main.protected=false`, and a repository rulesets query returned no enforced rulesets. A separate branch-protection endpoint returned 403 for this integration. An administrator must verify the actual mandatory CI/review enforcement before declaring release governance complete; this audit does not claim the integration has administrative access.
+
+This section is a dated observation. The acceptance source of truth remains the existing release scripts, workflows, deployment metadata and runtime receipts, not this document. Do not create new deployment orchestrators, provider fallbacks, or UI-owned readiness flags.
+
+Evidence links: [main commit](https://github.com/agustealo/AI-Karen/commit/573dea8e3104d8b5e1d429058917c868c13aaf7b), [main quality](https://github.com/agustealo/AI-Karen/actions/runs/45206385059), [first boot](https://github.com/agustealo/AI-Karen/actions/runs/45206385175), [older READY production artifact](https://vercel.com/zeustheeternal-3982/ai-karen/6civMQw1LWrEZGcy8NsUppZp9Yfz).
