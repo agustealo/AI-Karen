@@ -114,7 +114,7 @@ jobs:
           asyncio.run(prepare())
           PY
 
-      - name: Prove actual migration rollback, RLS, immutable history, CAS and replay
+      - name: Prove migration, runtime policy and scoped CRUD HTTP against PostgreSQL
         shell: bash
         run: |
           set -euo pipefail
@@ -134,4 +134,4 @@ jobs:
           echo "Card Studio database proof runs the actual migration and repository under a real least-privilege PostgreSQL login." >> "$GITHUB_STEP_SUMMARY"
           echo "Disposable database: karen_card_studio_test. No production data is touched." >> "$GITHUB_STEP_SUMMARY"
           echo "The proof covers rollback, tenant/user RLS, CAS competition, immutable history and idempotent retries." >> "$GITHUB_STEP_SUMMARY"
-          echo "It does NOT certify authenticated HTTP ingress, browser editor, hosted deployment, template publication or chat actions." >> "$GITHUB_STEP_SUMMARY"
+          echo "The HTTP contract exercises the real runtime and PostgreSQL via a test principal override. It does NOT certify JWT/durable-session authentication, hosted browser usage, publication or chat actions." >> "$GITHUB_STEP_SUMMARY"
