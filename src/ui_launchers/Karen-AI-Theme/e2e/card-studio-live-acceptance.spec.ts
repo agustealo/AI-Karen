@@ -21,6 +21,25 @@ const password = process.env.KAREN_UX_PASSWORD;
 const isolationEmail = process.env.KAREN_UX_ISOLATION_EMAIL;
 const isolationPassword = process.env.KAREN_UX_ISOLATION_PASSWORD;
 const localLoopback = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
+
+/**
+ * The shared protected settings/browser workflow sets this admission bit
+ * before invoking the dedicated Card Studio spec. Playwright returns exit 0
+ * when all opt-in tests are skipped, so a protected run must reject a missing
+ * opt-in or incomplete two-principal mutation authorization at module load.
+ *
+ * Ordinary developer test discovery still skips this opt-in suite and never
+ * requires real credentials. This check does not authorize any mutation.
+ */
+if (process.env.KAREN_SETTINGS_VERIFIED_DEPLOYMENT === "true" &&
+    (!enabled || !mutationApproved || !email || !password ||
+     !isolationEmail || !isolationPassword)) {
+  throw new Error(
+    "Protected Card Studio browser acceptance needs the enabled suite, " +
+    "explicit disposable mutation approval, and two sanitized identities. " +
+    "Skipped acceptance cannot certify consumer readiness.",
+  );
+}
 const catalogPath = "/api/chat/card-studio/catalog";
 const templatesPath = "/api/chat/card-studio/templates";
 const viewports = [

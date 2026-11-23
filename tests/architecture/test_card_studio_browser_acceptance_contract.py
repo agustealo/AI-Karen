@@ -106,6 +106,30 @@ def test_card_studio_uses_existing_scoped_protection_cookie_before_login() -> No
     assert "page.addInitScript(" not in fixture
 
 
+def test_card_studio_protected_suite_cannot_pass_when_all_trials_skip() -> None:
+    """Protected acceptance is not proved by Playwright's green skipped outcome."""
+    spec = (THEME / "e2e/card-studio-live-acceptance.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert 'KAREN_SETTINGS_VERIFIED_DEPLOYMENT: "true"' in workflow
+    assert 'KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE:' in workflow
+    assert 'KAREN_CARD_STUDIO_MUTATION_APPROVED:' in workflow
+    assert 'process.env.KAREN_SETTINGS_VERIFIED_DEPLOYMENT === "true"' in spec
+    assert '(!enabled || !mutationApproved || !email || !password ||' in spec
+    assert '!isolationEmail || !isolationPassword)' in spec
+    assert 'Skipped acceptance cannot certify consumer readiness.' in spec
+    assert spec.count('test.skip(!enabled,') == 3
+    assert 'test("KCARD-LIVE:' in spec
+    assert 'test("KCARD-LIVE-MUTATION:' in spec
+    assert 'test("KCARD-LIVE-ISOLATION:' in spec
+    assert 'npx playwright test e2e/card-studio-live-acceptance.spec.ts' in workflow
+    assert '--project=chromium --reporter=list --retries=0' in workflow
+    block = workflow.split(
+        'elif [[ "${{ inputs.scenario }}" == "card-studio" ]]; then', 1
+    )[1].split('elif [[', 1)[0]
+    assert '--grep=' not in block
+
 def test_card_studio_real_second_principal_denies_all_owner_paths() -> None:
     """No same-user stale tab or client-faked identity counts as authorization."""
     spec = (THEME / "e2e/card-studio-live-acceptance.spec.ts").read_text(

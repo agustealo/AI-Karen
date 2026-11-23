@@ -654,3 +654,25 @@ This strengthens release evidence; the already existing backend RuntimePolicy,
 RBAC, PostgreSQL RLS, API transport and default-disabled production feature
 remain the sole authorities. Source and CI passes are not evidence that the
 two-account live scenario actually ran on an approved host.
+
+
+### KGUI-CARD-STUDIO-01I: reject green-but-skipped release trials
+
+The dedicated Card Studio Playwright spec is opt-in for ordinary development,
+where skipped cases must not require production credentials. The **protected**
+GitHub browser job is different: it sets the existing
+`KAREN_SETTINGS_VERIFIED_DEPLOYMENT=true` admission marker. When that marker
+is present, the spec now fails immediately unless all three release
+preconditions are satisfied: `KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE=true`,
+`KAREN_CARD_STUDIO_MUTATION_APPROVED=true`, and both sanctioned sanitized
+credential pairs are supplied.
+
+This is a release-evidence guard, **not** permission to turn on Card Studio
+or execute mutations against arbitrary installations. The environment,
+deployed revision, Vercel provenance, real RBAC, PostgreSQL identity scope,
+and actual browser tests still have to pass. Ordinary non-protected
+Playwright discovery keeps the suite disabled by default. A command that
+reports only skipped tests must never be described as real-browser proof.
+The existing architecture-source contract guards the marker, prerequisite
+identity checks, three live trial names, and absence of a workflow grep
+that could select only one of the three cases.
