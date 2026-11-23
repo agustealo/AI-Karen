@@ -4,16 +4,20 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "src/ai_karen_engine/config/artifact_storage.py"
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "supabase/migrations/*artifact_archive_state.sql"
+      - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   push:
     branches: [main]
     paths:
+      - "src/ai_karen_engine/config/artifact_storage.py"
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "supabase/migrations/*artifact_archive_state.sql"
+      - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
@@ -228,10 +232,13 @@ jobs:
         run: |
           set -euo pipefail
           python -m compileall -q \
+            src/ai_karen_engine/config/artifact_storage.py \
             src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py \
+            tests/services/test_artifact_storage_platform_client.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py
-          pytest tests/integration/test_live_code_artifact_revocation_postgres.py \
+          pytest tests/services/test_artifact_storage_platform_client.py \
+            tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
             -q -rs --junitxml=ckgen-artifact-postgres-junit.xml
 
