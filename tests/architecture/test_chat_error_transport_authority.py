@@ -20,12 +20,18 @@ def test_chat_transport_keeps_expected_validation_translation() -> None:
 
     assert source.count("except HTTPException:") >= 2
     assert source.count("except ValueError as exc:") >= 2
-    assert "raise HTTPException(status_code=400, detail=str(exc)) from exc" in source
+    assert 'raise HTTPException(status_code=400, detail="Invalid chat request") from exc' in source
+    assert "logger.exception(" not in source
+    assert "error=str(exc)" not in source
 
 
 def test_global_error_middleware_owns_unexpected_exception_translation() -> None:
     source = ERROR_MIDDLEWARE.read_text(encoding="utf-8")
 
     assert "except Exception as exc:" in source
-    assert "traceback_str = traceback.format_exc()" in source
+    # Capturing raw tracebacks is not required for unexpected transport errors.
+    # SQLAlchemy exception tracebacks may include bound private user data.
+    assert "traceback.format_exc()" not in source
+    assert 'error_message = "Internal server error"' in source
+    assert "logger.exception(" not in source
     assert "error_type = type(exc).__name__" in source

@@ -1252,3 +1252,64 @@ async def test_b2c2_reconciliation_rejects_mismatched_authenticated_scope() -> N
     )
     assert result.status == "unverified"
     assert result.reason == "scope_or_identity_unverified"
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("history", "persistence"))
+@pytest.mark.parametrize("failure", ("permission", "sql", "repository_result"))
+async def test_runtime_transcript_error_redacts_sql_and_bound_values(
+    caplog: pytest.LogCaptureFixture, operation: str, failure: str,
+) -> None:
+    from sqlalchemy.exc import StatementError
+
+    sentinel = "PRIVATE_SQL_BOUND_TRANSCRIPT_SECRET"
+    injected = StatementError(
+        "sensitive", "SELECT :secret", {"secret": sentinel},
+        RuntimeError("private SQL driver context"),
+    )
+    assert sentinel in str(injected)
+
+    class UnsafeRepository(_Repository):
+        async def get_conversation(self, conversation_id: str, tenant_id: str):
+            if operation == "history" or failure != "repository_result":
+                if failure == "permission":
+                    raise PermissionError(sentinel)
+                if failure == "sql":
+                    raise injected
+                return RepositoryResult(success=False, error=sentinel)
+            return await super().get_conversation(conversation_id, tenant_id)
+
+        async def add_completed_turn(self, user_message, assistant_message):
+            return RepositoryResult(success=False, error=sentinel)
+
+    gateway = ConversationRuntimeGateway(repository=UnsafeRepository())
+    with caplog.at_level(
+        "WARNING",
+        logger="ai_karen_engine.core.runtime.conversation_runtime_gateway",
+    ):
+        if operation == "history":
+            result = await gateway.load_history(_context(), limit=5)
+        else:
+            result = await gateway.persist_completed_turn(
+                _context(), user_text=sentinel, assistant_text="response",
+            )
+    assert not result.success
+    assert sentinel not in repr(result)
+    assert sentinel not in caplog.text
+    assert "SELECT :secret" not in caplog.text
+    assert "private SQL driver context" not in caplog.text
+    assert all(
+        record.exc_info is None for record in caplog.records
+        if record.name == "ai_karen_engine.core.runtime.conversation_runtime_gateway"
+    )
+    if failure == "permission":
+        assert result.status == "rejected"
+        assert result.reason == "conversation_access_denied"
+    else:
+        assert result.status == "failed"
+        assert result.reason in {
+            "conversation_lookup_failed", "conversation_create_failed",
+            "conversation_history_read_failed", "transcript_persistence_failed",
+            "completed_turn_write_failed",
+        }
