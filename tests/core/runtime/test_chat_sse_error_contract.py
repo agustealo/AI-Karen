@@ -358,3 +358,31 @@ async def test_sse_disconnect_on_terminal_frame_handles_teardown_failure():
         await asyncio.wait_for(wire.aclose(), 1)
 
     await asyncio.wait_for(finalized.wait(), 1)
+
+
+@pytest.mark.asyncio
+async def test_sse_partial_disconnect_with_failed_cleanup_does_not_emit_into_closed_wire():
+    """A teardown failure on a closed consumer is logged, never serialized."""
+    finalized = asyncio.Event()
+
+    async def aborted_with_bad_close(_request):
+        try:
+            yield ChatStreamChunk(
+                type="content", content="partial", correlation_id="correlation-1",
+            )
+            await asyncio.Event().wait()
+        finally:
+            finalized.set()
+            raise RuntimeError("private post-disconnect teardown")
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=aborted_with_bad_close),
+    ):
+        wire = _sse(_request())
+        assert (await asyncio.wait_for(anext(wire), 1)).startswith(": stream_connected")
+        assert json.loads((await asyncio.wait_for(anext(wire), 1))[6:])["type"] == "content"
+        # After the close request, attempting a diagnostic yield is illegal.
+        await asyncio.wait_for(wire.aclose(), 1)
+
+    await asyncio.wait_for(finalized.wait(), 1)

@@ -378,6 +378,7 @@ async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
     """
     correlation_id = runtime_request.context.correlation_id
     terminal_seen = False
+    consumer_closed = False
     try:
         # A client can disconnect just after receiving one SSE frame. Keep
         # canonical producer cleanup deterministic, not dependent on GC.
@@ -390,10 +391,26 @@ async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
                 # consumer may close immediately at that suspension point.
                 if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
                     terminal_seen = True
-                yield chunk.type, encoded
+                try:
+                    yield chunk.type, encoded
+                except GeneratorExit:
+                    # A downstream close is not a request for more SSE bytes.
+                    # Remember it even when producer cleanup replaces the
+                    # GeneratorExit with an ordinary exception.
+                    consumer_closed = True
+                    raise
                 if terminal_seen:
                     return
     except Exception as exc:
+        if consumer_closed:
+            logger.error(
+                "chat_stream_cleanup_failed_on_consumer_close",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return
         if terminal_seen:
             # A producer teardown failure cannot put a second terminal event
             # after one the consumer already received.
