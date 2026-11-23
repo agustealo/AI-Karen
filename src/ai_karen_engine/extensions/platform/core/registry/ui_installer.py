@@ -21,7 +21,11 @@ from datetime import datetime
 
 from .plugin_registry import get_registry
 from .canonical_validator import get_validator
-from .manifest_enforcer import get_enforcer
+from .manifest_enforcer import (
+    get_enforcer,
+    GUIEntryModel,
+    ManifestValidationSeverity,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -166,9 +170,40 @@ class UIInstallerService:
                 
                 if manifest_path.is_file() and not manifest_path.is_symlink():
                     try:
-                        with open(manifest_path, "r") as f:
+                        with open(manifest_path, "r", encoding="utf-8") as f:
                             manifest = json.load(f)
-                        
+
+                        # Versioned GUI packages and explicit GUI entries must
+                        # pass the existing GUI authority on every restart.
+                        # Keep the older entry_file-only installation contract
+                        # until its migration has separate test coverage.
+                        if "gui_manifest_version" in manifest:
+                            issues = self.manifest_enforcer.validate_gui_manifest(
+                                manifest_path
+                            )
+                            errors = [
+                                issue for issue in issues
+                                if issue.severity is ManifestValidationSeverity.ERROR
+                            ]
+                            if errors:
+                                logger.warning(
+                                    "Skipping invalid GUI manifest for %s: %s",
+                                    plugin_id,
+                                    ", ".join(issue.field for issue in errors),
+                                )
+                                continue
+                        elif "entry" in manifest:
+                            # Maintain the historic entry-file-only contract
+                            # without trusting malformed entry declarations.
+                            try:
+                                GUIEntryModel.model_validate(manifest["entry"])
+                            except (ValueError, TypeError):
+                                logger.warning(
+                                    "Skipping malformed legacy GUI entry for %s",
+                                    plugin_id,
+                                )
+                                continue
+
                         # Check for entry file
                         entry = manifest.get("entry", {})
                         entry_file_rel = None

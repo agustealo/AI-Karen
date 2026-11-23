@@ -25,6 +25,8 @@ from ..manifest import (
     ExtensionManifest,
     ExtensionStatus,
     ExtensionCapabilities,
+    backend_manifest_names,
+    find_backend_manifest_file,
 )
 from .menu_discovery import discover_menu_contributions
 from .validator import ExtensionValidator
@@ -339,39 +341,12 @@ class ExtensionDiscoveryService:
             return None
 
     def _find_manifest_file(self, extension_dir: Path) -> Optional[Path]:
-        """
-        Find the manifest file in an extension directory.
-
-        Args:
-            extension_dir: Extension directory
-
-        Returns:
-            Path to manifest file or None
-        """
-        manifest_names = self._manifest_name_candidates(extension_dir)
-
-        for manifest_name in manifest_names:
-            manifest_file = extension_dir / manifest_name
-            if manifest_file.exists():
-                return manifest_file
-
-        return None
+        """Select backend metadata through the canonical manifest boundary."""
+        return find_backend_manifest_file(extension_dir)
 
     def _manifest_name_candidates(self, extension_dir: Path) -> List[str]:
-        path_parts = set(extension_dir.parts)
-        if "sys_extensions" in path_parts:
-            return [
-                "extension_manifest.json",
-                "plugin_manifest.json",
-                "extension.json",
-                "manifest.json",
-            ]
-        return [
-            "plugin_manifest.json",
-            "extension_manifest.json",
-            "extension.json",
-            "manifest.json",
-        ]
+        """Compatibility surface; the manifest model owns filename precedence."""
+        return list(backend_manifest_names(extension_dir))
 
     async def _calculate_file_hash(self, extension_dir: Path) -> Optional[str]:
         """

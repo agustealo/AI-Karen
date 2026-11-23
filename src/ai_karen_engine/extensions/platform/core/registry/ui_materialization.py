@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.extensions.platform.core.registry.plugin_registry import get_registry
+from ai_karen_engine.extensions.platform.core.registry.manifest_enforcer import (
+    ManifestStandardsEnforcer,
+    ManifestValidationSeverity,
+)
 
 logger = logging.getLogger("kari.ui_materialization")
 
@@ -128,6 +132,36 @@ class UIMaterializationPipeline:
             capabilities = cls._to_dict(getattr(metadata, "capabilities", None))
         return bool(capabilities.get("provides_ui", False))
 
+    @staticmethod
+    def _read_validated_gui_manifest(
+        manifest_path: Path, *, plugin_id: str, category: Optional[str]
+    ) -> Dict[str, Any]:
+        """Read presentation metadata using its existing GUI-only validator.
+
+        Registry admission happens first. This method is not plugin discovery
+        and cannot grant a backend capability, Python handler, or permissions.
+        """
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            raise ValueError("Missing or unsafe GUI manifest")
+        issues = ManifestStandardsEnforcer().validate_gui_manifest(manifest_path)
+        errors = [
+            issue.field
+            for issue in issues
+            if issue.severity is ManifestValidationSeverity.ERROR
+        ]
+        if errors:
+            raise ValueError("Invalid GUI manifest fields: " + ", ".join(errors))
+
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if (
+            data.get("plugin_id") != plugin_id
+            or data.get("id") != plugin_id
+            or (category is not None and data.get("category") != category)
+        ):
+            raise ValueError("GUI manifest identity or category disagrees with registry")
+        return data
+
     async def discover_ui_plugins(self) -> List[Dict[str, Any]]:
         """Return only UI plugins admitted by the governed extension registry.
 
@@ -227,10 +261,49 @@ class UIMaterializationPipeline:
             source_path = str(ui_config.get("source_path") or "ui")
             ui_component_dir = plugin_dir / source_path
             entry_file_name = str(ui_config.get("entry_file") or "PluginPage.tsx")
-            entry_candidate = plugin_dir / entry_file_name
-            if not entry_candidate.exists():
-                entry_candidate = ui_component_dir / Path(entry_file_name).name
-            has_component = entry_candidate.exists() and entry_candidate.is_file()
+
+            # The catalog manifest grants backend discovery, not UI publication.
+            # If the package has a separate GUI declaration, it owns the
+            # frontend entry and is validated independently before publication.
+            gui_manifest_path = plugin_dir / "manifest.json"
+            gui_manifest: Optional[Dict[str, Any]] = None
+            if gui_manifest_path != manifest_path and (
+                gui_manifest_path.exists() or gui_manifest_path.is_symlink()
+            ):
+                try:
+                    gui_manifest = self._read_validated_gui_manifest(
+                        gui_manifest_path,
+                        plugin_id=plugin_id,
+                        category=getattr(metadata, "category", None),
+                    )
+                    gui_entry_file = gui_manifest["entry"]["entry_file"]
+                    declared_entry = ui_config.get("entry_file")
+                    if declared_entry is not None and declared_entry != gui_entry_file:
+                        raise ValueError("Backend UI entry and GUI entry disagree")
+                    entry_file_name = gui_entry_file
+                except (OSError, ValueError, TypeError, KeyError):
+                    logger.warning(
+                        "Skipping UI plugin %s with inconsistent GUI declaration",
+                        plugin_id,
+                    )
+                    continue
+
+            if gui_manifest is not None:
+                entry_candidate = ui_component_dir / entry_file_name
+                # A GUI entry cannot load assets outside the authorized UI
+                # source, even if a manifest supplies a path that exists.
+                has_component = (
+                    entry_candidate.is_file()
+                    and not entry_candidate.is_symlink()
+                    and entry_candidate.resolve().is_relative_to(
+                        ui_component_dir.resolve()
+                    )
+                )
+            else:
+                entry_candidate = plugin_dir / entry_file_name
+                if not entry_candidate.exists():
+                    entry_candidate = ui_component_dir / Path(entry_file_name).name
+                has_component = entry_candidate.exists() and entry_candidate.is_file()
 
             capabilities = self._to_dict(getattr(plugin, "capabilities", None))
             if not capabilities:
@@ -256,6 +329,9 @@ class UIMaterializationPipeline:
                     "ui_config": ui_config,
                     "plugin_dir": str(plugin_dir),
                     "manifest_path": str(manifest_path),
+                    "gui_manifest_path": (
+                        str(gui_manifest_path) if gui_manifest is not None else None
+                    ),
                 }
             )
 
@@ -474,6 +550,7 @@ class UIMaterializationPipeline:
         plugin_id = plugin_ui["plugin_id"]
         plugin_dir = Path(plugin_ui["plugin_dir"])
         manifest_path = Path(plugin_ui["manifest_path"])
+        gui_manifest_value = plugin_ui.get("gui_manifest_path")
         ui_config = plugin_ui.get("ui_config", {})
         source_rel = Path(str(ui_config.get("source_path") or "ui"))
         target_dir = self.plugins_ui_dir / plugin_id.replace("_", "-")
@@ -492,6 +569,27 @@ class UIMaterializationPipeline:
                 raise ValueError("unsafe UI source path or plugin identifier")
 
             source_dir = plugin_dir / source_rel
+            publication_manifest = manifest_path
+            if gui_manifest_value is not None:
+                gui_path = Path(gui_manifest_value)
+                if gui_path != plugin_dir / "manifest.json":
+                    raise ValueError("GUI publication source is outside plugin package")
+                gui_data = self._read_validated_gui_manifest(
+                    gui_path,
+                    plugin_id=plugin_id,
+                    category=plugin_ui.get("category"),
+                )
+                gui_entry = gui_data["entry"]["entry_file"]
+                if (
+                    ui_config.get("entry_file") is not None
+                    and ui_config.get("entry_file") != gui_entry
+                ):
+                    raise ValueError("GUI entry diverged from backend UI contract")
+                if Path(plugin_ui["component_path"]).resolve() != (
+                    source_dir / gui_entry
+                ).resolve():
+                    raise ValueError("GUI component does not match declared entry")
+                publication_manifest = gui_path
             if (
                 not source_dir.is_dir()
                 or source_dir.is_symlink()
@@ -502,6 +600,11 @@ class UIMaterializationPipeline:
                 or not manifest_path.is_file()
                 or manifest_path.is_symlink()
                 or not manifest_path.resolve().is_relative_to(plugin_dir.resolve())
+                or not publication_manifest.is_file()
+                or publication_manifest.is_symlink()
+                or not publication_manifest.resolve().is_relative_to(
+                    plugin_dir.resolve()
+                )
             ):
                 raise ValueError("missing or unsafe governed UI source")
 
@@ -545,10 +648,10 @@ class UIMaterializationPipeline:
             destination_manifest = target_dir / "manifest.json"
             if (
                 not destination_manifest.exists()
-                or self._calculate_file_hash(manifest_path)
+                or self._calculate_file_hash(publication_manifest)
                 != self._calculate_file_hash(destination_manifest)
             ):
-                shutil.copy2(manifest_path, destination_manifest)
+                shutil.copy2(publication_manifest, destination_manifest)
             return True
         except Exception:
             logger.exception("Failed to materialize UI source for %s", plugin_id)

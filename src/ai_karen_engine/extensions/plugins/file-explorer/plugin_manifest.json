@@ -97,10 +97,5 @@
         "order": 35
       }
     ]
-  },
-  "entry": {
-    "id": "file-explorer-main",
-    "default": true,
-    "entry_file": "FileExplorerPage.tsx"
   }
 }

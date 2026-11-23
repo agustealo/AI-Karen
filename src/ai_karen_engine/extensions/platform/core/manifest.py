@@ -42,6 +42,61 @@ SEMVER_PATTERN = (
 NAME_PATTERN = r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
 
 
+# The runtime catalog and the GUI installer have distinct manifest authorities.
+# Some older backend communication plugins still use manifest.json. Admit that
+# filename only when it unambiguously declares a backend entrypoint.
+GUI_ONLY_MANIFEST_FIELDS = frozenset(
+    {"entry", "entry_file", "plugin_id", "gui_manifest_version"}
+)
+
+
+def backend_manifest_names(extension_dir: Path) -> tuple[str, ...]:
+    """Names ordered by the established system-extension/plugin contracts."""
+    if "sys_extensions" in extension_dir.parts:
+        return (
+            "extension_manifest.json",
+            "plugin_manifest.json",
+            "extension.json",
+            "manifest.json",
+        )
+    return (
+        "plugin_manifest.json",
+        "extension_manifest.json",
+        "extension.json",
+        "manifest.json",
+    )
+
+
+def find_backend_manifest_file(extension_dir: Path) -> Optional[Path]:
+    """Select an executable manifest without misclassifying a GUI manifest.
+
+    The legacy manifest.json fallback is intentionally narrow until the
+    remaining backend communication packages can be migrated separately.
+    GUI declarations are owned and validated by the GUI installation path.
+    """
+    for name in backend_manifest_names(extension_dir):
+        candidate = extension_dir / name
+        if candidate.is_symlink():
+            # Never bypass an unsafe preferred manifest with another file.
+            return None
+        if not candidate.is_file():
+            continue
+        if name == "manifest.json":
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                # Let the existing strict parser report malformed backend JSON.
+                return candidate
+            if not isinstance(data, dict):
+                return candidate
+            if GUI_ONLY_MANIFEST_FIELDS.intersection(data):
+                continue
+            if not isinstance(data.get("entrypoint"), str) or not data["entrypoint"]:
+                continue
+        return candidate
+    return None
+
+
 # Enums
 class ExtensionStatus(str, Enum):
     """Extension status enumeration."""
@@ -513,6 +568,12 @@ class ExtensionManifest(BaseModel):
             "allowed_prompt_overrides",
             "default_enabled",
         }
+
+        if GUI_ONLY_MANIFEST_FIELDS.intersection(data):
+            raise ValueError(
+                "GUI entry metadata is not valid in executable extension manifests; "
+                "validate manifest.json through the GUI manifest authority"
+            )
 
         declared_id = data.get("id")
         if declared_id is not None and declared_id != data.get("name"):

@@ -76,6 +76,8 @@ async def test_file_explorer_materializes_from_validated_canonical_manifest(tmp_
         PLUGIN / "ui/FileExplorerPage.tsx"
     ).read_bytes()
     published = json.loads((output / "manifest.json").read_text())
+    assert discovered[0]["gui_manifest_path"] == str(PLUGIN / "manifest.json")
+    assert published == json.loads((PLUGIN / "manifest.json").read_text())
     assert published["name"] == "file-explorer"
     assert published["entry"]["entry_file"] == "FileExplorerPage.tsx"
     assert (output / published["entry"]["entry_file"]).is_file()
@@ -109,16 +111,15 @@ def test_materialized_file_explorer_is_discovered_by_real_ui_installer(tmp_path)
 
     target = tmp_path / "plugin-repo" / "file-explorer"
     target.mkdir(parents=True)
-    manifest = json.loads((PLUGIN / "plugin_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((PLUGIN / "manifest.json").read_text(encoding="utf-8"))
     (target / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (target / manifest["entry"]["entry_file"]).write_bytes(
         (PLUGIN / "ui" / manifest["entry"]["entry_file"]).read_bytes()
     )
-    installer = UIInstallerService.__new__(UIInstallerService)
-    installer.plugins_repo_root = tmp_path / "plugin-repo"
-    installer.backup_dir = tmp_path / "backups"
-    installer.installations = {}
-    installer._load_installations()
+    installer = UIInstallerService(
+        plugins_repo_root=str(tmp_path / "plugin-repo"),
+        backup_dir=str(tmp_path / "backups"),
+    )
     assert "file-explorer" in installer.installations
     assert installer.installations["file-explorer"].entry_file == (
         target / "FileExplorerPage.tsx"
@@ -345,3 +346,81 @@ async def test_linked_publication_parent_does_not_redirect_copy(tmp_path):
     }
     assert await pipeline._materialize_ui_source(authorized) is False
     assert not (external / "plugin_repo/file-explorer").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", [
+    {"plugin_id": "different-plugin"},
+    {"id": "different-plugin"},
+    {"category": "security"},
+    {"entry": {"id": "main", "default": True, "entry_file": "../outside.tsx"}},
+    {"entry": {"id": "main", "default": True, "entry_file": "OtherPage.tsx"}},
+])
+async def test_separate_gui_manifest_disagreement_never_materializes(
+    tmp_path, mutation
+):
+    source = tmp_path / "source"
+    (source / "ui").mkdir(parents=True)
+    (source / "plugin_manifest.json").write_bytes(
+        (PLUGIN / "plugin_manifest.json").read_bytes()
+    )
+    gui = json.loads((PLUGIN / "manifest.json").read_text(encoding="utf-8"))
+    gui.update(mutation)
+    (source / "manifest.json").write_text(json.dumps(gui), encoding="utf-8")
+    (source / "ui" / "FileExplorerPage.tsx").write_bytes(
+        (PLUGIN / "ui" / "FileExplorerPage.tsx").read_bytes()
+    )
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=source,
+        manifest_path=source / "plugin_manifest.json",
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+    assert await pipeline.discover_ui_plugins() == []
+    assert not (tmp_path / "plugin-repo" / "file-explorer").exists()
+
+
+@pytest.mark.asyncio
+async def test_gui_manifest_change_after_discovery_fails_before_copy(tmp_path):
+    source = tmp_path / "source"
+    (source / "ui").mkdir(parents=True)
+    (source / "plugin_manifest.json").write_bytes(
+        (PLUGIN / "plugin_manifest.json").read_bytes()
+    )
+    (source / "manifest.json").write_bytes((PLUGIN / "manifest.json").read_bytes())
+    (source / "ui" / "FileExplorerPage.tsx").write_bytes(
+        (PLUGIN / "ui" / "FileExplorerPage.tsx").read_bytes()
+    )
+    metadata = SimpleNamespace(
+        is_valid=True,
+        validation_errors=[],
+        directory=source,
+        manifest_path=source / "plugin_manifest.json",
+        display_name="File Explorer",
+        version="0.2.0",
+        category="integration",
+        capabilities={"provides_ui": True},
+    )
+    pipeline = UIMaterializationPipeline(
+        extensions_dir=str(tmp_path / "extensions"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        plugins_ui_dir=str(tmp_path / "plugin-repo"),
+    )
+    pipeline.registry = _AuthorizedRegistry(metadata)
+    discovered = await pipeline.discover_ui_plugins()
+    assert len(discovered) == 1
+    changed = json.loads((source / "manifest.json").read_text())
+    changed["plugin_id"] = "untrusted"
+    (source / "manifest.json").write_text(json.dumps(changed))
+    assert await pipeline._materialize_ui_source(discovered[0]) is False
+    assert not (tmp_path / "plugin-repo" / "file-explorer").exists()
