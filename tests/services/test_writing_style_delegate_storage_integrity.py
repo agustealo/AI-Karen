@@ -80,6 +80,18 @@ class SqlHarness:
         self.calls.append(sql)
         if "set_config(" in sql:
             return SimpleNamespace(first=lambda: None)
+        if sql.startswith("SELECT r.revision_id"):
+            record = {
+                "revision_id": REVISION,
+                "revision_number": 1,
+                "approved_expression": {"tone": "direct"},
+                "content_digest": _revision().content_digest,
+            }
+            return SimpleNamespace(
+                mappings=lambda: SimpleNamespace(
+                    one_or_none=lambda: record if self.authorized else None,
+                )
+            )
         if sql.startswith("SELECT 1 FROM public.writing_style_profiles"):
             return SimpleNamespace(
                 first=lambda: object() if self.authorized else None
