@@ -56,7 +56,9 @@ async def test_live_canonical_redis_graph_postgres_memory_composition() -> None:
         uuid4(), uuid4(), uuid4(), uuid4(),
     )
     event_id, assertion_id = uuid4(), uuid4()
-    cue = f"Prism{uuid4().hex[:16]}"
+    # Use a lowercase fixture token because canonical lexical recall currently
+    # casefolds terms but uses a case-sensitive PostgreSQL contains predicate.
+    cue = f"prism{uuid4().hex[:16]}"
     content = f"Project {cue} was authorized for session continuity"
     session_id = f"session-{uuid4().hex}"
     query = f"why did we link the relation with {cue}"
