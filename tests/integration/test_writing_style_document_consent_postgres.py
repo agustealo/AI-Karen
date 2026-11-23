@@ -108,6 +108,7 @@ async def test_first_party_author_consent_postgres(
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_use_expiry(uuid,uuid,uuid) CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_revoke_consent_on_file_change() CASCADE;
+            DROP FUNCTION IF EXISTS kari_internal.writing_style_authorized_document_sources(uuid,uuid,uuid,text,uuid,bigint,text) CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY);
             CREATE TABLE public.files (
@@ -129,6 +130,7 @@ async def test_first_party_author_consent_postgres(
             "20261122010002_62_writing_style_document_author_consent.sql",
             "20261123030000_69_writing_style_document_file_tenant_text.sql",
             "20261123040000_70_writing_style_document_delegated_use_fence.sql",
+            "20261123050000_71_writing_style_delegated_storage_integrity.sql",
         ):
             await raw.execute((root / filename).read_text(encoding="utf-8"))
 
@@ -154,6 +156,12 @@ async def test_first_party_author_consent_postgres(
         )
         await raw.execute(f'CREATE ROLE "{role}" NOLOGIN')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+        await raw.execute(f'GRANT USAGE ON SCHEMA kari_internal TO "{role}"')
+        await raw.execute(
+            f'GRANT EXECUTE ON FUNCTION '
+            f'kari_internal.writing_style_authorized_document_sources('
+            f'uuid,uuid,uuid,text,uuid,bigint,text) TO "{role}"'
+        )
         await raw.execute(
             f'GRANT SELECT, INSERT, UPDATE '
             f'ON public.writing_style_document_consents TO "{role}"'
