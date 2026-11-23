@@ -28,5 +28,10 @@ def test_search_ui_does_not_invent_crawler_as_provider():
         / "src/ai_karen_engine/extensions/plugins/intelligent-search/ui/components/ResultsWorkspace.tsx"
     )
     content = path.read_text(encoding="utf-8")
+    # The active published workspace must represent zero evidence as zero,
+    # rather than substituting crawl output or a fabricated search provider.
     assert "|| 'crawl4ai'" not in content
-    assert "No sources retrieved" in content
+    assert "response?.provider || response?.metadata?.provider || 'Unknown'" in content
+    assert "if (!hasEvidence)" in content
+    assert "No sources found" in content
+    assert "The search did not return usable evidence." in content
