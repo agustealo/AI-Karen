@@ -47,9 +47,11 @@ from ai_karen_engine.database.conversation_manager import (
     Conversation,
     Message,
     MessageRole,
-    normalize_user_id,
 )
-from ai_karen_engine.database.id_types import coerce_tenant_id
+from ai_karen_engine.database.id_types import (
+    coerce_tenant_id,
+    coerce_user_id as normalize_user_id,
+)
 from ai_karen_engine.database.models import TenantConversation
 from ai_karen_engine.database.client import MultiTenantPostgresClient
 
