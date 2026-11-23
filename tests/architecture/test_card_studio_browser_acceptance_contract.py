@@ -43,10 +43,9 @@ def test_card_studio_browser_spec_does_not_forge_authenticated_responses() -> No
     assert "route.fulfill(" not in spec
     assert "page.addInitScript(" not in spec
     assert "storageState:" not in spec
-    assert '"trace: "off"' not in spec  # test.use uses object syntax
     assert 'trace: "off", screenshot: "off", video: "off"' in spec
     assert 'test.skip(!enabled,' in spec
-    assert '"KAREN_CARD_STUDIO_MUTATION_APPROVED"' in spec
+    assert "process.env.KAREN_CARD_STUDIO_MUTATION_APPROVED" in spec
     assert 'result.receipt.idempotency_key' in spec
     assert "const viewports = [" in spec
     for width in (390, 768, 1024, 1440):
