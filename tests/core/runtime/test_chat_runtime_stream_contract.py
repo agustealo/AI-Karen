@@ -2883,3 +2883,478 @@ async def test_revocation_during_streamed_memory_persistence_emits_denial_not_sa
         chunk.metadata.get("error_code") == "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
         for chunk in chunks if isinstance(chunk.metadata, dict)
     )
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1"
+    or os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1",
+    reason="requires explicit disposable PostgreSQL memory database",
+)
+@pytest.mark.timeout(180)
+async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
+    """Measure real PostgreSQL recall and live source fences during streaming.
+
+    CORTEX Stage 1, prompt preparation, provider tokens, and transcript
+    persistence are controlled fixtures. No production model or network
+    performance claim is made. MemoryRuntimeManager, NeuroRecall, canonical
+    PostgreSQL retrieval, and per-chunk authorization all execute for real.
+    """
+    import json
+    import platform
+    import time
+    from contextlib import aclosing
+    from pathlib import Path
+    from uuid import UUID
+
+    from sqlalchemy import delete, select, text
+
+    from ai_karen_engine.core.context.contracts import (
+        CognitiveContext, ContextRequirement, ContextRequirements,
+        EvidenceSource,
+    )
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
+    from ai_karen_engine.core.memory.memory_runtime_manager import MemoryRuntimeManager
+    from ai_karen_engine.core.memory.retrieval.neuro_recall import NeuroRecall
+    from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolver
+    from ai_karen_engine.persistence.postgres.engine import get_postgres_engine
+    from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
+    from ai_karen_engine.platform.memory.postgres.event_source import PostgresEventSource
+    from ai_karen_engine.platform.memory.postgres.ledger_models import (
+        ConsentScope, MemoryAssertion, MemoryEvent,
+    )
+    from ai_karen_engine.platform.memory.postgres.recall_retriever import (
+        PostgresRecallRetriever,
+    )
+
+    samples = int(os.getenv("KAREN_MEMORY_STREAM_SAMPLES", "6"))
+    if not 2 <= samples <= 50:
+        raise ValueError("KAREN_MEMORY_STREAM_SAMPLES must be between 2 and 50")
+    report_path = Path(os.getenv(
+        "KAREN_MEMORY_STREAM_REPORT", "memory-stream-acceptance.json",
+    ))
+    if report_path.suffix.lower() != ".json":
+        raise ValueError("Memory streaming acceptance report must be JSON")
+
+    tenant, user, foreign_tenant, foreign_user = (
+        UUID(TENANT_ID), UUID(USER_ID), uuid4(), uuid4(),
+    )
+    token = f"kisgraph{uuid4().hex}"
+    scope_id = uuid4()
+    scope_name = f"kisgraph-scope-{uuid4().hex}"
+    inserted = []
+    engine = get_postgres_engine()
+    checked_out_before = engine.async_engine.pool.checkedout()
+    manager = MemoryRuntimeManager(
+        recall_service=NeuroRecall(retriever=PostgresRecallRetriever()),
+        formation_service=MagicMock(), control_service=MagicMock(), stm=MagicMock(),
+    )
+    resolver = RuntimeEvidenceResolver(memory_manager=manager)
+    report = {
+        "schema_version": 1,
+        "test": "KIS-GRAPH-01C2R-F",
+        "status": "incomplete",
+        "database_driver": engine.async_engine.dialect.name,
+        "platform": platform.system(),
+        "python_version": platform.python_version(),
+        "samples_per_mode": samples,
+        "measurement": "perf_counter wall time includes real PostgreSQL and pool wait",
+        "memory_path": "MemoryRuntimeManager/NeuroRecall/PostgresRecallRetriever",
+        "publication_path": "ChatRuntime.execute_stream/PostgresEventSource",
+        "limitations": [
+            "CORTEX Stage 1 is a policy-bound test fixture, not real HTTP ingress",
+            "Provider stream and prompt assembly are controlled, not production model inference",
+            "Transcript gateway is a recording fixture, not durable PostgreSQL transcript",
+            "No browser rendering, remote network, or production-host latency measured",
+            "Revocation cannot retract previously emitted bytes or close the DB-to-wire race",
+        ],
+    }
+    failure_type = None
+    cleanup_error = None
+
+    async def seed(row_tenant, row_user, suffix, consent):
+        event_id, assertion_id = uuid4(), uuid4()
+        inserted.append((row_tenant, event_id, assertion_id))
+        async with async_transaction_scope(tenant_id=str(row_tenant)) as session:
+            session.add(MemoryEvent(
+                event_id=event_id, tenant_id=row_tenant, user_id=row_user,
+                event_type="memory_persisted", source_type="chat_user",
+                payload_hash=uuid4().hex, consent_state="granted",
+                payload={
+                    "content": f"{token} {suffix}",
+                    "vault": {"consent_scope": scope_name if consent else "memory.write"},
+                },
+            ))
+            await session.flush()
+            session.add(MemoryAssertion(
+                assertion_id=assertion_id, event_id=event_id,
+                tenant_id=row_tenant, user_id=row_user,
+                content=f"{token} {suffix}", consent_state="granted",
+            ))
+
+    def percentile(values, rank):
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = max(0, (len(ordered) * rank + 99) // 100 - 1)
+        return round(ordered[index], 3)
+
+    async def scenario(memory_enabled, provider=None, on_chunk=None, gateways=None):
+        runtime, gateway = _make_runtime()
+        if gateways is not None:
+            gateways.append(gateway)
+        request = _make_request()
+        request.messages = [{"role": "user", "content": token}]
+        decision, plan = _make_decision(), _make_plan()
+        decision.memory_recall_required = memory_enabled
+        decision.memory_write_allowed = False
+        context = request.context
+        cognitive = CognitiveContext(
+            context_id=str(uuid4()),
+            request_id=context.request_id, correlation_id=context.correlation_id,
+            tenant_id=context.tenant_id, user_id=context.user_id,
+            policy_decision_id=decision.policy_decision_id,
+            requirements=ContextRequirements(
+                request_id=context.request_id, correlation_id=context.correlation_id,
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                session_id=context.session_id, conversation_id=context.conversation_id,
+                requirements=[ContextRequirement(
+                    source=EvidenceSource.MEMORY, capability="memory.read",
+                    scopes=["session"], classes=["semantic"], max_items=5,
+                )] if memory_enabled else [],
+            ),
+            authorized_sources=["memory"] if memory_enabled else [],
+            unresolved_sources=["memory"] if memory_enabled else [],
+        )
+        started = time.perf_counter()
+        if memory_enabled:
+            await resolver.resolve(request, cognitive)
+            assert cognitive.metadata["memory_recall_status"] == "success"
+            assert not cognitive.metadata.get("memory_degraded")
+            assert "memory" not in cognitive.unresolved_sources
+            assert len(cognitive.evidence) == 1
+            assert cognitive.evidence[0].scope.tenant_id == context.tenant_id
+            assert cognitive.evidence[0].scope.user_id == context.user_id
+            origin = cognitive.evidence[0].metadata["canonical_event_origin"]
+            assert origin["record_updated_at"]
+        resolved_ms = 1000 * (time.perf_counter() - started)
+        decision.cognitive_context = cognitive
+
+        async def controlled_provider(task):
+            gate_started = time.perf_counter()
+            assert task.token_sink is not None
+            await task.token_sink("part-one")
+            await task.token_sink("part-two")
+            return ExpressionResult(
+                task_id=task.task_id, text="part-onepart-two",
+                provider="controlled-provider", model="controlled-model",
+                engine_id="controlled-stream", engine_mode="test",
+                runtime_engine="controlled-stream", response_source="test_fixture",
+                attempts=[], skipped=[],
+                latency_ms=1000 * (time.perf_counter() - gate_started),
+            )
+
+        chunks = []
+        first_content_elapsed_ms = None
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(
+                runtime, "_resolve_gate", new_callable=AsyncMock, return_value=None,
+            ))
+            stack.enter_context(patch.object(
+                runtime, "_decide", new_callable=AsyncMock, return_value=decision,
+            ))
+            stack.enter_context(patch.object(
+                runtime, "_build_authorized_plan", return_value=plan,
+            ))
+            stack.enter_context(patch.object(
+                runtime, "_assemble_prompt_with_telemetry",
+                new_callable=AsyncMock, return_value=([], {"assembly_duration_ms": 0.0}),
+            ))
+            stack.enter_context(patch.object(
+                runtime._composition.expression_gateway, "generate",
+                side_effect=provider or controlled_provider,
+            ))
+            stack.enter_context(patch.object(
+                runtime, "_persist_memory", new_callable=AsyncMock,
+            ))
+            stack.enter_context(patch.object(runtime, "_record_trajectory_completion"))
+            stack.enter_context(patch.object(runtime, "_record_execution_outcome"))
+            stack.enter_context(patch.object(runtime._emitter, "emit"))
+            direct = stack.enter_context(patch(
+                "ai_karen_engine.core.runtime.chat_runtime.get_direct_capability_executor",
+            ))
+            direct.return_value.can_handle.return_value = False
+            stack.enter_context(patch.object(
+                runtime, "_should_execute_authorized_reasoning", return_value=False,
+            ))
+            async with aclosing(runtime.execute_stream(request)) as stream:
+                async for chunk in stream:
+                    chunks.append(chunk)
+                    if (
+                        first_content_elapsed_ms is None
+                        and chunk.type == ChatStreamEventType.CONTENT
+                        and chunk.content
+                    ):
+                        # Observe the first outward content from the caller's
+                        # start, including PostgreSQL recall and pool wait.
+                        first_content_elapsed_ms = 1000 * (time.perf_counter() - started)
+                    if on_chunk is not None:
+                        await on_chunk(chunk)
+
+        total_ms = 1000 * (time.perf_counter() - started)
+        receipts = [c.metadata for c in chunks if c.type == ChatStreamEventType.COMPLETE]
+        return chunks, gateway, {
+            "resolved_memory_ms": round(resolved_ms, 3),
+            "total_elapsed_ms": round(total_ms, 3),
+            "end_to_end_first_content_ms": (
+                round(first_content_elapsed_ms, 3)
+                if first_content_elapsed_ms is not None else None
+            ),
+            "runtime_first_content_ms": (
+                round(float(receipts[0]["request_to_first_content_ms"]), 3)
+                if receipts and "request_to_first_content_ms" in receipts[0]
+                else None
+            ),
+        }
+
+    try:
+        await seed(tenant, user, "authorized", True)
+        await seed(foreign_tenant, user, "foreign_tenant", False)
+        await seed(tenant, foreign_user, "foreign_user", False)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ConsentScope(
+                scope_id=scope_id, tenant_id=tenant, user_id=user,
+                scope_name=scope_name, is_granted=True,
+            ))
+
+        # Real retriever checks both tenant and user, including same-token rows.
+        for probe_tenant, probe_user, expected in (
+            (tenant, user, 1), (foreign_tenant, user, 1),
+            (tenant, foreign_user, 1), (foreign_tenant, foreign_user, 0),
+        ):
+            observed = await manager.recall_context(
+                tenant_id=str(probe_tenant), user_id=str(probe_user),
+                query=token, top_k=5, tiers=("semantic",),
+            )
+            assert len(observed["results"]) == expected
+        rows = await manager.recall_context(
+            tenant_id=str(tenant), user_id=str(user), query=token, top_k=5,
+        )
+        assert rows["results"][0]["content"].endswith("authorized")
+        origin_context = await resolver.resolve(
+            _make_request(),
+            CognitiveContext(
+                context_id=str(uuid4()), request_id="req-1", correlation_id="corr-1",
+                tenant_id=TENANT_ID, user_id=USER_ID,
+                requirements=ContextRequirements(
+                    request_id="req-1", correlation_id="corr-1",
+                    tenant_id=TENANT_ID, user_id=USER_ID,
+                    requirements=[ContextRequirement(
+                        source=EvidenceSource.MEMORY, capability="memory.read",
+                        scopes=["session"], classes=["semantic"], max_items=5,
+                        metadata={"retrieval_query": token},
+                    )],
+                ),
+                authorized_sources=["memory"], unresolved_sources=["memory"],
+            ),
+        )
+        assert len(origin_context.evidence) == 1
+        assert await PostgresEventSource().authorize_selected_records(
+            tenant_id=str(foreign_tenant), user_id=str(user),
+            origins=[origin_context.evidence[0].metadata["canonical_event_origin"]],
+        ) is False
+
+        await scenario(False)  # exclude warm-ups
+        await scenario(True)
+        observations = {"memory_free": [], "memory_enabled": []}
+        for _ in range(samples):
+            for enabled in (False, True):
+                chunks, gateway, timing = await asyncio.wait_for(
+                    scenario(enabled), timeout=20,
+                )
+                assert [c.content for c in chunks if c.type == "content"] == [
+                    "part-one", "part-two",
+                ]
+                assert len([c for c in chunks if c.type == ChatStreamEventType.COMPLETE]) == 1
+                assert not any(c.type == ChatStreamEventType.ERROR for c in chunks)
+                assert gateway.calls and len(gateway.calls) == 1
+                assert timing["runtime_first_content_ms"] is not None
+                assert timing["end_to_end_first_content_ms"] is not None
+                assert timing["end_to_end_first_content_ms"] >= timing["resolved_memory_ms"]
+                assert timing["total_elapsed_ms"] >= timing["resolved_memory_ms"]
+                observations["memory_enabled" if enabled else "memory_free"].append(timing)
+        report["modes"] = {
+            mode: {
+                "attempted": len(values),
+                "complete": len(values),
+                "total_p50_ms": percentile([x["total_elapsed_ms"] for x in values], 50),
+                "total_p95_ms": percentile([x["total_elapsed_ms"] for x in values], 95),
+                "recall_p50_ms": percentile([x["resolved_memory_ms"] for x in values], 50),
+                "first_content_p95_ms": percentile(
+                    [x["end_to_end_first_content_ms"] for x in values], 95,
+                ),
+                "runtime_only_first_content_p95_ms": percentile(
+                    [x["runtime_first_content_ms"] for x in values], 95,
+                ),
+            }
+            for mode, values in observations.items()
+        }
+        report["warmup_per_mode"] = 1
+        report["tenant_isolation"] = "passed"
+
+        # Cancel the actual consumer task after its first visible delta.
+        first_content, worker_finalized, never = (
+            asyncio.Event(), asyncio.Event(), asyncio.Event(),
+        )
+        cancelled_gateways = []
+
+        async def suspended_provider(task):
+            try:
+                await task.token_sink("part-one")
+                await never.wait()
+                await task.token_sink("part-two")
+            finally:
+                worker_finalized.set()
+            raise AssertionError("cancelled producer unexpectedly completed")
+
+        async def hold_consumer(chunk):
+            if chunk.type == ChatStreamEventType.CONTENT:
+                first_content.set()
+                await never.wait()
+
+        began = time.perf_counter()
+        consumer = asyncio.create_task(scenario(
+            True, suspended_provider, hold_consumer, cancelled_gateways,
+        ))
+        try:
+            await asyncio.wait_for(first_content.wait(), timeout=15)
+            consumer.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(consumer, timeout=15)
+            await asyncio.wait_for(worker_finalized.wait(), timeout=15)
+        finally:
+            never.set()
+            if not consumer.done():
+                consumer.cancel()
+            await asyncio.gather(consumer, return_exceptions=True)
+        assert len(cancelled_gateways) == 1
+        assert cancelled_gateways[0].calls == []
+        report["cancellation"] = {
+            "status": "cancelled", "worker_finalized": worker_finalized.is_set(),
+            "transcript_commits": len(cancelled_gateways[0].calls),
+            "elapsed_ms": round((time.perf_counter() - began) * 1000, 3),
+        }
+
+        # One more complete live-DB stream and a fresh SQL query prove recovery.
+        recovered, recovered_gateway, _ = await asyncio.wait_for(scenario(True), 20)
+        assert recovered_gateway.calls
+        assert any(c.type == ChatStreamEventType.COMPLETE for c in recovered)
+        async with engine.async_session_factory() as session:
+            assert (await session.execute(text("SELECT 1"))).scalar_one() == 1
+        assert engine.async_engine.pool.checkedout() == checked_out_before
+        report["pool_after_cancel"] = "recovered_no_checked_out_connections"
+
+        # Withdraw durable consent after the first chunk reaches the consumer.
+        revocation_seen, revocation_release = asyncio.Event(), asyncio.Event()
+
+        async def gated_provider(task):
+            began = time.perf_counter()
+            await task.token_sink("part-one")
+            await revocation_release.wait()
+            await task.token_sink("part-two")
+            return ExpressionResult(
+                task_id=task.task_id, text="part-onepart-two",
+                provider="controlled-provider", model="controlled-model",
+                engine_id="controlled-stream", engine_mode="test",
+                runtime_engine="controlled-stream", response_source="test_fixture",
+                attempts=[], skipped=[],
+                latency_ms=1000 * (time.perf_counter() - began),
+            )
+
+        async def observe_first(chunk):
+            if chunk.type == ChatStreamEventType.CONTENT:
+                revocation_seen.set()
+
+        revocation_started = time.perf_counter()
+        pending = asyncio.create_task(scenario(True, gated_provider, observe_first))
+        try:
+            await asyncio.wait_for(revocation_seen.wait(), timeout=15)
+            async with async_transaction_scope(tenant_id=TENANT_ID) as session:
+                current = (await session.execute(select(ConsentScope).where(
+                    ConsentScope.scope_id == scope_id,
+                ))).scalar_one()
+                current.is_granted = False
+                current.revoked_at = datetime.datetime.now(
+                    datetime.timezone.utc,
+                ).replace(tzinfo=None)
+            revocation_release.set()
+            refused, refused_gateway, _ = await asyncio.wait_for(pending, timeout=15)
+        finally:
+            revocation_release.set()
+            if not pending.done():
+                pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+
+        assert [c.content for c in refused if c.type == "content"] == ["part-one"]
+        errors = [c for c in refused if c.type == ChatStreamEventType.ERROR]
+        assert len(errors) == 1
+        assert errors[0].metadata["error_code"] == "CHAT_MEMORY_SOURCE_REVOKED"
+        assert refused_gateway.calls == []
+        assert not any(
+            c.type == ChatStreamEventType.COMPLETE
+            and c.metadata.get("transcript_persistence_status") == "persisted"
+            for c in refused
+        )
+        report["revocation"] = {
+            "status": "publication_denied",
+            "visible_chunks_before_revoke": 1,
+            "transcript_commits": 0,
+            "elapsed_ms": round(
+                (time.perf_counter() - revocation_started) * 1000, 3,
+            ),
+        }
+        after = await manager.recall_context(
+            tenant_id=TENANT_ID, user_id=USER_ID, query=token, top_k=5,
+        )
+        assert not after["results"]
+        async with engine.async_session_factory() as session:
+            assert (await session.execute(text("SELECT 1"))).scalar_one() == 1
+        assert engine.async_engine.pool.checkedout() == checked_out_before
+        report["status"] = "complete"
+    except BaseException as exc:
+        failure_type = type(exc).__name__
+        raise
+    finally:
+        for row_tenant, event_id, assertion_id in inserted:
+            try:
+                async with asyncio.timeout(15):
+                    async with async_transaction_scope(tenant_id=str(row_tenant)) as session:
+                        await session.execute(delete(MemoryAssertion).where(
+                            MemoryAssertion.assertion_id == assertion_id,
+                        ))
+                        await session.execute(delete(MemoryEvent).where(
+                            MemoryEvent.event_id == event_id,
+                        ))
+            except BaseException as exc:
+                cleanup_error = type(exc).__name__
+        try:
+            async with asyncio.timeout(15):
+                async with async_transaction_scope(tenant_id=TENANT_ID) as session:
+                    await session.execute(delete(ConsentScope).where(
+                        ConsentScope.scope_id == scope_id,
+                    ))
+        except BaseException as exc:
+            cleanup_error = type(exc).__name__
+        report["failure_type"] = failure_type
+        report["cleanup_error_type"] = cleanup_error
+        report["checked_out_after_cleanup"] = engine.async_engine.pool.checkedout()
+        report["status"] = (
+            "complete" if report["status"] == "complete"
+            and failure_type is None and cleanup_error is None
+            and engine.async_engine.pool.checkedout() == checked_out_before
+            else "incomplete"
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        if failure_type is None:
+            assert cleanup_error is None, "PostgreSQL streaming fixture cleanup failed"
+            assert engine.async_engine.pool.checkedout() == checked_out_before
