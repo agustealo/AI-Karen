@@ -1613,9 +1613,11 @@ class InternetCapabilityService:
         strategy: Mapping[str, Any],
     ) -> bool:
         parsed = urlparse(url)
-        domain = parsed.netloc.lower().removeprefix("www.")
+        # netloc includes ports and userinfo; domain restrictions apply to the
+        # actual hostname, regardless of those URL decorations.
+        domain = (parsed.hostname or "").lower().removeprefix("www.")
 
-        if parsed.scheme not in {"http", "https"}:
+        if parsed.scheme not in {"http", "https"} or not domain:
             return False
 
         blocked_domains = {

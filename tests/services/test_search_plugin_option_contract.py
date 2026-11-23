@@ -50,7 +50,10 @@ def test_prepared_mode_policies_are_consumed_by_runtime_request():
     service = object.__new__(InternetCapabilityService)
     assert service._is_url_allowed("https://allowed.example/page", strategy)
     assert not service._is_url_allowed("https://blocked.allowed.example/page", strategy)
+    assert not service._is_url_allowed("https://blocked.allowed.example:443/page", strategy)
+    assert not service._is_url_allowed("https://someone@blocked.allowed.example/page", strategy)
     assert not service._is_url_allowed("https://elsewhere.example/page", strategy)
+    assert not service._is_url_allowed("https:///missing-host", strategy)
     assert "context_hints" not in strategy
 
 
