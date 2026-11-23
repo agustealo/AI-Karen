@@ -305,7 +305,7 @@ class WritingStyleProfileRepository:
                     "min(c.expires_at) AS expires_at "
                     "FROM public.writing_style_document_consents c "
                     "LEFT JOIN public.files f ON f.file_id=c.artifact_id::text "
-                    "AND f.tenant_id=c.tenant_id::text "
+                    "AND f.tenant_id=c.tenant_id "
                     "AND f.owner_user_id=c.author_actor_id "
                     "AND f.sha256=c.source_sha256 "
                     "AND f.deleted_at IS NULL "

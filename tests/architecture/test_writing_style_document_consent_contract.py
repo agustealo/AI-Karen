@@ -109,26 +109,36 @@ def test_author_document_discovery_uses_canonical_owner_paging() -> None:
     assert "loadMoreDocuments" in picker
     assert "Document ingestion remains disabled" in picker
 
-def test_canonical_file_tenant_remains_text_and_consent_uses_safe_casts() -> None:
-    """WS-04B4: UUID-shaped consent scope must not change the artifact schema."""
+def test_effective_file_tenant_uuid_and_forward_consent_repair() -> None:
+    """Migration 05, not the original migration 01, owns the effective type."""
     root = Path(__file__).resolve().parents[2]
-    canonical_files = (
+    base = (
         root / "supabase/migrations/20260827010000_01_core_persona_runtime.sql"
     ).read_text(encoding="utf-8")
-    assert "CREATE TABLE files (" in canonical_files
-    files_definition = canonical_files.split("CREATE TABLE files (", 1)[1].split(
-        ");", 1,
-    )[0]
-    assert "tenant_id     TEXT" in files_definition
+    assert "CREATE TABLE files (" in base
+    base_files = base.split("CREATE TABLE files (", 1)[1].split(");", 1)[0]
+    assert "tenant_id     TEXT" in base_files
+    normalized = (
+        root / "supabase/migrations/20260827050000_05_schema_security_finalization.sql"
+    ).read_text(encoding="utf-8")
+    assert "ALTER TABLE files" in normalized
+    assert "ALTER COLUMN tenant_id TYPE UUID" in normalized
+    assert "USING tenant_id::uuid" in normalized
 
-    migration = (
+    historical = (
         root / "supabase/migrations/"
         "20261123030000_69_writing_style_document_file_tenant_text.sql"
     ).read_text(encoding="utf-8")
-    assert "CREATE OR REPLACE FUNCTION public.writing_style_document_consent_validate()" in migration
-    assert "f.tenant_id = NEW.tenant_id::text" in migration
-    assert "f.tenant_id::uuid" not in migration
-    assert "ALTER TABLE public.files" not in migration
+    assert "f.tenant_id = NEW.tenant_id::text" in historical
+    repaired = (
+        root / "supabase/migrations/"
+        "20261123040000_70_writing_style_document_delegated_use_fence.sql"
+    ).read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE FUNCTION public.writing_style_document_consent_validate()" in repaired
+    assert "f.tenant_id = NEW.tenant_id" in repaired
+    assert "f.tenant_id = NEW.tenant_id::text" not in repaired
+    assert "ALTER TABLE public.files" not in repaired
+
     for expected in (
         "NEW.author_actor_id IS DISTINCT FROM",
         "NEW.author_attested IS NOT TRUE",
@@ -139,7 +149,7 @@ def test_canonical_file_tenant_remains_text_and_consent_uses_safe_casts() -> Non
         "f.bytes BETWEEN 1 AND 65536",
         "OR OLD.revoked_at IS NOT NULL",
     ):
-        assert expected in migration
+        assert expected in repaired
 
     issuer = (
         root / "src/ai_karen_engine/services/"
@@ -149,14 +159,13 @@ def test_canonical_file_tenant_remains_text_and_consent_uses_safe_casts() -> Non
         root / "src/ai_karen_engine/services/"
         "writing_style_profile_repository.py"
     ).read_text(encoding="utf-8")
-
-    assert issuer.count("p.tenant_id::text=f.tenant_id") == 2
-    assert issuer.count("f.tenant_id=CAST(:tenant AS uuid)::text") == 2
-    assert "f.tenant_id=c.tenant_id::text" in issuer
-    assert "f.tenant_id=c.tenant_id::text" in profile_repository
-
-    for source in (issuer, profile_repository):
-        assert "f.tenant_id::uuid" not in source
+    assert issuer.count("p.tenant_id=f.tenant_id") == 2
+    assert issuer.count("f.tenant_id=CAST(:tenant AS uuid)") == 2
+    assert "f.tenant_id=c.tenant_id" in issuer
+    assert "f.tenant_id=c.tenant_id" in profile_repository
+    for code in (issuer, profile_repository, repaired):
+        assert "f.tenant_id::text" not in code
+        assert "c.tenant_id::text" not in code
 
     for name in (
         "test_writing_style_document_consent_postgres.py",
@@ -166,5 +175,60 @@ def test_canonical_file_tenant_remains_text_and_consent_uses_safe_casts() -> Non
         fixture = (root / "tests/integration" / name).read_text(
             encoding="utf-8",
         )
-        assert "tenant_id text NOT NULL" in fixture
+        assert "tenant_id uuid NOT NULL" in fixture
         assert "20261123030000_69_writing_style_document_file_tenant_text.sql" in fixture
+        assert "20261123040000_70_writing_style_document_delegated_use_fence.sql" in fixture
+
+
+def test_document_style_use_fence_reuses_existing_sql_authority() -> None:
+    """The forward-only fence must not grant delegates receipt visibility."""
+    root = Path(__file__).resolve().parents[2]
+    name = "20261123040000_70_writing_style_document_delegated_use_fence.sql"
+    migration = (root / "supabase/migrations" / name).read_text(
+        encoding="utf-8",
+    )
+    for clause in (
+        "CREATE FUNCTION public.writing_style_document_use_expiry(",
+        "SECURITY INVOKER",
+        "c.author_attested IS TRUE",
+        "c.style_use_allowed IS TRUE",
+        "c.receipt_id = s.consent_receipt_id",
+        "c.artifact_id = s.source_id",
+        "f.tenant_id = c.tenant_id",
+        "f.owner_user_id = c.author_actor_id",
+        "f.sha256 = c.source_sha256",
+        "document_expiry := public.writing_style_document_use_expiry(",
+        "PERFORM public.writing_style_document_use_expiry(",
+        "CREATE FUNCTION public.writing_style_revoke_consent_on_file_change()",
+        "SECURITY DEFINER",
+        "SET row_security = off",
+        "AFTER UPDATE OF file_id, tenant_id, owner_user_id, name, mime_type, bytes,",
+        "sha256, storage_uri, deleted_at OR DELETE",
+        "SET revoked_at = clock_timestamp()",
+        "OLD.tenant_id",
+        "REVOKE ALL ON FUNCTION public.writing_style_revoke_consent_on_file_change()",
+    ):
+        assert clause in migration
+
+    assert "ALTER TABLE public.files" not in migration
+    assert "CREATE TABLE public.writing_style_grants" not in migration
+    assert "CREATE TRIGGER writing_style_grant_consent_fence" not in migration
+    # No direct grant or profile revocation implementation is duplicated in
+    # the new file-trigger function: existing receipt UPDATE owns both.
+    file_fence = migration.split(
+        "CREATE FUNCTION public.writing_style_revoke_consent_on_file_change()", 1,
+    )[1].split("$style_file_mutation_revoke$;", 1)[0]
+    assert "UPDATE public.writing_style_document_consents" in file_fence
+    assert "UPDATE public.writing_style_profiles" not in file_fence
+    assert "UPDATE public.writing_style_grants" not in file_fence
+    assert "RETURN NEW;" in file_fence
+
+    for test in (
+        "test_writing_style_document_consent_postgres.py",
+        "test_writing_style_identity_postgres.py",
+        "test_writing_style_sample_postgres.py",
+    ):
+        path = root / "tests/integration" / test
+        content = path.read_text(encoding="utf-8")
+        assert name in content
+        assert "storage_uri text" in content

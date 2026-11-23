@@ -106,16 +106,19 @@ async def test_first_party_author_consent_postgres(
             DROP FUNCTION IF EXISTS public.writing_style_prevent_revision_mutation() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_validate() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_use_expiry(uuid,uuid,uuid) CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_revoke_consent_on_file_change() CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
-                tenant_id text NOT NULL,
+                tenant_id uuid NOT NULL,
                 owner_user_id uuid NOT NULL,
                 name text NOT NULL,
                 mime_type text NOT NULL,
                 bytes bigint NOT NULL,
                 sha256 text,
+                storage_uri text,
                 deleted_at timestamptz
             );
         """)
@@ -125,6 +128,7 @@ async def test_first_party_author_consent_postgres(
             "20261122010001_61_writing_style_sample_evidence.sql",
             "20261122010002_62_writing_style_document_author_consent.sql",
             "20261123030000_69_writing_style_document_file_tenant_text.sql",
+            "20261123040000_70_writing_style_document_delegated_use_fence.sql",
         ):
             await raw.execute((root / filename).read_text(encoding="utf-8"))
 
@@ -146,7 +150,7 @@ async def test_first_party_author_consent_postgres(
             "INSERT INTO public.files "
             "(file_id, tenant_id, owner_user_id, name, mime_type, bytes, sha256) "
             "VALUES ($1,$2,$3,'author.txt','text/plain',10,$4)",
-            str(artifact), str(tenant), owner, digest,
+            str(artifact), tenant, owner, digest,
         )
         await raw.execute(f'CREATE ROLE "{role}" NOLOGIN')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
@@ -177,6 +181,10 @@ async def test_first_party_author_consent_postgres(
         await raw.execute(
             f'GRANT UPDATE ON public.writing_style_profiles, '
             f'public.writing_style_grants TO "{role}"'
+        )
+        await raw.execute(
+            f'GRANT INSERT ON public.writing_style_grants, '
+            f'public.writing_style_sample_evidence TO "{role}"'
         )
         await raw.execute(
             f'GRANT SELECT ON public.writing_style_grants, '
@@ -647,28 +655,13 @@ async def test_first_party_author_consent_postgres(
         ) == receipt
         assert (await issuer.verify_current(**scope)).style_use_allowed is True
 
-        # A once-issued receipt is not authorization to use altered or
-        # archived bytes. Exercise the real SQL verifier, not a mocked row.
-        await raw.execute(
-            "UPDATE public.files SET sha256=$1 WHERE file_id=$2",
-            "b" * 64, str(artifact),
-        )
-        assert await issuer.verify_current(**scope) is None
+        # A mismatched expected digest never reveals private metadata.
+        # File drift now revokes irreversibly; test it on separate receipts.
         assert await runtime_issuer.read_current_source_summary(
             tenant_id=str(tenant), actor_id=str(owner),
             profile_id=str(profile), artifact_id=str(artifact),
-            source_sha256=digest,
+            source_sha256="b" * 64,
         ) is None
-        await raw.execute(
-            "UPDATE public.files SET sha256=$1, deleted_at=clock_timestamp() "
-            "WHERE file_id=$2",
-            digest, str(artifact),
-        )
-        assert await issuer.verify_current(**scope) is None
-        await raw.execute(
-            "UPDATE public.files SET deleted_at=NULL WHERE file_id=$1",
-            str(artifact),
-        )
         assert await issuer.verify_current(**scope) is not None
 
         with pytest.raises(asyncpg.PostgresError):
@@ -706,27 +699,8 @@ async def test_first_party_author_consent_postgres(
             "WHERE tenant_id=$1 AND profile_id=$2", tenant, profile,
         ) == "published"
 
-        # A previously valid consent receipt must not authorize a NEW grant
-        # when the canonical file has changed. Exercise the owner-scoped
-        # repository and its real PostgreSQL query, not a mocked SQL result.
-        await raw.execute(
-            "UPDATE public.files SET sha256=$1 WHERE file_id=$2",
-            "c" * 64, str(artifact),
-        )
-        with pytest.raises(WritingStyleAccessDenied) as denied:
-            await WritingStyleProfileRepository(
-                client_factory=TrustedTestClient
-            ).grant_use(
-                tenant_id=str(tenant), actor_id=str(owner),
-                profile_id=str(profile), grantee_actor_id=str(other_actor),
-                purpose="draft_email", correlation_id="changed-source-grant",
-            )
-        assert denied.value.args[0] == "style_source_unavailable"
-        await raw.execute(
-            "UPDATE public.files SET sha256=$1 WHERE file_id=$2",
-            digest, str(artifact),
-        )
-
+        # The independent direct-SQL and source-drift matrix below tests
+        # changed canonical file metadata after a delegated grant exists.
         # Only one-way revocation is permitted; cannot un-revoke or alter
         # scope/digest/permissions even as the authenticated author.
         assert await issuer.revoke_first_party(
@@ -750,13 +724,8 @@ async def test_first_party_author_consent_postgres(
             "status": auth_middleware.TokenStatus.VALID,
             "payload": claims,
         }
-        # Deleting/archiving the canonical file must not strand a still-live
-        # author-attested consent or its dependent delegated grants.
-        await raw.execute(
-            "UPDATE public.files SET deleted_at=clock_timestamp() "
-            "WHERE file_id=$1", str(artifact),
-        )
-        assert await issuer.verify_current(**scope) is None
+        # Revoke current consent voluntarily before mutating its file.
+        # The wrong digest remains denied without changing the receipt.
         assert await issuer.revoke_first_party(
             **scope, correlation_id="wrong-source-revoke",
             request=bearer_request, expected_source_sha256="b" * 64,
@@ -765,6 +734,12 @@ async def test_first_party_author_consent_postgres(
             **scope, correlation_id="author-revoke", request=bearer_request,
             expected_source_sha256=digest,
         ) is True
+        assert await issuer.verify_current(**scope) is None
+        # Editing the canonical file after revocation cannot restore consent.
+        await raw.execute(
+            "UPDATE public.files SET deleted_at=clock_timestamp() "
+            "WHERE file_id=$1", str(artifact),
+        )
         assert await issuer.verify_current(**scope) is None
         with pytest.raises(asyncpg.PostgresError):
             await scoped(
@@ -833,7 +808,7 @@ async def test_first_party_author_consent_postgres(
             "INSERT INTO public.files "
             "(file_id,tenant_id,owner_user_id,name,mime_type,bytes,sha256) "
             "VALUES ($1,$2,$3,'pending.txt','text/plain',10,$4)",
-            str(draft_artifact), str(tenant), owner, digest,
+            str(draft_artifact), tenant, owner, digest,
         )
         await scoped(
             owner, tenant,
@@ -909,6 +884,230 @@ async def test_first_party_author_consent_postgres(
                 "VALUES ($1,$2,$3,$4,'draft_email',$3)",
                 tenant, draft_profile, owner, other_actor,
             )
+
+
+        # WS-04B5: use the real canonical SQL trigger as the authority. Direct
+        # owner SQL cannot issue an unbounded delegated grant over an expiring
+        # author-attested document, and the delegate sees only current state.
+        async def published_document_case():
+            case_profile, case_file, case_receipt, case_revision = (
+                uuid.uuid4() for _ in range(4)
+            )
+            await raw.execute(
+                "INSERT INTO public.writing_style_profiles "
+                "(tenant_id,profile_id,owner_actor_id,kind,label) "
+                "VALUES ($1,$2,$3,'personal','Document grant SQL fence')",
+                tenant, case_profile, owner,
+            )
+            await raw.execute(
+                "INSERT INTO public.files "
+                "(file_id,tenant_id,owner_user_id,name,mime_type,bytes,sha256) "
+                "VALUES ($1,$2,$3,'document.txt','text/plain',10,$4)",
+                str(case_file), tenant, owner, digest,
+            )
+            await scoped(
+                owner, tenant, insert,
+                tenant, case_profile, owner, case_file, owner, digest,
+                case_receipt,
+            )
+            await raw.execute(
+                "INSERT INTO public.writing_style_revisions "
+                "(tenant_id,profile_id,revision_id,revision_number,"
+                "approved_expression,content_digest,approved_by) "
+                "VALUES ($1,$2,$3,1,'{\"tone\":\"direct\"}'::jsonb,$4,$5)",
+                tenant, case_profile, case_revision, "b" * 64, owner,
+            )
+            await scoped(
+                owner, tenant,
+                "UPDATE public.writing_style_profiles "
+                "SET state='published',publication_revision=1,"
+                "current_revision_id=$1 WHERE tenant_id=$2 AND profile_id=$3",
+                case_revision, tenant, case_profile,
+            )
+            return case_profile, case_file, case_receipt, case_revision
+
+        direct_profile, direct_file, direct_receipt, direct_revision = (
+            await published_document_case()
+        )
+        await scoped(
+            owner, tenant,
+            "INSERT INTO public.writing_style_grants "
+            "(tenant_id,profile_id,owner_actor_id,actor_id,purpose,granted_by) "
+            "VALUES ($1,$2,$3,$4,'draft_email',$3)",
+            tenant, direct_profile, owner, other_actor,
+        )
+        original_expiry = await raw.fetchval(
+            "SELECT expires_at FROM public.writing_style_document_consents "
+            "WHERE receipt_id=$1", direct_receipt,
+        )
+        assert await raw.fetchval(
+            "SELECT expires_at FROM public.writing_style_grants "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3 "
+            "AND purpose='draft_email'",
+            tenant, direct_profile, other_actor,
+        ) == original_expiry
+
+        # Direct owner SQL cannot stretch a grant past its source consent.
+        for extension in (
+            "UPDATE public.writing_style_grants SET expires_at=NULL "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
+            "UPDATE public.writing_style_grants "
+            "SET expires_at=clock_timestamp()+interval '20 days' "
+            "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
+        ):
+            await scoped(owner, tenant, extension, tenant, direct_profile, other_actor)
+            assert await raw.fetchval(
+                "SELECT expires_at FROM public.writing_style_grants "
+                "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
+                tenant, direct_profile, other_actor,
+            ) == original_expiry
+
+        delegated_req = KariSignatureRequest(
+            tenant_id=str(tenant), actor_id=str(other_actor),
+            profile_id=str(direct_profile), purpose="draft_email",
+            correlation_id="ws04b5-direct-sql-valid",
+        )
+        direct_repo = WritingStyleProfileRepository(
+            client_factory=TrustedTestClient,
+        )
+        active_revision = await direct_repo.read_current_published(
+            request=delegated_req,
+        )
+        assert active_revision is not None
+        assert await direct_repo.authorize_use(
+            request=delegated_req, revision=active_revision,
+        ) is True
+
+        # A no-op metadata write must not destroy a valid author receipt.
+        await raw.execute(
+            "UPDATE public.files SET sha256=sha256 WHERE file_id=$1",
+            str(direct_file),
+        )
+        assert await raw.fetchval(
+            "SELECT revoked_at IS NULL FROM public.writing_style_document_consents "
+            "WHERE receipt_id=$1", direct_receipt,
+        ) is True
+
+        # Source drift, archival, deletion and owner/tenant moves are all
+        # irreversible revocation events. They must stop previously authorized
+        # delegate resolution without delegate SELECT on private receipts.
+        changes = (
+            ("digest", "UPDATE public.files SET sha256=$2 WHERE file_id=$1", "c" * 64),
+            ("archive", "UPDATE public.files SET deleted_at=clock_timestamp() WHERE file_id=$1", None),
+            ("mime", "UPDATE public.files SET mime_type='application/pdf' WHERE file_id=$1", None),
+            ("size", "UPDATE public.files SET bytes=11 WHERE file_id=$1", None),
+            ("name", "UPDATE public.files SET name='changed.txt' WHERE file_id=$1", None),
+            ("storage", "UPDATE public.files SET storage_uri='supabase://new-source' WHERE file_id=$1", None),
+            ("owner", "UPDATE public.files SET owner_user_id=$2 WHERE file_id=$1", other_actor),
+            ("tenant", "UPDATE public.files SET tenant_id=$2 WHERE file_id=$1", foreign_tenant),
+            ("delete", "DELETE FROM public.files WHERE file_id=$1", None),
+        )
+        for label, update_statement, replacement in changes:
+            case_profile, case_file, case_receipt, case_revision = (
+                await published_document_case()
+            )
+            await scoped(
+                owner, tenant,
+                "INSERT INTO public.writing_style_grants "
+                "(tenant_id,profile_id,owner_actor_id,actor_id,purpose,granted_by) "
+                "VALUES ($1,$2,$3,$4,'draft_email',$3)",
+                tenant, case_profile, owner, other_actor,
+            )
+            prior = KariSignatureRequest(
+                tenant_id=str(tenant), actor_id=str(other_actor),
+                profile_id=str(case_profile), purpose="draft_email",
+                correlation_id="ws04b5-" + label,
+            )
+            before = await direct_repo.read_current_published(request=prior)
+            assert before is not None, label
+            if label == "digest":
+                # A non-owner file actor cannot bypass the SECURITY DEFINER
+                # consent fence (fixture privileges are disposable only).
+                await scoped(other_actor, tenant, update_statement,
+                             str(case_file), replacement)
+            elif replacement is None:
+                await raw.execute(update_statement, str(case_file))
+            else:
+                await raw.execute(update_statement, str(case_file), replacement)
+            assert await raw.fetchval(
+                "SELECT revoked_at IS NOT NULL "
+                "FROM public.writing_style_document_consents "
+                "WHERE receipt_id=$1", case_receipt,
+            ) is True, label
+            assert await raw.fetchval(
+                "SELECT state FROM public.writing_style_profiles "
+                "WHERE tenant_id=$1 AND profile_id=$2",
+                tenant, case_profile,
+            ) == "revoked", label
+            assert await raw.fetchval(
+                "SELECT revoked_at IS NOT NULL "
+                "FROM public.writing_style_grants "
+                "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
+                tenant, case_profile, other_actor,
+            ) is True, label
+            assert await direct_repo.read_current_published(request=prior) is None, label
+            assert not await direct_repo.authorize_use(
+                request=prior, revision=before,
+            ), label
+            if label == "digest":
+                # Restoring metadata never reopens immutable receipt or grants.
+                await raw.execute(
+                    "UPDATE public.files SET sha256=$2 WHERE file_id=$1",
+                    str(case_file), digest,
+                )
+                assert await direct_repo.read_current_published(request=prior) is None
+                with pytest.raises(asyncpg.PostgresError):
+                    await scoped(
+                        owner, tenant,
+                        "UPDATE public.writing_style_grants "
+                        "SET revoked_at=NULL, expires_at=NULL "
+                        "WHERE tenant_id=$1 AND profile_id=$2 AND actor_id=$3",
+                        tenant, case_profile, other_actor,
+                    )
+
+        # A document sample without an independently issued matching receipt
+        # cannot be laundered into publication or a delegated grant via SQL.
+        unattested_profile, unattested_sample, unattested_source = (
+            uuid.uuid4() for _ in range(3)
+        )
+        unattested_revision = uuid.uuid4()
+        await raw.execute(
+            "INSERT INTO public.writing_style_profiles "
+            "(tenant_id,profile_id,owner_actor_id,kind,label) "
+            "VALUES ($1,$2,$3,'personal','Unattested sample')",
+            tenant, unattested_profile, owner,
+        )
+        await scoped(
+            owner, tenant,
+            "INSERT INTO public.writing_style_sample_evidence "
+            "(tenant_id,profile_id,owner_actor_id,sample_id,source_type,"
+            "source_id,source_author_id,consent_receipt_id,"
+            "analysis_allowed,style_use_allowed,consent_expires_at) "
+            "VALUES ($1,$2,$3,$4,'document',$5,$3,$6,true,true,"
+            "clock_timestamp()+interval '1 day')",
+            tenant, unattested_profile, owner, unattested_sample,
+            unattested_source, uuid.uuid4(),
+        )
+        await raw.execute(
+            "INSERT INTO public.writing_style_revisions "
+            "(tenant_id,profile_id,revision_id,revision_number,"
+            "approved_expression,content_digest,approved_by) "
+            "VALUES ($1,$2,$3,1,'{}'::jsonb,$4,$5)",
+            tenant, unattested_profile, unattested_revision, "d" * 64, owner,
+        )
+        with pytest.raises(asyncpg.PostgresError, match="source use consent unavailable"):
+            await scoped(
+                owner, tenant,
+                "UPDATE public.writing_style_profiles "
+                "SET state='published',publication_revision=1,"
+                "current_revision_id=$1 WHERE tenant_id=$2 AND profile_id=$3",
+                unattested_revision, tenant, unattested_profile,
+            )
+        assert await raw.fetchval(
+            "SELECT state FROM public.writing_style_profiles "
+            "WHERE tenant_id=$1 AND profile_id=$2",
+            tenant, unattested_profile,
+        ) == "draft"
 
     finally:
         if engine is not None:
