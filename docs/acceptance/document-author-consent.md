@@ -248,3 +248,12 @@ First execute `PYTHONPATH=src python -m pytest -q tests/integration/test_documen
 Retain sanitized evidence of both phases, the distinct author revocation transaction, the same approved host/database/tenant/profile/revision provenance, and the actual commit. An **after-only negative** is vacuous and **does not count** as acceptance. A skipped run, simulation or unit test also does not qualify. Timing is observed, not a promised SLO. No source bytes, credentials, original author document or bearer credentials should enter artifacts.
 
 **Current status:** acceptance source added; neither phase has executed on an approved host, and no real delegated grant has been created or revoked by this change. Consumer ingestion remains OFF and PR release HOLD remains in force.
+
+
+### WS-04A9 live probe evidence-quality refinements
+
+The opt-in delegated-use probe now accepts any purpose valid under the existing `KariSignatureRequest` contract. It does not maintain a second hardcoded purpose registry. The real scoped PostgreSQL grant and the canonical resolver decide whether a particular purpose is allowed. Its measured duration includes the entire read, authorization, and positive/negative resolver path, not just the earlier preliminary checks.
+
+The bounded Supabase Storage probe also makes a **second read request using the same real owner/artifact but an undersized maximum-byte budget**; it must be denied and must return no text. This is distinct from the cross-tenant and cross-owner denials and does not replace the canonical storage owner's pre-transfer length, 206 range, and digest controls.
+
+Neither probe has executed against an approved target installation. These refinements supply stronger requirements for the future host trial, **not** evidence that the host passed them. Keep all live-gate statuses unverified until observed.
