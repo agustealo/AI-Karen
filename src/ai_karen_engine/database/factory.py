@@ -207,6 +207,17 @@ class DatabaseServiceFactory:
 
             self._services["artifact_store"] = factory.create_artifact_store()
 
+            # Reuse the SAME canonical artifact owner for KariSignature
+            # delegate-use verification. A bare style repository without
+            # this dependency must deny document-backed use.
+            from ai_karen_engine.services.writing_style_profile_repository import (
+                WritingStyleProfileRepository,
+            )
+            self._services["writing_style_repository"] = WritingStyleProfileRepository(
+                client_factory=lambda: db_client,
+                artifact_store=self._services["artifact_store"],
+            )
+
             logger.info("Canonical repositories created successfully")
             return factory
 
