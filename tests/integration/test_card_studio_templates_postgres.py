@@ -137,7 +137,7 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
         for table in _TABLES:
             state = await admin.fetchrow("""
                 SELECT relrowsecurity, relforcerowsecurity
-                FROM pg_class WHERE oid=$1::regclass
+                FROM pg_class WHERE oid=to_regclass($1)
             """, f"public.{table}")
             assert state["relrowsecurity"] and state["relforcerowsecurity"], table
             for role in ("anon", "authenticated"):
@@ -280,12 +280,12 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
                     draft=_draft(),
                     idempotency_key=str(uuid.uuid4()),
                 )
-            assert not await _rls_query(
-                reader, denied_tenant, denied_user,
-                "SELECT template_id FROM public.card_studio_templates "
-                "WHERE template_id=$1",
-                uuid.UUID(first.template_id),
-            )
+            for table in _TABLES:
+                assert not await _rls_query(
+                    reader, denied_tenant, denied_user,
+                    f"SELECT template_id FROM public.{table} WHERE template_id=$1",
+                    uuid.UUID(first.template_id),
+                )
 
         with pytest.raises(asyncpg.PostgresError):
             await _rls_query(
@@ -368,10 +368,12 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
             expected_revision=2,
             idempotency_key=archive_key,
         )
-        assert not await repo.list_owned(
+        active = await repo.list_owned(
             authenticated_tenant_id=str(tenant_a),
             authenticated_user_id=str(owner_a),
-        ) == [archived]  # archived draft is excluded from default listing
+        )
+        assert len(active) == 1
+        assert active[0].template_id == concurrent[0][0].template_id
         historical = await repo.read_owned(
             authenticated_tenant_id=str(tenant_a),
             authenticated_user_id=str(owner_a),
