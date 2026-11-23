@@ -230,3 +230,15 @@ def test_browser_config_disables_untrusted_page_scripts(monkeypatch):
     assert crawler.browser_config.options["java_script_enabled"] is False
     assert crawler.browser_config.options["use_persistent_context"] is False
     assert crawler.browser_config.options["accept_downloads"] is False
+
+
+def test_incompatible_sdk_browser_config_fails_closed(monkeypatch):
+    from ai_karen_engine.integrations.web import crawl4ai_integration as module
+
+    class OldBrowserConfig:
+        def __init__(self, headless=True):
+            self.headless = headless
+
+    monkeypatch.setattr(module, "BrowserConfig", OldBrowserConfig)
+    with pytest.raises(RuntimeError, match="secure browser settings"):
+        Crawl4AIIntegration(resolve_dns_for_safety=False)

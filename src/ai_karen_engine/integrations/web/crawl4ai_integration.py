@@ -776,13 +776,14 @@ class Crawl4AIIntegration:
         if self.settings.user_agent:
             kwargs["user_agent"] = self.settings.user_agent
 
-        return self._safe_construct(
-            BrowserConfig,
-            kwargs=kwargs,
-            fallback_kwargs={
-                "headless": self.settings.headless,
-            },
-        )
+        # Do not silently downgrade the security configuration if an older
+        # Crawl4AI SDK does not support disabling scripts or persistence.
+        try:
+            return BrowserConfig(**kwargs)
+        except TypeError as exc:
+            raise RuntimeError(
+                "Installed Crawl4AI does not support required secure browser settings."
+            ) from exc
 
     def _build_run_config(
         self,
