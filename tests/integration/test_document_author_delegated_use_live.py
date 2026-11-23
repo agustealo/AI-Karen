@@ -65,9 +65,9 @@ def _fixture() -> tuple[KariSignatureRequest, KariSignatureRevision]:
         "Approved published revision SHA-256 required"
     )
     purpose = os.environ.get(_PURPOSE, "")
-    assert purpose in {"draft_email", "rewrite", "summarize", "chat_response"}, (
-        "Approved delegated-use purpose required"
-    )
+    # The canonical KariSignatureRequest validates token shape. Whether this
+    # exact purpose is actually granted is decided by live PostgreSQL RLS.
+    assert purpose, "Approved delegated-use purpose required"
     try:
         expression = json.loads(os.environ.get(_EXPRESSION, ""))
     except (TypeError, ValueError) as exc:
@@ -109,8 +109,6 @@ async def test_live_delegated_use_before_and_after_revocation() -> None:
         request=request, revision=known_revision,
     )
     resolver = KariSignatureResolver(repository)
-    duration_ms = round((time.perf_counter() - started) * 1000, 2)
-
     if phase == "before":
         # A live positive check is necessary, otherwise a revoked grant could
         # make a negative-only test vacuously pass without any functioning use.
@@ -131,11 +129,12 @@ async def test_live_delegated_use_before_and_after_revocation() -> None:
         with pytest.raises(PermissionError, match="style_unavailable"):
             await resolver.resolve(request)
 
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
     logger.info(
         "document_delegated_use_live_acceptance",
         extra={
             "phase": phase,
-            "read_and_authorize_ms": duration_ms,
+            "read_authorize_resolve_ms": duration_ms,
             "published_visible": current is not None,
             "delegated_use_allowed": allowed is True,
         },
