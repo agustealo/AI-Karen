@@ -15,7 +15,7 @@
 | Memory event graph | `core/memory/graph/service.py`; `platform/memory/postgres/graph_repository.py` | Rebuildable scoped relational/temporal projection over governed data | Another durable graph truth store |
 | Memory candidate selection | `core/memory/retrieval/neuro_recall.py` plus `retrieval/retrieval_router.py` | Bounded candidate routing, live source ACL, fusion, ranking, rejection, abstention | Search plugin directly publishing raw private graph rows |
 | Complex workflows | `core/langgraph_orchestrator/` and runtime authorization | Graph planning, checkpoints and genuine branching tool chains | Extra orchestrator for single-step retrieval |
-| Consumer presentation | `src/ui_launchers/Karen-AI-Theme/src/plugin_repo/intelligent-search/` | Show backend truth, accessible source and state controls | Construct factual relations, claim tool termination, save or modify memory |
+| Consumer presentation | Canonical `src/ai_karen_engine/extensions/plugins/intelligent-search/ui/`; published build projection `src/ui_launchers/Karen-AI-Theme/src/plugin_repo/intelligent-search/` | Show backend truth, accessible source and state controls | Treat build artifacts as independent UI source, construct factual relations, claim tool termination, save or modify memory |
 
 ## 2. Current ingress and output flow
 
@@ -45,19 +45,19 @@ IntelligentSearchApi normalization -> ResultsWorkspace / ArticleReader
 
 **Important limitation:** The plugin search response currently emphasizes retrieval and excerpts. It is not by itself proof of final, model-generated, claim-cited answer synthesis. Consumer copy must not call retrieval summaries verified AI answers.
 
-## 3. Three source trees and packaging audit
+## 3. Canonical UI source and release projections
 
-1. **Active consumer source (observed):**
-   `src/ui_launchers/Karen-AI-Theme/src/plugin_repo/intelligent-search/`.
-   Key files: `IntelligentSearchPage.tsx`, `components/ResultsWorkspace.tsx`, `components/Panels.tsx`, `components/ArticleReader.tsx`, `hooks/useIntelligentSearch.ts`, `hooks/useSearchPayload.ts`, `services/IntelligentSearchApi.ts`, `types/index.ts`, `configs/modeConfig.ts`.
-2. **Backend extension and adjacent UI package:**
-   `src/ai_karen_engine/extensions/plugins/intelligent-search/`. Contains backend `handler.py`, `handlers/`, manifest, prompts and `ui/`.
-3. **Essential/free plugin distribution copy:**
-   `free_plugins/essential/intelligent-search/`, with independent manifest and UI-shaped files.
+The 2026-11-23 source audit found that the frontend's active published UI had moved ahead of the preinstalled extension: its page, hooks, typed response normalization and evidence components had changed while the canonical \`ui/\` still contained obsolete modules and imports to files absent from that directory.
 
-**Do not blindly copy files among these locations.** Before touching packaging, trace plugin manager bundling, import graph, build/install workflow, manifest resolution and actual mounted consumer path. Choose one authoritative edit owner, provide a deterministic generated packaging step where possible, retain compatibility only as needed. Audit all runtime registrations before deletion.
+1. **Canonical authoring and runtime registration:** \`src/ai_karen_engine/extensions/plugins/intelligent-search/\`. Its \`plugin_manifest.json\` is the backend handler and RBAC declaration; \`manifest.json\` is the separately validated GUI presentation entry; \`ui/\` contains the authoritative React source, hooks, API adapter and types. Runtime execution remains governed by the plugin kernel, CORTEX and canonical search services.
+2. **Published consumer projection:** \`src/ui_launchers/Karen-AI-Theme/src/plugin_repo/intelligent-search/\`. The frontend import map references this bundled package. Its code is **not** a second writable source of truth, and the presence of an import entry does not mean the backend plugin is enabled or authorized.
+3. **Free release mirror:** \`free_plugins/essential/intelligent-search/\`. These bytes must remain identical to the canonical preinstalled extension. They are distribution artifacts, not an executable registry or another handler implementation.
 
-The backend manifest currently advertises `version: 2.0.0`, `entrypoint: handler:MainExtension`, `provides_ui`, `provides_api` and `prompt_first`. It also contains historical defaults including `default_mode: general` and provider names. **The live consumer hook defaults to auto** and backend provider authority is the central search/runtime configuration. Do not turn manifest metadata into a new provider registry.
+**Source convergence:** PR #1261 reconciles the existing active published UI into canonical \`ui/\`, updates the free release mirror, and retires the replaced \`hooks/useWebSearch.ts\` and \`services/webSearchApi.ts\` names. \`tests/extensions/test_intelligent_search_ui_source_authority.py\` verifies complete source-to-published UI file parity, release mirror parity, clean governed materialization and real installer restart. The frontend import map and manifest boundaries remain enforced by their existing owners. This is source/build proof, **not** proof of a live user's enabled state, permissions or external deployment.
+
+Never edit \`plugin_repo\` or \`free_plugins\` as if either owns the feature. For changes, update the canonical extension source, propagate reviewed artifacts into the build/release destinations, and run exact-head backend, frontend, CI and browser acceptance. Do not grant plugin execution from GUI metadata or assume a provider is healthy from a manifest default.
+
+The backend manifest advertises \`version: 2.0.0\`, \`entrypoint: handler:MainExtension\`, \`provides_ui\`, \`provides_api\` and \`prompt_first\`. The consumer hook defaults to automatic selection, but backend provider eligibility comes from the central search/runtime configuration, never a second frontend provider registry.
 
 ## 4. Graph technologies are not interchangeable
 
