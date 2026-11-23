@@ -1,4 +1,5 @@
-export type SearchModeId = 
+export type SearchModeId =
+  | 'auto'
   | 'general'
   | 'news'
   | 'docs'
@@ -13,9 +14,19 @@ export interface SearchSourceItem {
   title: string;
   snippet?: string;
   content?: string;
+  full_content?: string | null;
+  article_preview?: string | null;
+  article_complete?: boolean;
+  article_char_count?: number;
+  article_id?: string | null;
+  markdown?: string;
+  extracted_data?: Record<string, unknown>;
   publishedDate?: string;
   relevanceScore?: number;
+  evidence_level?: 'fetched_page' | 'search_snippet';
   domain?: string;
+  links?: Array<{ url: string; text: string; category?: string }>;
+  media?: Record<string, unknown>;
 }
 
 export interface SearchResultItem {
@@ -26,6 +37,21 @@ export interface SearchResultItem {
   snippet?: string;
   content?: string;
   score?: number;
+  markdown?: string;
+  extracted_data?: Record<string, unknown>;
+}
+
+export interface CrawlDiagnostics {
+  enabled: boolean;
+  engine: string;
+  status: string;
+  pages_requested: number;
+  pages_succeeded: number;
+  pages_failed: number;
+  latency_ms: number;
+  capabilities: Record<string, boolean>;
+  degraded: boolean;
+  degradation_reason?: string;
 }
 
 export interface SearchDiagnostics {
@@ -40,30 +66,98 @@ export interface SearchDiagnostics {
   degraded?: boolean;
 }
 
+export interface WeatherCondition {
+  temp: number;
+  condition: string;
+  humidity?: number;
+  windSpeed?: number;
+  windDirection?: string;
+  feelsLike?: number;
+  pressure?: number;
+  uvIndex?: number;
+  visibility?: number;
+  precipProbability?: number;
+  icon?: string;
+}
+
+export interface WeatherForecast {
+  date: string;
+  high: number;
+  low: number;
+  condition: string;
+  precipProbability?: number;
+  icon?: string;
+}
+
+export interface WeatherAlert {
+  event: string;
+  severity: string;
+  description: string;
+  start: string;
+  end: string;
+}
+
+export interface WeatherResult {
+  location: string;
+  current?: WeatherCondition;
+  daily?: WeatherForecast[];
+  hourly?: WeatherCondition[];
+  alerts?: WeatherAlert[];
+  units: 'metric' | 'imperial';
+}
+
+export interface SearchEvidenceGraph {
+  version: number;
+  kind: 'retrieval_evidence';
+  status: 'available' | 'empty';
+  truncated: boolean;
+  nodes: Array<{
+    id: string;
+    kind: 'source' | 'passage';
+    label: string;
+    url: string;
+    evidence_level: 'fetched_page' | 'search_snippet';
+    article_id?: string | null;
+    published_at?: string | null;
+  }>;
+  edges: Array<{
+    id: string;
+    from: string;
+    to: string;
+    type: 'DERIVED_FROM';
+    provenance_url: string;
+    verification_state: 'source_matched';
+  }>;
+}
+
 export interface IntelligentSearchResponse {
   summary: string;
   query?: string;
   mode?: SearchModeId | string;
+  status?: string;
   provider?: string;
   total_results?: number;
   search_time?: number;
   can_execute?: boolean;
   reason?: string;
   sources?: SearchSourceItem[];
-  extractedData?: any;
+  evidenceGraph?: SearchEvidenceGraph;
+  extractedData?: Record<string, unknown>;
   insights?: string[];
   diagnostics?: SearchDiagnostics;
+  crawl?: CrawlDiagnostics;
   results?: SearchResultItem[];
   liveSearch?: {
     mode?: string;
     query?: string;
     expanded_queries?: string[];
     urls?: string[];
-    crawl_results?: any[];
-    processed_chunks?: any[];
+    crawl_results?: Array<Record<string, unknown>>;
+    processed_chunks?: Array<Record<string, unknown>>;
   };
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   execution_time_ms?: number;
+  weather?: WeatherResult;
 }
 
 export interface PluginExecutionEnvelope<T> {
@@ -76,48 +170,50 @@ export interface PluginExecutionEnvelope<T> {
 }
 
 export interface IntelligentSearchOptions {
-  // General options
   maxUrls?: number;
   freshnessBias?: string;
   allowedDomains?: string[];
   blockedDomains?: string[];
-  
-  // News
   timeRange?: string;
   preferRecent?: boolean;
-
-  // Docs
   product?: string;
   version?: string;
   officialOnly?: boolean;
   docTypes?: string[];
-
-  // Deep Research
   maxSubqueries?: number;
   maxHops?: number;
   sourceDiversity?: number;
-
-  // Structured Extract
   schema?: string;
   instruction?: string;
   targetFields?: string[];
   targetSelectors?: string[];
-
-  // Weather
   location?: string;
   units?: string;
   includeCurrent?: boolean;
   includeHourly?: boolean;
   includeDaily?: boolean;
   includeAlerts?: boolean;
-
-  // Stock Market
   ticker?: string;
   companyName?: string;
   exchange?: string;
   includePriceAction?: boolean;
   includeCompanyNews?: boolean;
   includeEarnings?: boolean;
+
+  // Crawl4AI-specific options
+  crawlEnabled?: boolean;
+  crawlMaxPages?: number;
+  crawlMaxDepth?: number;
+  crawlCaptureScreenshot?: boolean;
+  crawlUseCache?: boolean;
+  crawlRespectRobotsTxt?: boolean;
+  crawlIncludeDomains?: string[];
+  crawlExcludeDomains?: string[];
+  crawlExtractLinks?: boolean;
+  crawlExtractMedia?: boolean;
+  crawlExtractCleanedHtml?: boolean;
+  crawlStructuredSchema?: string;
+  crawlWaitForSelector?: string;
 }
 
 export interface IntelligentSearchState {
@@ -127,4 +223,13 @@ export interface IntelligentSearchState {
   isLoading: boolean;
   error: Error | null;
   response: IntelligentSearchResponse | null;
+  /** Last successful request, never inferred from editable form fields. */
+  completedSearch?: { query: string; mode: SearchModeId } | null;
+  /** True when visible evidence belongs to a previous request configuration. */
+  isResultsStale?: boolean;
 }
+
+// Aliases for backward compatibility if needed, but primary naming is now IntelligentSearch
+export type WebSearchResponse = IntelligentSearchResponse;
+export type WebSearchOptions = IntelligentSearchOptions;
+export type WebSearchState = IntelligentSearchState;
