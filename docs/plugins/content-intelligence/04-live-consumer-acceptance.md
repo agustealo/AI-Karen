@@ -202,3 +202,43 @@ reviewed/deployed SHA, source metadata provenance and sanitized
 pass/fail receipt before the release ledger changes. An unconfigured
 protected environment, unavailable live Storage fixture, or blocked
 Vercel deployment stays **unverified**, not silently passed.
+
+
+## KPLUG-10: Prove the real Storage handoff to Content Intelligence
+
+**Status: source contract, not an observed live-service pass.** The existing
+opt-in `test_live_supabase_object_read_with_disposable_postgres_owner_scope`
+now goes beyond downloading the selected object from real Storage. It uses
+the same canonical `SupabaseArtifactStore` as the owner-scoped File Explorer
+adapter and both runtime hosts. An artifact must appear on the first real
+owner inventory page, pass independent source/revision revalidation, and
+produce an exact source-ID/SHA-256 lexical analysis after its bytes have
+been reread and checked from real Storage. A forged revision must deny
+without publishing an additional analysis result.
+
+The test reuses `KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE=1` and the
+`KAREN_TEST_LIVE_ARTIFACT_ID` / `KAREN_TEST_LIVE_ARTIFACT_SHA256`
+fixture from the original live object-read proof. No third live-storage
+test flag or workflow is introduced. The named Storage bucket must be
+independently attested as private and the PostgreSQL target must be local
+`karen_code_artifact_test` on port 5432, with an exact disposable
+Supabase project URL and credentials. All of these prerequisites must
+fail closed if missing; the fixture must be the same active,
+nonsensitive artifact selected by the protected browser scenario.
+
+The test-only kernel admission fixture checks the hosts' request contracts
+and executes the canonical Content Intelligence lexical engine. **It is not
+a production PluginKernel or an authenticated HTTP request**, so it
+cannot certify effective RuntimePolicy, RBAC, browser authentication or
+deployment wiring. Preserve those independent proof paths through the
+existing protected browser workflow and API contract suites.
+
+A normal CK-GEN run keeps both live Storage proofs skipped. Only a
+successful explicitly opted-in run with a real object read, validated
+source receipt, and sanitized evidence counts toward live Storage
+acceptance. Record the exact run URL, source commit and deployment SHA,
+approved tenant/owner segregation results, Storage private-bucket
+attestation, protected browser scenario results, and reviewer approval.
+Never log content bytes, filenames, signing tokens, authentication headers,
+or private Storage URLs. File Explorer and Content Intelligence remain
+**Not shipped** until those separate proofs have actually passed.
