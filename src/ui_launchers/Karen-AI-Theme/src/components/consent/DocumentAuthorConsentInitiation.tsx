@@ -91,7 +91,9 @@ export function DocumentAuthorConsentInitiation() {
   const [allowStyleUse, setAllowStyleUse] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  // Inventory failures block submission; initiation failures are recoverable.
   const [error, setError] = useState<string | null>(null);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -149,7 +151,7 @@ export function DocumentAuthorConsentInitiation() {
   async function initiate() {
     if (!canSubmit || !selected) return;
     setSubmitting(true);
-    setError(null);
+    setSubmissionError(null);
     try {
       const approval = await apiClient.post<PendingAuthorApproval>(
         '/api/approvals/document-consent/initiate',
@@ -170,8 +172,8 @@ export function DocumentAuthorConsentInitiation() {
         '/approvals/document-consent/' + encodeURIComponent(approval.approval_id),
       );
     } catch {
-      setError(
-        'Document review could not be initiated. No consent or ingestion has occurred.',
+      setSubmissionError(
+        'Document review could not be initiated or verified. No consent receipt or ingestion is claimed. You may retry.',
       );
       setSubmitting(false);
     }
@@ -190,6 +192,7 @@ export function DocumentAuthorConsentInitiation() {
       </p>
       {loading && <p role="status">Loading owned document metadata…</p>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {submissionError && <p role="alert" className="text-sm text-destructive">{submissionError}</p>}
       {!loading && documents.length === 0 && (
         <p role="status">
           No eligible documents were returned by your document store.
@@ -202,7 +205,10 @@ export function DocumentAuthorConsentInitiation() {
           <select
             aria-label="Your document"
             value={selectedDocument}
-            onChange={(event) => setSelectedDocument(event.target.value)}
+            onChange={(event) => {
+              setSelectedDocument(event.target.value);
+              setSubmissionError(null);
+            }}
             disabled={submitting}
             className="w-full rounded-md border border-border bg-background p-2"
           >
@@ -244,7 +250,10 @@ export function DocumentAuthorConsentInitiation() {
           <select
             aria-label="Your draft writing-style profile"
             value={profileId}
-            onChange={(event) => setProfileId(event.target.value)}
+            onChange={(event) => {
+              setProfileId(event.target.value);
+              setSubmissionError(null);
+            }}
             disabled={submitting}
             className="w-full rounded-md border border-border bg-background p-2"
           >
@@ -266,7 +275,10 @@ export function DocumentAuthorConsentInitiation() {
           type="checkbox"
           checked={allowStyleUse}
           disabled={submitting}
-          onChange={(event) => setAllowStyleUse(event.target.checked)}
+          onChange={(event) => {
+            setAllowStyleUse(event.target.checked);
+            setSubmissionError(null);
+          }}
         />
         <span>
           Request permission to apply my writing style to generated content.
