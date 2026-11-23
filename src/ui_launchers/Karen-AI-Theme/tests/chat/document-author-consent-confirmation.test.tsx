@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DocumentAuthorConsentConfirmation } from '@/components/consent/DocumentAuthorConsentConfirmation';
@@ -281,6 +281,121 @@ describe('first-party document author confirmation', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Revoke document consent' })).toBeNull();
     expect(api.post).not.toHaveBeenCalled();
+  });
+
+
+  it('does not attach an old consumed approval receipt to a newly opened approval', async () => {
+    const nextApprovalId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
+    const historicalReceipt = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
+    let resolveOldReceipt: ((record: unknown) => void) | undefined;
+    api.get.mockImplementation((url: string) => {
+      if (url === '/api/approvals/document-consent/' + approvalId) {
+        return Promise.resolve({ ...preview, status: 'consumed' });
+      }
+      if (url === '/api/approvals/document-consent/' + approvalId + '/receipt') {
+        return new Promise((resolve) => { resolveOldReceipt = resolve; });
+      }
+      if (url === '/api/approvals/document-consent/' + nextApprovalId) {
+        return Promise.resolve({ ...preview, approval_id: nextApprovalId, status: 'pending' });
+      }
+      return Promise.reject(new Error('unexpected approval'));
+    });
+
+    const view = render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    await waitFor(() => expect(resolveOldReceipt).toBeDefined());
+
+    view.rerender(<DocumentAuthorConsentConfirmation approvalId={nextApprovalId} />);
+    expect(await screen.findByRole('checkbox', {
+      name: /I authored this document/,
+    })).toBeTruthy();
+
+    await act(async () => {
+      resolveOldReceipt?.({
+        approval_id: approvalId, receipt_id: historicalReceipt, status: 'issued',
+      });
+    });
+    expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Revoke document consent' })).toBeNull();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('discards an older receipt recheck completed after confirmed revocation', async () => {
+    const receipt = {
+      approval_id: approvalId,
+      receipt_id: 'dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb',
+      status: 'issued',
+    };
+    let resolveInitialReceipt: ((record: unknown) => void) | undefined;
+    let reads = 0;
+    api.get.mockImplementation((url: string) => {
+      if (url.endsWith('/receipt')) {
+        reads += 1;
+        return reads === 1
+          ? new Promise((resolve) => { resolveInitialReceipt = resolve; })
+          : Promise.resolve(receipt);
+      }
+      return Promise.resolve({ ...preview, status: 'consumed' });
+    });
+    api.post.mockResolvedValue({ approval_id: approvalId, status: 'revoked' });
+
+    render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    expect(await screen.findByRole('button', {
+      name: 'Recheck current consent receipt',
+    })).toBeTruthy();
+    await waitFor(() => expect(resolveInitialReceipt).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Recheck current consent receipt',
+    }));
+    expect(await screen.findByText(/Verified receipt ID:/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'Confirm revoke document consent',
+    }));
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Revoke document consent',
+    }));
+    expect(await screen.findByText(/Document consent revocation recorded/)).toBeTruthy();
+
+    await act(async () => { resolveInitialReceipt?.(receipt); });
+    expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Revoke document consent' })).toBeNull();
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a new approval isolated from a delayed former confirmation', async () => {
+    const nextApprovalId = 'cccccccc-dddd-eeee-ffff-111111111111';
+    let resolveOldConfirm: ((record: unknown) => void) | undefined;
+    api.get.mockImplementation((url: string) => Promise.resolve({
+      ...preview,
+      approval_id: url.endsWith(nextApprovalId) ? nextApprovalId : approvalId,
+    }));
+    api.post.mockImplementation((url: string) => (
+      url.endsWith('/confirm')
+        ? new Promise((resolve) => { resolveOldConfirm = resolve; })
+        : Promise.reject(new Error('unexpected issuance'))
+    ));
+
+    const view = render(<DocumentAuthorConsentConfirmation approvalId={approvalId} />);
+    await screen.findByText(preview.artifact_id);
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: /I authored this document/,
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm author consent' }));
+    await waitFor(() => expect(resolveOldConfirm).toBeDefined());
+
+    view.rerender(<DocumentAuthorConsentConfirmation approvalId={nextApprovalId} />);
+    expect(await screen.findByRole('checkbox', {
+      name: /I authored this document/,
+    })).toBeTruthy();
+
+    await act(async () => {
+      resolveOldConfirm?.({ approval_id: approvalId, status: 'approved' });
+    });
+    expect(screen.queryByText(/Author approval recorded/)).toBeNull();
+    expect(screen.queryByText(/Verified receipt ID:/)).toBeNull();
+    expect(screen.getByRole('button', {
+      name: 'Confirm author consent',
+    })).toBeTruthy();
   });
 
 });
