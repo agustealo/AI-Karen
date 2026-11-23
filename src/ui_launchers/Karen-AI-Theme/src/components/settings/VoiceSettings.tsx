@@ -17,38 +17,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
-import { DEFAULT_KAREN_SETTINGS, KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
+import { readPreferredBrowserVoiceURI, persistPreferredBrowserVoiceURI } from "@/lib/browser-voice-preference";
 import LocalVoiceEngineSettings from "@/components/settings/LocalVoiceEngineSettings";
 
 const DEFAULT_VOICE_SENTINEL = "_DEFAULT_VOICE_";
 const DISCOVERY_DELAYS_MS = [250, 1000, 3000] as const;
 type VoiceStatus = "loading" | "ready" | "empty" | "unsupported" | "failed";
-
-const readPreferredVoice = (): string | null => {
-  try {
-    const raw = localStorage.getItem(KAREN_SETTINGS_LS_KEY);
-    if (!raw) return DEFAULT_KAREN_SETTINGS.ttsVoiceURI;
-    const settings: unknown = JSON.parse(raw);
-    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return null;
-    const value = (settings as Record<string, unknown>).ttsVoiceURI;
-    return typeof value === "string" && value.trim() ? value : null;
-  } catch {
-    return null;
-  }
-};
-
-const persistPreferredVoice = (voiceURI: string | null): void => {
-  // Read the latest value at save time so a voice edit never overwrites
-  // unrelated settings saved by a different panel.
-  const raw = localStorage.getItem(KAREN_SETTINGS_LS_KEY);
-  const parsed: unknown = raw ? JSON.parse(raw) : DEFAULT_KAREN_SETTINGS;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("invalid_local_settings");
-  }
-  localStorage.setItem(KAREN_SETTINGS_LS_KEY, JSON.stringify({
-    ...(parsed as Record<string, unknown>), ttsVoiceURI: voiceURI,
-  }));
-};
 
 export default function VoiceSettings() {
   const { toast } = useToast();
@@ -61,7 +35,7 @@ export default function VoiceSettings() {
   const previewRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   useEffect(() => {
-    setSelectedVoiceURI(readPreferredVoice());
+    setSelectedVoiceURI(readPreferredBrowserVoiceURI());
   }, []);
 
   useEffect(() => {
@@ -187,7 +161,7 @@ export default function VoiceSettings() {
       return;
     }
     try {
-      persistPreferredVoice(selectedVoiceURI);
+      persistPreferredBrowserVoiceURI(selectedVoiceURI);
       toast({
         title: "Browser voice preference saved",
         description: "The preference is stored on this device, not in Karen's server settings.",
@@ -203,7 +177,7 @@ export default function VoiceSettings() {
 
   const resetToDefaults = () => {
     try {
-      persistPreferredVoice(null);
+      persistPreferredBrowserVoiceURI(null);
       stopPreview();
       setSelectedVoiceURI(null);
       toast({ title: "Browser voice preference reset" });

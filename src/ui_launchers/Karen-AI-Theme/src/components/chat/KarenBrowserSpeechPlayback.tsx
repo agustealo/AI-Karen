@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Volume2, Square } from "lucide-react";
 import { apiClient } from "@/lib/api";
-import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
+import { readPreferredBrowserVoiceURI } from "@/lib/browser-voice-preference";
 
 type SpeechPart = { type?: unknown; text?: unknown };
 type SpeechState = "idle" | "speaking";
@@ -67,18 +67,6 @@ export function extractAssistantSpeech(message: unknown): string {
     .filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => String(part.text).trim())
     .filter(Boolean).join(" ").trim();
-}
-
-function savedBrowserVoiceURI(): string | null {
-  try {
-    const raw = localStorage.getItem(KAREN_SETTINGS_LS_KEY);
-    const data: unknown = raw ? JSON.parse(raw) : null;
-    if (!data || typeof data !== "object" || Array.isArray(data)) return null;
-    const voice = (data as Record<string, unknown>).ttsVoiceURI;
-    return typeof voice === "string" && voice.trim() ? voice : null;
-  } catch {
-    return null;
-  }
 }
 
 function speechChunks(text: string): string[] {
@@ -198,7 +186,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
       if (!available.length) {
         throw new SafeSpeechError("No browser voices are available. Check Voice settings.");
       }
-      const savedURI = savedBrowserVoiceURI();
+      const savedURI = readPreferredBrowserVoiceURI();
       const selected = savedURI
         ? available.find((voice) => voice.voiceURI === savedURI)
         : available.find((voice) => voice.default) || available[0];
