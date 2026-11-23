@@ -52,6 +52,8 @@ def test_live_browser_never_replaces_backend_truth_with_stubs() -> None:
     assert "getByTestId('plugins-overview')" in body
     assert "registry.filter((entry) => entry.name === plugin.id)" in body
     assert "activeStates.has(status)" in body
+    assert "enabledFirstParty.length" in body
+    assert "toBeGreaterThan(0)" in body
     assert "guest.request.get(" in body
     assert "expect([401, 403]" in body
     for name in ("file-explorer", "intelligent-search", "time-query"):

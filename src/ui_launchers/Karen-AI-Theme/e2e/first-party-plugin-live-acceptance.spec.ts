@@ -123,6 +123,13 @@ test('KPLUG-LIVE: authenticated registry, real UI mounts, guest denial and respo
     await guest.close();
   }
 
+  // A deployment with every first-party plugin disabled cannot prove real UI
+  // mounting. Preserve disabled-state coverage without allowing a vacuous pass.
+  const enabledFirstParty = plugins.filter((plugin) => registry.some(
+    (entry) => entry.name === plugin.id && activeStates.has(entry.status),
+  ));
+  expect(enabledFirstParty.length, 'No enabled first-party UI to exercise on this host').toBeGreaterThan(0);
+
   await openOverview(page);
   const overview = page.getByTestId('plugins-overview');
   for (const viewport of viewports) {
