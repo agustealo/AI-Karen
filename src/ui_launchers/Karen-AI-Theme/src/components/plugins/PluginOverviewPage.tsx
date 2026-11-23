@@ -79,6 +79,7 @@ type BackendStatusDetail =
   | 'restorable';
 
 type UIInstallStatus =
+  | 'unverified'
   | 'not_installed'
   | 'installed'
   | 'removing'
@@ -299,7 +300,9 @@ const deriveUiInstallStatus = (backendState: BackendState): UIInstallStatus => {
   switch (normalized) {
     case 'error':
     case 'broken':
-      return 'error';
+      // A backend execution failure is not evidence that UI installation
+      // itself failed. That status needs independent package/mount evidence.
+      return 'unverified';
 
     case 'uninstalled':
     case 'not_discovered':
@@ -448,6 +451,13 @@ function FrontendStateBadge({
 
 function UIInstallStatusBadge({ status }: { status: UIInstallStatus }) {
   switch (status) {
+    case 'unverified':
+      return (
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+          <AlertTriangle className="h-3 w-3" aria-hidden={true} /> unverified
+        </span>
+      );
+
     case 'installed':
       return (
         <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400">

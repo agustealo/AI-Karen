@@ -813,8 +813,18 @@ class PluginKernel:
         ):
             raise RuntimeError("Untrusted plugin lifecycle marker")
         if observed_state == "disabled":
-            # Derived disabled state is not proof of an explicit mutation.
-            if not disabled_marker.is_file():
+            # A first-party, default-disabled manifest is an authoritative
+            # *initial* opt-in precondition, not evidence that a user disabled
+            # the plugin. Keep non-bundled paths on the explicit-marker gate.
+            # A previous enable marker prevents a later failed disable from
+            # masquerading as initial package state.
+            bundled_initial_disabled = (
+                self._is_builtin_root()
+                and not manifest.rbac.default_enabled
+                and not enabled_marker.exists()
+                and not self._is_uploaded_plugin(plugin_id)
+            )
+            if not disabled_marker.is_file() and not bundled_initial_disabled:
                 raise RuntimeError("Explicit disable marker is missing")
         else:
             if disabled_marker.exists():

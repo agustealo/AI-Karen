@@ -462,3 +462,51 @@ async def test_prepared_transition_does_not_return_success_after_failed_attestat
     # The physical marker may have changed: the future host must freeze the
     # prepared global claim as uncertain, not retry or claim terminal success.
     assert (tmp_path / "kernel-terminal" / kernel.MANUAL_ENABLED_MARKER).is_file()
+
+
+@pytest.mark.asyncio
+async def test_trusted_bundled_default_disabled_can_prepare_first_enable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bundled opt-in plugin starts disabled without a prior user action."""
+    _create_plugin(tmp_path, explicit_disabled=False)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    assert kernel.get_record("kernel-terminal")["status"] == "disabled"
+    # Only the canonical bundled root receives this source-trust distinction.
+    monkeypatch.setattr(kernel, "_is_builtin_root", lambda: True)
+    first = await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=str(uuid.uuid4())
+    )
+    assert first.observed_state == "disabled"
+    assert len(first.manifest_checksum) == 64
+
+    # A leftover explicit-enable marker can never be mistaken for initial
+    # bundled disablement if the runtime is disabled unexpectedly.
+    enabled = tmp_path / "kernel-terminal" / kernel.MANUAL_ENABLED_MARKER
+    enabled.write_text(kernel.MANUAL_ENABLED_CONTENT, encoding="utf-8")
+    with pytest.raises(RuntimeError, match="Explicit disable marker"):
+        await kernel.observe_lifecycle_for_finalization(
+            "kernel-terminal", operation_id=str(uuid.uuid4())
+        )
+
+
+@pytest.mark.asyncio
+async def test_uploaded_plugin_never_uses_bundled_first_enable_exemption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _create_plugin(tmp_path, explicit_disabled=False)
+    (tmp_path / "kernel-terminal" / ".karen-upload-origin").write_text(
+        "untrusted", encoding="utf-8"
+    )
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    monkeypatch.setattr(kernel, "_is_builtin_root", lambda: True)
+    with pytest.raises(RuntimeError, match="installation unavailable"):
+        await kernel.observe_lifecycle_for_finalization(
+            "kernel-terminal", operation_id=str(uuid.uuid4())
+        )

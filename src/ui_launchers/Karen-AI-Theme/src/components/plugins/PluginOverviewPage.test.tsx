@@ -92,6 +92,26 @@ describe('Plugins and Tools Kari OS workspace', () => {
     expect(container.querySelectorAll('.kari-card').length).toBeGreaterThanOrEqual(5);
   });
 
+  it('does not misreport a broken backend as a failed UI installation', () => {
+    mocked.usePluginRegistry.mockReturnValue({
+      plugins: [{ ...installed[0], rawStatus: 'broken' }],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
+    mocked.usePluginHealth.mockReturnValue({
+      backendState: 'broken',
+      frontendMountState: 'idle',
+      permissionVisible: true,
+      errorMessage: 'Plugin lifecycle outcome is unverified',
+    });
+    render(<PluginOverviewPage />);
+    const card = screen.getByTestId('plugin-integration-card');
+    expect(card.textContent).toContain('unverified');
+    expect(card.textContent).toContain('broken');
+    expect(card.textContent).not.toContain('UI installation error');
+  });
+
   it('renders voice plugin lifecycle guidance without a missing icon crash', () => {
     mocked.usePluginRegistry.mockReturnValue({
       plugins: [
