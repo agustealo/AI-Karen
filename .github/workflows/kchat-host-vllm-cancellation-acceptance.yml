@@ -1,0 +1,126 @@
+name: KCHAT-HOST-01 Actual vLLM Host Cancellation Acceptance
+
+# Explicit dispatch only: this runs active inference on an operator-approved
+# real host; never run it on pull requests or untrusted branches.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Local vLLM API on runner (http://127.0.0.1:PORT/v1)"
+        type: string
+        required: true
+      model:
+        description: "Exactly one served model ID from /v1/models"
+        type: string
+        required: true
+      expected_hostname:
+        description: "Exact hostname of the registered target inference host"
+        type: string
+        required: true
+      scheduler_budget_ms:
+        description: "Native abort and scheduler-drain limit in milliseconds"
+        type: string
+        required: true
+        default: "5000"
+      transport_budget_ms:
+        description: "Canonical HTTP stream-close limit in milliseconds"
+        type: string
+        required: true
+        default: "5000"
+      maintenance_ack:
+        description: "I have isolated the host and authorized real model testing"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kchat-host-vllm-certification
+  cancel-in-progress: false
+
+jobs:
+  host-scheduler-certification:
+    if: github.ref == 'refs/heads/main' && inputs.maintenance_ack == true
+    runs-on: [self-hosted, linux, karen-inference-host]
+    environment: inference-host-certification
+    timeout-minutes: 25
+    env:
+      PYTHONPATH: src
+      KAREN_VLLM_HOST_PROOF_API_KEY: ${{ secrets.KAREN_VLLM_HOST_PROOF_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify exact mainline source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m py_compile scripts/ci/vllm_host_cancellation_proof.py
+
+      - name: Prepare disposable acceptance-only dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/kchat-vllm-proof-env"
+          "$RUNNER_TEMP/kchat-vllm-proof-env/bin/python" -m pip install \
+            -r requirements/ci/runtime-contract.txt
+          "$RUNNER_TEMP/kchat-vllm-proof-env/bin/python" -m pip check
+
+      - name: Prove native scheduler abort, resource quiescence and recovery
+        shell: bash
+        env:
+          KAREN_HOST_URL: ${{ inputs.base_url }}
+          KAREN_HOST_MODEL: ${{ inputs.model }}
+          KAREN_EXPECTED_HOSTNAME: ${{ inputs.expected_hostname }}
+          KAREN_SCHEDULER_BUDGET: ${{ inputs.scheduler_budget_ms }}
+          KAREN_TRANSPORT_BUDGET: ${{ inputs.transport_budget_ms }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/kchat-host-01-evidence"
+          "$RUNNER_TEMP/kchat-vllm-proof-env/bin/python" \
+            scripts/ci/vllm_host_cancellation_proof.py \
+            --base-url "$KAREN_HOST_URL" \
+            --model "$KAREN_HOST_MODEL" \
+            --expected-hostname "$KAREN_EXPECTED_HOSTNAME" \
+            --expected-source-sha "$GITHUB_SHA" \
+            --scheduler-budget-ms "$KAREN_SCHEDULER_BUDGET" \
+            --transport-budget-ms "$KAREN_TRANSPORT_BUDGET" \
+            --report "$RUNNER_TEMP/kchat-host-01-evidence/scheduler.json" \
+            --exclusive-maintenance
+
+      - name: Reject unverified hardware or per-request claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/kchat-vllm-proof-env/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["RUNNER_TEMP"]) / "kchat-host-01-evidence/scheduler.json"
+          proof = json.loads(p.read_text())
+          assert proof["status"] == "host_scheduler_observation_passed"
+          assert proof["source_sha"] == os.environ["GITHUB_SHA"]
+          assert proof["scheduler_drained"] is True
+          assert proof["native_abort_counter_after"] > proof["native_abort_counter_before"]
+          assert proof["tokens_stable_after_idle"] is True
+          assert proof["independent_survivor_verified"] is True
+          assert proof["retry_verified"] is True
+          assert proof["final_scheduler_idle"] is True
+          assert proof["per_request_abort_trace_certified"] is False
+          assert proof["gpu_vram_release_certified"] is False
+          print("Native scheduler evidence verified at target host.")
+          PY
+
+      - name: Preserve sanitized host evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kchat-host-01-native-scheduler
+          path: ${{ runner.temp }}/kchat-host-01-evidence/scheduler.json
+          if-no-files-found: warn
+          retention-days: 14
