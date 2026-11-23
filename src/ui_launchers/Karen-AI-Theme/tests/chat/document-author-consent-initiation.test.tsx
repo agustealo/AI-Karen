@@ -346,4 +346,53 @@ describe('document author source initiation', () => {
     expect(api.post).not.toHaveBeenCalled();
   });
 
+  it('allows retry after a denied initiation without bypassing inventory validation', async () => {
+    api.post
+      .mockRejectedValueOnce(new Error('403'))
+      .mockResolvedValueOnce({
+        approval_id: approvalId,
+        status: 'pending',
+        intent: 'writing_style.document_consent.issue',
+      });
+    render(<DocumentAuthorConsentInitiation />);
+    await screen.findByText(/author-original.txt/);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your document' }), {
+      target: { value: documentId },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your draft writing-style profile' }), {
+      target: { value: profileId },
+    });
+    const initiate = screen.getByRole('button', { name: 'Continue to author review' }) as HTMLButtonElement;
+    fireEvent.click(initiate);
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(initiate.disabled).toBe(false);
+    expect(navigate.push).not.toHaveBeenCalled();
+    fireEvent.click(initiate);
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(navigate.push).toHaveBeenCalledWith(
+      '/approvals/document-consent/' + approvalId,
+    ));
+    expect(api.post.mock.calls[1][1]).toEqual({
+      profile_id: profileId, artifact_id: documentId, style_use_allowed: false,
+    });
+  });
+
+  it('clears an initiation error when changing purpose without clearing an inventory failure', async () => {
+    api.post.mockRejectedValue(new Error('unavailable'));
+    render(<DocumentAuthorConsentInitiation />);
+    await screen.findByText(/author-original.txt/);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your document' }), {
+      target: { value: documentId },
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Your draft writing-style profile' }), {
+      target: { value: profileId },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to author review' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect((screen.getByRole('button', { name: 'Continue to author review' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
 });
