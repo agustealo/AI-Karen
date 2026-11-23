@@ -28,6 +28,11 @@ from ai_karen_engine.extensions.contracts import ExtensionHealth, ExtensionLifec
 logger = logging.getLogger("kari.extensions.health")
 
 
+def safe_extension_health_error(error: object) -> Optional[str]:
+    """Expose health failure existence without serializing private diagnostics."""
+    return "Extension health check failed" if error else None
+
+
 class ExtensionHealthStatus(str, Enum):
     """Extension health status levels."""
     HEALTHY = "healthy"
@@ -154,7 +159,7 @@ class ExtensionHealthMonitor:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in extension health monitoring loop: {e}")
+                logger.error("Extension health monitoring loop failed", extra={"error_type": type(e).__name__})
                 await asyncio.sleep(check_interval)
 
     async def check_extension_system_health(self) -> ExtensionSystemHealth:
@@ -224,7 +229,7 @@ class ExtensionHealthMonitor:
                         )
             except Exception as e:
                 logger.warning(
-                    f"Failed to get extensions from registry: {e}", exc_info=True
+                    "Failed to get extensions from registry", extra={"error_type": type(e).__name__}
                 )
 
             # Check health of each extension
@@ -233,14 +238,14 @@ class ExtensionHealthMonitor:
                     metrics = await self._check_individual_extension_health(name, record)
                     extension_metrics[name] = metrics
                 except Exception as e:
-                    logger.error(f"Failed to check health for extension {name}: {e}")
+                    logger.error("Failed to check extension health", extra={"extension_name": name, "error_type": type(e).__name__})
                     extension_metrics[name] = ExtensionHealthRecord(
                         plugin_id=name,
                         state=ExtensionLifecycleState.FAILED,
                         health=ExtensionHealth.UNAVAILABLE,
                         response_time_ms=0,
                         last_check=datetime.now(timezone.utc),
-                        error=str(e)
+                        error="Extension health check failed"
                     )
 
             # Check supporting services health
@@ -276,7 +281,7 @@ class ExtensionHealthMonitor:
             )
 
         except Exception as e:
-            logger.error(f"Failed to check extension system health: {e}")
+            logger.error("Failed to check extension system health", extra={"error_type": type(e).__name__})
             return ExtensionSystemHealth(
                 overall_status=ExtensionHealthStatus.UNHEALTHY,
                 total_extensions=0,
@@ -317,7 +322,7 @@ class ExtensionHealthMonitor:
                     try:
                         health_result = await record.instance.health_check()
                     except Exception as e:
-                        logger.warning(f"Extension {name} health check failed: {e}")
+                        logger.warning("Extension health check failed", extra={"extension_name": name, "error_type": type(e).__name__})
                         health_result = False
 
             # Calculate response time
@@ -356,7 +361,7 @@ class ExtensionHealthMonitor:
                 health=ExtensionHealth.UNAVAILABLE,
                 response_time_ms=(time.time() - start_time) * 1000,
                 last_check=datetime.now(timezone.utc),
-                error=str(e)
+                error="Extension health check failed"
             )
 
     def _determine_extension_status(
@@ -400,7 +405,7 @@ class ExtensionHealthMonitor:
             # In production, this would test token generation/validation
             return True
         except Exception as e:
-            logger.warning(f"Authentication service health check failed: {e}")
+            logger.warning("Authentication service health check failed", extra={"error_type": type(e).__name__})
             return False
 
     async def _check_database_health(self) -> bool:
@@ -410,7 +415,7 @@ class ExtensionHealthMonitor:
             # In production, this would test database connectivity and queries
             return True
         except Exception as e:
-            logger.warning(f"Database health check failed: {e}")
+            logger.warning("Database health check failed", extra={"error_type": type(e).__name__})
             return False
 
     async def _check_background_tasks_health(self) -> bool:
@@ -421,7 +426,7 @@ class ExtensionHealthMonitor:
             # Placeholder for actual background task health check
             return True
         except Exception as e:
-            logger.warning(f"Background tasks health check failed: {e}")
+            logger.warning("Background tasks health check failed", extra={"error_type": type(e).__name__})
             return False
 
     def _calculate_overall_status(
@@ -498,7 +503,7 @@ class ExtensionHealthMonitor:
                     f"Extension {name} is {metrics.health.value}: "
                     f"response_time={metrics.response_time_ms:.1f}ms, "
                     f"errors={metrics.error_count}, "
-                    f"error_msg={metrics.error}"
+                    f"error_present={bool(metrics.error)}"
                 )
 
     def _add_to_history(self, health: ExtensionSystemHealth):
@@ -544,7 +549,7 @@ class ExtensionHealthMonitor:
                         "background_tasks_active": metrics.background_tasks_active,
                         "background_tasks_failed": metrics.background_tasks_failed,
                         "last_check": metrics.last_check.isoformat() if metrics.last_check else None,
-                        "error": metrics.error
+                        "error": safe_extension_health_error(metrics.error)
                     }
                     for name, metrics in health.extension_metrics.items()
                 }
@@ -577,7 +582,7 @@ class ExtensionHealthMonitor:
                 # Prometheus not available, skip metrics update
                 pass
         except Exception as e:
-            logger.warning(f"Failed to update extension metrics: {e}")
+            logger.warning("Failed to update extension metrics", extra={"error_type": type(e).__name__})
 
     def record_extension_api_call(self, extension_name: str, endpoint: str, status_code: int, response_time_ms: float):
         """Record extension API call metrics."""
@@ -590,7 +595,7 @@ class ExtensionHealthMonitor:
                 # Prometheus not available, skip metrics update
                 pass
         except Exception as e:
-            logger.warning(f"Failed to record extension API call metrics: {e}")
+            logger.warning("Failed to record extension API call metrics", extra={"error_type": type(e).__name__})
 
     def record_extension_error(self, extension_name: str, error_type: str):
         """Record extension error metrics."""
@@ -603,7 +608,7 @@ class ExtensionHealthMonitor:
                 # Prometheus not available, skip metrics update
                 pass
         except Exception as e:
-            logger.warning(f"Failed to record extension error metrics: {e}")
+            logger.warning("Failed to record extension error metrics", extra={"error_type": type(e).__name__})
 
     async def check_specific_extension_health(self, extension_name: str) -> Dict[str, Any]:
         """Check health of a specific extension."""
@@ -636,16 +641,16 @@ class ExtensionHealthMonitor:
                 "background_tasks_active": metrics.background_tasks_active,
                 "background_tasks_failed": metrics.background_tasks_failed,
                 "last_check": metrics.last_check.isoformat() if metrics.last_check else None,
-                "error": metrics.error,
+                "error": safe_extension_health_error(metrics.error),
                 "healthy": metrics.health == ExtensionHealth.HEALTHY
             }
 
         except Exception as e:
-            logger.error(f"Failed to check health for extension {extension_name}: {e}")
+            logger.error("Failed to check extension health", extra={"extension_name": extension_name, "error_type": type(e).__name__})
             return {
                 "extension": extension_name,
                 "status": "error",
-                "error": str(e),
+                "error": "Extension health check failed",
                 "healthy": False
             }
 

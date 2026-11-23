@@ -6,13 +6,16 @@ Used for initial frontend loading and system status checks.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 try:
     from pydantic import BaseModel
 except ImportError:
     from ai_karen_engine.pydantic_stub import BaseModel
+
+from ai_karen_engine.core.runtime.operational_health import get_operational_health_service
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ async def get_system_info():
             ]
         )
     except Exception as e:
-        logger.error(f"Failed to get system info: {e}")
+        logger.error("Failed to get system info", extra={"error_type": type(e).__name__})
         raise HTTPException(status_code=500, detail="Failed to retrieve system information")
 
 
@@ -103,28 +106,51 @@ async def get_basic_provider_info():
         return basic_providers
         
     except Exception as e:
-        logger.error(f"Failed to get basic provider info: {e}")
+        logger.error("Failed to get basic provider info", extra={"error_type": type(e).__name__})
         raise HTTPException(status_code=500, detail="Failed to retrieve provider information")
 
 
 @router.get("/health", response_model=Dict[str, Any])
-async def public_health_check():
-    """Public health check endpoint."""
-    try:
-        return {
-            "status": "healthy",
-            "timestamp": "2025-08-25T20:00:00Z",
-            "services": {
-                "api": "operational",
-                "authentication": "operational"
-            },
-            "message": "System is operational. Authentication required for full access."
-        }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
+async def public_health_check(request: Request) -> Dict[str, Any]:
+    """Project canonical runtime readiness without leaking internal diagnostics.
+
+    The public endpoint reports observed readiness only. It never invents
+    authentication health or provider availability from a static list.
+    """
+    timestamp = datetime.now(timezone.utc).isoformat()
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
         return {
             "status": "degraded",
-            "timestamp": "2025-08-25T20:00:00Z", 
-            "error": str(e),
-            "message": "System is experiencing issues."
+            "timestamp": timestamp,
+            "services": {"api": "operational", "readiness": "unavailable"},
+            "message": "Runtime readiness unavailable",
+        }
+
+    try:
+        result = await get_operational_health_service().readiness(
+            environment=str(getattr(settings, "environment", "production")),
+        )
+        components = result.as_dict().get("components", {})
+        return {
+            "status": "healthy" if result.ready else "degraded",
+            "timestamp": timestamp,
+            "services": {
+                "api": "operational",
+                "configuration": components.get("configuration", "unknown"),
+                "database": components.get("database", "unknown"),
+                "redis": components.get("redis", "unknown"),
+            },
+            "message": "Runtime ready" if result.ready else "Runtime not ready",
+        }
+    except Exception as exc:
+        logger.error(
+            "Public readiness check failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        return {
+            "status": "degraded",
+            "timestamp": timestamp,
+            "services": {"api": "operational", "readiness": "unavailable"},
+            "message": "Runtime readiness unavailable",
         }
