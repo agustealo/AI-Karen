@@ -1,6 +1,7 @@
 """Canonical SSE transport translates early runtime failure without fake replies."""
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -237,3 +238,94 @@ async def test_partial_stream_disconnect_is_not_complete():
     assert events[-1]["metadata"]["correlation_id"] == "correlation-1"
     assert "private upstream disconnect" not in str(events)
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_sse_consumer_close_finalizes_runtime_after_first_content():
+    """H: stopping the wire after one content frame must close the producer."""
+    finalized = asyncio.Event()
+    generated = []
+
+    async def pending(_request):
+        try:
+            generated.append("opened")
+            yield ChatStreamChunk(
+                type="content", content="partial", correlation_id="correlation-1",
+            )
+            await asyncio.Event().wait()
+            generated.append("unexpected_resumption")
+        finally:
+            finalized.set()
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=pending),
+    ):
+        wire = _sse(_request())
+        assert await asyncio.wait_for(anext(wire), 1) == ": stream_connected\\n\\n"
+        observed = await asyncio.wait_for(anext(wire), 1)
+        assert json.loads(observed[6:])["type"] == "content"
+        await asyncio.wait_for(wire.aclose(), 1)
+        await asyncio.wait_for(finalized.wait(), 1)
+
+    assert generated == ["opened"]
+    # Neither DONE nor a successful terminal can be fabricated after close.
+
+
+@pytest.mark.asyncio
+async def test_sse_verified_terminal_closes_producer_before_done():
+    """A terminal chunk must not leave a suspended producer in the pool."""
+    finalized = asyncio.Event()
+
+    async def terminal_then_waits(_request):
+        try:
+            yield ChatStreamChunk(
+                type="content", content="verified", correlation_id="correlation-1",
+            )
+            yield ChatStreamChunk(
+                type="complete", content="", correlation_id="correlation-1",
+            )
+            await asyncio.Event().wait()
+        finally:
+            finalized.set()
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=terminal_then_waits),
+    ):
+        frames = [frame async for frame in _sse(_request())]
+
+    await asyncio.wait_for(finalized.wait(), 1)
+    assert [json.loads(frame[6:])["type"] for frame in frames[1:-1]] == [
+        "content", "complete",
+    ]
+    assert frames[-1] == "data: [DONE]\\n\\n"
+
+
+@pytest.mark.asyncio
+async def test_sse_cleanup_failure_after_terminal_never_invents_second_terminal():
+    """A failed close must not emit a post-completion ERROR or leak its cause."""
+    finalized = asyncio.Event()
+
+    async def unsafe_teardown(_request):
+        try:
+            yield ChatStreamChunk(
+                type="complete", content="", correlation_id="correlation-1",
+            )
+            await asyncio.Event().wait()
+        finally:
+            finalized.set()
+            raise RuntimeError("private producer close detail")
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=unsafe_teardown),
+    ):
+        frames = [frame async for frame in _sse(_request())]
+
+    await asyncio.wait_for(finalized.wait(), 1)
+    assert [json.loads(frame[6:])["type"] for frame in frames[1:-1]] == [
+        "complete",
+    ]
+    assert frames[-1] == "data: [DONE]\\n\\n"
+    assert "private producer close detail" not in "".join(frames)
