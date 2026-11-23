@@ -52,6 +52,52 @@ def _composer_draft_failure_class(exc: Exception) -> str:
     return "database_failure_unclassified"
 
 
+
+_ALLOWED_TURN_FAILURE_CODES = frozenset({
+    "chat_run_transcript_scope_mismatch",
+    "chat_run_commit_not_authorized",
+    "conversation_persona_scope_invalid",
+    "conversation_persona_scope_mismatch",
+    "message_idempotency_conflict",
+    "incomplete_turn_replay",
+})
+
+
+def _repository_failure_class(exc: Exception) -> str:
+    """Classify SQL failures without formatting SQLAlchemy's parameters."""
+    original = getattr(exc, "orig", None)
+    state = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    if state in ("42501", "28000"):
+        return "database_permission_denied"
+    if state in ("42P01", "42703", "42804", "42P07"):
+        return "database_schema_incompatible"
+    if state in ("23503", "23505", "23514"):
+        return "database_integrity_failure"
+    if state in ("08000", "08001", "08003", "08006", "57P01"):
+        return "database_connection_unavailable"
+    return "database_failure_unclassified"
+
+
+def _repository_failure(
+    operation: str, exc: Exception, *,
+    error_code: str = "conversation_storage_unavailable",
+) -> RepositoryResult:
+    """One fail-closed boundary for logs and result metadata, without SQL."""
+    failure_class = _repository_failure_class(exc)
+    logger.error(
+        "conversation_repository_operation_failed",
+        extra={
+            "operation": operation,
+            "error_type": type(exc).__name__,
+            "failure_class": failure_class,
+        },
+    )
+    return RepositoryResult(
+        success=False, error=error_code,
+        metadata={"failure_class": failure_class},
+    )
+
+
 class PostgresConversationRepository(ConversationRepository):
     """PostgreSQL conversation repository.
 
@@ -78,8 +124,7 @@ class PostgresConversationRepository(ConversationRepository):
                 await session.execute(text("SELECT 1"))
             return RepositoryResult(success=True)
         except Exception as exc:
-            logger.error("ConversationRepository health check failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("health_check", exc)
 
     @instrument_repository(
         operation="create_conversation", repository="PostgresConversationRepository"
@@ -124,8 +169,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=conversation.id)
         except Exception as exc:
-            logger.error("create_conversation failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("create_conversation", exc)
 
     @instrument_repository(
         operation="get_conversation", repository="PostgresConversationRepository"
@@ -154,8 +198,7 @@ class PostgresConversationRepository(ConversationRepository):
                     data=self._row_to_conversation(row),
                 )
         except Exception as exc:
-            logger.error("get_conversation failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("get_conversation", exc)
 
     @instrument_repository(
         operation="get_conversation_by_session",
@@ -196,8 +239,7 @@ class PostgresConversationRepository(ConversationRepository):
                     data=self._row_to_conversation(row),
                 )
         except Exception as exc:
-            logger.error("get_conversation_by_session failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("get_conversation_by_session", exc)
 
     @instrument_repository(
         operation="list_conversations", repository="PostgresConversationRepository"
@@ -247,8 +289,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=conversations)
         except Exception as exc:
-            logger.error("list_conversations failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("list_conversations", exc)
 
     @instrument_repository(
         operation="count_conversations",
@@ -287,8 +328,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=int(result.scalar_one()))
         except Exception as exc:
-            logger.error("count_conversations failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("count_conversations", exc)
 
     @instrument_repository(
         operation="update_conversation", repository="PostgresConversationRepository"
@@ -337,8 +377,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=result.rowcount > 0)
         except Exception as exc:
-            logger.error("update_conversation failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("update_conversation", exc)
 
     @instrument_repository(
         operation="delete_conversation", repository="PostgresConversationRepository"
@@ -411,10 +450,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=deleted)
         except Exception as exc:
-            logger.error(
-                "delete_conversation failed", extra={"error_type": type(exc).__name__},
-            )
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("delete_conversation", exc)
 
     @instrument_repository(
         operation="get_composer_draft", repository="PostgresConversationRepository"
@@ -680,8 +716,7 @@ class PostgresConversationRepository(ConversationRepository):
                     ),
                 )
         except Exception as exc:
-            logger.error("add_message failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("add_message", exc)
 
     @instrument_repository(
         operation="add_completed_turn", repository="PostgresConversationRepository"
@@ -1022,10 +1057,19 @@ class PostgresConversationRepository(ConversationRepository):
                     metadata={"idempotent_replay": persisted == 0},
                 )
         except ValueError as exc:
-            return RepositoryResult(success=False, error=str(exc))
-        except Exception:
-            logger.exception("Atomic completed-turn persistence failed")
-            return RepositoryResult(success=False, error="completed_turn_write_failed")
+            if (
+                len(exc.args) == 1
+                and isinstance(exc.args[0], str)
+                and exc.args[0] in _ALLOWED_TURN_FAILURE_CODES
+            ):
+                return RepositoryResult(success=False, error=exc.args[0])
+            return _repository_failure(
+                "add_completed_turn", exc, error_code="completed_turn_write_failed",
+            )
+        except Exception as exc:
+            return _repository_failure(
+                "add_completed_turn", exc, error_code="completed_turn_write_failed",
+            )
 
     @instrument_repository(
         operation="get_messages", repository="PostgresConversationRepository"
@@ -1088,8 +1132,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=messages)
         except Exception as exc:
-            logger.error("get_messages failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("get_messages", exc)
 
     @instrument_repository(
         operation="update_message", repository="PostgresConversationRepository"
@@ -1127,8 +1170,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=result.rowcount > 0)
         except Exception as exc:
-            logger.error("update_message failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("update_message", exc)
 
     @instrument_repository(
         operation="delete_message", repository="PostgresConversationRepository"
@@ -1161,8 +1203,7 @@ class PostgresConversationRepository(ConversationRepository):
                 )
                 return RepositoryResult(success=True, data=result.rowcount > 0)
         except Exception as exc:
-            logger.error("delete_message failed: %s", exc)
-            return RepositoryResult(success=False, error=str(exc))
+            return _repository_failure("delete_message", exc)
 
     def _row_to_conversation(self, row: Any) -> Conversation:
         return Conversation(
