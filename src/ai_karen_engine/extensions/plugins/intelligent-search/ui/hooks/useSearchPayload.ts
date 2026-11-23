@@ -9,6 +9,9 @@ const SEARCH_OPTION_KEYS: Partial<Record<keyof IntelligentSearchOptions, string>
   blockedDomains: 'blocked_domains',
   timeRange: 'time_range',
   preferRecent: 'prefer_recent',
+  companyName: 'company_name',
+  targetFields: 'target_fields',
+  targetSelectors: 'target_selectors',
 };
 
 export function useSearchPayload() {
