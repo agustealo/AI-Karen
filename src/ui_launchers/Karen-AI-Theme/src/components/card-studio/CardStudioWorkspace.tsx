@@ -135,14 +135,10 @@ export function CardStudioWorkspace() {
         listSavedCardTemplates(),
       ]);
       if (signal && !signal.active) return;
-      const ownedTypes = new Set(available.flatMap(item =>
-        item.definition.slots.map(slot => slot.component_type),
-      ));
-      const valid = saved.filter(item =>
-        item.definition.slots.every(slot => ownedTypes.has(slot.component_type)),
-      );
+      // Keep truthful inventory even if a stored component was retired.
+      // Such records remain visible but cannot be edited or previewed.
       setCatalog(available);
-      setTemplates(valid);
+      setTemplates(saved);
       const recovered = recoverPending(principal);
       setPending(recovered);
       if (recovered) {
@@ -204,6 +200,13 @@ export function CardStudioWorkspace() {
   const choose = (item: SavedCardTemplate | null) => {
     if (locked || !catalog.length) return;
     if (dirty && !window.confirm("Discard unsaved layout changes?")) return;
+    const hostTypes = new Set(catalog.flatMap(entry =>
+      entry.definition.slots.map(slot => slot.component_type),
+    ));
+    if (item && item.definition.slots.some(slot => !hostTypes.has(slot.component_type))) {
+      setError("This saved layout uses a component that the host no longer supports. Editing is unavailable.");
+      return;
+    }
     setSelected(item);
     setDraft(item ? structuredClone(item.definition) : createBlankCardDraft(catalog));
     setError("");
@@ -353,11 +356,17 @@ export function CardStudioWorkspace() {
           </div>
           {!templates.length && <p className="text-sm text-muted-foreground">No saved layouts were returned by your account.</p>}
           <ul className="space-y-2">{templates.map(item => <li key={item.template_id}>
-            <button type="button" disabled={locked} aria-current={selected?.template_id === item.template_id ? "true" : undefined}
+            <button type="button" disabled={locked || item.definition.slots.some(slot =>
+                !allowedTypes.includes(slot.component_type))}
+              aria-current={selected?.template_id === item.template_id ? "true" : undefined}
               onClick={() => choose(item)}
               className="w-full rounded-lg border border-border/70 p-3 text-left hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
               <span className="block truncate text-sm font-medium">{item.definition.title}</span>
-              <span className="block text-xs text-muted-foreground">Revision {item.revision} · {item.lifecycle}</span>
+              <span className="block text-xs text-muted-foreground">
+                Revision {item.revision} · {item.lifecycle}
+                {item.definition.slots.some(slot => !allowedTypes.includes(slot.component_type))
+                  ? " · Component unavailable" : ""}
+              </span>
             </button>
           </li>)}</ul>
         </aside>
