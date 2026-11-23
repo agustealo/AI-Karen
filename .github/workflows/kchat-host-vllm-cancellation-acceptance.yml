@@ -117,6 +117,7 @@ jobs:
           assert proof["engine_request_abort_certified"] is False
           assert proof["concurrent_scheduler_active"] is True
           assert proof["concurrent_scheduler_drained"] is True
+          assert proof["survivor_only_normal_completion_verified"] is True
           assert proof["tokens_stable_after_idle"] is True
           assert proof["independent_survivor_verified"] is True
           assert proof["retry_verified"] is True
