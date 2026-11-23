@@ -109,6 +109,7 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
         }
       }
     }).catch(async () => {
+      if (!active) return;
       // A fresh bearer after token rotation cannot review the original
       // session-bound approval. It may still revoke its own issued consent.
       try {
@@ -207,7 +208,7 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
     const currentApprovalId = preview?.approval_id || revocationReview?.approval_id;
     if (!currentApprovalId || (!receiptId && !revocationReview) ||
       !revokeConfirmed || revoking || revoked) return;
-    receiptEpoch.current += 1;
+    const currentEpoch = ++receiptEpoch.current;
     setRevoking(true);
     setError(null);
     try {
@@ -216,6 +217,7 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
       }>('/api/approvals/document-consent/' + currentApprovalId + '/revoke', {
         confirmed: true,
       });
+      if (currentEpoch !== receiptEpoch.current) return;
       if (result.approval_id !== currentApprovalId || result.status !== 'revoked') {
         throw new Error('Revocation could not be verified.');
       }
@@ -224,9 +226,11 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
       setReceiptId(null);
       setRevokeConfirmed(false);
     } catch {
+      if (currentEpoch !== receiptEpoch.current) return;
       // A lost revocation response may mean the consent was revoked already.
       // Re-read current server evidence rather than retaining a stale receipt.
       const current = revocationReview ? false : await recoverReceipt(currentApprovalId);
+      if (currentEpoch !== receiptEpoch.current) return;
       if (!current) {
         setReceiptId(null);
         setRevokeConfirmed(false);
@@ -235,12 +239,13 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
         ? 'Revocation was not confirmed. A current receipt still exists.'
         : 'Revocation could not be verified. No current consent receipt was recovered.');
     } finally {
-      setRevoking(false);
+      if (currentEpoch === receiptEpoch.current) setRevoking(false);
     }
   }
 
   async function handleConfirm() {
     if (!canConfirm || !preview) return;
+    const currentEpoch = receiptEpoch.current;
     setSubmitting(true);
     setError(null);
     try {
@@ -248,6 +253,7 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
         '/api/approvals/document-consent/' + preview.approval_id + '/confirm',
         { confirmed: true },
       );
+      if (currentEpoch !== receiptEpoch.current) return;
       if (result.approval_id !== preview.approval_id || result.status !== 'approved') {
         throw new Error('Unexpected approval state.');
       }
@@ -255,10 +261,11 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
       setConfirmed(false);
       await issueReceipt(result.approval_id);
     } catch {
+      if (currentEpoch !== receiptEpoch.current) return;
       setError('Confirmation was not verified. No consent receipt is claimed.');
       setConfirmed(false);
     } finally {
-      setSubmitting(false);
+      if (currentEpoch === receiptEpoch.current) setSubmitting(false);
     }
   }
 
