@@ -282,11 +282,20 @@ jobs:
           assert report["aborted_transcript_rows"] == 0
           assert report["retry_committed_pair"] is True
           assert report["tenant_history_isolation"] is True
-          assert report["durable_message_rows"] == 4
+          assert report["durable_message_rows"] == 8
+          assert report["real_chat_runtime_executed"] is True
+          assert report["runtime_policy_issuance"] == "real_runtime_policy"
+          assert report["model_worker"] == "controlled_in_process_async_task"
+          assert report["model_worker_cancelled_after_http_disconnect"] is True
+          assert report["cancelled_runtime_transcript_rows"] == 0
+          assert report["runtime_completed_streams"] == 2
+          assert report["runtime_tenant_history_isolation"] is True
+          assert isinstance(report["worker_cancel_observed_ms"], (int, float))
+          assert report["worker_cancel_observed_ms"] >= 0
           assert report["checked_out_after_cleanup"] == 0
           assert report["error_type"] is None
           assert report["cleanup_error_type"] is None
-          print("Real PostgreSQL session and transcript wire proof passed.")
+          print("Real PostgreSQL auth, ChatRuntime, SSE and worker-cancellation proof passed; model generation is controlled.")
           PY
 
       - name: Preserve KIS-GRAPH-01C2R-K sanitized live SQL and HTTP evidence
