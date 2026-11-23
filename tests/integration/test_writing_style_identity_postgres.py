@@ -103,7 +103,7 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
         ).read_text(encoding="utf-8"))
         await raw.execute((
             Path(__file__).resolve().parents[2]
-            / "supabase/migrations/20261123050000_71_writing_style_delegated_storage_integrity.sql"
+            / "supabase/migrations/20261123060000_72_writing_style_delegated_storage_integrity.sql"
         ).read_text(encoding="utf-8"))
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2) ON CONFLICT DO NOTHING",
