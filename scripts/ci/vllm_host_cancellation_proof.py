@@ -326,9 +326,17 @@ async def run(
         await finish(provider_stream(
             endpoint, model, "Give one short fact about the stars.", 48,
         ), model)
-        baseline = await sample(client, model)
-        if baseline.running != 0 or baseline.waiting != 0:
-            raise HostAcceptanceHold("exclusive_idle_host_required")
+        # A completed warm-up is the instrumentation control: the daemon
+        # must publish at least one normal terminal before comparing A with
+        # it. Give asynchronous metrics a bounded chance to become visible.
+        baseline, _ = await until(
+            client, model,
+            lambda m: (
+                m.running == 0 and m.waiting == 0 and m.normal_finishes >= 1
+            ),
+            timeout_s=min(timeout_s, 5.0),
+            failure="warmup_native_terminal_metric_unavailable",
+        )
 
         try:
             # Isolated phase: direct native evidence for cancellation of A.
