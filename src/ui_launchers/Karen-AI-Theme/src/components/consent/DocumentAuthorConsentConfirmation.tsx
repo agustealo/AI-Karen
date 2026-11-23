@@ -332,7 +332,7 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
                     ? 'This author decision is already approved.'
                     : 'This author confirmation has expired.'}
               </p>
-              {preview.status === 'approved' && !receiptId && !issuing && (
+              {preview.status === 'approved' && !receiptId && !issuing && !revoked && (
                 <button
                   type="button"
                   onClick={() => { void issueReceipt(preview.approval_id); }}
@@ -341,7 +341,7 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
                   Issue approved consent receipt
                 </button>
               )}
-              {preview.status === 'consumed' && !receiptId && (
+              {preview.status === 'consumed' && !receiptId && !revoked && (
                 <button
                   type="button"
                   onClick={() => { void recoverReceipt(preview.approval_id); }}
@@ -370,7 +370,7 @@ function DocumentAuthorConsentForApproval({ approvalId }: { approvalId: string }
           {receiptId && (
             <p className="break-all text-sm">Verified receipt ID: {receiptId}</p>
           )}
-          {!receiptId && !issuing && (
+          {!receiptId && !issuing && !revoked && (
             <button
               type="button"
               onClick={() => { void issueReceipt(decision.approval_id); }}
