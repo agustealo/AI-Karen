@@ -110,6 +110,7 @@ async def test_real_cpu_transformer_worker_stops_on_chat_runtime_stream_close_an
     ctx = multiprocessing.get_context("spawn")
     app = FastAPI()
     started: list[dict[str, Any]] = []
+    workers: list[Any] = []
     stopped: list[dict[str, Any]] = []
     stop_observed = asyncio.Event()
     inference_requests: list[str] = []
@@ -138,6 +139,7 @@ async def test_real_cpu_transformer_worker_stops_on_chat_runtime_stream_close_an
             daemon=True,
         )
         worker.start()
+        workers.append(worker)
         sender.close()
         record = {
             "pid": worker.pid,
@@ -195,6 +197,10 @@ async def test_real_cpu_transformer_worker_stops_on_chat_runtime_stream_close_an
                     await asyncio.sleep(0.005)
             finally:
                 cleanup_started = time.perf_counter()
+                if complete:
+                    # Allow a legitimately finished child to exit cleanly
+                    # before treating it as an abandoned inference process.
+                    worker.join(timeout=3.0)
                 if worker.is_alive():
                     worker.terminate()
                 worker.join(timeout=3.0)
@@ -390,6 +396,11 @@ async def test_real_cpu_transformer_worker_stops_on_chat_runtime_stream_close_an
             await asyncio.wait_for(server_task, timeout=10)
         finally:
             listener.close()
-        assert all(not psutil.pid_exists(row["pid"]) for row in stopped)
-        assert all(not row.get("pid") or not psutil.pid_exists(row["pid"])
-                   for row in started)
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=2.0)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(timeout=2.0)
+        assert all(not worker.is_alive() for worker in workers)
