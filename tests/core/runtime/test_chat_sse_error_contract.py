@@ -329,3 +329,32 @@ async def test_sse_cleanup_failure_after_terminal_never_invents_second_terminal(
     ]
     assert frames[-1] == "data: [DONE]\n\n"
     assert "private producer close detail" not in "".join(frames)
+
+
+@pytest.mark.asyncio
+async def test_sse_disconnect_on_terminal_frame_handles_teardown_failure():
+    """Closing at the terminal yield must not attempt a second frame."""
+    finalized = asyncio.Event()
+
+    async def completed_with_bad_close(_request):
+        try:
+            yield ChatStreamChunk(
+                type="complete", content="", correlation_id="correlation-1",
+            )
+            await asyncio.Event().wait()
+        finally:
+            finalized.set()
+            raise RuntimeError("private cleanup error")
+
+    with patch(
+        "ai_karen_engine.api_routes.chat.runtime.get_chat_runtime",
+        return_value=SimpleNamespace(execute_stream=completed_with_bad_close),
+    ):
+        wire = _sse(_request())
+        assert (await asyncio.wait_for(anext(wire), 1)).startswith(": stream_connected")
+        terminal = await asyncio.wait_for(anext(wire), 1)
+        assert json.loads(terminal[6:])["type"] == "complete"
+        # No second __anext__: close the outer serializer right on terminal.
+        await asyncio.wait_for(wire.aclose(), 1)
+
+    await asyncio.wait_for(finalized.wait(), 1)

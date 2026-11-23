@@ -386,9 +386,12 @@ async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
                 encoded = json.dumps(
                     chunk.to_sse_payload(), ensure_ascii=False, allow_nan=False,
                 )
-                yield chunk.type, encoded
+                # Set finality *before* yielding the terminal frame. An SSE
+                # consumer may close immediately at that suspension point.
                 if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
                     terminal_seen = True
+                yield chunk.type, encoded
+                if terminal_seen:
                     return
     except Exception as exc:
         if terminal_seen:
