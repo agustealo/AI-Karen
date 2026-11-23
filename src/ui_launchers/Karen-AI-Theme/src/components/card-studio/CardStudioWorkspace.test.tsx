@@ -151,6 +151,27 @@ describe("authenticated Card Studio layout UI", () => {
     expect(window.sessionStorage.length).toBe(0);
   });
 
+  it("keeps unsupported saved layouts visible without falsely claiming an empty library", async () => {
+    endpoint.list.mockResolvedValueOnce([{
+      template_id: "55555555-5555-4555-8555-555555555555",
+      template_key: "retired-layout",
+      revision: 3,
+      lifecycle: "draft",
+      definition: {
+        ...valid,
+        template_key: "retired-layout",
+        title: "Old layout",
+        slots: [{ slot_id: "primary", component_type: "retired.renderer" }],
+      },
+    }]);
+    await ready();
+    const inventoryItem = screen.getByRole("button", { name: /Old layout/ });
+    expect(inventoryItem).toBeDisabled();
+    expect(inventoryItem.textContent).toContain("Component unavailable");
+    expect(screen.queryByText(/No saved layouts were returned/)).toBeNull();
+    expect(endpoint.submit).not.toHaveBeenCalled();
+  });
+
   it("does not show success for a revision CAS conflict", async () => {
     const stored = {
       template_id: "55555555-5555-4555-8555-555555555555",
