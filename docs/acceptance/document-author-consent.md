@@ -277,3 +277,20 @@ The reader accepts only canonical tenant/actor/document UUID scope, delegates an
 **Crucially, reading bytes is not itself permission to learn or imitate an author.** The surrounding persisted-sample authority continues to validate the profile-specific consent receipt and current PostgreSQL evidence before and after the source read, including the exact content digest; RuntimePolicy remains responsible for execution. This adapter is not auto-registered for consumer document ingestion and does not enable the feature.
 
 Focused source-owner unit tests exercise canonical bounded-call delegation, malformed scopes, cross-owner/tenant data, unsupported types, storage denial and exceptions. Real Supabase transport integrity and browser-to-consent revocation remain local acceptance requirements under the existing handoff; they are not inferred from tests.
+
+### WS-04B2: approval-scoped UI state and delayed-response fencing
+
+The first-party document author confirmation component now creates a fresh, keyed
+screen instance for each canonical approval ID. A late receipt/confirmation
+response for a previously viewed approval cannot populate the new review. The
+existing receipt owner remains authoritative: in-flight receipt reads are
+invalidated when revocation begins, after an issued receipt is requested, and
+when the screen unmounts. A delayed prior confirmation cannot trigger a second
+receipt-issuance call after the author navigates to a different approval.
+
+Frontend regressions cover out-of-order receipt recovery, revocation winning
+over a stale read, and a late previous-approval confirmation. This is a
+**presentation and action-continuation integrity fix**, not a new consent
+issuer, a proof of host activation, or authorization to ingest documents.
+Consumer ingestion remains OFF until independent real-host author, Supabase
+Storage and delegated-use acceptance are observed.
