@@ -467,19 +467,26 @@ class Crawl4AIIntegration:
         if not callable(set_hook):
             raise RuntimeError("Crawl4AI browser egress hook is unavailable.")
 
+        installation_lock = asyncio.Lock()
+
         async def on_page_context_created(page: Any, context: Any, **kwargs: Any) -> Any:
-            route = getattr(context, "route", None)
-            if not callable(route):
-                raise RuntimeError("Browser context cannot enforce request routing.")
-            # Each browser context receives its own cap and lock. Reuse of the
-            # crawler across pages cannot reset or borrow another budget.
-            budget = {"count": 0, "lock": asyncio.Lock()}
+            # Crawl4AI may reuse contexts for several pages, including under
+            # concurrency. Never register a second route with a fresh budget.
+            async with installation_lock:
+                if getattr(context, "_karen_public_egress_installed", False):
+                    return page
 
-            async def guard(request_route: Any) -> None:
-                await self._guard_browser_request(request_route, budget)
+                route = getattr(context, "route", None)
+                if not callable(route):
+                    raise RuntimeError("Browser context cannot enforce request routing.")
+                budget = {"count": 0, "lock": asyncio.Lock()}
 
-            await route("**/*", guard)
-            return page
+                async def guard(request_route: Any) -> None:
+                    await self._guard_browser_request(request_route, budget)
+
+                await route("**/*", guard)
+                setattr(context, "_karen_public_egress_installed", True)
+                return page
 
         set_hook("on_page_context_created", on_page_context_created)
 

@@ -311,3 +311,39 @@ async def test_unneeded_browser_subresources_are_blocked_without_fetching():
     assert route.fetched == []
     assert route.aborted == 1
     assert route.fulfilled == []
+
+
+@pytest.mark.asyncio
+async def test_reused_context_cannot_reinstall_route_or_reset_request_budget():
+    url = "https://public.example/start"
+    crawler = integration(allowed_urls=[url], max_browser_requests=1)
+
+    class Strategy:
+        def set_hook(self, name, hook):
+            self.hook = hook
+
+    class Context:
+        registrations = 0
+
+        async def route(self, pattern, handler):
+            self.registrations += 1
+            self.handler = handler
+
+    strategy = Strategy()
+    crawler._install_browser_egress_hook(
+        SimpleNamespace(crawler_strategy=strategy)
+    )
+    context = Context()
+    await asyncio.gather(
+        strategy.hook(object(), context),
+        strategy.hook(object(), context),
+    )
+    assert context.registrations == 1
+
+    first = Route(url, [Response()])
+    second = Route(url, [Response()])
+    await context.handler(first)
+    await context.handler(second)
+    assert first.fulfilled and not first.aborted
+    assert second.fetched == []
+    assert second.aborted == 1
