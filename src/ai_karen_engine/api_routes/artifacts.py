@@ -120,7 +120,7 @@ async def upload_artifact(
     )
     result = await store.upload(request)
     if not result.success or not result.data:
-        logger.error("Artifact upload repository rejected request: %s", result.error)
+        logger.error("Artifact upload repository rejected request")
         raise HTTPException(status_code=503, detail="Artifact upload failed")
 
     artifact = result.data
