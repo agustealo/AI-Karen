@@ -281,6 +281,37 @@ def test_get_valid_claims_without_at_uses_one_utc_snapshot(
     assert observed[0].utcoffset() == timedelta(0)
 
 
+def test_undated_store_lookup_does_not_replay_superseded_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Current-state reads differ from explicit valid-time history queries."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    snapshot = start + timedelta(days=5)
+    boundary = start + timedelta(days=10)
+    store = MemoryClaimStore(**CLAIM_SCOPE)
+    superseded = _claim("vim", valid_from=start, valid_until=boundary)
+    superseded.status = ClaimStatus.SUPERSEDED
+    active = _claim("vscode", valid_from=start)
+    store.add(superseded)
+    store.add(active)
+    clock_reads: list[datetime] = []
+
+    class FrozenClock:
+        @staticmethod
+        def now(tz: timezone) -> datetime:
+            assert tz is UTC
+            clock_reads.append(snapshot)
+            return snapshot
+
+    monkeypatch.setattr("ai_karen_engine.core.memory.claims.datetime", FrozenClock)
+
+    assert store.get_valid_claims(**CLAIM_SCOPE) == [active]
+    assert clock_reads == [snapshot]
+    assert store.get_valid_claims(snapshot, **CLAIM_SCOPE) == [superseded, active]
+    assert store.get_valid_claims(boundary, **CLAIM_SCOPE) == [active]
+    assert clock_reads == [snapshot]
+
+
 def test_get_valid_claims_implicit_snapshot_respects_exact_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
