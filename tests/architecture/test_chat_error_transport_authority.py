@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CHAT_ROUTE = ROOT / "src/ai_karen_engine/api_routes/chat/runtime.py"
