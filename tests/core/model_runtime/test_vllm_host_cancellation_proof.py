@@ -118,6 +118,28 @@ def test_normal_terminal_counter_must_be_observable_after_warmup() -> None:
         )
 
 
+def test_concurrent_proof_accepts_exactly_one_normal_terminal_for_b() -> None:
+    before = _sample(tokens=115, stop=2)
+    after = _sample(tokens=130, stop=3)
+    host.certify_concurrent_survivor_only(before, after)
+
+
+@pytest.mark.parametrize("after,code", [
+    (_metrics(tokens=130, stop=2), "concurrent_normal_completion_ambiguous"),
+    (_metrics(tokens=130, stop=4), "concurrent_normal_completion_ambiguous"),
+    (_metrics(tokens=130, length=2), "concurrent_normal_completion_ambiguous"),
+    (_metrics(running=1, tokens=130, stop=3), "concurrent_scheduler_not_idle"),
+    (_metrics(tokens=110, stop=3), "native_counters_reset"),
+])
+def test_concurrent_cancel_does_not_mask_a2_normal_completion(
+    after: str, code: str,
+) -> None:
+    before = _sample(tokens=115, stop=2)
+    observed = host.parse_scheduler_metrics(after, "local-model")
+    with pytest.raises(host.HostAcceptanceHold, match=code):
+        host.certify_concurrent_survivor_only(before, observed)
+
+
 @pytest.mark.asyncio
 async def test_scheduler_budget_starts_at_disconnect_not_after_survivor() -> None:
     class FakeClient:
