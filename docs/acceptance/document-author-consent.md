@@ -222,3 +222,29 @@ Use `PYTHONPATH=src python -m pytest -q -s tests/integration/test_document_autho
 The test proves **storage availability, bounded integrity and owner isolation at the tested installation and time** only. It does not establish first-party authorship, receipt issuance, later runtime delegated-use revocation, or consumer readiness. Run the separately opt-in authenticated Playwright consent/revoke trial, and obtain fresh runtime-owned delegated-use denial evidence before lifting the release hold.
 
 **Execution status:** added to source; **no approved target-host execution or result is claimed**. Do not automatically turn this test on in ordinary PR CI or infer that previous PostgreSQL integration tests ran against real external Supabase Storage.
+
+
+### WS-04A9: live delegated-use two-phase acceptance
+
+`tests/integration/test_document_author_delegated_use_live.py` is an **opt-in, read-only** probe against the existing `WritingStyleProfileRepository` and `KariSignatureResolver`. It checks that an actual published revision and delegated-purpose grant work **before** the author revokes, and that the same revision is inaccessible and its resolver rejects **after** that revocation. The probe never creates profiles, grants, revocations, receipts, fake SQL rows or model responses.
+
+On an explicitly approved isolated host, prepare a genuinely delegated, published, disposable author-owned style that references a live issued document-consent receipt. Provide protected, non-logged environment values:
+
+| Variable | Required value |
+| --- | --- |
+| `KAREN_DOCUMENT_DELEGATED_USE_LIVE_ACCEPTANCE=true` | Opt in (absent means **skip**, not pass) |
+| `KAREN_DOCUMENT_DELEGATED_USE_PHASE=before` / `after` | Explicit phase; neither is inferred |
+| `KAREN_DOCUMENT_AUTHOR_TENANT_ID` | Canonical UUID for the approved tenant |
+| `KAREN_DOCUMENT_AUTHOR_PROFILE_ID` | Canonical UUID of the same published style profile |
+| `KAREN_DOCUMENT_DELEGATE_USER_ID` | Canonical UUID of the actual preauthorized delegate |
+| `KAREN_DOCUMENT_PUBLISHED_REVISION_ID` | Existing published revision UUID, retained for the after phase |
+| `KAREN_DOCUMENT_PUBLISHED_REVISION_NUMBER` | Matching positive canonical revision number |
+| `KAREN_DOCUMENT_PUBLISHED_REVISION_SHA256` | Lowercase SHA-256 digest of the canonical approved expression |
+| `KAREN_DOCUMENT_PUBLISHED_EXPRESSION_JSON` | The matching approved expression JSON; no source document content |
+| `KAREN_DOCUMENT_DELEGATED_PURPOSE` | Actual granted use, e.g. `draft_email` |
+
+First execute `PYTHONPATH=src python -m pytest -q tests/integration/test_document_author_delegated_use_live.py` in phase **before**. It must observe the real current published revision, authorize the known revision and resolve the style through `KariSignatureResolver`. Only after a successful positive phase, revoke **that same document consent** using the existing authenticated author flow and independently verify the revocation. Execute the unchanged fixture in phase **after**. It must observe no current published revision, reject authorization of the known former revision, and raise `style_unavailable` through the canonical resolver.
+
+Retain sanitized evidence of both phases, the distinct author revocation transaction, the same approved host/database/tenant/profile/revision provenance, and the actual commit. An **after-only negative** is vacuous and **does not count** as acceptance. A skipped run, simulation or unit test also does not qualify. Timing is observed, not a promised SLO. No source bytes, credentials, original author document or bearer credentials should enter artifacts.
+
+**Current status:** acceptance source added; neither phase has executed on an approved host, and no real delegated grant has been created or revoked by this change. Consumer ingestion remains OFF and PR release HOLD remains in force.
