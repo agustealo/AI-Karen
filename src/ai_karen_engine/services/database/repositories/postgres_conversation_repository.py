@@ -392,9 +392,13 @@ class PostgresConversationRepository(ConversationRepository):
         Never leave an audit/replay payload behind after transcript erasure.
         """
         start = time.perf_counter()
+        if not user_id:
+            # This is an intentional authorization denial, not a database
+            # exception. Preserve the contract without serializing an error.
+            return RepositoryResult(
+                success=False, error="conversation_deletion_owner_required",
+            )
         try:
-            if not user_id:
-                raise ValueError("conversation_deletion_owner_required")
             async with await self._session() as session:
                 async with session.begin():
                     scope = {
