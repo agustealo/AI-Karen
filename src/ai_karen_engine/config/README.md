@@ -329,3 +329,23 @@ All config logic should be thoroughly tested:
 **Hot reload not working**: Verify file watcher permissions and config file accessibility
 **Provider issues**: Check provider configs in `llm_provider_config.py`</content>
 <parameter name="filePath">src/ai_karen_engine/config/README.md
+
+
+### Signed Supabase Storage range read deadline
+
+`KAREN_ARTIFACT_SIGNED_RANGE_DEADLINE_SECONDS` configures the **total
+wall-clock deadline** for the privileged owner-scoped
+`SupabaseArtifactStore.read_owner_active_text_bounded` signed URL acquisition
+and HTTP range stream. Default: `20.0` seconds. Accepted values: finite
+floating-point seconds from `0.01` through `120.0` inclusive; invalid,
+missing-value-like, NaN and infinite overrides fail closed before making a
+signed Storage request (unset uses the safe default).
+
+The deadline applies across signing and the entire HTTP transfer while
+PostgreSQL holds `FOR SHARE`. It supplements, rather than replaces, the
+HTTPX per-operation transport timeouts, exact HTTP 206 / Content-Range
+verification, byte cap, SHA-256 validation, tenant/owner checks, and release
+acceptance requirements. A deadline expiration returns the existing
+`bounded_artifact_read_unavailable` result and releases the database session.
+It does not certify cloud Storage or protected-browser readiness. An
+operator can increase the deadline only within the validated safety bound.
