@@ -468,7 +468,11 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
                 request_a.context,
                 user_text="repeat-this-question",
                 assistant_text="canonical response body",
-                response_metadata={"response_source": "controlled_model_fixture"},
+                response_metadata={
+                    "actual_provider": "controlled-wire-provider",
+                    "actual_model": "controlled-model",
+                    "response_source": "controlled_model_fixture",
+                },
             )
             assert duplicate.status == "already_persisted"
             assert duplicate.persisted_messages == 0
