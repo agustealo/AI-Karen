@@ -241,6 +241,8 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
     if not dsn:
         pytest.fail("Missing disposable PostgreSQL connection URL")
     parsed = _disposable_database_url(dsn)
+    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
+        pytest.fail("Real Storage owner proof requires local disposable PostgreSQL")
 
     def required_uuid(name: str) -> str:
         raw = os.getenv(name, "")
@@ -313,6 +315,16 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
         platform.initialize()
         if platform.storage is None or platform.url != project_url:
             pytest.fail("Canonical Supabase Storage client is unavailable")
+        try:
+            bucket = platform.storage.get_bucket("artifacts")
+        except Exception:
+            pytest.fail("Private disposable Storage bucket cannot be attested")
+        bucket_public = (
+            bucket.get("public") if isinstance(bucket, dict)
+            else getattr(bucket, "public", None)
+        )
+        if bucket_public is not False:
+            pytest.fail("Live Storage handoff requires a private artifacts bucket")
         store = SupabaseArtifactStore(sessions, platform)
 
         foreign = await store.read_owner_active_code(artifact, tenant, foreign_owner)
@@ -330,6 +342,162 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
         assert granted.data.artifact_id == artifact
         assert granted.data.tenant_id == tenant
         assert granted.data.user_id == owner
+
+        # Real Storage was read above. Now drive the existing authorized
+        # runtime hosts using that SAME real store, rather than just checking
+        # a successful repository download in isolation. Only the kernel is
+        # a test double: its production lifecycle/RBAC checks are independently
+        # covered by dedicated kernel and API suites.
+        from importlib import import_module
+
+        from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+        from ai_karen_engine.extensions.content_intelligence_sources import (
+            ContentSourceHost,
+        )
+        from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+        from ai_karen_engine.extensions.file_explorer_inventory import (
+            FileExplorerInventoryHost,
+        )
+
+        explorer_source = import_module(
+            "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
+        )
+        lexical_engine = import_module(
+            "ai_karen_engine.extensions.plugins.content-intelligence.engine"
+        )
+
+        class ContractKernel:
+            """Admission fixture only; not live PluginKernel or RuntimePolicy."""
+
+            def __init__(self):
+                self.content_admissions = 0
+                self.analysis_executions = 0
+
+            def get_record(self, plugin_id):
+                assert plugin_id in {"file-explorer", "content-intelligence"}
+                return {"status": "enabled", "dependencies_resolved": True}
+
+            async def admit(self, request):
+                assert request.plugin_id == "content-intelligence"
+                assert request.payload == {}
+                assert request.authorized_plan.policy_decision_id == "live-storage-proof"
+                self.content_admissions += 1
+                return SimpleNamespace(status="admitted")
+
+            async def execute(self, request):
+                assert request.authorized_plan.policy_decision_id == "live-storage-proof"
+                if request.plugin_id == "file-explorer":
+                    assert request.context.resource_scope["file_explorer_grant"] == "host_verified"
+                    return SimpleNamespace(
+                        status="success",
+                        payload={
+                            "operation": "list",
+                            "items": request.context.resource_scope[
+                                "file_explorer_entries"
+                            ],
+                        },
+                    )
+                assert request.plugin_id == "content-intelligence"
+                self.analysis_executions += 1
+                return SimpleNamespace(
+                    status="success",
+                    payload=lexical_engine.execute(request.payload),
+                )
+
+        kernel = ContractKernel()
+        explorer = FileExplorerInventoryHost(
+            kernel=kernel,
+            source=explorer_source.ArtifactSourceAdapter(store),
+        )
+        content_host = ContentSourceHost(store=store, kernel=kernel)
+        capabilities = ["file-explorer", "content-intelligence", "data:read"]
+        context = ExtensionExecutionContext(
+            request_id="kplug-10-real-storage",
+            correlation_id="kplug-10-real-storage-correlation",
+            user_id=owner,
+            tenant_id=tenant,
+            session_id="kplug-10-proof-session",
+            policy_decision_id="live-storage-proof",
+            allowed_capabilities=capabilities,
+            resource_scope={},
+            audit_context={"user_roles": ["user"], "permissions": ["data:read"]},
+        )
+        plan = AuthorizedExecutionPlan(
+            execution_id="kplug-10-real-storage-execution",
+            policy_decision_id="live-storage-proof",
+            authorized_user_id=owner,
+            authorized_tenant_id=tenant,
+            authorized_session_id="kplug-10-proof-session",
+            allowed_plugins=["file-explorer", "content-intelligence"],
+            allowed_capabilities=capabilities,
+        )
+
+        owner_page = await explorer.list_owner_page(
+            context=context, plan=plan, limit=100
+        )
+        selected = next(
+            (entry for entry in owner_page["items"]
+             if entry["source_id"] == artifact),
+            None,
+        )
+        if selected is None:
+            pytest.fail(
+                "Preseeded source must appear on the actual owner's first "
+                "inventory page, matching the protected browser fixture"
+            )
+        assert selected["revision"] == expected_sha
+        assert selected["sha256"] == expected_sha
+        assert selected["kind"] == "file"
+        assert "storage_uri" not in selected
+
+        revalidated = await explorer.revalidate_owner_selection(
+            context=context,
+            plan=plan,
+            source_id=artifact,
+            expected_revision=selected["revision"],
+        )
+        assert revalidated["owner_scope_verified"] is True
+        assert revalidated["source_id"] == artifact
+
+        analyzed = await content_host.execute_owner_text(
+            context=context,
+            plan=plan,
+            operation="analyze",
+            references=[{
+                "source_id": artifact,
+                "revision": selected["revision"],
+            }],
+        )
+        assert analyzed["operation"] == "analyze"
+        assert analyzed["persisted"] is False
+        assert len(analyzed["documents"]) == 1
+        assert analyzed["documents"][0]["id"] == artifact
+        assert analyzed["documents"][0]["sha256"] == expected_sha
+        assert analyzed["documents"][0]["characters"] == len(granted.data.text)
+        assert kernel.content_admissions == 1
+        assert kernel.analysis_executions == 1
+
+        # An old or fabricated digest remains invalid even when the same
+        # artifact is present in the real owner inventory. No analysis output
+        # is allowed to publish from a mismatched source/revision.
+        forged = ("b" if expected_sha[0] == "a" else "a") + expected_sha[1:]
+        with pytest.raises(
+            PermissionError, match="file_explorer_source_revision_changed"
+        ):
+            await explorer.revalidate_owner_selection(
+                context=context, plan=plan,
+                source_id=artifact, expected_revision=forged,
+            )
+        with pytest.raises(
+            PermissionError, match="content_source_evidence_invalid"
+        ):
+            await content_host.execute_owner_text(
+                context=context,
+                plan=plan,
+                operation="analyze",
+                references=[{"source_id": artifact, "revision": forged}],
+            )
+        assert kernel.analysis_executions == 1
     finally:
         platform.reset()
         await engine.dispose()
