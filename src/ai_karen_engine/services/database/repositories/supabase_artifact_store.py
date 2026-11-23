@@ -57,6 +57,11 @@ class SupabaseArtifactStore(ArtifactStore):
         return storage.from_("artifacts")
 
 
+    @staticmethod
+    def _canonical_object_key(tenant_id: str, artifact_id: str) -> str:
+        """The immutable storage key created by upload, not the display name."""
+        return f"{tenant_id}/{artifact_id}/content"
+
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
         try:
@@ -78,7 +83,7 @@ class SupabaseArtifactStore(ArtifactStore):
         start = time.perf_counter()
         artifact_id = str(uuid.uuid4())
         # Storage keys must never contain a client-controlled filename.
-        storage_key = f"{request.tenant_id}/{artifact_id}/content"
+        storage_key = self._canonical_object_key(request.tenant_id, artifact_id)
         data = request.data or b""
         digest = hashlib.sha256(data).hexdigest()
         try:
@@ -244,7 +249,8 @@ class SupabaseArtifactStore(ArtifactStore):
                     or re.fullmatch(r"[a-f0-9]{64}", expected_sha) is None
                     or not isinstance(storage_uri, str)
                     or storage_uri != (
-                        f"supabase://artifacts/{tenant_id}/{artifact_id}/{filename}"
+                        "supabase://artifacts/"
+                        + self._canonical_object_key(tenant_id, artifact_id)
                     )
                 ):
                     return RepositoryResult(success=False, error=unavailable)
@@ -252,7 +258,7 @@ class SupabaseArtifactStore(ArtifactStore):
                 # The row remains locked until this method returns. No archived
                 # or cross-owner artifact can become an eligible code view.
                 downloaded = self._bucket().download(
-                    f"{tenant_id}/{artifact_id}/{filename}"
+                    self._canonical_object_key(tenant_id, artifact_id)
                 )
                 if (
                     not isinstance(downloaded, bytes)
@@ -292,11 +298,14 @@ class SupabaseArtifactStore(ArtifactStore):
         self, artifact_id: str, tenant_id: str, user_id: str, *,
         max_bytes: int = 65536,
     ) -> RepositoryResult[VerifiedArtifactText]:
-        """Read active owner text over a pinned, ranged, streaming storage request.
+        """Read active owner text from the exact canonical upload object key.
 
-        The repository checks owner and metadata under a PostgreSQL share lock.
+        The filename is display metadata, never a Storage path component.
+        PostgreSQL owner and immutable digest are checked under a share lock.
         The SDK's buffered download is NEVER called. A 206 response with an
         exact Content-Range is mandatory; missing streaming capabilities deny.
+        Storage-object replacement with unchanged SQL metadata is denied by
+        comparing the actual streamed SHA-256 on every read.
         """
         unavailable = "bounded_artifact_read_unavailable"
         if (
@@ -338,7 +347,8 @@ class SupabaseArtifactStore(ArtifactStore):
                     or not isinstance(digest, str)
                     or re.fullmatch(r"[a-f0-9]{64}", digest) is None
                     or row.storage_uri != (
-                        f"supabase://artifacts/{tenant_id}/{artifact_id}/{name}"
+                        "supabase://artifacts/"
+                        + self._canonical_object_key(tenant_id, artifact_id)
                     )
                 ):
                     return RepositoryResult(success=False, error=unavailable)
@@ -373,7 +383,7 @@ class SupabaseArtifactStore(ArtifactStore):
                     ArtifactStorageConfig.from_environment()
                     .signed_range_total_timeout_seconds
                 ):
-                    path = f"{tenant_id}/{artifact_id}/{name}"
+                    path = self._canonical_object_key(tenant_id, artifact_id)
                     bucket = self._bucket()
                     signed = await asyncio.to_thread(bucket.create_signed_url, path, 60)
                     if not isinstance(signed, dict):
