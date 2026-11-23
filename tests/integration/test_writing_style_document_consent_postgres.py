@@ -110,7 +110,7 @@ async def test_first_party_author_consent_postgres(
             CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
-                tenant_id uuid NOT NULL,
+                tenant_id text NOT NULL,
                 owner_user_id uuid NOT NULL,
                 name text NOT NULL,
                 mime_type text NOT NULL,
@@ -124,6 +124,7 @@ async def test_first_party_author_consent_postgres(
             "20261120235900_60_writing_style_identity.sql",
             "20261122010001_61_writing_style_sample_evidence.sql",
             "20261122010002_62_writing_style_document_author_consent.sql",
+            "20261123030000_69_writing_style_document_file_tenant_text.sql",
         ):
             await raw.execute((root / filename).read_text(encoding="utf-8"))
 
@@ -145,7 +146,7 @@ async def test_first_party_author_consent_postgres(
             "INSERT INTO public.files "
             "(file_id, tenant_id, owner_user_id, name, mime_type, bytes, sha256) "
             "VALUES ($1,$2,$3,'author.txt','text/plain',10,$4)",
-            str(artifact), tenant, owner, digest,
+            str(artifact), str(tenant), owner, digest,
         )
         await raw.execute(f'CREATE ROLE "{role}" NOLOGIN')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
@@ -832,7 +833,7 @@ async def test_first_party_author_consent_postgres(
             "INSERT INTO public.files "
             "(file_id,tenant_id,owner_user_id,name,mime_type,bytes,sha256) "
             "VALUES ($1,$2,$3,'pending.txt','text/plain',10,$4)",
-            str(draft_artifact), tenant, owner, digest,
+            str(draft_artifact), str(tenant), owner, digest,
         )
         await scoped(
             owner, tenant,

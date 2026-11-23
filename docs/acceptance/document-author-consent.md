@@ -315,3 +315,26 @@ or consumer activation. The two checks are separate observations rather than
 an atomic snapshot of external storage and consent. The current release HOLD
 remains until the approved-host author, bounded Supabase Storage, and delegated-
 use before/after acceptance are observed.
+
+### WS-04B4: canonical artifact tenant type alignment
+
+An adversarial schema audit found that the canonical `public.files.tenant_id`
+column is `TEXT`, but writing-style document consent and profile tenant
+identifiers are `UUID`. The prior issuer queries, grant-time document check
+and consent INSERT trigger compared these types without a cast. Test fixtures
+had independently defined `files.tenant_id UUID`, masking the defect.
+
+The additive `69_writing_style_document_file_tenant_text` migration replaces
+only the existing consent validation function, comparing the authenticated
+receipt tenant UUID as text against the unchanged canonical file tenant text.
+The runtime issuer, review source summary, current receipt verifier, and
+profile grant preflight use the same canonical direction. No arbitrary file
+metadata is cast to UUID, no document bytes are exposed, and the existing
+owner, digest, deleted-state, bounded-size, attestation, immutable receipt and
+revocation requirements remain in place. The old migration is not rewritten.
+
+Disposable PostgreSQL fixtures and a source-schema regression now use the
+production `TEXT` column and apply the forward migration. This is an
+internal eligibility/SQL correctness repair, **not** a document-ingestion
+activation or approved-host acceptance result. The separate author, storage,
+browser and delegated-use live acceptance HOLD remains.

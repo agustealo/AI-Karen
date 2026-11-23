@@ -66,7 +66,7 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
-                tenant_id uuid NOT NULL,
+                tenant_id text NOT NULL,
                 owner_user_id uuid NOT NULL,
                 name text NOT NULL,
                 mime_type text NOT NULL,
@@ -88,6 +88,10 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
         await raw.execute((
             Path(__file__).resolve().parents[2]
             / "supabase/migrations/20261122010002_62_writing_style_document_author_consent.sql"
+        ).read_text(encoding="utf-8"))
+        await raw.execute((
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261123030000_69_writing_style_document_file_tenant_text.sql"
         ).read_text(encoding="utf-8"))
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2) ON CONFLICT DO NOTHING",
