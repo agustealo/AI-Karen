@@ -202,6 +202,18 @@ def certify_scheduler_quiescence(
     if not 0 <= stable.kv_usage <= 1.000001:
         raise HostAcceptanceHold("kv_cache_metric_invalid")
 
+def certify_concurrent_survivor_only(
+    before: SchedulerSample, after: SchedulerSample,
+) -> None:
+    """Exactly B may complete normally after A2 is closed on an exclusive host."""
+    if after.running != 0 or after.waiting != 0:
+        raise HostAcceptanceHold("concurrent_scheduler_not_idle")
+    if after.tokens < before.tokens or after.aborted < before.aborted:
+        raise HostAcceptanceHold("native_counters_reset")
+    if after.normal_finishes != before.normal_finishes + 1:
+        raise HostAcceptanceHold("concurrent_normal_completion_ambiguous")
+
+
 
 async def sample(client: httpx.AsyncClient, model: str) -> SchedulerSample:
     response = await client.get("/metrics")
@@ -427,10 +439,18 @@ async def run(
             b_task = None
             b_stream = None
             concurrent_drained, _ = await until(
-                client, model, lambda m: m.running == 0 and m.waiting == 0,
+                client, model,
+                lambda m: (
+                    m.running == 0 and m.waiting == 0
+                    and m.normal_finishes >= stable.normal_finishes + 1
+                ),
                 timeout_s=scheduler_budget_ms / 1000,
-                failure="concurrent_scheduler_not_drained_after_survivor",
+                failure="concurrent_survivor_terminal_not_observed",
             )
+            await asyncio.sleep(0.5)
+            concurrent_stable = await sample(client, model)
+            certify_concurrent_survivor_only(stable, concurrent_drained)
+            certify_concurrent_survivor_only(stable, concurrent_stable)
             retry_deltas = await finish(provider_stream(
                 endpoint, model, "What is a compass used for?", 96,
             ), model)
@@ -470,6 +490,7 @@ async def run(
                 "independent_survivor_verified": survivor_deltas > 0,
                 "concurrent_scheduler_active": concurrent_running.running >= 1,
                 "concurrent_scheduler_drained": concurrent_drained.running == 0,
+                "survivor_only_normal_completion_verified": True,
                 "retry_verified": retry_deltas > 0,
                 "final_scheduler_idle": last.running == 0 and last.waiting == 0,
                 "per_request_abort_trace_certified": False,
