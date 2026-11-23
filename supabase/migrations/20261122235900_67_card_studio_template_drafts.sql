@@ -135,6 +135,28 @@ CREATE POLICY card_studio_receipt_insert ON public.card_studio_template_mutation
         AND user_id = NULLIF(current_setting('app.current_user_id', true), '')::uuid
     );
 
+-- The stable parent may only be deleted by governed account/tenant erasure.
+-- Ordinary template deletion must use a revision-checked soft archive, so it
+-- cannot erase immutable history or ambiguous-response mutation receipts.
+CREATE FUNCTION public.prevent_card_studio_template_delete()
+RETURNS TRIGGER LANGUAGE plpgsql AS $immutable_card_studio_owner$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM public.tenants WHERE id = OLD.tenant_id
+    ) OR NOT EXISTS (
+        SELECT 1 FROM public.auth_users WHERE user_id = OLD.user_id
+    ) THEN
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'Card Studio templates require soft archive'
+        USING ERRCODE = '55000';
+END;
+$immutable_card_studio_owner$;
+
+CREATE TRIGGER card_studio_template_soft_archive_only
+    BEFORE DELETE ON public.card_studio_templates
+    FOR EACH ROW EXECUTE FUNCTION public.prevent_card_studio_template_delete();
+
 -- Version and receipt rows are immutable except governed parent deletion.
 CREATE FUNCTION public.prevent_card_studio_history_mutation()
 RETURNS TRIGGER LANGUAGE plpgsql AS $immutable_card_studio$

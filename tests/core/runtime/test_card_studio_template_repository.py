@@ -298,6 +298,8 @@ def test_migration_has_immutable_owner_boundaries_and_no_client_access():
         "REVOKE ALL ON public.card_studio_template_mutation_receipts FROM PUBLIC",
         "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')",
         "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')",
+        "BEFORE DELETE ON public.card_studio_templates",
+        "Card Studio templates require soft archive",
         "BEFORE UPDATE OR DELETE ON public.card_studio_template_revisions",
         "BEFORE UPDATE OR DELETE ON public.card_studio_template_mutation_receipts",
         "octet_length(definition::text) <= 4096",
