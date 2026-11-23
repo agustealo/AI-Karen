@@ -64,6 +64,7 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_use_expiry(uuid,uuid,uuid) CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_revoke_consent_on_file_change() CASCADE;
+            DROP FUNCTION IF EXISTS kari_internal.writing_style_authorized_document_sources(uuid,uuid,uuid,text,uuid,bigint,text) CASCADE;
             DROP TABLE IF EXISTS public.files CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.files (
@@ -100,12 +101,22 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             Path(__file__).resolve().parents[2]
             / "supabase/migrations/20261123040000_70_writing_style_document_delegated_use_fence.sql"
         ).read_text(encoding="utf-8"))
+        await raw.execute((
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261123050000_71_writing_style_delegated_storage_integrity.sql"
+        ).read_text(encoding="utf-8"))
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2) ON CONFLICT DO NOTHING",
             tenant_a, tenant_b,
         )
         await raw.execute(f'CREATE ROLE "{role}" NOLOGIN')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+        await raw.execute(f'GRANT USAGE ON SCHEMA kari_internal TO "{role}"')
+        await raw.execute(
+            f'GRANT EXECUTE ON FUNCTION '
+            f'kari_internal.writing_style_authorized_document_sources('
+            f'uuid,uuid,uuid,text,uuid,bigint,text) TO "{role}"'
+        )
         await raw.execute(
             f'GRANT SELECT, INSERT, UPDATE ON public.writing_style_profiles, '
             f'public.writing_style_revisions, public.writing_style_grants TO "{role}"'
