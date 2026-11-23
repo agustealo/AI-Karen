@@ -62,6 +62,32 @@ class SupabaseArtifactStore(ArtifactStore):
         """The immutable storage key created by upload, not the display name."""
         return f"{tenant_id}/{artifact_id}/content"
 
+    @classmethod
+    def _verified_object_key(
+        cls, tenant_id: str, artifact_id: str, filename: str,
+        storage_uri: object,
+    ) -> str | None:
+        """Use only an exact source path attested by the locked file row.
+
+        Canonical uploads write /content. Historical code artifacts may have
+        a basename key. Neither may be guessed as a fallback, and arbitrary
+        signed paths are never trusted.
+        """
+        if (
+            not isinstance(storage_uri, str)
+            or not isinstance(filename, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", filename)
+            is None
+        ):
+            return None
+        canonical = cls._canonical_object_key(tenant_id, artifact_id)
+        historical = f"{tenant_id}/{artifact_id}/{filename}"
+        if storage_uri == f"supabase://artifacts/{canonical}":
+            return canonical
+        if storage_uri == f"supabase://artifacts/{historical}":
+            return historical
+        return None
+
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
         try:
@@ -227,6 +253,9 @@ class SupabaseArtifactStore(ArtifactStore):
                 size_bytes = row.bytes
                 expected_sha = row.sha256
                 storage_uri = row.storage_uri
+                object_key = self._verified_object_key(
+                    tenant_id, artifact_id, filename, storage_uri,
+                )
                 if (
                     not isinstance(filename, str)
                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", filename)
@@ -248,18 +277,13 @@ class SupabaseArtifactStore(ArtifactStore):
                     or not isinstance(expected_sha, str)
                     or re.fullmatch(r"[a-f0-9]{64}", expected_sha) is None
                     or not isinstance(storage_uri, str)
-                    or storage_uri != (
-                        "supabase://artifacts/"
-                        + self._canonical_object_key(tenant_id, artifact_id)
-                    )
+                    or object_key is None
                 ):
                     return RepositoryResult(success=False, error=unavailable)
 
                 # The row remains locked until this method returns. No archived
                 # or cross-owner artifact can become an eligible code view.
-                downloaded = self._bucket().download(
-                    self._canonical_object_key(tenant_id, artifact_id)
-                )
+                downloaded = self._bucket().download(object_key)
                 if (
                     not isinstance(downloaded, bytes)
                     or len(downloaded) != size_bytes
@@ -298,7 +322,7 @@ class SupabaseArtifactStore(ArtifactStore):
         self, artifact_id: str, tenant_id: str, user_id: str, *,
         max_bytes: int = 65536,
     ) -> RepositoryResult[VerifiedArtifactText]:
-        """Read active owner text from the exact canonical upload object key.
+        """Read owner text from the exact file-row-attested Storage object key.
 
         The filename is display metadata, never a Storage path component.
         PostgreSQL owner and immutable digest are checked under a share lock.
@@ -336,6 +360,9 @@ class SupabaseArtifactStore(ArtifactStore):
                     return RepositoryResult(success=False, error=unavailable)
                 name, mime_type = row.name, row.mime_type
                 size, digest = row.bytes, row.sha256
+                object_key = self._verified_object_key(
+                    tenant_id, artifact_id, name, row.storage_uri,
+                )
                 if (
                     not isinstance(name, str)
                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", name)
@@ -346,10 +373,7 @@ class SupabaseArtifactStore(ArtifactStore):
                     or not 1 <= size <= max_bytes
                     or not isinstance(digest, str)
                     or re.fullmatch(r"[a-f0-9]{64}", digest) is None
-                    or row.storage_uri != (
-                        "supabase://artifacts/"
-                        + self._canonical_object_key(tenant_id, artifact_id)
-                    )
+                    or object_key is None
                 ):
                     return RepositoryResult(success=False, error=unavailable)
 
@@ -383,7 +407,7 @@ class SupabaseArtifactStore(ArtifactStore):
                     ArtifactStorageConfig.from_environment()
                     .signed_range_total_timeout_seconds
                 ):
-                    path = self._canonical_object_key(tenant_id, artifact_id)
+                    path = object_key
                     bucket = self._bucket()
                     signed = await asyncio.to_thread(bucket.create_signed_url, path, 60)
                     if not isinstance(signed, dict):
