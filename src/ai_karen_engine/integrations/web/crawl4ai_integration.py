@@ -92,7 +92,6 @@ class CrawlFailureCode(str, Enum):
     CRAWLER_ERROR = "crawler_error"
     EMPTY_RESULT = "empty_result"
     PARTIAL_BATCH_FAILURE = "partial_batch_failure"
-    EGRESS_POLICY_UNAVAILABLE = "egress_policy_unavailable"
 
 
 @dataclass(frozen=True)

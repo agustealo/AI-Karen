@@ -63,10 +63,12 @@ def integration(*, allowed_urls=(), max_browser_requests=16, max_redirects=5,
         max_response_bytes=max_response_bytes,
     )
     # Never resolve real DNS in tests; production uses _validate_url.
-    crawler._validate_url = lambda url: (
-        None if url in allowed_urls else
-        {"failure_code": "private_network_blocked", "error": "denied"}
-    )
+    def validate_test_target(url):
+        if url in allowed_urls:
+            return None
+        return {"failure_code": "private_network_blocked", "error": "denied"}
+
+    crawler._validate_url = validate_test_target
     crawler.robots_policy = SimpleNamespace(is_allowed=None)
     return crawler
 
