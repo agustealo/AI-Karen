@@ -342,7 +342,7 @@ async def run(
             first_a = await asyncio.wait_for(anext(a_stream), timeout=timeout_s)
             if first_a.kind != "delta" or not first_a.delta:
                 raise HostAcceptanceHold("live_cancelled_request_no_token")
-            active, _ = await until(
+            await until(
                 client, model, lambda m: m.running >= 1,
                 timeout_s=min(15.0, timeout_s),
                 failure="live_scheduler_activation_not_observed",
