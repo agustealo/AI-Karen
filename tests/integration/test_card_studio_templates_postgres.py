@@ -119,7 +119,7 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
         # A mid-migration SQL error must roll back the already-created head.
         broken = migration.replace(
             "CREATE TABLE public.card_studio_template_revisions (",
-            "SELECT 1 / 0;\\nCREATE TABLE public.card_studio_template_revisions (",
+            "SELECT 1 / 0;\nCREATE TABLE public.card_studio_template_revisions (",
             1,
         )
         assert broken != migration
