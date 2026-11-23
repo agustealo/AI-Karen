@@ -824,6 +824,124 @@ class DirectCapabilityExecutor:
             latency_ms=(time.perf_counter() - started) * 1000.0,
         )
 
+    async def _inspect_runtime_capabilities(
+        self,
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ) -> DirectCapabilityResult:
+        """Report registered capability contracts and tool status without a grant.
+
+        This reports only live registry observations, not inferred plugin,
+        provider/model health or permissions to run an arbitrary action.
+        """
+        started = time.perf_counter()
+        denial = "I can't verify runtime capabilities for this request."
+        if (
+            "runtime.inspect" not in set(plan.allowed_capabilities)
+            or not plan.matches_execution_scope(
+                user_id=request.context.user_id,
+                tenant_id=request.context.tenant_id,
+                session_id=request.context.session_id,
+            )
+            or not await ActionExecutionGate.authorize(plan, "runtime.inspect")
+        ):
+            return DirectCapabilityResult(
+                handled=True, text=denial, degraded=True,
+                source="capability_unavailable", source_id="runtime.inspect",
+                error="runtime_inspection_denied",
+            )
+        try:
+            request.context.require_authenticated_user()
+        except PermissionError:
+            return DirectCapabilityResult(
+                handled=True,
+                text="Sign in to inspect Karen's current capabilities.",
+                degraded=True,
+                source="capability_unavailable", source_id="runtime.inspect",
+                error="authenticated_principal_required",
+            )
+        if not await meter.consume_tool_call():
+            return DirectCapabilityResult(
+                handled=True, text="Runtime inspection budget exhausted.",
+                degraded=True,
+                source="capability_unavailable", source_id="runtime.inspect",
+                error="execution_budget_exhausted",
+            )
+
+        try:
+            from ai_karen_engine.core.ai_runtime.capability_registry import (
+                get_capability_registry,
+            )
+            from ai_karen_engine.services.tooling.tool_service import ToolStatus
+
+            # Core capability contracts describe what adapters may do; they
+            # are not assertions that a selected model or host is healthy.
+            contracts = get_capability_registry().list()
+            tool_service = get_tool_service()
+            available = tool_service.list_tools(status=ToolStatus.AVAILABLE)
+            # Tool names are catalog evidence, not call permissions. The
+            # current inspection request itself authorizes no tool execution.
+            permitted = set(plan.allowed_tools)
+            enabled_for_request = sorted(name for name in available if name in permitted)
+            capability_names = sorted({
+                item.name for item in contracts
+                if isinstance(item.name, str) and item.name.strip()
+            })
+            tool_names = sorted({
+                name for name in available
+                if isinstance(name, str) and name.strip()
+            })
+        except Exception as exc:
+            logger.warning(
+                "runtime.capability_inspection_failed",
+                extra={
+                    "correlation_id": request.context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return DirectCapabilityResult(
+                handled=True,
+                text="The current runtime registry could not be verified. I won't guess which tools are available.",
+                degraded=True, source="capability_unavailable",
+                source_id="runtime.inspect",
+                error="runtime_registry_unavailable",
+            )
+
+        def summary(names: List[str], *, max_names: int = 16) -> str:
+            shown = ", ".join(names[:max_names])
+            remainder = len(names) - max_names
+            if remainder > 0:
+                shown += f" (plus {remainder} more)"
+            return shown if names else "none verified"
+
+        text = (
+            "Karen can hold this conversation through its chat runtime. "
+            "Additional execution, memory recall and external providers depend "
+            "on their own authorization and verified readiness.\n\n"
+            f"Registered core capability contracts ({len(capability_names)}): "
+            f"{summary(capability_names)}. These are definitions, not proof "
+            "that every operation is running.\n\n"
+            f"Tools currently marked available in the tool registry "
+            f"({len(tool_names)}): {summary(tool_names)}. "
+            "Registration is not a live health check or permission to execute. "
+            f"Tools allowed for this inspection request ({len(enabled_for_request)}): "
+            f"{summary(enabled_for_request)}. "
+            "A specific action must pass its own runtime policy, tool gate, "
+            "credentials and service readiness before execution.\n\n"
+            "Plugins, agents, provider models, personal memory and local voice "
+            "have separate governed registries or health checks. "
+            "This tool catalog does not establish their availability. "
+            "Ask to inspect plugins or choose an action to check its actual eligibility."
+        )
+        return DirectCapabilityResult(
+            handled=True, text=text, success=True,
+            source="runtime_registry_observation",
+            source_id="runtime.inspect",
+            payload={"status": "observed", "required_capability": "runtime.inspect"},
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
     async def _inspect_plugins(
         self, request: ChatExecutionRequest, plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
@@ -1215,6 +1333,9 @@ class DirectCapabilityExecutor:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
         if not route:
             return DirectCapabilityResult(handled=False)
+
+        if decision.intent == "runtime.inspect":
+            return await self._inspect_runtime_capabilities(request, plan, meter)
 
         if decision.intent == "plugin.inspect":
             return await self._inspect_plugins(request, plan, meter)
