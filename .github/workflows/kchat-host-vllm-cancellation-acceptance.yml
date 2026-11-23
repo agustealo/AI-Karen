@@ -1,4 +1,4 @@
-name: KCHAT-HOST-01 Actual vLLM Host Cancellation Acceptance
+name: KCHAT-HOST-02 vLLM Host Scheduler Quiescence Acceptance
 
 # Explicit dispatch only: this runs active inference on an operator-approved
 # real host; never run it on pull requests or untrusted branches.
@@ -18,7 +18,7 @@ on:
         type: string
         required: true
       scheduler_budget_ms:
-        description: "Native abort and scheduler-drain limit in milliseconds"
+        description: "Native scheduler-drain limit measured from stream close (ms)"
         type: string
         required: true
         default: "5000"
@@ -70,7 +70,7 @@ jobs:
             -r requirements/ci/runtime-contract.txt
           "$RUNNER_TEMP/kchat-vllm-proof-env/bin/python" -m pip check
 
-      - name: Prove native scheduler abort, resource quiescence and recovery
+      - name: Observe isolated scheduler quiescence and independent-request recovery
         shell: bash
         env:
           KAREN_HOST_URL: ${{ inputs.base_url }}
@@ -103,24 +103,35 @@ jobs:
 
           p = Path(os.environ["RUNNER_TEMP"]) / "kchat-host-01-evidence/scheduler.json"
           proof = json.loads(p.read_text())
-          assert proof["status"] == "host_scheduler_observation_passed"
+          assert proof["status"] == "host_scheduler_quiescence_observed"
           assert proof["source_sha"] == os.environ["GITHUB_SHA"]
           assert proof["scheduler_drained"] is True
-          assert proof["native_abort_counter_after"] > proof["native_abort_counter_before"]
+          assert proof["scheduler_quiescence_verified"] is True
+          assert proof["normal_terminal_counter_unchanged"] is True
+          assert (
+              proof["normal_terminal_counter_after"]
+              == proof["normal_terminal_counter_before"]
+          )
+          assert proof["native_abort_receipt_required"] is False
+          assert proof["engine_request_abort_certified"] is False
+          assert proof["concurrent_scheduler_active"] is True
+          assert proof["concurrent_scheduler_drained"] is True
           assert proof["tokens_stable_after_idle"] is True
           assert proof["independent_survivor_verified"] is True
           assert proof["retry_verified"] is True
           assert proof["final_scheduler_idle"] is True
           assert proof["per_request_abort_trace_certified"] is False
           assert proof["gpu_vram_release_certified"] is False
-          print("Native scheduler evidence verified at target host.")
+          print(
+              "Host scheduler quiescence observed; per-request abort not certified."
+          )
           PY
 
       - name: Preserve sanitized host evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kchat-host-01-native-scheduler
+          name: kchat-host-02-native-quiescence
           path: ${{ runner.temp }}/kchat-host-01-evidence/scheduler.json
           if-no-files-found: warn
           retention-days: 14
