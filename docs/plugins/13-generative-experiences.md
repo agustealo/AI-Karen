@@ -256,3 +256,42 @@ production-schema upgrade or hosted release.
 least-privilege role provisioning, authenticated API and RBAC, admin/support
 lifecycle, Card Studio UX, signed-in browser acceptance, and deployed rollback.
 Template publication, chat execution, and arbitrary UI code remain disabled.
+
+
+## KGUI-CARD-STUDIO-01C: Authenticated owner-scoped CRUD HTTP (source candidate)
+
+The existing DEV_FAST workflow (`.github/workflows/dev-fast.yml`) is the
+first focused PR validation gate. The existing
+`.github/workflows/card-studio-postgres-proof.yml` remains the canonical
+database gate. Do not introduce a second Card Studio store or fast CI owner.
+
+**Transport:** `/chat/card-studio/templates` offers list, create, read,
+revision-checked revise and archive, plus historical revision listing/readback.
+The canonical chat router registers the small `api_routes/chat/card_studio.py`
+adapter. No client-provided tenant/user, policy decision, receipt or source
+attestation is accepted. Server authentication must supply the exact principal.
+All replies are `private, no-store` and have correlation IDs. Mutations require
+a bearer-authenticated request so cookie-only cross-site writes cannot be
+mistaken for authorized requests.
+
+**Runtime authority:** `CardStudioTemplateService` requires an active, verified
+matching user/tenant `ChatExecutionContext`, calls the existing
+`RuntimePolicyEnforcer` for `card_studio.read` or `card_studio.write`,
+and delegates RBAC checks to the existing central permission registry. It
+never accepts a caller-issued policy grant, executes a model, or selects a
+provider. Only after this admission can the existing PostgreSQL repository
+read or atomically commit an owner-scoped mutation. The repository preserves
+immutable receipts, uncertain-response idempotency and revision CAS.
+
+**Server feature gate:** `KARI_ENABLE_CARD_STUDIO_CRUD`, default **false**.
+This gate is independent of the AG-UI and presentation-pin gates. It must not
+be enabled for consumers until real signed-session HTTP, role provisioning,
+full-schema deployment and browser acceptance are independently certified.
+
+**Audit:** An access grant/deny and successful mutation receipt emit sanitized
+audit/structured events with request/correlation, owner and tenant IDs,
+operation, revision and latency, never template source content or credentials.
+
+**Not included:** Template publication/activation, shared-library roles,
+plugin execution, CORTEX chat proposals, custom components, visual editor,
+model-generated HTML or direct frontend SQL.

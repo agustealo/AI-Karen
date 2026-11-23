@@ -1781,3 +1781,10 @@ async def get_available_models(
             context="model_listing_error",
         )
         raise HTTPException(status_code=500, detail="Unable to list available models") from exc
+
+
+# Keep the Card Studio transport adjacent to the canonical chat ingress.
+# This is only route registration; runtime policy and repository own execution.
+from ai_karen_engine.api_routes.chat.card_studio import router as card_studio_router
+
+router.include_router(card_studio_router)

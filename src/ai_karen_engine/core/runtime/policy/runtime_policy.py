@@ -938,6 +938,44 @@ class RuntimePolicyEnforcer:
                 evaluated_at=evaluated_at,
             )
 
+        # Card Studio draft actions are governed by the existing RBAC manager.
+        # The requested capability is never itself a grant. This evaluator
+        # receives a server-verified principal only from the runtime service.
+        requested_card_actions = sorted({
+            capability for capability in request.requested_capabilities
+            if isinstance(capability, str) and capability.startswith("card_studio.")
+        })
+        if requested_card_actions:
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            required_permissions = {
+                "card_studio.read": Permission.CARD_STUDIO_READ,
+                "card_studio.write": Permission.CARD_STUDIO_WRITE,
+            }
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            manager = get_rbac_manager()
+            denied = [
+                action for action in requested_card_actions
+                if action not in required_permissions
+                or not manager.has_permission(principal, required_permissions[action])
+            ]
+            if denied:
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=denied,
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
+
         # Planner reads expose tenant-private commitments. Requested capability
         # alone never grants access, even for a read-only presentation.
         if "planner.read" in request.requested_capabilities:

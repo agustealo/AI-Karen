@@ -8,8 +8,19 @@ on:
       - "src/ai_karen_engine/persistence/repositories/card_studio_template_repository.py"
       - "src/ai_karen_engine/core/runtime/presentation_contract.py"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "src/ai_karen_engine/api_routes/chat/card_studio.py"
+      - "src/ai_karen_engine/api_routes/chat/runtime.py"
+      - "src/ai_karen_engine/api_routes/chat/execution_identity.py"
+      - "src/ai_karen_engine/core/runtime/card_studio_template_service.py"
+      - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
+      - "config_assets/permissions.json"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "tests/core/runtime/test_card_studio_template_service.py"
+      - "tests/api_routes/test_card_studio_template_route.py"
       - "tests/core/runtime/test_card_studio_template_repository.py"
       - "tests/integration/test_card_studio_templates_postgres.py"
+      - "tests/integration/test_card_studio_signed_session_postgres.py"
       - ".github/workflows/card-studio-postgres-proof.yml"
   push:
     branches: [main]
@@ -18,8 +29,19 @@ on:
       - "src/ai_karen_engine/persistence/repositories/card_studio_template_repository.py"
       - "src/ai_karen_engine/core/runtime/presentation_contract.py"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "src/ai_karen_engine/api_routes/chat/card_studio.py"
+      - "src/ai_karen_engine/api_routes/chat/runtime.py"
+      - "src/ai_karen_engine/api_routes/chat/execution_identity.py"
+      - "src/ai_karen_engine/core/runtime/card_studio_template_service.py"
+      - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
+      - "config_assets/permissions.json"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "tests/core/runtime/test_card_studio_template_service.py"
+      - "tests/api_routes/test_card_studio_template_route.py"
       - "tests/core/runtime/test_card_studio_template_repository.py"
       - "tests/integration/test_card_studio_templates_postgres.py"
+      - "tests/integration/test_card_studio_signed_session_postgres.py"
       - ".github/workflows/card-studio-postgres-proof.yml"
   workflow_dispatch:
 
@@ -39,6 +61,7 @@ jobs:
       KAREN_TEST_CARD_STUDIO_POSTGRES: "1"
       KAREN_TEST_DISPOSABLE_DATABASE: "1"
       KAREN_TEST_CARD_STUDIO_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_card_studio_test
+      KAREN_TEST_CARD_STUDIO_AUTH_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_card_studio_auth_test
     steps:
       - uses: actions/checkout@v4
 
@@ -76,25 +99,26 @@ jobs:
                   "postgresql://postgres:postgres@127.0.0.1:5432/ai_karen"
               )
               try:
-                  existing = await admin.fetchval(
-                      "SELECT 1 FROM pg_database WHERE datname=$1",
-                      "karen_card_studio_test",
-                  )
-                  if existing:
-                      raise RuntimeError("Refusing preexisting Card Studio test database")
+                  for name in ("karen_card_studio_test", "karen_card_studio_auth_test"):
+                      existing = await admin.fetchval(
+                          "SELECT 1 FROM pg_database WHERE datname=$1", name,
+                      )
+                      if existing:
+                          raise RuntimeError("Refusing preexisting Card Studio test database")
                   for role in ("anon", "authenticated"):
                       if not await admin.fetchval(
                           "SELECT 1 FROM pg_roles WHERE rolname=$1", role
                       ):
                           await admin.execute(f'CREATE ROLE "{role}" NOLOGIN')
                   await admin.execute("CREATE DATABASE karen_card_studio_test")
+                  await admin.execute("CREATE DATABASE karen_card_studio_auth_test")
               finally:
                   await admin.close()
 
           asyncio.run(prepare())
           PY
 
-      - name: Prove actual migration rollback, RLS, immutable history, CAS and replay
+      - name: Prove migration, runtime policy and scoped CRUD HTTP against PostgreSQL
         shell: bash
         run: |
           set -euo pipefail
@@ -102,14 +126,17 @@ jobs:
             src/ai_karen_engine/persistence/repositories/card_studio_template_repository.py \
             tests/integration/test_card_studio_templates_postgres.py
           pytest tests/core/runtime/test_card_studio_template_repository.py \
-            tests/core/runtime/test_card_template_contract.py -q -rs
+            tests/core/runtime/test_card_template_contract.py \
+            tests/core/runtime/test_card_studio_template_service.py \
+            tests/api_routes/test_card_studio_template_route.py -q -rs
           pytest tests/integration/test_card_studio_templates_postgres.py -q -rs
+          pytest tests/integration/test_card_studio_signed_session_postgres.py -q -rs
 
       - name: Declare scope of achieved evidence
         if: always()
         shell: bash
         run: |
           echo "Card Studio database proof runs the actual migration and repository under a real least-privilege PostgreSQL login." >> "$GITHUB_STEP_SUMMARY"
-          echo "Disposable database: karen_card_studio_test. No production data is touched." >> "$GITHUB_STEP_SUMMARY"
+          echo "Disposable databases: karen_card_studio_test and karen_card_studio_auth_test. No production data is touched." >> "$GITHUB_STEP_SUMMARY"
           echo "The proof covers rollback, tenant/user RLS, CAS competition, immutable history and idempotent retries." >> "$GITHUB_STEP_SUMMARY"
-          echo "It does NOT certify authenticated HTTP ingress, browser editor, hosted deployment, template publication or chat actions." >> "$GITHUB_STEP_SUMMARY"
+          echo "The HTTP contract uses real runtime and PostgreSQL, and a separate auth test verifies signed durable-session revocation/drift. Neither certifies hosted browser usage, publication or chat actions." >> "$GITHUB_STEP_SUMMARY"
