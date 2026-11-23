@@ -295,29 +295,42 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
                 tenant_a, owner_a,
             )
 
-        # SQL-level immutability stands even when the restricted role has
-        # direct UPDATE/DELETE grants; archive is the only ordinary removal.
-        for table, mutation in (
-            (
-                "card_studio_template_revisions",
+        # Lack of UPDATE/DELETE policies on immutable rows makes restricted
+        # DML a zero-row no-op, not necessarily a PostgreSQL exception.
+        revision_changes = await _rls_query(
+            reader, tenant_a, owner_a,
+            "UPDATE public.card_studio_template_revisions "
+            "SET definition='{}'::jsonb WHERE template_id=$1 RETURNING revision",
+            uuid.UUID(first.template_id),
+        )
+        assert revision_changes == []
+        receipt_deletions = await _rls_query(
+            reader, tenant_a, owner_a,
+            "DELETE FROM public.card_studio_template_mutation_receipts "
+            "WHERE template_id=$1 RETURNING receipt_id",
+            uuid.UUID(first.template_id),
+        )
+        assert receipt_deletions == []
+
+        # The privileged maintenance role bypasses RLS, but immutable-history
+        # triggers must still reject tampering. Owner deletion requires archive.
+        with pytest.raises(asyncpg.PostgresError, match="immutable"):
+            await admin.execute(
                 "UPDATE public.card_studio_template_revisions "
                 "SET definition='{}'::jsonb WHERE template_id=$1",
-            ),
-            (
-                "card_studio_template_mutation_receipts",
+                uuid.UUID(first.template_id),
+            )
+        with pytest.raises(asyncpg.PostgresError, match="immutable"):
+            await admin.execute(
                 "DELETE FROM public.card_studio_template_mutation_receipts "
                 "WHERE template_id=$1",
-            ),
-            (
-                "card_studio_templates",
-                "DELETE FROM public.card_studio_templates "
-                "WHERE template_id=$1",
-            ),
-        ):
-            with pytest.raises(asyncpg.PostgresError):
-                await _rls_query(
-                    reader, tenant_a, owner_a, mutation, uuid.UUID(first.template_id)
-                )
+                uuid.UUID(first.template_id),
+            )
+        with pytest.raises(asyncpg.PostgresError, match="soft archive"):
+            await admin.execute(
+                "DELETE FROM public.card_studio_templates WHERE template_id=$1",
+                uuid.UUID(first.template_id),
+            )
 
         # A failing duplicate receipt INSERT must revert an earlier head
         # revision mutation in the same real transaction.
