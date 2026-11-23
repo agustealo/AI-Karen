@@ -52,7 +52,7 @@ def checked_url(raw: str) -> str:
     parsed = urlsplit(raw.strip())
     if (
         parsed.scheme != "http"
-        or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or parsed.hostname not in {"127.0.0.1", "::1"}
         or not parsed.port
         or parsed.path.rstrip("/") != "/v1"
         or parsed.username or parsed.password or parsed.query or parsed.fragment
@@ -83,6 +83,15 @@ def validate_identity(
         raise HostAcceptanceHold("source_identity_unverifiable") from None
     if actual != expected_sha:
         raise HostAcceptanceHold("source_identity_mismatch")
+    try:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repo_root, check=True, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        raise HostAcceptanceHold("source_cleanliness_unverifiable") from None
+    if dirty:
+        raise HostAcceptanceHold("source_checkout_modified")
 
 
 def parse_scheduler_metrics(body: str, model: str) -> SchedulerSample:
@@ -123,7 +132,13 @@ def parse_scheduler_metrics(body: str, model: str) -> SchedulerSample:
             "vllm:request_success_total", "vllm:request_success",
             abort=True, required=False,
         ),
-        kv_usage=total("vllm:kv_cache_usage_perc"),
+        # A multi-engine host may expose several per-shard cache percentages.
+        # Summing these fractions would manufacture utilization above 100%.
+        kv_usage=max(
+            (value for name, _labels, value in values
+             if name == "vllm:kv_cache_usage_perc"),
+            default=float("nan"),
+        ),
     )
 
 
@@ -417,6 +432,21 @@ def main() -> int:
             str(exc) if isinstance(exc, HostAcceptanceHold)
             else "host_probe_failed_without_certification"
         )
+        hold = {
+            "schema_version": 1,
+            "status": "hold",
+            "reason_code": code,
+            "host_scheduler_certified": False,
+            "gpu_vram_release_certified": False,
+        }
+        try:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(
+                json.dumps(hold, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
         print(json.dumps({"status": "hold", "reason_code": code}, sort_keys=True))
         return 1
     print(json.dumps({
