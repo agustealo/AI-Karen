@@ -264,7 +264,8 @@ async def test_unknown_publication_and_unbounded_revision_not_exposed(monkeypatc
             "idempotency_key": KEY, "draft": definition(),
         },
     )
-    assert response.status_code in (404, 422)
+    # The GET-only template detail route exists, but publication has no POST.
+    assert response.status_code == 405
     response = await request(
         app, "PUT", f"/chat/card-studio/templates/{TEMPLATE}", json={
             "idempotency_key": KEY, "expected_revision": 0, "draft": definition(),
