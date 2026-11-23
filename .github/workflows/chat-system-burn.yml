@@ -318,7 +318,7 @@ jobs:
           retention-days: 14
 
       - name: Prove private error redaction through runtime and HTTP boundaries
-        run: pytest tests/core/runtime/test_conversation_runtime_gateway.py tests/architecture/test_chat_error_transport_authority.py tests/architecture/test_error_transport_authority.py -q
+        run: pytest tests/core/runtime/test_conversation_runtime_gateway.py tests/architecture/test_chat_error_transport_authority.py tests/architecture/test_error_transport_authority.py tests/architecture/test_consumer_privacy_authority.py -q
 
       - name: Prove canonical transcript repository errors redact SQL parameters
         run: pytest tests/services/database/repositories/test_postgres_conversation_repository_tenant_scope.py -q

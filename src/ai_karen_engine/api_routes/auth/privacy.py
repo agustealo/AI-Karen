@@ -23,6 +23,7 @@ from ai_karen_engine.services.privacy_compliance import (
     PrivacyComplianceService,
     PrivacyRequestStatus,
     get_privacy_compliance_service,
+    safe_privacy_failure_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,16 +103,42 @@ def _identity(user: UserData) -> tuple[str, str]:
     return user_id, tenant_id
 
 
+_SAFE_PRIVACY_VALIDATION_MESSAGES = frozenset({
+    "Only JSON privacy exports are currently implemented",
+    "Only hard_delete is implemented. soft_delete and anonymize fail closed until canonical support exists.",
+})
+_SAFE_PRIVACY_STATE_MESSAGES = frozenset({
+    "Privacy request was already claimed or is no longer pending",
+})
+_SAFE_PRIVACY_PERMISSION_MESSAGES = frozenset({"Invalid verification token"})
+
+
+def _canonical_detail(exc: Exception, allowed: frozenset[str], fallback: str) -> str:
+    """Expose only exact, known service error literals."""
+    if len(exc.args) == 1 and type(exc.args[0]) is str and exc.args[0] in allowed:
+        return exc.args[0]
+    return fallback
+
+
 def _translate_service_error(exc: Exception) -> HTTPException:
     if isinstance(exc, KeyError):
         return HTTPException(status_code=404, detail="Privacy request not found")
     if isinstance(exc, PermissionError):
-        return HTTPException(status_code=403, detail=str(exc))
+        return HTTPException(
+            status_code=403,
+            detail=_canonical_detail(exc, _SAFE_PRIVACY_PERMISSION_MESSAGES, "Privacy request access denied"),
+        )
     if isinstance(exc, ValueError):
-        return HTTPException(status_code=422, detail=str(exc))
+        return HTTPException(
+            status_code=422,
+            detail=_canonical_detail(exc, _SAFE_PRIVACY_VALIDATION_MESSAGES, "Invalid privacy request"),
+        )
     if isinstance(exc, RuntimeError):
-        return HTTPException(status_code=409, detail=str(exc))
-    logger.exception("privacy.request.failed")
+        return HTTPException(
+            status_code=409,
+            detail=_canonical_detail(exc, _SAFE_PRIVACY_STATE_MESSAGES, "Privacy request conflict"),
+        )
+    logger.error("privacy.request.failed", extra={"error_type": type(exc).__name__})
     return HTTPException(status_code=500, detail="Privacy operation failed")
 
 
@@ -215,7 +242,7 @@ async def get_privacy_request_status(
             else None
         ),
         result_metadata=dict(privacy_request.result_metadata or {}),
-        error_message=privacy_request.error_message,
+        error_message=safe_privacy_failure_message(privacy_request.error_message),
     )
 
 
