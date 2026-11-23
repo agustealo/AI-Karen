@@ -184,6 +184,41 @@ jobs:
           pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k "status_only_stream or upstream_stream_error or whitespace_only_assistant_stream or partial_content_then_error" -q
           pytest tests/core/runtime/test_chat_sse_error_contract.py tests/architecture/test_stream_error_diagnostic_contract.py -q
 
+      - name: KIS-GRAPH-01C2R-J observe authenticated HTTP SSE over loopback TCP
+        env:
+          KAREN_CHAT_WIRE_REPORT: build/kis-graph-01c2r-j-http-sse-wire.json
+        run: |
+          pytest tests/core/runtime/test_chat_http_sse_wire_acceptance.py -q -rs \
+            --junitxml=build/kis-graph-01c2r-j-http-sse-wire-junit.xml
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("build/kis-graph-01c2r-j-http-sse-wire.json").read_text())
+          assert data["status"] == "complete"
+          assert data["real_tcp_http"] is True
+          assert data["signed_jwt_verification"] == "actual"
+          assert data["durable_auth_session_readback"] == "controlled"
+          assert data["chat_runtime_model_stream"] == "controlled"
+          assert data["sse_completed"] == 8
+          assert data["rejected_before_runtime"] == 4
+          assert data["disconnect_finalized"] is True
+          assert data["error_type"] is None
+          assert data["cleanup_error_type"] is None
+          print("Authenticated SSE TCP acceptance complete. Model/session storage are controlled.")
+          PY
+
+      - name: Preserve sanitized HTTP SSE wire acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kis-graph-01c2r-j-http-sse-wire
+          path: |
+            build/kis-graph-01c2r-j-http-sse-wire.json
+            build/kis-graph-01c2r-j-http-sse-wire-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Deep-smoke terminal parity across SSE NDJSON Copilot and WebSocket
         run: pytest tests/core/runtime/test_chat_transport_terminal_parity.py -q
 
