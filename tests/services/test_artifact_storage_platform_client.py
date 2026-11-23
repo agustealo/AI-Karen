@@ -166,7 +166,7 @@ def bounded_store(monkeypatch, *, body=_BODY, signed_url=None, row=None, transpo
         row = SimpleNamespace(
             name="author.txt", mime_type="text/plain", bytes=len(body),
             sha256=hashlib.sha256(body).hexdigest(),
-            storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt",
+            storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/content",
         )
     session = FakeSession(row)
     storage = FakeStorage()
@@ -182,7 +182,7 @@ def bounded_store(monkeypatch, *, body=_BODY, signed_url=None, row=None, transpo
             assert request.headers.get("range") == f"bytes=0-{len(body)-1}"
             assert request.url.host == "storage.example.test"
             assert request.url.path.endswith(
-                f"/artifacts/{_TENANT}/{_ARTIFACT}/author.txt"
+                f"/artifacts/{_TENANT}/{_ARTIFACT}/content"
             )
             return httpx.Response(
                 206, stream=UnconsumedStream(body),
@@ -221,7 +221,7 @@ async def test_bounded_signed_range_returns_verified_owner_text(monkeypatch):
     assert result.success
     assert result.data.text == _BODY.decode()
     assert result.data.sha256 == hashlib.sha256(_BODY).hexdigest()
-    assert bucket.signatures == [(f"{_TENANT}/{_ARTIFACT}/author.txt", 60)]
+    assert bucket.signatures == [(f"{_TENANT}/{_ARTIFACT}/content", 60)]
     assert len(session.queries) == 1
     assert "FOR SHARE" in session.queries[0][0]
     assert session.queries[0][1]["owner_id"] == _OWNER
@@ -235,7 +235,7 @@ async def test_bounded_signed_range_rejects_bad_storage_responses(monkeypatch, r
         name="author.txt", mime_type="text/plain", bytes=len(body),
         sha256=("0" * 64 if response == "wrong_digest"
                 else hashlib.sha256(body).hexdigest()),
-        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt",
+        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/content",
     )
     streams = []
 
@@ -274,22 +274,24 @@ async def test_bounded_signed_range_rejects_bad_storage_responses(monkeypatch, r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad_url", [
+    "/storage/v1/object/sign/artifacts/"
+    + _TENANT + "/" + _ARTIFACT + "/author.txt?token=secret",
     "https://other.example.test/storage/v1/object/sign/artifacts/"
-    + _TENANT + "/" + _ARTIFACT + "/author.txt?token=secret",
+    + _TENANT + "/" + _ARTIFACT + "/content?token=secret",
     "/storage/v1/object/sign/other-bucket/"
-    + _TENANT + "/" + _ARTIFACT + "/author.txt?token=secret",
+    + _TENANT + "/" + _ARTIFACT + "/content?token=secret",
     "/storage/v1/object/sign/artifacts/"
-    + _TENANT + "/" + _ARTIFACT + "/author.txt",
+    + _TENANT + "/" + _ARTIFACT + "/content",
     "http://storage.example.test/storage/v1/object/sign/artifacts/"
-    + _TENANT + "/" + _ARTIFACT + "/author.txt?token=secret",
+    + _TENANT + "/" + _ARTIFACT + "/content?token=secret",
     "/storage/v1/object/sign/artifacts/"
-    + _TENANT + "/" + _ARTIFACT + "/author.txt?%74oken=eyJabc%2EeyJdef%2Eghi",
+    + _TENANT + "/" + _ARTIFACT + "/content?%74oken=eyJabc%2EeyJdef%2Eghi",
     "/storage/v1/object/%73ign/artifacts/"
-    + _TENANT + "/" + _ARTIFACT + "/author.txt?token=secret",
+    + _TENANT + "/" + _ARTIFACT + "/content?token=secret",
     "/storage/v1/object/sign/artifacts/"
-    + _TENANT + "/" + _ARTIFACT + "/%61uthor.txt?token=secret",
+    + _TENANT + "/" + _ARTIFACT + "/%63ontent?token=secret",
     "/storage/v1/object/sign/artifacts/"
-    + _TENANT + "/" + _ARTIFACT + "/author%2Etxt?token=secret",
+    + _TENANT + "/" + _ARTIFACT + "/conten%74?token=secret",
 ])
 async def test_bounded_signed_range_blocks_untrusted_urls(monkeypatch, bad_url):
     attempted_requests = []
@@ -543,3 +545,99 @@ async def test_bounded_signed_range_total_deadline_allows_fast_real_range(monkey
     assert passed.success and passed.data is not None
     assert passed.data.sha256 == hashlib.sha256(_BODY).hexdigest()
     assert session.exits == 1
+
+
+@pytest.mark.asyncio
+async def test_bounded_read_rechecks_live_bytes_when_object_drifts_without_sql_write(
+    monkeypatch,
+):
+    """Byte replacement behind an unchanged canonical row cannot be approved."""
+    body = _BODY
+    object_bytes = [body]
+    reads = []
+
+    # Canonical PostgreSQL metadata stays unchanged across all three calls.
+    immutable_row = SimpleNamespace(
+        name="author.txt",
+        mime_type="text/plain",
+        bytes=len(body),
+        sha256=hashlib.sha256(body).hexdigest(),
+        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/content",
+    )
+
+    def live_object(request):
+        reads.append(str(request.url))
+        assert request.url.path == (
+            f"/storage/v1/object/sign/artifacts/{_TENANT}/{_ARTIFACT}/content"
+        )
+        assert request.headers["range"] == f"bytes=0-{len(body)-1}"
+        return httpx.Response(
+            206,
+            stream=UnconsumedStream(object_bytes[0]),
+            headers={
+                "Content-Range": f"bytes 0-{len(body)-1}/{len(body)}",
+                "Content-Length": str(len(body)),
+            },
+        )
+
+    store, bucket, session = bounded_store(
+        monkeypatch, row=immutable_row,
+        transport=httpx.MockTransport(live_object),
+    )
+    original = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER,
+    )
+    assert original.success is True and original.data.text == body.decode()
+    original_digest = immutable_row.sha256
+
+    # Supabase object changes out-of-band, with an identical byte length.
+    # No SQL UPDATE, archive, or trigger runs.
+    object_bytes[0] = body[:-1] + (b"!" if body[-1:] != b"!" else b"?")
+    assert len(object_bytes[0]) == len(body)
+    tampered = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER,
+    )
+    assert tampered.success is False
+    assert tampered.data is None
+    assert tampered.error == "bounded_artifact_read_unavailable"
+    assert immutable_row.sha256 == original_digest
+    assert immutable_row.bytes == len(body)
+
+    # If object bytes are restored, the bounded reader can verify them
+    # again. Receipt validity and irreversible revocation are separate
+    # SQL authorities, not outcomes inferred from this storage test.
+    object_bytes[0] = body
+    restored = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER,
+    )
+    assert restored.success is True
+    assert restored.data.sha256 == original_digest
+    assert len(reads) == len(bucket.signatures) == len(session.queries) == 3
+
+
+@pytest.mark.asyncio
+async def test_bounded_read_rejects_noncanonical_storage_locator_before_signing(
+    monkeypatch,
+):
+    """Legacy filename keys and malicious aliases are never chosen."""
+    row = SimpleNamespace(
+        name="author.txt",
+        mime_type="text/plain",
+        bytes=len(_BODY),
+        sha256=hashlib.sha256(_BODY).hexdigest(),
+        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt",
+    )
+    store, bucket, _ = bounded_store(monkeypatch, row=row)
+    denied = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER,
+    )
+    assert denied.success is False
+    assert denied.data is None
+    assert bucket.signatures == []
+
+
+def test_canonical_object_storage_key_is_identical_for_upload_and_read():
+    """One stable key owner, independent from a user-controlled filename."""
+    key = SupabaseArtifactStore._canonical_object_key(_TENANT, _ARTIFACT)
+    assert key == f"{_TENANT}/{_ARTIFACT}/content"
+    assert "author.txt" not in key
