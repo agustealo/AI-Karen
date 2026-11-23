@@ -379,4 +379,78 @@ describe("governed local engine voice settings", () => {
     expect(api.synthesizeLocalVoice).not.toHaveBeenCalled();
   });
 
+
+  it("aborts an unmounted preview before synthesis can allocate audio", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    let finishSynthesis!: (blob: Blob) => void;
+    api.synthesizeLocalVoice.mockImplementation(() => new Promise<Blob>((resolve) => {
+      finishSynthesis = resolve;
+    }));
+    const create = vi.fn(() => "blob:late-preview");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: create });
+
+    const view = render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    fireEvent.click(screen.getByRole("button", { name: "Preview local voice" }));
+    await waitFor(() => expect(api.synthesizeLocalVoice).toHaveBeenCalledTimes(1));
+    const signal = api.synthesizeLocalVoice.mock.calls[0][3] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+    await act(async () => finishSynthesis(new Blob([new Uint8Array(44)], { type: "audio/wav" })));
+    expect(create).not.toHaveBeenCalled();
+    expect(api.toast).not.toHaveBeenCalled();
+  });
+
+  it("releases a playing WAV exactly once on unmount despite late playback events", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true, value: vi.fn(() => "blob:owned-local-sample"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    const outputs: Array<{
+      src: string;
+      onended: (() => void) | null;
+      onerror: (() => void) | null;
+      pause: ReturnType<typeof vi.fn>;
+      play: ReturnType<typeof vi.fn>;
+    }> = [];
+    vi.stubGlobal("Audio", class {
+      src: string;
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      pause = vi.fn();
+      play = vi.fn().mockResolvedValue(undefined);
+      constructor(url: string) {
+        this.src = url;
+        outputs.push(this);
+      }
+    });
+    api.synthesizeLocalVoice.mockResolvedValue(new Blob([new Uint8Array(44)], { type: "audio/wav" }));
+
+    const view = render(<LocalVoiceEngineSettings />);
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    fireEvent.click(screen.getByRole("button", { name: "Preview local voice" }));
+    await waitFor(() => expect(outputs).toHaveLength(1));
+    const previousEnd = outputs[0].onended;
+    const previousError = outputs[0].onerror;
+    await waitFor(() => expect(outputs[0].play).toHaveBeenCalledTimes(1));
+    view.unmount();
+
+    expect(outputs[0].pause).toHaveBeenCalledTimes(1);
+    expect(outputs[0].src).toBe("");
+    expect(outputs[0].onended).toBeNull();
+    expect(outputs[0].onerror).toBeNull();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:owned-local-sample");
+    await act(async () => { previousEnd?.(); previousError?.(); });
+    expect(outputs[0].pause).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
 });
