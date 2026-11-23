@@ -21,6 +21,34 @@ from ai_karen_engine.server.json_encoder import custom_json_dumps
 
 logger = logging.getLogger(__name__)
 
+# Only explicit, established authentication messages are public error text.
+# JWT and storage exception strings must never enter the HTTP response.
+_SAFE_AUTH_ERROR_DETAILS = frozenset({
+    "Explicit non-default tenant scope is required",
+    "Token has expired",
+    "Refresh token has expired",
+    "Invalid token",
+    "Invalid refresh token",
+    "Token has been revoked",
+    "Session verification unavailable",
+    "Session expired or revoked",
+    "Session identity or tenant mismatch",
+    "No valid active session provided",
+    "Session unavailable",
+    "Failed to authenticate user",
+    "Authentication required",
+})
+
+
+def _safe_auth_detail(status_code: int, message: object) -> str:
+    if type(message) is str and message in _SAFE_AUTH_ERROR_DETAILS:
+        return message
+    if status_code == 403:
+        return "Access denied"
+    if status_code == 503:
+        return "Authentication service unavailable"
+    return "Authentication required"
+
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -40,8 +68,11 @@ def _json_response(
             content=json.loads(serialized),
             headers=headers,
         )
-    except Exception:
-        logger.exception("Failed to serialize exception response")
+    except Exception as exc:
+        logger.error(
+            "Failed to serialize exception response",
+            extra={"error_type": type(exc).__name__},
+        )
         return JSONResponse(
             status_code=status_code,
             content={
@@ -57,7 +88,11 @@ async def custom_http_exception_handler(
     request: Request,
     exc: HTTPException,
 ) -> JSONResponse:
-    content: Dict[str, Any] = {"detail": exc.detail}
+    # Explicit HTTP 500 errors bypass unhandled-exception translation.
+    # Their detail may itself be a SQLAlchemy error or other sensitive value.
+    content: Dict[str, Any] = {
+        "detail": "Internal server error" if exc.status_code == 500 else exc.detail
+    }
     if logger.isEnabledFor(logging.DEBUG):
         content.update(
             {
@@ -99,7 +134,7 @@ async def custom_validation_exception_handler(
         status_code=422,
         content={
             "detail": "Validation error",
-            "message": str(exc),
+            "message": "Invalid request parameters",
             "timestamp": _timestamp(),
             "path": str(request.url.path),
             "method": request.method,
@@ -111,9 +146,13 @@ async def custom_general_exception_handler(
     request: Request,
     exc: Exception,
 ) -> JSONResponse:
-    logger.exception(
+    logger.error(
         "Unhandled request exception",
-        extra={"method": request.method, "path": str(request.url.path)},
+        extra={
+            "method": request.method,
+            "path": str(request.url.path),
+            "error_type": type(exc).__name__,
+        },
     )
 
     content: Dict[str, Any] = {
@@ -124,14 +163,6 @@ async def custom_general_exception_handler(
         "path": str(request.url.path),
         "method": request.method,
     }
-    if logger.isEnabledFor(logging.DEBUG):
-        content.update(
-            {
-                "exception_type": type(exc).__name__,
-                "exception_message": str(exc),
-            }
-        )
-
     return _json_response(status_code=500, content=content)
 
 
@@ -140,7 +171,7 @@ async def custom_authentication_exception_handler(
     exc: AuthenticationError,
 ) -> JSONResponse:
     status_code = int(getattr(exc, "status_code", 401))
-    message = str(getattr(exc, "message", str(exc)))
+    message = _safe_auth_detail(status_code, getattr(exc, "message", None))
     logger.warning(
         "Authentication request rejected",
         extra={

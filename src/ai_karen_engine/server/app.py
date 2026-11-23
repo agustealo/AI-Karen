@@ -230,7 +230,7 @@ def create_app() -> FastAPI:
                 }
             except Exception as e:
                 connection_status = {
-                    "database": {"status": "unknown", "error": str(e)},
+                    "database": {"status": "unknown", "error": "Database status unavailable"},
                     "redis": "unknown",
                 }
 
@@ -263,7 +263,7 @@ def create_app() -> FastAPI:
                 else:
                     extension_status = {"status": "unknown", "monitor_available": False}
             except Exception as e:
-                extension_status = {"status": "error", "error": str(e)}
+                extension_status = {"status": "error", "error": "Extension status unavailable"}
 
             # Check model availability
             model_status = {}
@@ -302,7 +302,7 @@ def create_app() -> FastAPI:
             except Exception as e:
                 model_orchestrator_status = {
                     "status": "error",
-                    "error": str(e),
+                    "error": "Model orchestrator status unavailable",
                     "plugin_loaded": "model_orchestrator" in ENABLED_PLUGINS,
                 }
 
@@ -348,7 +348,7 @@ def create_app() -> FastAPI:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "environment": settings.environment,
                 "version": "1.0.0",
-                "error": str(e),
+                "error": "Health check unavailable",
                 "fallback_mode": True,
             }
 
@@ -391,7 +391,7 @@ def create_app() -> FastAPI:
                 health = await extension_monitor.check_extension_system_health()
                 extension_monitor.update_extension_metrics(health)
         except Exception as e:
-            logger.warning(f"Failed to update extension metrics before serving: {e}")
+            logger.warning("Failed to update extension metrics before serving", extra={"error_type": type(e).__name__})
 
         return Response(
             content=generate_latest(REGISTRY),
@@ -419,10 +419,10 @@ def create_app() -> FastAPI:
                 "database": health_info,
             }
         except Exception as e:
-            logger.error(f"Database health check failed: {e}")
+            logger.error("Database health check failed", extra={"error_type": type(e).__name__})
             return {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "database": {"status": "error", "healthy": False, "error": str(e)},
+                "database": {"status": "error", "healthy": False, "error": "Database health unavailable"},
             }
 
     # Add database connection test endpoint
@@ -445,12 +445,12 @@ def create_app() -> FastAPI:
                 },
             }
         except Exception as e:
-            logger.error(f"Database connection test failed: {e}")
+            logger.error("Database connection test failed", extra={"error_type": type(e).__name__})
             return {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "connection_test": {
                     "success": False,
-                    "error": str(e),
+                    "error": "Database connection test unavailable",
                     "timeout_configured": settings.db_connection_timeout,
                 },
             }
@@ -520,13 +520,13 @@ def create_app() -> FastAPI:
                     }
             except Exception as e:
                 logger.warning(
-                    f"Failed to enhance degraded mode with extension info: {e}"
+                    "Failed to enhance degraded mode with extension info"
                 )
-                payload["extension_system"] = {"status": "error", "error": str(e)}
+                payload["extension_system"] = {"status": "error", "error": "Extension status unavailable"}
 
             return payload
         except Exception as exc:
-            logger.warning("Degraded mode proxy fallback due to error: %s", exc)
+            logger.warning("Degraded mode proxy fallback", extra={"error_type": type(exc).__name__})
 
             # Get extension system status for degraded mode reporting
             extension_degraded_info = {}
@@ -567,10 +567,10 @@ def create_app() -> FastAPI:
                         "extension_monitor_available": False,
                     }
             except Exception as e:
-                logger.warning(f"Failed to get extension status for degraded mode: {e}")
+                logger.warning("Failed to get extension status for degraded mode", extra={"error_type": type(e).__name__})
                 extension_degraded_info = {
                     "extension_system_status": "error",
-                    "extension_error": str(e),
+                    "extension_error": "Extension status unavailable",
                 }
 
             return {
@@ -587,7 +587,7 @@ def create_app() -> FastAPI:
                 "fallback_systems_active": True,
                 "extension_system": extension_degraded_info,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "error": str(exc),
+                "error": "Degraded status unavailable",
             }
 
     logger.info("FastAPI application created and configured successfully")
