@@ -159,10 +159,17 @@ def test_kplug10_live_storage_owner_read_proves_actual_runtime_handoff():
     )[1].split("\n\n@pytest.mark.skipif(", 1)[0]
 
     assert "KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE" in proof
+    target_guard = proof.split("def _disposable_database_url(dsn: str):", 1)[1].split(
+        "\n\n@pytest.mark.parametrize(", 1
+    )[0]
+    assert 'parsed.host not in {"127.0.0.1", "localhost"}' in target_guard
+    assert "port = parsed.port" in target_guard
+    assert "port != 5432" in target_guard
+    assert "parsed.query" in target_guard
     for required in (
         "KAREN_TEST_SUPABASE_DISPOSABLE",
         "bucket_public is not False",
-        "parsed.port != 5432",
+        "parsed = _disposable_database_url(dsn)",
         "granted = await store.read_owner_active_code(",
         "FileExplorerInventoryHost(",
         "ContentSourceHost(store=store, kernel=kernel)",
