@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import aclosing
 import time
 from typing import Any
 
@@ -101,23 +102,28 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 # transports. Forward only verified model SSE deltas, and
                 # accept a final result only after its terminal wire receipt.
                 execution = None
-                async for part in stream_provider_endpoint(
-                    endpoint,
-                    messages=task.messages,
-                    model=model,
-                    max_tokens=task.max_tokens,
-                    temperature=task.temperature,
-                    timeout_ms=task.timeout_ms,
-                ):
-                    if part.kind == "delta" and part.delta:
-                        if provider_first_delta_ms is None:
-                            provider_first_delta_ms = (
-                                time.perf_counter() - attempt_started
-                            ) * 1000.0
-                        task.stream_started = True
-                        await task.token_sink(part.delta)
-                    elif part.kind == "complete":
-                        execution = part.result
+                # Explicitly close the provider SSE generator if cancellation
+                # interrupts token delivery, not only while reading SSE.
+                # A bare `async for` does not guarantee prompt generator close
+                # when its body is cancelled at the downstream token sink.
+                async with aclosing(stream_provider_endpoint(
+                        endpoint,
+                        messages=task.messages,
+                        model=model,
+                        max_tokens=task.max_tokens,
+                        temperature=task.temperature,
+                        timeout_ms=task.timeout_ms,
+                )) as provider_events:
+                    async for part in provider_events:
+                        if part.kind == "delta" and part.delta:
+                            if provider_first_delta_ms is None:
+                                provider_first_delta_ms = (
+                                    time.perf_counter() - attempt_started
+                                ) * 1000.0
+                            task.stream_started = True
+                            await task.token_sink(part.delta)
+                        elif part.kind == "complete":
+                            execution = part.result
                 if execution is None:
                     raise ProviderExecutionError("provider_stream_missing_terminal")
             else:
