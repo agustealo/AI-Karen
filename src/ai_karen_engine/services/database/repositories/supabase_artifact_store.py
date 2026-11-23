@@ -34,6 +34,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
 )
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
 from ai_karen_engine.core.logging.redaction import install_signed_storage_httpx_log_filter
+from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 
 logger = logging.getLogger(__name__)
 
@@ -346,64 +347,72 @@ class SupabaseArtifactStore(ArtifactStore):
                 ):
                     return RepositoryResult(success=False, error=unavailable)
 
-                path = f"{tenant_id}/{artifact_id}/{name}"
-                bucket = self._bucket()
-                signed = await asyncio.to_thread(bucket.create_signed_url, path, 60)
-                if not isinstance(signed, dict):
-                    return RepositoryResult(success=False, error=unavailable)
-                signed_path = signed.get("signedURL") or signed.get("signed_url")
-                if not isinstance(signed_path, str):
-                    return RepositoryResult(success=False, error=unavailable)
-                url = urljoin(origin.rstrip("/") + "/", signed_path)
-                parts = urlsplit(url)
-                expected_path = f"/storage/v1/object/sign/artifacts/{path}"
-                params = parse_qs(parts.query, keep_blank_values=True)
-                if (
-                    parts.scheme != origin_parts.scheme
-                    or parts.netloc != origin_parts.netloc
-                    or parts.username is not None or parts.password is not None
-                    or parts.fragment
-                    or parts.path != expected_path
-                    or parts.query.split("=", 1)[0] != "token"
-                    or set(params) != {"token"}
-                    or len(params["token"]) != 1
-                    or not params["token"][0]
+                # Keep the PostgreSQL FOR SHARE lease bounded even when a
+                # hostile Storage endpoint trickles bytes without violating
+                # HTTPX's per-operation idle timeout. Include signing and
+                # the complete streaming transfer in ONE wall-clock budget.
+                async with asyncio.timeout(
+                    ArtifactStorageConfig.from_environment()
+                    .signed_range_total_timeout_seconds
                 ):
-                    return RepositoryResult(success=False, error=unavailable)
+                    path = f"{tenant_id}/{artifact_id}/{name}"
+                    bucket = self._bucket()
+                    signed = await asyncio.to_thread(bucket.create_signed_url, path, 60)
+                    if not isinstance(signed, dict):
+                        return RepositoryResult(success=False, error=unavailable)
+                    signed_path = signed.get("signedURL") or signed.get("signed_url")
+                    if not isinstance(signed_path, str):
+                        return RepositoryResult(success=False, error=unavailable)
+                    url = urljoin(origin.rstrip("/") + "/", signed_path)
+                    parts = urlsplit(url)
+                    expected_path = f"/storage/v1/object/sign/artifacts/{path}"
+                    params = parse_qs(parts.query, keep_blank_values=True)
+                    if (
+                        parts.scheme != origin_parts.scheme
+                        or parts.netloc != origin_parts.netloc
+                        or parts.username is not None or parts.password is not None
+                        or parts.fragment
+                        or parts.path != expected_path
+                        or parts.query.split("=", 1)[0] != "token"
+                        or set(params) != {"token"}
+                        or len(params["token"]) != 1
+                        or not params["token"][0]
+                    ):
+                        return RepositoryResult(success=False, error=unavailable)
 
-                # HTTPX logs request URLs at INFO. Install the canonical
-                # signed-token guard even when sink setup was skipped by a
-                # standalone worker or repository test.
-                install_signed_storage_httpx_log_filter()
-                chunks = bytearray()
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(10.0, connect=3.0),
-                    trust_env=False, follow_redirects=False,
-                ) as client:
-                    async with client.stream(
-                        "GET", url,
-                        headers={
-                            "Range": f"bytes=0-{size - 1}",
-                            "Accept-Encoding": "identity",
-                            "Cache-Control": "no-store",
-                        },
-                    ) as response:
-                        if (
-                            response.status_code != 206
-                            or response.headers.get("Content-Range")
-                            != f"bytes 0-{size - 1}/{size}"
-                            or response.headers.get("Content-Encoding", "identity")
-                            != "identity"
-                            or (
-                                response.headers.get("Content-Length") is not None
-                                and response.headers["Content-Length"] != str(size)
-                            )
-                        ):
-                            return RepositoryResult(success=False, error=unavailable)
-                        async for chunk in response.aiter_raw(chunk_size=4096):
-                            if len(chunks) + len(chunk) > size:
+                    # HTTPX logs request URLs at INFO. Install the canonical
+                    # signed-token guard even when sink setup was skipped by a
+                    # standalone worker or repository test.
+                    install_signed_storage_httpx_log_filter()
+                    chunks = bytearray()
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(10.0, connect=3.0),
+                        trust_env=False, follow_redirects=False,
+                    ) as client:
+                        async with client.stream(
+                            "GET", url,
+                            headers={
+                                "Range": f"bytes=0-{size - 1}",
+                                "Accept-Encoding": "identity",
+                                "Cache-Control": "no-store",
+                            },
+                        ) as response:
+                            if (
+                                response.status_code != 206
+                                or response.headers.get("Content-Range")
+                                != f"bytes 0-{size - 1}/{size}"
+                                or response.headers.get("Content-Encoding", "identity")
+                                != "identity"
+                                or (
+                                    response.headers.get("Content-Length") is not None
+                                    and response.headers["Content-Length"] != str(size)
+                                )
+                            ):
                                 return RepositoryResult(success=False, error=unavailable)
-                            chunks.extend(chunk)
+                            async for chunk in response.aiter_raw(chunk_size=4096):
+                                if len(chunks) + len(chunk) > size:
+                                    return RepositoryResult(success=False, error=unavailable)
+                                chunks.extend(chunk)
 
                 if (
                     len(chunks) != size
