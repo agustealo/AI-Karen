@@ -294,3 +294,24 @@ over a stale read, and a late previous-approval confirmation. This is a
 issuer, a proof of host activation, or authorization to ingest documents.
 Consumer ingestion remains OFF until independent real-host author, Supabase
 Storage and delegated-use acceptance are observed.
+
+### WS-04B3: consent recheck after source-derived style analysis (internal only)
+
+The existing `KariSignatureSampleAnalyzer` now reuses the *same* trusted
+`WritingStylePersistedSampleAuthority` immediately before returning any
+heuristic proposal, including `insufficient_evidence`. A positive preflight
+authorization is not a consent lease. This second authorization repeats the
+source-specific, profile-specific receipt, owner, bounded source-byte and
+PostgreSQL sample-evidence checks. If consent or evidence is revoked while the
+heuristic runs, or the storage/issuer becomes unavailable, the proposal is
+discarded with the same redacted `style_sample_unavailable` failure. It is
+still unapproved, contains no source text and grants no publication or use.
+
+The existing independent PostgreSQL profile lifecycle and grants remain the
+owners of publication and delegated-use decisions. Source-only tests and the
+canonical KariSignature PostgreSQL proof now cover the post-heuristic boundary;
+this is not evidence of a real-host analysis, a production runtime registration,
+or consumer activation. The two checks are separate observations rather than
+an atomic snapshot of external storage and consent. The current release HOLD
+remains until the approved-host author, bounded Supabase Storage, and delegated-
+use before/after acceptance are observed.

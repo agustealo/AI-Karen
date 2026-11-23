@@ -124,6 +124,20 @@ class KariSignatureSampleAnalyzer:
         self._authority = authority
         self._analyzer = analyzer if analyzer is not None else NLPStyleAnalyzer()
 
+    async def _require_current_analysis_permission(
+        self, *, request: KariSignatureRequest, sample: KariSignatureSample,
+    ) -> None:
+        """Revisit the SAME governed source owner; never cache positive consent."""
+        try:
+            allowed = await self._authority.authorize_analysis(
+                request=request, sample=sample,
+            )
+        except Exception:
+            # Backend error details, including private sample text, are inert.
+            raise PermissionError("style_sample_unavailable") from None
+        if allowed is not True:
+            raise PermissionError("style_sample_unavailable")
+
     async def propose(
         self,
         *, request: KariSignatureRequest, sample: KariSignatureSample,
@@ -139,18 +153,18 @@ class KariSignatureSampleAnalyzer:
         ):
             raise PermissionError("style_sample_unavailable")
 
-        try:
-            permitted = await self._authority.authorize_analysis(
-                request=request, sample=sample
-            )
-        except Exception:
-            raise PermissionError("style_sample_unavailable") from None
-        if permitted is not True:
-            raise PermissionError("style_sample_unavailable")
+        await self._require_current_analysis_permission(
+            request=request, sample=sample,
+        )
 
         words = sample.content.split()
         count = len(words)
         if count < _MIN_WORDS:
+            # A weak/no-evidence response is still a source-derived analysis.
+            # A revocation in the meantime must prevent its release as well.
+            await self._require_current_analysis_permission(
+                request=request, sample=sample,
+            )
             return KariSignatureStyleProposal(
                 profile_id=sample.profile_id,
                 sample_id=sample.sample_id,
@@ -180,6 +194,12 @@ class KariSignatureSampleAnalyzer:
             # surfaced errors or ordinary telemetry.
             raise RuntimeError("style_sample_analysis_unavailable") from None
 
+        # Revocation may arrive while synchronous style analysis runs.
+        # Only the host-owned persisted source+consent authority may re-admit
+        # this proposal; never mistake the initial permission for a lease.
+        await self._require_current_analysis_permission(
+            request=request, sample=sample,
+        )
         return KariSignatureStyleProposal(
             profile_id=sample.profile_id,
             sample_id=sample.sample_id,

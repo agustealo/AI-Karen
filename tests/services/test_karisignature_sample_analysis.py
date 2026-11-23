@@ -66,7 +66,8 @@ async def test_host_authorized_sample_generates_weak_unapproved_proposal():
     proposal = await KariSignatureSampleAnalyzer(gate).propose(
         request=request(), sample=supplied,
     )
-    gate.authorize_analysis.assert_awaited_once_with(
+    assert gate.authorize_analysis.await_count == 2
+    gate.authorize_analysis.assert_awaited_with(
         request=request(), sample=supplied,
     )
     assert proposal.profile_id == PROFILE
@@ -98,6 +99,55 @@ async def test_revocation_is_checked_on_every_analysis():
     gate.authorize_analysis.return_value = False
     with pytest.raises(PermissionError, match="style_sample_unavailable"):
         await analyzer.propose(request=request(), sample=sample())
+    assert gate.authorize_analysis.await_count == 3
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second", [False, None, 1, "yes"])
+async def test_revocation_after_heuristic_denies_proposal(second):
+    gate = authority()
+    gate.authorize_analysis.side_effect = [True, second]
+    analyzed = []
+
+    class RecordingAnalyzer:
+        def analyze_style(self, passage):
+            analyzed.append(passage)
+            from ai_karen_engine.services.formatting.nlp_style_analyzer import (
+                NLPStyleAnalyzer,
+            )
+            return NLPStyleAnalyzer().analyze_style(passage)
+
+    with pytest.raises(PermissionError, match="style_sample_unavailable"):
+        await KariSignatureSampleAnalyzer(gate, RecordingAnalyzer()).propose(
+            request=request(), sample=sample(),
+        )
+    assert analyzed == [TEXT]
+    assert gate.authorize_analysis.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_second_consent_read_exception_is_redacted_and_denies_proposal():
+    gate = authority()
+    gate.authorize_analysis.side_effect = [
+        True, RuntimeError("private author words and storage credentials"),
+    ]
+    with pytest.raises(PermissionError, match="style_sample_unavailable") as error:
+        await KariSignatureSampleAnalyzer(gate).propose(
+            request=request(), sample=sample(),
+        )
+    assert "private" not in str(error.value)
+    assert gate.authorize_analysis.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_insufficient_evidence_does_not_escape_post_analysis_revocation():
+    gate = authority()
+    gate.authorize_analysis.side_effect = [True, False]
+    with pytest.raises(PermissionError, match="style_sample_unavailable"):
+        await KariSignatureSampleAnalyzer(gate).propose(
+            request=request(), sample=sample("A few words."),
+        )
     assert gate.authorize_analysis.await_count == 2
 
 
