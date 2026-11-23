@@ -723,3 +723,29 @@ preview-only mutations. An account in another tenant is not a substitute.
 The existing real PostgreSQL test independently covers cross-tenant isolation.
 The protected workflow and production default-disabled Card Studio setting are
 unchanged. No source-only test proves that the live Chromium trial ran.
+
+## KCARD-01L local-only Card Studio acceptance
+
+KCARD-01L uses a disposable Compose project, loopback-only ports, production-built API/Web images, Redis, and an isolated disposable database inside the repository-owned local Supabase PostgreSQL authority. It does not create another cloud or network database, and it does not use Vercel protection markers or Codex review.
+
+```bash
+bash scripts/ci/kui-card-studio-local-deployment.sh <40-character-reviewed-SHA>
+set -a
+source "${XDG_STATE_HOME:-$HOME/.local/state}/ai-karen/kcard-local/$REVIEWED_SHA/.env.production"
+set +a
+export RUN_CARD_STUDIO_LOCAL=1
+export RUN_BROWSER=1
+export KAREN_LOCAL_CHAT_ACCEPTANCE=1
+export KAREN_CARD_STUDIO_LOCAL_ACCEPTANCE_REQUIRED=true
+export KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE=true
+export KAREN_CARD_STUDIO_MUTATION_APPROVED=true
+export KAREN_BASE_URL=http://127.0.0.1:8010
+export KAREN_SANITIZED_ACCOUNT=true
+export KAREN_UX_EMAIL='sanitized-owner@example.invalid'
+export KAREN_UX_PASSWORD='<sanitized-owner-secret>'
+export KAREN_UX_ISOLATION_EMAIL='sanitized-isolation@example.invalid'
+export KAREN_UX_ISOLATION_PASSWORD='<sanitized-isolation-secret>'
+bash scripts/ci/kui-local-acceptance.sh "$REVIEWED_SHA"
+```
+
+After acceptance, run `bash scripts/ci/kui-card-studio-local-cleanup.sh "$REVIEWED_SHA"`. Cleanup drops only the disposable `kcard_<12-character-SHA>` database and removes the project containers; it does not alter the canonical Supabase database.

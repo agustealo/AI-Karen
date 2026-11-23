@@ -1,0 +1,49 @@
+# Disposable KCARD-01L local acceptance overlay.
+# Reuses the repository-owned local Supabase/PostgreSQL authority; no cloud DB is created.
+services:
+  redis:
+    ports: !reset []
+
+  api:
+    ports:
+      - "127.0.0.1:${KCARD_API_PORT:-8000}:8000"
+      - "127.0.0.1:${KCARD_METRICS_PORT:-9092}:9091"
+    volumes: !override
+      - logs_data:/app/logs
+      - backup_data:/app/backups
+      - ./models:/app/models:rw
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ENVIRONMENT: "production"
+      DEBUG: "false"
+      AUTH_MODE: "production"
+      AUTH_DEV_MODE: "false"
+      AUTH_ALLOW_DEV_LOGIN: "false"
+      KARI_AUTH_BYPASS: "false"
+      AUTH_ENABLE_SESSION_VALIDATION: "true"
+      KARI_ENABLE_CARD_STUDIO_CRUD: "true"
+      DB_HOST: "host.docker.internal"
+      DB_PORT: "54322"
+      DB_USER: "${KCARD_DB_USER:?KCARD_DB_USER is required}"
+      DB_PASSWORD: "${KCARD_DB_PASSWORD:?KCARD_DB_PASSWORD is required}"
+      DB_NAME: "${KCARD_DB_NAME:?KCARD_DB_NAME is required}"
+      DATABASE_URL: "${KCARD_DATABASE_URL:?KCARD_DATABASE_URL is required}"
+      POSTGRES_URL: "${KCARD_POSTGRES_URL:?KCARD_POSTGRES_URL is required}"
+      AUTH_DATABASE_URL: "${KCARD_AUTH_DATABASE_URL:?KCARD_AUTH_DATABASE_URL is required}"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  web:
+    ports:
+      - "127.0.0.1:${KCARD_WEB_PORT:-8010}:8010"
+
+  prometheus:
+    ports: !reset []
+
+  grafana:
+    ports: !reset []
+
+volumes:
+  kcard_postgres_data:

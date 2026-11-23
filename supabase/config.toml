@@ -2,12 +2,12 @@ project_id = "karen-local"
 
 [api]
 enabled = true
-port = 54321
+port = 54341
 schemas = ["public", "storage", "realtime", "graphql_public"]
 
 [db]
-port = 54322
-shadow_port = 54320
+port = 54342
+shadow_port = 54340
 major_version = 15
 
 [realtime]
