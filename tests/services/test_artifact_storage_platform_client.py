@@ -622,13 +622,13 @@ async def test_bounded_read_rechecks_live_bytes_when_object_drifts_without_sql_w
 async def test_bounded_read_rejects_noncanonical_storage_locator_before_signing(
     monkeypatch,
 ):
-    """Legacy filename keys and malicious aliases are never chosen."""
+    """Any alias that the locked DB row did not attest is rejected."""
     row = SimpleNamespace(
         name="author.txt",
         mime_type="text/plain",
         bytes=len(_BODY),
         sha256=hashlib.sha256(_BODY).hexdigest(),
-        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt",
+        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/attacker.txt",
     )
     store, bucket, _ = bounded_store(monkeypatch, row=row)
     denied = await store.read_owner_active_text_bounded(
@@ -693,7 +693,7 @@ async def test_upload_and_bounded_reader_share_actual_canonical_storage_key():
 
 @pytest.mark.asyncio
 async def test_active_code_reader_uses_same_canonical_storage_key():
-    """No separate filename-key storage model survives in legacy code reads."""
+    """Both exact historical and canonical code keys remain usable."""
     row = SimpleNamespace(
         name="author.txt", mime_type="text/plain", bytes=len(_BODY),
         sha256=hashlib.sha256(_BODY).hexdigest(),
@@ -713,10 +713,55 @@ async def test_active_code_reader_uses_same_canonical_storage_key():
     assert verified.data.text == _BODY.decode("utf-8")
     assert storage.bucket.files[canonical] == _BODY
 
-    # A record pointing at the old display-filename path is not trusted.
+    # Existing code artifacts stored at the exact filename key remain valid.
+    legacy_key = f"{_TENANT}/{_ARTIFACT}/author.txt"
+    storage.bucket.files[legacy_key] = _BODY
     session.row = SimpleNamespace(
         **{**vars(row),
-           "storage_uri": f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt"}
+           "storage_uri": f"supabase://artifacts/{legacy_key}"}
+    )
+    historical = await store.read_owner_active_code(_ARTIFACT, _TENANT, _OWNER)
+    assert historical.success is True and historical.data.text == _BODY.decode()
+    # But a guessed filename or a forged row URI never becomes a path.
+    session.row = SimpleNamespace(
+        **{**vars(row),
+           "storage_uri": f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/attacker.txt"}
     )
     rejected = await store.read_owner_active_code(_ARTIFACT, _TENANT, _OWNER)
     assert rejected.success is False and rejected.data is None
+
+
+@pytest.mark.asyncio
+async def test_bounded_read_accepts_exact_legacy_file_row_path(monkeypatch):
+    """Prior file rows are read only at their recorded, safe object key."""
+    row = SimpleNamespace(
+        name="author.txt",
+        mime_type="text/plain",
+        bytes=len(_BODY),
+        sha256=hashlib.sha256(_BODY).hexdigest(),
+        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt",
+    )
+    def real_legacy_object(request):
+        assert request.url.path.endswith(
+            f"/artifacts/{_TENANT}/{_ARTIFACT}/author.txt"
+        )
+        assert request.headers["range"] == f"bytes=0-{len(_BODY)-1}"
+        return httpx.Response(
+            206, stream=UnconsumedStream(_BODY),
+            headers={
+                "Content-Range": f"bytes 0-{len(_BODY)-1}/{len(_BODY)}",
+                "Content-Length": str(len(_BODY)),
+            },
+        )
+
+    store, bucket, _ = bounded_store(
+        monkeypatch, row=row,
+        transport=httpx.MockTransport(real_legacy_object),
+    )
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER,
+    )
+    assert result.success and result.data.text == _BODY.decode()
+    assert bucket.signatures == [
+        (f"{_TENANT}/{_ARTIFACT}/author.txt", 60),
+    ]
