@@ -171,6 +171,24 @@ class UploadSessionRepository:
                   AND owner_user_id = :owner_user_id
                   AND state = :expected_state
                   AND expires_at > now()
+                  AND (
+                      :next_state <> 'committed'
+                      OR (
+                          received_bytes = expected_bytes
+                          AND EXISTS (
+                              SELECT 1 FROM public.files AS artifact
+                              WHERE artifact.file_id = :artifact_id
+                                AND artifact.tenant_id = :tenant_id
+                                AND artifact.owner_user_id = :owner_user_id
+                                AND artifact.deleted_at IS NULL
+                                AND artifact.bytes = expected_bytes
+                                AND (
+                                    expected_sha256 IS NULL
+                                    OR artifact.sha256 = expected_sha256
+                                )
+                          )
+                      )
+                  )
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
                           received_bytes, artifact_id
