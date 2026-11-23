@@ -21,6 +21,7 @@ const password = process.env.KAREN_UX_PASSWORD;
 const isolationEmail = process.env.KAREN_UX_ISOLATION_EMAIL;
 const isolationPassword = process.env.KAREN_UX_ISOLATION_PASSWORD;
 const localLoopback = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
+const localRequired = process.env.KAREN_CARD_STUDIO_LOCAL_ACCEPTANCE_REQUIRED === "true";
 
 /**
  * The shared protected settings/browser workflow sets this admission bit

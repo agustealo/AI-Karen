@@ -116,6 +116,7 @@ class UploadSessionRepository:
                 FROM public.artifact_upload_sessions
                 WHERE tenant_id = :tenant_id AND owner_user_id = :owner_user_id
                   AND idempotency_key_hash = :idempotency_key_hash
+                  AND expires_at > now()
                 FOR UPDATE
             """), params)
             row = result.first()

@@ -315,3 +315,66 @@ or consumer activation. The two checks are separate observations rather than
 an atomic snapshot of external storage and consent. The current release HOLD
 remains until the approved-host author, bounded Supabase Storage, and delegated-
 use before/after acceptance are observed.
+
+### WS-04B4: earlier tenant-type repair superseded by WS-04B5
+
+The WS-04B4 audit inspected the original artifact schema in migration
+`01_core_persona_runtime.sql`, where `files.tenant_id` was `TEXT`. It
+missed migration `05_schema_security_finalization.sql`, which converts
+`files.tenant_id` to `UUID` before the writing-style migrations. As a
+result, the merged WS-04B4 migration 69 and its issuer/grant SQL used an
+incorrect UUID-to-text comparison for the **effective production schema**.
+The disposable tests had been changed to `TEXT`, masking this regression.
+
+WS-04B5 corrects the earlier conclusion: migration 70 restores the existing
+consent validation function to a UUID-to-UUID comparison using a **new
+forward-only migration**, and the runtime SQL/fixtures now agree with the
+post-migration `UUID` artifact tenant. Neither historical migration nor
+the canonical files table is rewritten. The exact-head production First-Boot
+smoke test, which applies migrations from the beginning, exposed this issue;
+it must pass again before the corrective PR can merge.
+
+This history is retained explicitly to avoid treating the initial migration
+or an artificial test fixture as the live schema contract. Consumer
+ingestion remains OFF and the approved-host acceptance HOLD still applies.
+
+### WS-04B5: document-backed publication, direct SQL grant and source-change fence
+
+The corrected use boundary is based on the **effective** schema after
+migration 05: both `files.tenant_id` and the writing-style tenant scope
+are `UUID`. The WS-04B5 forward migration restores the mismatched
+validator from migration 69 and retains UUID comparisons in all grant and
+source-verification paths. Source validators still reject invalid ownership,
+digest or first-party attestation; no free-form text is cast to UUID.
+
+PostgreSQL owner-only receipt rows are not visible to delegated actors under
+forced RLS, so delegate-side negative receipt queries cannot establish
+authorization. The canonical profile and grant triggers now use a shared
+`SECURITY INVOKER` document consent validator while executing in the
+authenticated owner scope. It requires a current author-attested style-use
+receipt and matching canonical artifact metadata; a document sample's
+`consent_receipt_id` must resolve to that same artifact and author. Direct
+owner SQL grant INSERT and UPDATE cannot sidestep the check or extend a grant
+past the earliest document receipt expiry. Profiles without document sources
+retain their established manually authored style workflow.
+
+A new, restricted `SECURITY DEFINER` trigger on canonical `public.files`
+observes relevant file-identity, ownership, digest, type, storage locator,
+name, size, archive and deletion changes. It revokes any matching immutable
+author receipt via the **existing** document-consent revocation trigger,
+atomically invalidating the published/draft profile and its grants. Restoration
+does not resurrect the one-way consent. A forward-only migration also
+reconciles already-invalid receipts, unattested document sample references,
+and unbounded historical document-use grants. The privileged trigger must be
+installed under a role permitted to bypass forced RLS; it fails closed if the
+database owner lacks that privilege.
+
+The disposable PostgreSQL proof now exercises direct SQL and all file change
+classes against a real RLS-scoped delegate. Existing mocked generic-source
+sample tests no longer pretend to possess independent document receipts.
+This proves SQL metadata and consent lifecycle behavior only. In-place storage
+object replacement **without** changing canonical file metadata remains
+undetectable at this SQL boundary and needs separately verified storage
+integrity, reconciliation, and approved-host acceptance. Consumer document
+ingestion remains **OFF**; no implicit permission or model learning is
+introduced.

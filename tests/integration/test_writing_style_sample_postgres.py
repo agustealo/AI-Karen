@@ -1,5 +1,7 @@
-"""Disposable PostgreSQL proof: sample provenance, consent and revocation.
+"""Disposable PostgreSQL proof: generic sample provenance and revocation.
 
+The mocked source is a generic message. Real document consent is separately
+proven against the canonical file table and receipt in the document test.
 Only runs against the dedicated /karen_writing_style_test database; always
 uses the non-superuser test role for RLS and backend sample mutations.
 """
@@ -73,6 +75,8 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             DROP FUNCTION IF EXISTS public.writing_style_prevent_revision_mutation() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_validate() CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_use_expiry(uuid,uuid,uuid) CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_revoke_consent_on_file_change() CASCADE;
             DROP TABLE IF EXISTS public.files CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.files (
@@ -83,6 +87,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
                 mime_type text NOT NULL,
                 bytes bigint NOT NULL,
                 sha256 text,
+                storage_uri text,
                 deleted_at timestamptz
             );
         """)
@@ -91,6 +96,8 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             "20261120235900_60_writing_style_identity.sql",
             "20261122010001_61_writing_style_sample_evidence.sql",
             "20261122010002_62_writing_style_document_author_consent.sql",
+            "20261123030000_69_writing_style_document_file_tenant_text.sql",
+            "20261123040000_70_writing_style_document_delegated_use_fence.sql",
         ):
             await raw.execute((root / file).read_text(encoding="utf-8"))
         await raw.execute(
@@ -140,13 +147,13 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         data = {
             "tenant_id": str(tenant), "actor_id": str(owner),
             "profile_id": str(profile), "sample_id": str(sample),
-            "source_type": "document", "source_id": str(source),
+            "source_type": "message", "source_id": str(source),
             "correlation_id": "register-sample-test",
         }
         authority = type("Authority", (), {"verify_analysis": AsyncMock()})()
         authority.verify_analysis.return_value = VerifiedWritingStyleSource(
             tenant_id=str(tenant), profile_id=str(profile), owner_actor_id=str(owner),
-            source_id=str(source), source_type="document", author_actor_id=str(author),
+            source_id=str(source), source_type="message", author_actor_id=str(author),
             consent_receipt_id=str(receipt), analysis_allowed=True,
             style_use_allowed=False,
             consent_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -231,7 +238,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         authority.verify_analysis.return_value = VerifiedWritingStyleSource(
             tenant_id=str(tenant), profile_id=str(live_profile),
             owner_actor_id=str(owner), source_id=str(live_source),
-            source_type="document", author_actor_id=str(author),
+            source_type="message", author_actor_id=str(author),
             consent_receipt_id=str(uuid.uuid4()), analysis_allowed=True,
             style_use_allowed=True,
             consent_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -239,7 +246,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         await provenance.register(
             tenant_id=str(tenant), actor_id=str(owner),
             profile_id=str(live_profile), sample_id=str(live_sample),
-            source_type="document", source_id=str(live_source),
+            source_type="message", source_id=str(live_source),
             correlation_id="consented-sample",
         )
         # WS-02C: evidence record alone is insufficient. Current author/receipt
@@ -250,7 +257,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         current_sample = KariSignatureSample(
             tenant_id=str(tenant), actor_id=str(owner),
             profile_id=str(live_profile), sample_id=str(live_sample),
-            source_ref=f"document:{live_source}", content=sample_body,
+            source_ref=f"message:{live_source}", content=sample_body,
             digest=KariSignatureSample.content_digest(sample_body),
         )
         source_reader = type(
@@ -383,7 +390,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
                         "source_id,source_author_id,consent_receipt_id,"
                         "analysis_allowed,style_use_allowed,consent_expires_at) "
                         "VALUES (CAST(:tenant AS uuid),CAST(:profile AS uuid),"
-                        "CAST(:owner AS uuid),CAST(:sample AS uuid),'document',"
+                        "CAST(:owner AS uuid),CAST(:sample AS uuid),'message',"
                         "CAST(:source AS uuid),CAST(:author AS uuid),"
                         "CAST(:receipt AS uuid),true,true,"
                         "clock_timestamp()+interval '10 seconds')"
@@ -546,7 +553,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         authority.verify_analysis.return_value = VerifiedWritingStyleSource(
             tenant_id=str(tenant), profile_id=str(race_sample_profile),
             owner_actor_id=str(owner), source_id=str(race_source_id),
-            source_type="document", author_actor_id=str(author),
+            source_type="message", author_actor_id=str(author),
             consent_receipt_id=str(uuid.uuid4()), analysis_allowed=True,
             style_use_allowed=True,
             consent_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -554,7 +561,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         await provenance.register(
             tenant_id=str(tenant), actor_id=str(owner),
             profile_id=str(race_sample_profile), sample_id=str(race_sample_id),
-            source_type="document", source_id=str(race_source_id),
+            source_type="message", source_id=str(race_source_id),
             correlation_id="sample-race-register",
         )
         await identities.publish(
