@@ -21,7 +21,11 @@ from datetime import datetime
 
 from .plugin_registry import get_registry
 from .canonical_validator import get_validator
-from .manifest_enforcer import get_enforcer, ManifestValidationSeverity
+from .manifest_enforcer import (
+    get_enforcer,
+    GUIEntryModel,
+    ManifestValidationSeverity,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -173,7 +177,7 @@ class UIInstallerService:
                         # pass the existing GUI authority on every restart.
                         # Keep the older entry_file-only installation contract
                         # until its migration has separate test coverage.
-                        if "entry" in manifest or "gui_manifest_version" in manifest:
+                        if "gui_manifest_version" in manifest:
                             issues = self.manifest_enforcer.validate_gui_manifest(
                                 manifest_path
                             )
@@ -186,6 +190,17 @@ class UIInstallerService:
                                     "Skipping invalid GUI manifest for %s: %s",
                                     plugin_id,
                                     ", ".join(issue.field for issue in errors),
+                                )
+                                continue
+                        elif "entry" in manifest:
+                            # Maintain the historic entry-file-only contract
+                            # without trusting malformed entry declarations.
+                            try:
+                                GUIEntryModel.model_validate(manifest["entry"])
+                            except (ValueError, TypeError):
+                                logger.warning(
+                                    "Skipping malformed legacy GUI entry for %s",
+                                    plugin_id,
                                 )
                                 continue
 

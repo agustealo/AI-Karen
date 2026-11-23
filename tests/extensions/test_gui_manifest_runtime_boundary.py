@@ -150,6 +150,45 @@ def test_invalid_gui_entry_is_not_rediscovered_as_installed_ui(tmp_path: Path) -
     assert "example" not in service.installations
 
 
+def test_unversioned_gui_entry_keeps_restart_compatibility(tmp_path: Path) -> None:
+    root = tmp_path / "installed"
+    package = root / "example"
+    package.mkdir(parents=True)
+    (package / "manifest.json").write_text(
+        json.dumps({"entry": {"entry_file": "ExamplePage.tsx"}}),
+        encoding="utf-8",
+    )
+    (package / "ExamplePage.tsx").write_text(
+        "export default null", encoding="utf-8"
+    )
+
+    service = UIInstallerService(
+        plugins_repo_root=str(root),
+        backup_dir=str(tmp_path / "backups"),
+    )
+    assert "example" in service.installations
+    assert not service.installations["example"].checksum
+
+
+def test_unversioned_gui_entry_rejects_invalid_types(tmp_path: Path) -> None:
+    root = tmp_path / "installed"
+    package = root / "example"
+    package.mkdir(parents=True)
+    (package / "manifest.json").write_text(
+        json.dumps({"entry": {"entry_file": "ExamplePage.tsx", "default": "yes"}}),
+        encoding="utf-8",
+    )
+    (package / "ExamplePage.tsx").write_text(
+        "export default null", encoding="utf-8"
+    )
+
+    service = UIInstallerService(
+        plugins_repo_root=str(root),
+        backup_dir=str(tmp_path / "backups"),
+    )
+    assert "example" not in service.installations
+
+
 def test_first_party_gui_and_runtime_manifests_keep_distinct_ownership() -> None:
     root = (
         Path(__file__).resolve().parents[2]

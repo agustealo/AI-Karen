@@ -86,13 +86,15 @@ class RootManifestModel(BaseModel):
 class GUIEntryModel(BaseModel):
     """Typed GUI entry metadata; never a Python execution declaration."""
 
-    id: StrictStr
+    # Older installed UI packages did not declare an entry ID.
+    # Versioned GUI manifests still require it via manifest-level validation.
+    id: Optional[StrictStr] = None
     default: StrictBool = False
     entry_file: StrictStr
 
     @validator("id")
     def validate_id(cls, value):
-        if not value.strip():
+        if value is not None and not value.strip():
             raise ValueError("GUI entry id must be non-empty")
         return value
 
