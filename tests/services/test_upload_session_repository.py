@@ -176,3 +176,18 @@ async def test_rejects_non_uuid_tenant_before_database_access():
             idempotency_key_hash=KEY, manifest_sha256=DIGEST,
             expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
         )
+
+
+@pytest.mark.asyncio
+async def test_create_or_get_requires_unexpired_existing_session():
+    db = FakeSession(record())
+    repo = UploadSessionRepository(lambda: db)
+    await repo.create_or_get(
+        tenant_id=TENANT, owner_user_id=OWNER,
+        destination_id="explorer", recipe="store_only",
+        idempotency_key_hash=KEY, manifest_sha256=DIGEST,
+        expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
+    )
+    select_sql = db.statements[1][0]
+    assert "expires_at > now()" in select_sql
+    assert "FOR UPDATE" in select_sql
