@@ -7,6 +7,7 @@ This does NOT verify authorship outside authenticated first-party attestation.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import uuid
@@ -28,7 +29,12 @@ from ai_karen_engine.auth import auth_middleware, session as auth_session
 from ai_karen_engine.core.runtime.prompt.karisignature_contract import (
     KariSignatureRequest,
     KariSignatureRevision,
+    KariSignatureResolver,
 )
+from ai_karen_engine.services.database.repositories.artifact_store import (
+    VerifiedArtifactText,
+)
+from ai_karen_engine.services.database.repositories.base import RepositoryResult
 from ai_karen_engine.core.runtime.document_consent_approval import (
     DocumentConsentApprovalScope,
 )
@@ -66,7 +72,8 @@ async def test_first_party_author_consent_postgres(
     tenant, foreign_tenant = uuid.uuid4(), uuid.uuid4()
     owner, other_actor = uuid.uuid4(), uuid.uuid4()
     profile, artifact, receipt = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
-    digest = "a" * 64
+    original_bytes = "authornote"
+    digest = hashlib.sha256(original_bytes.encode("utf-8")).hexdigest()
     role = "style_consent_test_" + uuid.uuid4().hex[:12]
     root = Path(__file__).resolve().parents[2] / "supabase/migrations"
 
@@ -923,7 +930,8 @@ async def test_first_party_author_consent_postgres(
                 "(tenant_id,profile_id,revision_id,revision_number,"
                 "approved_expression,content_digest,approved_by) "
                 "VALUES ($1,$2,$3,1,'{\"tone\":\"direct\"}'::jsonb,$4,$5)",
-                tenant, case_profile, case_revision, "b" * 64, owner,
+                tenant, case_profile, case_revision,
+                KariSignatureRevision.digest({"tone": "direct"}), owner,
             )
             await scoped(
                 owner, tenant,
@@ -975,8 +983,41 @@ async def test_first_party_author_consent_postgres(
             profile_id=str(direct_profile), purpose="draft_email",
             correlation_id="ws04b5-direct-sql-valid",
         )
+        class MutableVerifiedStorage:
+            """Disposable transport proof, never a production Storage fallback."""
+
+            def __init__(self):
+                self.content = original_bytes
+                self.calls = []
+
+            async def read_owner_active_text_bounded(
+                self, artifact_id: str, tenant_id: str, user_id: str, *,
+                max_bytes: int = 65536,
+            ):
+                self.calls.append((artifact_id, tenant_id, user_id, max_bytes))
+                # No content is inferred from the delegate's identity. The
+                # current attested source owner comes from private SQL only.
+                if tenant_id != str(tenant) or user_id != str(owner):
+                    return RepositoryResult(success=False, error="denied")
+                return RepositoryResult(
+                    success=True,
+                    data=VerifiedArtifactText(
+                        artifact_id=artifact_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        filename="document.txt",
+                        mime_type="text/plain",
+                        sha256=hashlib.sha256(
+                            self.content.encode("utf-8")
+                        ).hexdigest(),
+                        text=self.content,
+                    ),
+                )
+
+        storage = MutableVerifiedStorage()
         direct_repo = WritingStyleProfileRepository(
             client_factory=TrustedTestClient,
+            artifact_store=storage,
         )
         active_revision = await direct_repo.read_current_published(
             request=delegated_req,
@@ -985,6 +1026,85 @@ async def test_first_party_author_consent_postgres(
         assert await direct_repo.authorize_use(
             request=delegated_req, revision=active_revision,
         ) is True
+        assert storage.calls == [
+            (str(direct_file), str(tenant), str(owner), 65536),
+        ]
+        # A SQL-authorized delegate must never obtain the author's bytes:
+        # KariSignatureResolver only releases the approved style expression.
+        resolution = await KariSignatureResolver(direct_repo).resolve(
+            delegated_req
+        )
+        assert resolution.presentation == {"tone": "direct"}
+        assert not hasattr(resolution, "text")
+        assert len(storage.calls) == 2
+
+        # Changed object bytes with UNCHANGED PostgreSQL file metadata and
+        # valid grant/receipt must deny every delegated use.
+        storage.content = "authorN0te"
+        assert len(storage.content) == len(original_bytes)
+        assert await direct_repo.read_current_published(
+            request=delegated_req
+        ) is not None  # SQL metadata alone cannot detect this.
+        assert await direct_repo.authorize_use(
+            request=delegated_req, revision=active_revision,
+        ) is False
+        with pytest.raises(PermissionError, match="style_unavailable"):
+            await KariSignatureResolver(direct_repo).resolve(delegated_req)
+
+        # A transient Storage or signer outage also fails closed without
+        # assuming author revocation or mutating an immutable receipt.
+        storage.content = original_bytes
+        assert await direct_repo.authorize_use(
+            request=delegated_req, revision=active_revision,
+        ) is True
+        no_storage_repo = WritingStyleProfileRepository(
+            client_factory=TrustedTestClient
+        )
+        assert not await no_storage_repo.authorize_use(
+            request=delegated_req, revision=active_revision,
+        )
+
+        # The delegate cannot read author-private ledger rows under FORCE RLS,
+        # even though the tightly restricted function can prove source scope.
+        async with raw.transaction():
+            await raw.execute(f'SET LOCAL ROLE "{role}"')
+            await raw.execute(
+                "SELECT set_config('app.current_tenant_id', $1, true)",
+                str(tenant),
+            )
+            await raw.execute(
+                "SELECT set_config('app.current_user_id', $1, true)",
+                str(other_actor),
+            )
+            await raw.execute(
+                "SELECT set_config('app.current_style_purpose', $1, true)",
+                "draft_email",
+            )
+            assert await raw.fetchval(
+                "SELECT count(*) FROM public.writing_style_document_consents "
+                "WHERE tenant_id=$1 AND profile_id=$2",
+                tenant, direct_profile,
+            ) == 0
+            scopes = await raw.fetch(
+                "SELECT * FROM kari_internal.writing_style_authorized_document_sources("
+                "$1,$2,$3,$4,$5,$6,$7)",
+                tenant, direct_profile, other_actor, "draft_email",
+                direct_revision, 1,
+                KariSignatureRevision.digest({"tone": "direct"}),
+            )
+            assert len(scopes) == 1
+            assert scopes[0]["artifact_id"] == direct_file
+            assert scopes[0]["owner_actor_id"] == owner
+            assert scopes[0]["source_sha256"] == digest
+            with pytest.raises(asyncpg.PostgresError):
+                await raw.fetch(
+                    "SELECT * FROM kari_internal.writing_style_authorized_document_sources("
+                    "$1,$2,$3,$4,$5,$6,$7)",
+                    tenant, direct_profile, owner, "draft_email",
+                    direct_revision, 1,
+                    KariSignatureRevision.digest({"tone": "direct"}),
+                )
+
 
         # A no-op metadata write must not destroy a valid author receipt.
         await raw.execute(
