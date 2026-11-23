@@ -241,6 +241,8 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
     if not dsn:
         pytest.fail("Missing disposable PostgreSQL connection URL")
     parsed = _disposable_database_url(dsn)
+    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
+        pytest.fail("Real Storage owner proof requires local disposable PostgreSQL")
 
     def required_uuid(name: str) -> str:
         raw = os.getenv(name, "")
@@ -313,6 +315,16 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
         platform.initialize()
         if platform.storage is None or platform.url != project_url:
             pytest.fail("Canonical Supabase Storage client is unavailable")
+        try:
+            bucket = platform.storage.get_bucket("artifacts")
+        except Exception:
+            pytest.fail("Private disposable Storage bucket cannot be attested")
+        bucket_public = (
+            bucket.get("public") if isinstance(bucket, dict)
+            else getattr(bucket, "public", None)
+        )
+        if bucket_public is not False:
+            pytest.fail("Live Storage handoff requires a private artifacts bucket")
         store = SupabaseArtifactStore(sessions, platform)
 
         foreign = await store.read_owner_active_code(artifact, tenant, foreign_owner)
