@@ -132,3 +132,23 @@ async def test_illegal_or_unproven_commit_is_denied():
             tenant_id="tenant-a", owner_user_id=OWNER, session_id=SESSION,
             expected_state="committing", next_state="committed",
         )
+
+
+@pytest.mark.asyncio
+async def test_committed_transition_requires_active_owner_matched_artifact():
+    db = FakeSession({**record(), "state": "committing"})
+    repo = UploadSessionRepository(lambda: db)
+    artifact_id = str(uuid4())
+    await repo.transition(
+        tenant_id="tenant-a", owner_user_id=OWNER, session_id=SESSION,
+        expected_state="committing", next_state="committed",
+        artifact_id=artifact_id,
+    )
+    statement = db.statements[0][0]
+    assert "received_bytes = expected_bytes" in statement
+    assert "FROM public.files AS artifact" in statement
+    assert "artifact.tenant_id = :tenant_id" in statement
+    assert "artifact.owner_user_id = :owner_user_id" in statement
+    assert "artifact.deleted_at IS NULL" in statement
+    assert "artifact.bytes = expected_bytes" in statement
+    assert "artifact.sha256 = expected_sha256" in statement
