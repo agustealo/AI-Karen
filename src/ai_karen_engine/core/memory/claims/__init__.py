@@ -235,6 +235,11 @@ class MemoryClaimStore:
         snapshot_at = at if at is not None else datetime.now(UTC)
         claims: list[MemoryClaim] = []
         for _, claim in self._verified_items():
+            # An undated lookup means current-state retrieval, not an explicit
+            # historical valid-time query. Keep the shared UTC snapshot for
+            # every remaining claim without reviving superseded history.
+            if at is None and claim.status is ClaimStatus.SUPERSEDED:
+                continue
             if claim.is_valid(snapshot_at):
                 claims.append(claim)
         return claims
