@@ -153,6 +153,8 @@ class UploadSessionRepository:
             raise ValueError("Illegal upload state transition")
         if next_state == "committed" and not artifact_id:
             raise ValueError("Committed upload requires artifact_id")
+        if next_state != "committed" and artifact_id is not None:
+            raise ValueError("Artifact binding is allowed only at commit")
         params = {
             **identity,
             "session_id": session_uuid,
