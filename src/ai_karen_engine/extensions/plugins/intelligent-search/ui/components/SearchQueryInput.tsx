@@ -6,13 +6,14 @@ interface SearchQueryInputProps {
   onQueryChange: (query: string) => void;
   onSubmit: () => void;
   disabled?: boolean;
+  allowEmptyQuery?: boolean;
 }
 
-export function SearchQueryInput({ query, onQueryChange, onSubmit, disabled }: SearchQueryInputProps) {
+export function SearchQueryInput({ query, onQueryChange, onSubmit, disabled, allowEmptyQuery = false }: SearchQueryInputProps) {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      onSubmit();
+      if (!disabled && (query.trim() || allowEmptyQuery)) onSubmit();
     }
   };
 
@@ -22,9 +23,10 @@ export function SearchQueryInput({ query, onQueryChange, onSubmit, disabled }: S
         <Sparkles className="h-3.5 w-3.5 text-primary" />
         Live query
       </div>
-      <label className="text-sm font-medium text-foreground">Query</label>
+      <label htmlFor="intelligent-search-query" className="text-sm font-medium text-foreground">Query</label>
       <div className="relative">
         <input
+          id="intelligent-search-query"
           type="text"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
@@ -37,7 +39,7 @@ export function SearchQueryInput({ query, onQueryChange, onSubmit, disabled }: S
           <button
             type="button"
             onClick={onSubmit}
-            disabled={disabled || !query.trim()}
+            disabled={disabled || (!query.trim() && !allowEmptyQuery)}
             className="inline-flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-[0_10px_24px_rgba(0,0,0,0.18)] transition-all hover:bg-primary/90 disabled:opacity-50"
           >
             <Radar className="h-3.5 w-3.5" />

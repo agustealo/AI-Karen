@@ -3,6 +3,7 @@ import { ArrowUpRight, Database, Radar, Sparkles } from 'lucide-react';
 import { IntelligentSearchState } from '../types';
 import { ModeConfigItem } from '../configs/modeConfig';
 import { LoadingState, EmptyState, ErrorState } from './UIStates';
+import { EvidenceGraphPanel } from './EvidenceGraphPanel';
 import { ResultsPanel, SourcesPanel, ExtractedDataPanel, InsightsPanel, DiagnosticsPanel } from './Panels';
 
 interface ResultsWorkspaceProps {
@@ -13,31 +14,52 @@ interface ResultsWorkspaceProps {
 export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<string>(modeConfig.resultTabs[0] || 'results');
   const [activeSourceIndex, setActiveSourceIndex] = useState(0);
+  const [detailsWidth, setDetailsWidth] = useState(280);
+  const [showDetails, setShowDetails] = useState(false);
 
-  const validTabs = modeConfig.resultTabs;
-  const currentTab = validTabs.includes(activeTab) ? activeTab : validTabs[0];
   const response = state.response;
+  const validTabs = React.useMemo(
+    () => response?.evidenceGraph && !modeConfig.resultTabs.includes('graph')
+      ? [modeConfig.resultTabs[0], 'graph', ...modeConfig.resultTabs.slice(1)]
+      : modeConfig.resultTabs,
+    [modeConfig.resultTabs, response?.evidenceGraph],
+  );
+  const currentTab = validTabs.includes(activeTab) ? activeTab : validTabs[0];
   const sources = response?.sources ?? [];
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
-  const providerLabel = response?.provider || response?.metadata?.provider || 'Unknown';
-  const elapsed = response?.execution_time_ms ? `${response.execution_time_ms}ms` : 'Not reported';
+  const distinctHosts = new Set(sources.map((source) => {
+    try { return new URL(source.url).hostname.replace(/^www\./, '').toLowerCase(); }
+    catch { return ''; }
+  }).filter(Boolean)).size;
+  const actualMode = String(response?.mode || 'unknown');
+  const searchProviders = Array.isArray(response?.metadata?.search_providers)
+    ? response.metadata.search_providers.filter((value): value is string => typeof value === 'string')
+    : [];
+  const correlationId = typeof response?.metadata?.correlation_id === 'string'
+    ? response.metadata.correlation_id : null;
+  const providerLabel = String(
+    response?.provider || response?.metadata?.provider || 'Unknown',
+  );
+  const elapsed = response?.execution_time_ms ? `${response.execution_time_ms}ms` : 'live';
   const featuredItem = response?.results?.[0] ?? response?.sources?.[0];
   const featuredPreview =
     featuredItem?.content ||
     featuredItem?.snippet ||
-    'No retrieved page preview is available.';
+    'No retrieved preview available.';
   const featuredHref = featuredItem?.url || '';
-  const statusLabel = !sourceCount && !resultCount
-    ? response?.diagnostics?.degraded ? 'Search failed: no evidence' : 'No sources retrieved'
-    : response?.diagnostics?.degraded ? 'Partial evidence' : 'Sources retrieved';
   const hasEvidence = sourceCount > 0 || resultCount > 0;
-  const capabilityTags = [
-    `Search provider ${providerLabel}`,
-    `${sourceCount} sources`,
-    `${resultCount} cards`,
-    statusLabel,
-  ];
+  const weatherData = response?.mode === 'weather' && response.extractedData &&
+    typeof response.extractedData === 'object' ? response.extractedData : null;
+  const measuredTemperature = weatherData?.temperature_f;
+  const hasWeatherObservation = typeof measuredTemperature === 'number' &&
+    Number.isFinite(measuredTemperature) &&
+    typeof weatherData?.observed_at === 'string' &&
+    typeof weatherData?.location === 'string' &&
+    (response?.sources?.length ?? 0) > 0;
+  const failedExecution = response?.metadata?.degraded === true && response?.status === 'error';
+  const searchFailure = response?.status === 'error' || response?.can_execute === false && response?.reason;
+  const failureMessage = typeof response?.reason === 'string' ? response.reason : 'The requested live information is unavailable. Please retry or refine your search.';
 
   useEffect(() => {
     if (activeSourceIndex > sources.length - 1) {
@@ -58,26 +80,19 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   if (state.isLoading) return <LoadingState state={state} />;
   if (state.error) return <ErrorState error={state.error} />;
   if (!response) return <EmptyState />;
-  if (!hasEvidence) {
-    return (
-      <div role="status" className="flex h-full flex-col justify-center gap-3 p-8 text-foreground">
-        <h2 className="text-xl font-semibold">No search evidence retrieved</h2>
-        <p className="max-w-2xl text-sm text-muted-foreground">
-          {response.summary || 'The search completed without any usable source links or pages.'}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Search provider: {providerLabel}. No result or citation has been verified.
-        </p>
-        {response.diagnostics?.warnings?.length ? (
-          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-            {response.diagnostics.warnings.map((warning, index) => (
-              <li key={index}>{warning}</li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
-    );
-  }
+  if (response.status === 'needs_location') return (
+    <section role="status" aria-label="Weather location required"
+      className="rounded-2xl border border-border/60 bg-card p-8 space-y-3">
+      <h2 className="text-lg font-semibold">Which location should I check?</h2>
+      <p className="text-sm text-muted-foreground">
+        Enter a city and state or country in the search field, such as
+        {' "weather in Detroit, MI"'}, then search again.
+        No weather observation has been retrieved yet.
+      </p>
+    </section>
+  );
+  if (searchFailure || failedExecution) return <div role="alert" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">Search could not be completed</h2><p className="text-muted-foreground">{failureMessage}</p></div>;
+  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">No sources found</h2><p className="text-muted-foreground">The search did not return usable evidence. Try a broader query or a different search mode.</p></div>;
 
   const renderTabContent = () => {
     switch (currentTab) {
@@ -85,6 +100,8 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         return <ResultsPanel response={response} />;
       case 'sources':
         return <SourcesPanel response={response} />;
+      case 'graph':
+        return <EvidenceGraphPanel graph={response.evidenceGraph} />;
       case 'extractedData':
         return <ExtractedDataPanel response={response} />;
       case 'insights':
@@ -97,7 +114,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-tl-3xl border-l border-t border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.12),transparent_30%),radial-gradient(circle_at_top_right,rgba(16,185,129,0.10),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_18%),hsl(var(--background))] shadow-[0_-1px_0_rgba(255,255,255,0.03),0_24px_70px_rgba(0,0,0,0.35)]">
+    <div className="relative flex min-h-[70vh] flex-1 flex-col overflow-hidden rounded-tl-3xl border-l border-t border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.12),transparent_30%),radial-gradient(circle_at_top_right,rgba(16,185,129,0.10),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_18%),hsl(var(--background))] shadow-[0_-1px_0_rgba(255,255,255,0.03),0_24px_70px_rgba(0,0,0,0.35)]">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),transparent_22%,transparent_78%,rgba(255,255,255,0.03))]" />
 
       <div className="relative border-b border-border/60 bg-background/70 px-5 py-5 backdrop-blur-xl lg:px-6">
@@ -105,38 +122,58 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
           <div className="space-y-3">
             <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-[11px] uppercase tracking-[0.32em] text-muted-foreground shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Search evidence workspace
+              Search results
             </div>
             <div className="space-y-2">
               <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
-                {modeConfig.label}
+                {response.mode && response.mode !== 'auto' ? String(response.mode).replace(/_/g, ' ') : modeConfig.label}
               </h2>
               <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-                {response.summary || modeConfig.description}
+                {response.summary || 'Retrieved evidence is available below.'}
+                <span className="mt-1 block text-xs">Source summaries and excerpts are not verified AI-generated answers.</span>
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <StatBadge label="Sources" value={sourceCount} />
-            <StatBadge label="Cards" value={resultCount} />
-            <StatBadge label="Latency" value={elapsed} />
-            <StatBadge label="Mode" value={state.mode.replace(/_/g, ' ')} />
+            <StatBadge label="Distinct websites" value={distinctHosts} />
+
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <SignalTile label="Query" value={response.query || 'Query unavailable'} icon={<Radar className="h-4 w-4" />} />
+        <details className="mt-5 rounded-xl border border-border/50 bg-card/60 p-3"><summary className="cursor-pointer text-sm font-medium text-muted-foreground">Technical search details</summary><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <SignalTile label="Query" value={response.query || 'live request'} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="Provider" value={providerLabel} icon={<Database className="h-4 w-4" />} />
+          <SignalTile label="Actual mode" value={actualMode} icon={<Radar className="h-4 w-4" />} />
+          <SignalTile label="Providers used" value={searchProviders.length ? searchProviders.join(", ") : "Not reported"} icon={<Database className="h-4 w-4" />} />
+          <SignalTile label="Correlation ID" value={correlationId || "Not reported"} icon={<Radar className="h-4 w-4" />} />
           <SignalTile label="URLs" value={response.diagnostics?.urlsFound ?? sourceCount} icon={<ArrowUpRight className="h-4 w-4" />} />
-          <SignalTile label="Chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
-        </div>
+          <SignalTile label="Retrieved chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
+        </div></details>
       </div>
 
-      <div className="relative grid min-h-0 flex-1 gap-6 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-6 lg:py-6">
-        <section className="flex min-h-0 flex-col gap-4">
+      {hasWeatherObservation && weatherData && (
+        <section aria-label="Weather observation" className="relative mx-4 mt-4 rounded-2xl border border-border/60 bg-card p-5 lg:mx-6">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Live provider observation</p>
+          <h3 className="mt-2 text-lg font-semibold text-foreground">{String(weatherData.location)}</h3>
+          <p className="mt-2 text-3xl font-semibold text-foreground">{String(measuredTemperature)} °F</p>
+          <p className="mt-2 text-sm text-muted-foreground">Provider timestamp: {String(weatherData.observed_at)} {typeof weatherData.timezone === 'string' ? weatherData.timezone : ''}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Structured weather data, not an AI-generated forecast explanation.</p>
+          {response.sources?.[0]?.url?.startsWith('https://') && (
+            <a href={response.sources[0].url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block text-sm text-primary underline">
+              View weather data provider
+            </a>
+          )}
+        </section>
+      )}
+
+      <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
+        style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>
+        <section className="flex min-h-[55vh] min-w-0 flex-col gap-4">
           <div className="rounded-3xl border border-border/60 bg-card/70 p-2 shadow-sm backdrop-blur">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Explore sources</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
+            <nav aria-label="Search result sections" className="flex flex-wrap gap-2">
               {validTabs.map((tabId) => {
                 const label = tabId.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase());
                 const isActive = currentTab === tabId;
@@ -145,7 +182,10 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
                   <button
                     key={tabId}
                     onClick={() => setActiveTab(tabId)}
-                    className={`rounded-2xl px-4 py-2.5 text-sm font-medium transition-all ${
+                    type="button"
+                    aria-current={isActive ? "page" : undefined}
+                    aria-label={`Show ${label} search information`}
+                    className={`min-h-11 rounded-2xl px-4 py-2.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                       isActive
                         ? 'bg-primary text-primary-foreground shadow-[0_10px_24px_rgba(0,0,0,0.2)]'
                         : 'text-muted-foreground hover:bg-muted/70 hover:text-foreground'
@@ -155,17 +195,17 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
                   </button>
                 );
               })}
-            </div>
+            </nav>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-3xl border border-border/60 bg-card/80 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-6">
+          <div className="min-h-[50vh] min-w-0 flex-1 overflow-y-auto rounded-3xl border border-border/60 bg-card/80 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-6">
             {renderTabContent()}
           </div>
         </section>
 
-        <aside className="min-h-0 overflow-y-auto rounded-3xl border border-border/60 bg-card/75 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-5">
+        {showDetails && <aside className="min-h-[50vh] min-w-0 overflow-y-auto rounded-3xl border border-border/60 bg-card/75 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-5">
           <div className="space-y-4">
-
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">Details width<input aria-label="Details width" type="range" min={240} max={600} step={20} value={detailsWidth} onChange={event => setDetailsWidth(Number(event.target.value))} className="min-w-0 flex-1" /></label>
             <div className="rounded-3xl border border-border/60 bg-background/70 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted-foreground">
                 Featured preview
@@ -201,23 +241,9 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
               </div>
             </div>
 
-            <div className="rounded-3xl border border-border/60 bg-background/70 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted-foreground">
-                Capability strip
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {capabilityTags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs text-muted-foreground"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            </div>
+
           </div>
-        </aside>
+        </aside>}
       </div>
     </div>
   );

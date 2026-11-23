@@ -16,7 +16,7 @@ export function SearchHeader({ modeConfig, state }: SearchHeaderProps) {
     : state.error
       ? 'Search failed'
       : state.response
-        ? 'Live response ready'
+        ? state.isResultsStale ? 'Previous results · update needed' : 'Live response ready'
         : 'Awaiting query';
 
   return (

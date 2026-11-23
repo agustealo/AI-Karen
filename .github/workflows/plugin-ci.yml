@@ -259,6 +259,7 @@ jobs:
             tests/architecture/test_grounded_article_reference_boundary.py \
             tests/architecture/test_extension_lifecycle_authority.py \
             tests/architecture/test_extension_route_authority.py \
+            tests/architecture/test_shared_file_explorer_ui_boundary.py \
             tests/architecture/test_plugin_lifecycle_ingress_fence.py \
             tests/architecture/test_plugin_runtime_authority.py \
             tests/architecture/test_plugin_store_api_shape_guards.py \

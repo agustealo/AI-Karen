@@ -34,7 +34,10 @@ def test_canonical_manifest_registers_materializable_shared_ui():
     assert manifest["capabilities"]["provides_ui"] is True
     assert manifest["ui"]["source_path"] == "ui"
     assert manifest["ui"]["entry_file"] == "FileExplorerPage.tsx"
-    assert manifest["entry"]["entry_file"] == manifest["ui"]["entry_file"]
+    gui = json.loads((PLUGIN / "manifest.json").read_text())
+    assert "entry" not in manifest
+    assert gui["id"] == gui["plugin_id"] == manifest["name"]
+    assert gui["entry"]["entry_file"] == manifest["ui"]["entry_file"]
     assert (PLUGIN / "ui" / manifest["ui"]["entry_file"]).is_file()
     assert manifest["ui"]["menu"][0]["zone"] == "sidebar.plugins"
 
