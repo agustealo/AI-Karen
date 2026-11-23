@@ -682,3 +682,292 @@ async def test_bounded_signed_range_holds_real_postgres_archive_lock(monkeypatch
                 )
                 await admin.commit()
         await engine.dispose()
+
+
+
+@pytest.mark.skipif(
+    os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+    or os.getenv("KAREN_TEST_CODE_ARTIFACT_POSTGRES") != "1",
+    reason="Requires existing disposable PostgreSQL artifact acceptance database",
+)
+async def test_real_postgres_explorer_selection_to_content_revision_and_owner_races() -> None:
+    """Prove live DB selection is never a transferable content-read permission.
+
+    Uses real migrated PostgreSQL rows, ArtifactStore, File Explorer adapter,
+    both runtime hosts and the canonical lexical engine. The kernel admission
+    shim exercises those hosts' contracts; it is not a replacement for the
+    separate RBAC/kernel tests. Storage bytes are controlled test fixtures.
+    """
+    import asyncio
+    from importlib import import_module
+
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.extensions.content_intelligence_sources import ContentSourceHost
+    from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+    from ai_karen_engine.extensions.file_explorer_inventory import FileExplorerInventoryHost
+
+    dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
+    required = (
+        os.getenv("KAREN_TEST_ARTIFACT_TENANT_ID", ""),
+        os.getenv("KAREN_TEST_ARTIFACT_OWNER_ID", ""),
+        os.getenv("KAREN_TEST_ARTIFACT_OTHER_USER_ID", ""),
+    )
+    if not dsn or not all(required):
+        pytest.fail("Disposable PostgreSQL URL and seeded principals are required")
+    parsed = _disposable_database_url(dsn)
+    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
+        pytest.fail("Refusing integration proof outside local disposable PostgreSQL")
+    try:
+        tenant, owner, other_owner = (str(UUID(value)) for value in required)
+    except (ValueError, TypeError, AttributeError):
+        pytest.fail("Canonical seeded tenant and user UUIDs are required")
+    if (tenant, owner, other_owner) != required or len(set(required)) != 3:
+        pytest.fail("Integration proof requires distinct canonical principals")
+
+    engine = create_async_engine(parsed, pool_pre_ping=True, pool_size=3)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    artifact = str(uuid4())
+    filename = "kplug_revision_proof.txt"
+    key = f"{tenant}/{artifact}/{filename}"
+    versions = (
+        b"Original bounded source proof.\n",
+        b"Updated bounded source revision.\n",
+        b"Concurrent committed source change.\n",
+    )
+    digests = tuple(hashlib.sha256(data).hexdigest() for data in versions)
+    bucket = MagicMock()
+    bucket.download.return_value = versions[0]
+    platform = SimpleNamespace(
+        storage=SimpleNamespace(
+            from_=lambda name: bucket if name == "artifacts" else None
+        ),
+    )
+    store = SupabaseArtifactStore(sessions, platform)
+    explorer_module = import_module(
+        "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
+    )
+    content_engine = import_module(
+        "ai_karen_engine.extensions.plugins.content-intelligence.engine"
+    )
+
+    class ContractKernel:
+        """Run actual plugin projection/analysis after host-owned admission."""
+
+        def __init__(self):
+            self.analysis_executions = []
+            self.content_admissions = []
+
+        def get_record(self, plugin_id):
+            assert plugin_id in {"file-explorer", "content-intelligence"}
+            return {"status": "enabled", "dependencies_resolved": True}
+
+        async def admit(self, request):
+            assert request.plugin_id == "content-intelligence"
+            assert request.authorized_plan.policy_decision_id == "proof-policy"
+            assert request.payload == {}
+            self.content_admissions.append(request)
+            return SimpleNamespace(status="admitted")
+
+        async def execute(self, request):
+            assert request.authorized_plan.policy_decision_id == "proof-policy"
+            if request.plugin_id == "file-explorer":
+                assert request.context.resource_scope["file_explorer_grant"] == "host_verified"
+                entries = request.context.resource_scope["file_explorer_entries"]
+                return SimpleNamespace(
+                    status="success",
+                    payload={"operation": "list", "items": entries},
+                )
+            assert request.plugin_id == "content-intelligence"
+            self.analysis_executions.append(request)
+            return SimpleNamespace(
+                status="success", payload=content_engine.execute(request.payload)
+            )
+
+    kernel = ContractKernel()
+    source = explorer_module.ArtifactSourceAdapter(store)
+    explorer = FileExplorerInventoryHost(kernel=kernel, source=source)
+    content = ContentSourceHost(store=store, kernel=kernel)
+    capabilities = ["file-explorer", "content-intelligence", "data:read"]
+    context = ExtensionExecutionContext(
+        request_id="kplug-08-request",
+        correlation_id="kplug-08-correlation",
+        user_id=owner, tenant_id=tenant, session_id="kplug-08-session",
+        policy_decision_id="proof-policy",
+        allowed_capabilities=capabilities,
+        resource_scope={},
+        audit_context={"user_roles": ["user"], "permissions": ["data:read"]},
+    )
+    plan = AuthorizedExecutionPlan(
+        execution_id="kplug-08-execution",
+        policy_decision_id="proof-policy",
+        authorized_user_id=owner,
+        authorized_tenant_id=tenant,
+        authorized_session_id="kplug-08-session",
+        allowed_plugins=["file-explorer", "content-intelligence"],
+        allowed_capabilities=capabilities,
+    )
+
+    async def inventory():
+        return await explorer.list_owner_page(context=context, plan=plan)
+
+    async def analyze(revision: str):
+        return await content.execute_owner_text(
+            context=context, plan=plan, operation="analyze",
+            references=[{"source_id": artifact, "revision": revision}],
+        )
+
+    async def change(*, digest: str | None = None, data: bytes | None = None,
+                     new_owner: str | None = None):
+        assignments, params = [], {"id": artifact, "tenant": tenant}
+        if digest is not None:
+            assignments.extend(["sha256=:digest", "bytes=:size"])
+            params.update({"digest": digest, "size": len(data)})
+        if new_owner is not None:
+            assignments.append("owner_user_id=CAST(:owner AS uuid)")
+            params["owner"] = new_owner
+        assert assignments
+        async with sessions() as writer:
+            result = await writer.execute(text(
+                "UPDATE files SET " + ", ".join(assignments)
+                + " WHERE file_id=:id AND tenant_id=CAST(:tenant AS uuid)"
+            ), params)
+            assert result.rowcount == 1
+            await writer.commit()
+
+    inserted = False
+    pending = None
+    try:
+        async with sessions() as admin:
+            assert (await admin.execute(
+                text("SELECT current_database()")
+            )).scalar_one() == "karen_code_artifact_test"
+            await admin.execute(
+                text(
+                    "INSERT INTO files (file_id, tenant_id, owner_user_id, name, "
+                    "mime_type, bytes, storage_uri, sha256, metadata, created_at) "
+                    "VALUES (:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
+                    ":name, 'text/plain', :size, :uri, :digest, '{}'::jsonb, NOW())"
+                ),
+                {
+                    "id": artifact, "tenant": tenant, "owner": owner,
+                    "name": filename, "size": len(versions[0]),
+                    "uri": f"supabase://artifacts/{key}", "digest": digests[0],
+                },
+            )
+            await admin.commit()
+            inserted = True
+
+        # The actual database supplies File Explorer's owner-only reference.
+        page = await inventory()
+        assert page["items"] == [{
+            "source_id": artifact, "parent_id": None, "kind": "file",
+            "name": filename, "revision": digests[0],
+            "size_bytes": len(versions[0]), "sha256": digests[0],
+        }]
+        assert "storage_uri" not in page["items"][0]
+        initial = await analyze(digests[0])
+        assert initial["persisted"] is False
+        assert initial["documents"][0]["sha256"] == digests[0]
+        assert initial["documents"][0]["id"] == artifact
+        assert len(kernel.analysis_executions) == 1
+
+        # A committed replacement invalidates the first selected reference.
+        await change(digest=digests[1], data=versions[1])
+        bucket.download.return_value = versions[1]
+        with pytest.raises(PermissionError, match="file_explorer_source_revision_changed"):
+            await explorer.revalidate_owner_selection(
+                context=context, plan=plan, source_id=artifact,
+                expected_revision=digests[0],
+            )
+        with pytest.raises(PermissionError, match="content_source_evidence_invalid"):
+            await analyze(digests[0])
+        assert len(kernel.analysis_executions) == 1
+        refreshed = await inventory()
+        assert refreshed["items"][0]["revision"] == digests[1]
+        updated = await analyze(digests[1])
+        assert updated["documents"][0]["sha256"] == digests[1]
+        assert len(kernel.analysis_executions) == 2
+
+        # A real PostgreSQL FOR UPDATE excludes the reader's FOR SHARE until
+        # the writer commits a *third* revision. Admission cannot turn the
+        # previously selected second revision into a durable byte grant.
+        started = asyncio.Event()
+
+        class SignallingStore:
+            async def read_owner_active_code(self, source_id, tenant_id, user_id):
+                started.set()
+                return await store.read_owner_active_code(
+                    source_id, tenant_id, user_id
+                )
+
+        competing_content = ContentSourceHost(
+            store=SignallingStore(), kernel=kernel
+        )
+        async with sessions() as writer:
+            row = await writer.execute(
+                text("SELECT file_id FROM files WHERE file_id=:id FOR UPDATE"),
+                {"id": artifact},
+            )
+            assert str(row.scalar_one()) == artifact
+            pending = asyncio.create_task(competing_content.execute_owner_text(
+                context=context, plan=plan, operation="analyze",
+                references=[{
+                    "source_id": artifact, "revision": digests[1],
+                }],
+            ))
+            await asyncio.wait_for(started.wait(), timeout=10)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(pending), timeout=0.2)
+            assert len(kernel.analysis_executions) == 2
+            outcome = await writer.execute(text(
+                "UPDATE files SET sha256=:digest, bytes=:size "
+                "WHERE file_id=:id"
+            ), {
+                "id": artifact, "digest": digests[2],
+                "size": len(versions[2]),
+            })
+            assert outcome.rowcount == 1
+            bucket.download.return_value = versions[2]
+            await writer.commit()
+
+        with pytest.raises(PermissionError, match="content_source_evidence_invalid"):
+            await asyncio.wait_for(pending, timeout=15)
+        assert len(kernel.analysis_executions) == 2
+        current = await inventory()
+        assert current["items"][0]["revision"] == digests[2]
+        accepted = await analyze(digests[2])
+        assert accepted["documents"][0]["sha256"] == digests[2]
+        assert len(kernel.analysis_executions) == 3
+
+        # Real owner transfer removes this source from the old principal's
+        # inventory and prevents both revalidation and content execution.
+        calls_before_revocation = bucket.download.call_count
+        await change(new_owner=other_owner)
+        assert (await inventory())["items"] == []
+        with pytest.raises(PermissionError, match="file_explorer_source_unavailable"):
+            await explorer.revalidate_owner_selection(
+                context=context, plan=plan, source_id=artifact,
+                expected_revision=digests[2],
+            )
+        with pytest.raises(PermissionError, match="content_source_unavailable"):
+            await analyze(digests[2])
+        assert bucket.download.call_count == calls_before_revocation
+        assert len(kernel.analysis_executions) == 3
+        assert all(
+            request.context.user_id == owner
+            and request.context.tenant_id == tenant
+            for request in kernel.content_admissions
+        )
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        if inserted:
+            async with sessions() as admin:
+                await admin.execute(
+                    text("DELETE FROM files WHERE file_id=:id AND "
+                         "tenant_id=CAST(:tenant AS uuid)"),
+                    {"id": artifact, "tenant": tenant},
+                )
+                await admin.commit()
+        await engine.dispose()

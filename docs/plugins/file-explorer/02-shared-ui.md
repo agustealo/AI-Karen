@@ -59,3 +59,30 @@ The dashboard-owned `FileExplorerInventoryHost` passes only the selected `source
 When analysis fails, the panel never displays synthetic or partial results. The user may retry a transient failure against the current selection, or choose **Refresh inventory and reselect**. That action invalidates the in-flight presentation attempt, clears the prior selection, and requests a new owner-scoped inventory page through the authenticated host. The user must select the new reference before another analysis; the browser never silently substitutes a new revision for the requested one. A denial does not disclose whether a particular source exists, changed, or belongs to a different owner.
 
 Source integration tests cover a rejected stale revision, metadata refresh with a changed SHA-256, mandatory re-selection, a new analysis request carrying the refreshed revision, a transient retry, and suppression of private API errors. This is mock-backed frontend regression evidence, **not** observed production PostgreSQL or browser certification. The independent backend output-lineage validation is separately tracked in PR #1206 and must not be duplicated in this UI slice.
+
+
+## KPLUG-08 disposable PostgreSQL handoff acceptance
+
+The existing CK-GEN artifact PostgreSQL proof runs the
+`test_real_postgres_explorer_selection_to_content_revision_and_owner_races`
+case in `tests/integration/test_live_code_artifact_revocation_postgres.py`.
+It uses canonical migrated `files` rows, the existing `SupabaseArtifactStore`,
+`ArtifactSourceAdapter`, `FileExplorerInventoryHost`,
+`ContentSourceHost`, and the Content Intelligence lexical engine. No new
+source owner, schema, RLS policy, database provisioning, or release workflow
+is introduced. The test-only kernel shim does **not** substitute for the
+separate kernel/RBAC authorization tests.
+
+The proof covers real committed metadata revisions, rejecting stale selected
+hashes before analysis publication, requiring refreshed source references,
+revoked ownership, and a concurrent PostgreSQL `FOR UPDATE` writer racing
+the canonical `FOR SHARE` owner-read path. Analysis never claims that an old
+selected digest automatically follows a newly committed source revision.
+
+The existing `.github/workflows/ckgen-artifact-postgres-proof.yml` creates
+the dedicated `karen_code_artifact_test` database with canonical migrations
+and seeded tenants, then runs this test along with its established PostgreSQL
+revocation and RLS proofs. Test Storage bytes are an in-process fixture.
+A passing run is **real PostgreSQL authorization/revision evidence**, not
+live Supabase object-store integration, a production runtime deployment,
+or authenticated browser consumer acceptance. Those remain separate gates.
