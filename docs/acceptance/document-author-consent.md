@@ -389,11 +389,16 @@ ending in the user-visible filename. Existing mocked HTTP tests had used
 that filename path as well. The filename is metadata, not a storage key.
 
 The same existing `SupabaseArtifactStore` now owns a single
-`_canonical_object_key` constructor reused for upload, bounded signed-range
-text reads and owner-scoped code reads. A reader must match the exact
-canonical storage URI on the locked file row before it requests a signed URL.
-The signed URL must remain on the configured Supabase origin and exact
-artifact path. No filename or caller-provided URL is promoted to authority.
+`_canonical_object_key` constructor for new uploads, plus one strict
+`_verified_object_key` selector for reads. New uploads always write
+`/content`. Previously stored code artifacts may legitimately have
+`/{safe_filename}` as their object key; the reader accepts this historical
+format **only** when the owner-scoped, locked PostgreSQL file row has exactly
+that URI. It does not probe multiple paths or fall back on failures.
+Both bounded text and code readers pin a single validated key before
+signing or downloading. The signed URL must remain on the configured
+Supabase origin and exact recorded artifact path. Arbitrary filenames,
+aliases and caller-provided URLs are not authority.
 
 The bounded reader already checks the SHA-256 of **actual** streamed
 object bytes against the locked PostgreSQL digest, with strict 206 range,
