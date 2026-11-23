@@ -106,9 +106,20 @@ jobs:
     name: profile-memory-postgres
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       PYTHONPATH: src
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_karen
+      REDIS_URL: redis://127.0.0.1:6379/0
       KAREN_TEST_POSTGRES_MEMORY: "1"
     steps:
       - uses: actions/checkout@v4
@@ -158,15 +169,30 @@ jobs:
         run: |
           python - <<'PY'
           import asyncio
+          from sqlalchemy import text
           from ai_karen_engine.persistence.postgres import get_postgres_engine
-          from ai_karen_engine.platform.memory.postgres.ledger_models import Base, MemoryEvent, MemoryAssertion, MemoryEpisode, ProfileFact, ProjectionStatus, ConsentScope, RetentionPolicy
+          from ai_karen_engine.platform.memory.postgres.ledger_models import (
+              Base, MemoryEvent, MemoryAssertion, MemoryEpisode, ProfileFact,
+              ProjectionStatus, ConsentScope, RetentionPolicy,
+              MemoryUserGoal, MemoryOpenLoop, MemoryProspectiveItem,
+              MemoryEntity, MemoryRelation,
+          )
+          from ai_karen_engine.platform.memory.postgres.entity_models import MemoryEntityAlias
+          from ai_karen_engine.platform.memory.postgres.procedural_models import MemoryProcedure
 
           async def prepare():
               engine = get_postgres_engine().async_engine
               async with engine.begin() as conn:
+                  await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
                   await conn.run_sync(
                       Base.metadata.create_all,
-                      tables=[model.__table__ for model in (MemoryEvent, MemoryAssertion, MemoryEpisode, ProfileFact, ProjectionStatus, ConsentScope, RetentionPolicy)],
+                      tables=[model.__table__ for model in (
+                          MemoryEvent, MemoryAssertion, MemoryEpisode, ProfileFact,
+                          ProjectionStatus, ConsentScope, RetentionPolicy,
+                          MemoryUserGoal, MemoryOpenLoop, MemoryProspectiveItem,
+                          MemoryEntity, MemoryRelation, MemoryEntityAlias,
+                          MemoryProcedure,
+                      )],
                   )
           asyncio.run(prepare())
           PY
@@ -274,6 +300,43 @@ jobs:
           path: |
             memory-stream-acceptance.json
             memory-stream-acceptance-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: KIS-GRAPH-01C2R-I prove live Redis graph and PostgreSQL composition
+        env:
+          KAREN_TEST_DISPOSABLE_DATABASE: "1"
+          KAREN_TEST_REAL_REDIS_GRAPH: "1"
+          KAREN_MEMORY_COMPOSITION_SAMPLES: "8"
+          KAREN_MEMORY_COMPOSITION_REPORT: memory-composition-acceptance.json
+        run: |
+          pytest tests/integration/test_live_canonical_memory_composition.py -q -rs \
+            --junitxml=memory-composition-acceptance-junit.xml
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("memory-composition-acceptance.json").read_text())
+          assert report["status"] == "complete"
+          assert all(report["real_services"].values())
+          assert report["composed_recall"]["completed"] == 8
+          assert {"stm", "postgres", "postgres_graph"}.issubset(
+              set(report["composed_recall"]["selected_stores"])
+          )
+          assert report["identity_isolation"] == "passed"
+          assert report["session_isolation"] == "passed"
+          assert report["revocation"] == "event_derived_redis_and_graph_denied"
+          assert report["checked_out_after_cleanup"] == 0
+          print("Real Redis/graph/PostgreSQL composition evidence validated.")
+          PY
+      - name: Preserve KIS-GRAPH-01C2R-I sanitized composition evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kis-graph-01c2r-i-live-memory-composition
+          path: |
+            memory-composition-acceptance.json
+            memory-composition-acceptance-junit.xml
           if-no-files-found: warn
           retention-days: 14
 
