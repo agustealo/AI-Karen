@@ -192,7 +192,9 @@ def test_kcon774_local_latency_runner_disables_sensitive_recordings_by_default()
     assert "process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ||" in config
     assert "process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ||" in config
     assert "const cardStudioAcceptance = process.env.KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE === 'true';" in config
-    assert "  settingsAcceptance ||\\n  fileExplorerAcceptance ||\\n  pinReadbackAcceptance ||\\n  cardStudioAcceptance;" in config
+    private_modes = config.split("const privateBrowserRun = localBenchmark ||", 1)[1].split(";", 1)[0]
+    for required in ("settingsAcceptance", "fileExplorerAcceptance", "pinReadbackAcceptance", "cardStudioAcceptance"):
+        assert required in private_modes
     assert "const pinReadbackAcceptance = process.env.KAREN_PIN_READBACK_ACCEPTANCE === '1';" in config
     assert "reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance" in config
     assert "screenshot: privateBrowserRun ? 'off' : 'only-on-failure'," in config
