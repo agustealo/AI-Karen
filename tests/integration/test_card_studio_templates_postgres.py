@@ -466,10 +466,47 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
             )
             denied = await http.get(f"/chat/card-studio/templates/{http_id}")
             assert denied.status_code == 404
+
+            # The very same idempotency key is valid for a different verified
+            # owner and must produce a distinct receipt and row. The first
+            # principal's immutable receipt must never be returned to B.
+            owner_b_draft = _draft(title="Other owner's receipt", key="http-other-owner")
+            owner_b_create = await http.post(
+                "/chat/card-studio/templates",
+                headers=bearer,
+                json={"idempotency_key": key, "draft": owner_b_draft},
+            )
+            assert owner_b_create.status_code == 200, owner_b_create.text
+            owner_b_body = owner_b_create.json()
+            owner_b_id = owner_b_body["template"]["template_id"]
+            assert owner_b_id != http_id
+            assert owner_b_body["receipt"]["idempotency_key"] == key
+            assert owner_b_body["template"]["definition"] == owner_b_draft
+            owner_b_replay = await http.post(
+                "/chat/card-studio/templates",
+                headers=bearer,
+                json={"idempotency_key": key, "draft": owner_b_draft},
+            )
+            assert owner_b_replay.status_code == 200
+            assert owner_b_replay.json() == owner_b_body
+
             actor["principal"] = UserData(
                 user_id=str(owner_c), tenant_id=str(tenant_b),
                 roles=["user"], permissions=[],
             )
+            # Tenant C can independently reuse the identical UUID as well.
+            owner_c_draft = _draft(title="Other tenant's receipt", key="http-other-tenant")
+            owner_c_create = await http.post(
+                "/chat/card-studio/templates",
+                headers=bearer,
+                json={"idempotency_key": key, "draft": owner_c_draft},
+            )
+            assert owner_c_create.status_code == 200, owner_c_create.text
+            owner_c_body = owner_c_create.json()
+            owner_c_id = owner_c_body["template"]["template_id"]
+            assert owner_c_id not in (http_id, owner_b_id)
+            assert owner_c_body["receipt"]["idempotency_key"] == key
+            assert owner_c_body["template"]["definition"] == owner_c_draft
             denied = await http.put(
                 f"/chat/card-studio/templates/{http_id}",
                 headers=bearer,
@@ -486,6 +523,11 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
                 user_id=str(owner_a), tenant_id=str(tenant_a),
                 roles=["user"], permissions=[],
             )
+            for foreign_id in (owner_b_id, owner_c_id):
+                foreign_read = await http.get(
+                    f"/chat/card-studio/templates/{foreign_id}"
+                )
+                assert foreign_read.status_code == 404
             changed = await http.put(
                 f"/chat/card-studio/templates/{http_id}",
                 headers=bearer,

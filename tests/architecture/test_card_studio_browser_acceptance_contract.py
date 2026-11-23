@@ -166,3 +166,24 @@ def test_card_studio_real_second_principal_denies_all_owner_paths() -> None:
     assert 'route.fulfill(' not in spec
     assert 'page.addInitScript(' not in spec
     assert 'trace: "off", screenshot: "off", video: "off"' in spec
+
+
+def test_card_studio_same_key_across_real_principals_cannot_replay_foreign_receipt() -> None:
+    """Browser and real-PostgreSQL proof use the existing scoped receipt owner."""
+    spec = (THEME / "e2e/card-studio-live-acceptance.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    integration = (
+        ROOT / "tests/integration/test_card_studio_templates_postgres.py"
+    ).read_text(encoding="utf-8")
+    assert 'const ownerKey = created.request.idempotency_key' in spec
+    assert 'idempotency_key: ownerKey, draft: independentDraft' in spec
+    assert 'independentReplay.payload, "B must replay only B\'s own receipt"' in spec
+    assert '"A must not see B\'s same-key record"' in spec
+    assert '"Same-key disposable record must archive"' in spec
+    assert '"Second-account disposable Card Studio cleanup incomplete."' in spec
+    assert 'owner_b_draft = _draft(' in integration
+    assert 'owner_c_draft = _draft(' in integration
+    assert 'assert owner_b_replay.json() == owner_b_body' in integration
+    assert 'assert owner_c_id not in (http_id, owner_b_id)' in integration
+    assert 'for foreign_id in (owner_b_id, owner_c_id):' in integration
