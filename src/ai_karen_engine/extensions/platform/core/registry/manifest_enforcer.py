@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass
 from enum import Enum
-from pydantic import BaseModel, validator, ValidationError
+from pydantic import BaseModel, validator, ValidationError, StrictBool, StrictStr
 
 
 class ManifestType(Enum):
@@ -83,6 +83,37 @@ class RootManifestModel(BaseModel):
         return v
 
 
+class GUIEntryModel(BaseModel):
+    """Typed GUI entry metadata; never a Python execution declaration."""
+
+    id: StrictStr
+    default: StrictBool = False
+    entry_file: StrictStr
+
+    @validator("id")
+    def validate_id(cls, value):
+        if not value.strip():
+            raise ValueError("GUI entry id must be non-empty")
+        return value
+
+    @validator("entry_file")
+    def validate_entry_file(cls, value):
+        path = Path(value)
+        if (
+            not value
+            or value != value.strip()
+            or "\\" in value
+            or path.is_absolute()
+            or ".." in path.parts
+            or path.suffix not in {".tsx", ".jsx", ".ts", ".js"}
+        ):
+            raise ValueError("GUI entry_file must be a relative frontend module path")
+        return value
+
+    class Config:
+        extra = "forbid"
+
+
 class GUIManifestModel(BaseModel):
     """Model for GUI manifest validation."""
     id: str
@@ -91,7 +122,7 @@ class GUIManifestModel(BaseModel):
     gui_manifest_version: str
     display_name: Optional[str] = None
     description: Optional[str] = None
-    entry: Dict[str, Any] = {}
+    entry: GUIEntryModel
     contributions: Dict[str, List[Dict[str, Any]]] = {}
     assets: Dict[str, List[str]] = {}
     rbac: Dict[str, Any] = {}
@@ -179,6 +210,15 @@ class ManifestStandardsEnforcer:
                     suggestion=self._get_suggestion_for_error(error)
                 ))
 
+        if not isinstance(manifest_data, dict):
+            results.append(ManifestValidationResult(
+                manifest_type=ManifestType.GUI,
+                severity=ManifestValidationSeverity.ERROR,
+                field="file",
+                message="GUI manifest must be a JSON object",
+            ))
+            return results
+
         # Additional validation checks
         results.extend(self._validate_gui_manifest_specific(manifest_data, manifest_path))
 
@@ -237,7 +277,15 @@ class ManifestStandardsEnforcer:
         results = []
         
         # Validate entry section
-        entry = manifest_data.get("entry", {})
+        entry = manifest_data.get("entry")
+        if not isinstance(entry, dict):
+            results.append(ManifestValidationResult(
+                manifest_type=ManifestType.GUI,
+                severity=ManifestValidationSeverity.ERROR,
+                field="entry",
+                message="GUI entry must be a structured object",
+            ))
+            return results
         if not entry.get("id"):
             results.append(ManifestValidationResult(
                 manifest_type=ManifestType.GUI,

@@ -16,7 +16,11 @@ import json
 import logging
 
 from ai_karen_engine.extensions.platform.core.host.base import ExtensionBase, ExtensionContext
-from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
+from ai_karen_engine.extensions.platform.core.manifest import (
+    ExtensionManifest,
+    backend_manifest_names,
+    find_backend_manifest_file,
+)
 from .config import ExtensionConfigManager
 from .dependency_resolver import DependencyResolver
 from .errors import (
@@ -169,27 +173,11 @@ class ExtensionLoader:
         return manifest
 
     def _find_manifest_file(self, extension_dir: Path) -> Optional[Path]:
-        for manifest_name in self._manifest_name_candidates(extension_dir):
-            manifest_file = extension_dir / manifest_name
-            if manifest_file.exists():
-                return manifest_file
-        return None
+        """Use the shared runtime manifest selector, never a GUI manifest."""
+        return find_backend_manifest_file(extension_dir)
 
     def _manifest_name_candidates(self, extension_dir: Path) -> List[str]:
-        path_parts = set(extension_dir.parts)
-        if "sys_extensions" in path_parts:
-            return [
-                "extension_manifest.json",
-                "plugin_manifest.json",
-                "extension.json",
-                "manifest.json",
-            ]
-        return [
-            "plugin_manifest.json",
-            "extension_manifest.json",
-            "extension.json",
-            "manifest.json",
-        ]
+        return list(backend_manifest_names(extension_dir))
 
     def _resolve_extension_dir(self, extension_name: str) -> Optional[Path]:
         if extension_name in self._discovered_paths:
