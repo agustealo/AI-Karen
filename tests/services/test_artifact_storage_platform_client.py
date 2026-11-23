@@ -11,6 +11,9 @@ import httpx
 
 import pytest
 
+from ai_karen_engine.services.database.repositories.artifact_store import (
+    ArtifactUploadRequest,
+)
 from ai_karen_engine.services.database.repositories.supabase_artifact_store import (
     SupabaseArtifactStore,
 )
@@ -641,3 +644,79 @@ def test_canonical_object_storage_key_is_identical_for_upload_and_read():
     key = SupabaseArtifactStore._canonical_object_key(_TENANT, _ARTIFACT)
     assert key == f"{_TENANT}/{_ARTIFACT}/content"
     assert "author.txt" not in key
+
+
+@pytest.mark.asyncio
+async def test_upload_and_bounded_reader_share_actual_canonical_storage_key():
+    """A real upload writes /content, never a user-controlled name key."""
+    class InsertSession:
+        def __init__(self):
+            self.sql = []
+            self.commits = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def execute(self, stmt, args):
+            self.sql.append((str(stmt), args))
+
+        async def commit(self):
+            self.commits += 1
+
+    session = InsertSession()
+    storage = FakeStorage()
+    store = SupabaseArtifactStore(
+        session_factory=None,
+        storage_client=SimpleNamespace(storage=storage),
+    )
+    store._session = AsyncMock(return_value=session)
+    uploaded = await store.upload(ArtifactUploadRequest(
+        tenant_id=_TENANT, user_id=_OWNER,
+        filename="author.txt", content_type="text/plain",
+        data=_BODY,
+    ))
+    assert uploaded.success is True and uploaded.data is not None
+    saved = uploaded.data
+    expected_key = f"{_TENANT}/{saved.id}/content"
+    assert saved.storage_key == expected_key
+    assert storage.bucket.files == {expected_key: _BODY}
+    assert session.commits == 1
+    assert len(session.sql) == 1
+    persisted = session.sql[0][1]
+    assert persisted["storage_uri"] == f"supabase://artifacts/{expected_key}"
+    assert persisted["sha256"] == hashlib.sha256(_BODY).hexdigest()
+    assert persisted["name"] == "author.txt"
+
+
+@pytest.mark.asyncio
+async def test_active_code_reader_uses_same_canonical_storage_key():
+    """No separate filename-key storage model survives in legacy code reads."""
+    row = SimpleNamespace(
+        name="author.txt", mime_type="text/plain", bytes=len(_BODY),
+        sha256=hashlib.sha256(_BODY).hexdigest(),
+        storage_uri=f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/content",
+    )
+    session = FakeSession(row)
+    storage = FakeStorage()
+    canonical = f"{_TENANT}/{_ARTIFACT}/content"
+    storage.bucket.files[canonical] = _BODY
+    store = SupabaseArtifactStore(
+        session_factory=None,
+        storage_client=SimpleNamespace(storage=storage),
+    )
+    store._session = AsyncMock(return_value=session)
+    verified = await store.read_owner_active_code(_ARTIFACT, _TENANT, _OWNER)
+    assert verified.success and verified.data is not None
+    assert verified.data.text == _BODY.decode("utf-8")
+    assert storage.bucket.files[canonical] == _BODY
+
+    # A record pointing at the old display-filename path is not trusted.
+    session.row = SimpleNamespace(
+        **{**vars(row),
+           "storage_uri": f"supabase://artifacts/{_TENANT}/{_ARTIFACT}/author.txt"}
+    )
+    rejected = await store.read_owner_active_code(_ARTIFACT, _TENANT, _OWNER)
+    assert rejected.success is False and rejected.data is None
