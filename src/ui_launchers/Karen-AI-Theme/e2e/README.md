@@ -654,3 +654,46 @@ This strengthens release evidence; the already existing backend RuntimePolicy,
 RBAC, PostgreSQL RLS, API transport and default-disabled production feature
 remain the sole authorities. Source and CI passes are not evidence that the
 two-account live scenario actually ran on an approved host.
+
+
+### KGUI-CARD-STUDIO-01I: reject green-but-skipped release trials
+
+The dedicated Card Studio Playwright spec is opt-in for ordinary development,
+where skipped cases must not require production credentials. The **protected**
+GitHub browser job is different: it sets the existing
+`KAREN_SETTINGS_VERIFIED_DEPLOYMENT=true` admission marker. When that marker
+is present, the spec now fails immediately unless all three release
+preconditions are satisfied: `KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE=true`,
+`KAREN_CARD_STUDIO_MUTATION_APPROVED=true`, and both sanctioned sanitized
+credential pairs are supplied.
+
+This is a release-evidence guard, **not** permission to turn on Card Studio
+or execute mutations against arbitrary installations. The environment,
+deployed revision, Vercel provenance, real RBAC, PostgreSQL identity scope,
+and actual browser tests still have to pass. Ordinary non-protected
+Playwright discovery keeps the suite disabled by default. A command that
+reports only skipped tests must never be described as real-browser proof.
+The existing architecture-source contract guards the marker, prerequisite
+identity checks, three live trial names, and absence of a workflow grep
+that could select only one of the three cases.
+
+
+### KGUI-CARD-STUDIO-01J: principal-scoped idempotency receipt proof
+
+The live two-account Chromium scenario now challenges the canonical mutation
+receipt boundary with **the same idempotency UUID** from two genuinely
+authenticated, write-authorized users. User B submits an independently valid
+draft using A's committed request key. The server must return HTTP 200 with
+B's own template and receipt, never A's immutable snapshot; an identical retry
+by B must return precisely B's prior committed result. User B can read the new
+record, while user A must not be able to read B's record. All additional
+disposable records are archived with verified server acknowledgments, and
+cleanup failures fail the trial rather than being silently ignored.
+
+The existing real-PostgreSQL integration trial additionally proves this
+behavior for two users in one tenant and a third user in a different tenant,
+using the exact same idempotency UUID, with owner RLS still denying foreign
+reads. The runtime, repository, API route, migrations, and production feature
+default are unchanged. The real browser proof still requires the approved,
+sanitized, disposable preview and protected workflow dispatch. GitHub source
+and database gates alone do not certify that this browser scenario executed.

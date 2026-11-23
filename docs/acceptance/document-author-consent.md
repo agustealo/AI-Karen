@@ -1,5 +1,14 @@
 # Document author consent: real browser acceptance
 
+## Current release truth (supersedes historical draft checkpoints)
+
+**Source integration: MERGED.** WS-04A9's source implementation merged from PR #1183 to `main` at `aadd12579351962229b18ce6b90a0b3a8891715d`. Earlier statements in the dated WS-04A9 development notes about keeping **that PR draft or unmerged** describe their historical checkpoints only; they are no longer an instruction to roll back the completed merge or to block unrelated development.
+
+**Consumer capability: HOLD.** The merged source does not activate writing-style document ingestion and is not certified as consumer-ready. The approved-host author browser flow, real bounded Supabase Storage read, and two-phase delegated-use revocation evidence remain unverified. A completed GitHub workflow, an available Vercel frontend, or a skipped opt-in acceptance test is not a substitute for their observed deployment results.
+
+**Canonical local acceptance record:** [PR #1183 local acceptance handoff](https://github.com/agustealo/AI-Karen/pull/1183#issuecomment-7089515191). GitHub Issues is disabled in this repository, so keep sanitized acceptance results linked to that existing record. External-host setup and disposable fixture preparation may proceed locally and do not hold subsequent internal green PRs. **Do not enable ingestion or claim live acceptance until the remaining gates are observed.**
+
+
 **Slice:** WS-04A9T through WS-04A9Y, PR #1183. This is a source-specific, first-party author workflow, not a generic chat approval or proof of third-party authorship.
 
 ## Execution authority
@@ -200,7 +209,7 @@ This is a **presentation eligibility guard**, not an authorization mechanism. Th
 
 The existing opt-in, mutation-gated browser acceptance now verifies the **same authenticated original bearer** on both sides of revocation: its canonical receipt recovery endpoint must return **HTTP 200** immediately after issuance and reload, then **HTTP 403 or 404** after the author revokes from a freshly logged-in, separate browser context. This verifies a real server-side denial, not merely that the receipt has disappeared from the UI. The browser-only status probe reads its own authentication token internally and returns **only the numeric status** to the test runner; it never exports bearer credentials, document contents, receipt JSON or signed URLs. Screenshots, traces and videos remain disabled.
 
-This new assertion requires explicit `KAREN_DOCUMENT_AUTHOR_MUTATION_ACCEPTANCE=true` and an approved disposable author fixture on the target host. A CI build or skipped Playwright test is **not** evidence that the live scenario ran. The assertion proves receipt recovery is fenced after revocation; **delegated writing-style use denial still requires independent runtime evidence**, and actual Supabase Storage bounded reads remain a separate release gate. Draft PR and consumer ingestion OFF remain mandatory.
+This new assertion requires explicit `KAREN_DOCUMENT_AUTHOR_MUTATION_ACCEPTANCE=true` and an approved disposable author fixture on the target host. A CI build or skipped Playwright test is **not** evidence that the live scenario ran. The assertion proves receipt recovery is fenced after revocation; **delegated writing-style use denial still requires independent runtime evidence**, and actual Supabase Storage bounded reads remain a separate release gate. Consumer ingestion remains OFF until real-host acceptance; the original draft PR requirement is superseded by the completed merge described above.
 
 
 ### WS-04A9 live storage-read probe (read-only, opt-in)
@@ -247,7 +256,7 @@ First execute `PYTHONPATH=src python -m pytest -q tests/integration/test_documen
 
 Retain sanitized evidence of both phases, the distinct author revocation transaction, the same approved host/database/tenant/profile/revision provenance, and the actual commit. An **after-only negative** is vacuous and **does not count** as acceptance. A skipped run, simulation or unit test also does not qualify. Timing is observed, not a promised SLO. No source bytes, credentials, original author document or bearer credentials should enter artifacts.
 
-**Current status:** acceptance source added; neither phase has executed on an approved host, and no real delegated grant has been created or revoked by this change. Consumer ingestion remains OFF and PR release HOLD remains in force.
+**Current status:** the acceptance source is merged, but neither phase has executed on an approved host and no real delegated grant has been created or revoked by this change. Consumer ingestion remains OFF and the **consumer capability** stays on HOLD. Historical draft-PR wording above does not apply to the merged source.
 
 
 ### WS-04A9 live probe evidence-quality refinements
@@ -257,3 +266,14 @@ The opt-in delegated-use probe now accepts any purpose valid under the existing 
 The bounded Supabase Storage probe also makes a **second read request using the same real owner/artifact but an undersized maximum-byte budget**; it must be denied and must return no text. This is distinct from the cross-tenant and cross-owner denials and does not replace the canonical storage owner's pre-transfer length, 206 range, and digest controls.
 
 Neither probe has executed against an approved target installation. These refinements supply stronger requirements for the future host trial, **not** evidence that the host passed them. Keep all live-gate statuses unverified until observed.
+
+
+## WS-04B0: governed document content-reader composition (development only)
+
+The canonical `ArtifactStore` now provides `read_owner_active_text_bounded`, so `ArtifactWritingStyleContentReader` in the existing document-source authority module adapts this **already-owned** capability for the `WritingStylePersistedSampleAuthority` reader protocol. No second storage client, download fallback, independent content cache, user-supplied URL or new authorization engine is created.
+
+The reader accepts only canonical tenant/actor/document UUID scope, delegates an explicit 65,536-byte budget to the existing storage owner, and accepts only a typed `VerifiedArtifactText` matching the requested tenant, actor, artifact, safe text filename and MIME. Unsupported sources, invalid scope, denied or unbounded storage, mismatched output and errors return no content.
+
+**Crucially, reading bytes is not itself permission to learn or imitate an author.** The surrounding persisted-sample authority continues to validate the profile-specific consent receipt and current PostgreSQL evidence before and after the source read, including the exact content digest; RuntimePolicy remains responsible for execution. This adapter is not auto-registered for consumer document ingestion and does not enable the feature.
+
+Focused source-owner unit tests exercise canonical bounded-call delegation, malformed scopes, cross-owner/tenant data, unsupported types, storage denial and exceptions. Real Supabase transport integrity and browser-to-consent revocation remain local acceptance requirements under the existing handoff; they are not inferred from tests.

@@ -21,6 +21,25 @@ const password = process.env.KAREN_UX_PASSWORD;
 const isolationEmail = process.env.KAREN_UX_ISOLATION_EMAIL;
 const isolationPassword = process.env.KAREN_UX_ISOLATION_PASSWORD;
 const localLoopback = process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1";
+
+/**
+ * The shared protected settings/browser workflow sets this admission bit
+ * before invoking the dedicated Card Studio spec. Playwright returns exit 0
+ * when all opt-in tests are skipped, so a protected run must reject a missing
+ * opt-in or incomplete two-principal mutation authorization at module load.
+ *
+ * Ordinary developer test discovery still skips this opt-in suite and never
+ * requires real credentials. This check does not authorize any mutation.
+ */
+if (process.env.KAREN_SETTINGS_VERIFIED_DEPLOYMENT === "true" &&
+    (!enabled || !mutationApproved || !email || !password ||
+     !isolationEmail || !isolationPassword)) {
+  throw new Error(
+    "Protected Card Studio browser acceptance needs the enabled suite, " +
+    "explicit disposable mutation approval, and two sanitized identities. " +
+    "Skipped acceptance cannot certify consumer readiness.",
+  );
+}
 const catalogPath = "/api/chat/card-studio/catalog";
 const templatesPath = "/api/chat/card-studio/templates";
 const viewports = [
@@ -503,6 +522,7 @@ test("KCARD-LIVE-ISOLATION: second real user cannot read, revise or archive owne
       const foreignId = foreignCreated.saved.template.template_id;
       expect(foreignCreated.saved.template.revision).toBe(1);
       expect(foreignCreated.saved.template.lifecycle).toBe("draft");
+      let independentId: string | null = null;
       try {
         // B also has functional authenticated read admission. A disabled
         // plugin, missing bearer or missing write permission cannot count.
@@ -520,6 +540,59 @@ test("KCARD-LIVE-ISOLATION: second real user cannot read, revise or archive owne
         expect(owned.templates.some(item => item.template_id === foreignId)).toBe(true);
         expect(owned.templates.some(item =>
           item.template_id === ownerId || item.template_key === key)).toBe(false);
+
+        // Both authenticated accounts can create, but idempotency keys must be
+        // owner-scoped. Reusing A's key with B's distinct draft must commit a
+        // B-owned record, never replay A's receipt or reveal A's snapshot.
+        const ownerKey = created.request.idempotency_key;
+        if (typeof ownerKey !== "string") {
+          throw new Error("Owner committed request has no idempotency key.");
+        }
+        const independentDraft = {
+          ...(foreignCreated.request.draft as Record<string, unknown>),
+          title: "Independent receipt E2E " + sample,
+          template_key: "isolation-replay-e2e-" + sample,
+        };
+        const independentBody = { idempotency_key: ownerKey, draft: independentDraft };
+        const independentResponse = await scopedCardRequest(
+          other, templatesPath, "POST", independentBody,
+        );
+        expect(independentResponse.status, "Same key across owners must remain independent").toBe(200);
+        expect(independentResponse.cacheControl).toContain("no-store");
+        const independent = independentResponse.payload as Commit;
+        if (typeof independent?.template?.template_id === "string") {
+          independentId = independent.template.template_id;
+        }
+        expect(independent.schema_version).toBe(1);
+        expect(independent.committed).toBe(true);
+        expect(independent.receipt.operation).toBe("create");
+        expect(independent.receipt.idempotency_key).toBe(ownerKey);
+        expect(independent.receipt.template_id).toBe(independentId);
+        expect(independent.template.revision).toBe(1);
+        expect(independent.template.lifecycle).toBe("draft");
+        expect(independentId).not.toBe(ownerId);
+        expect(independentId).not.toBe(foreignId);
+        expect(independent.template.definition.template_key).toBe(independentDraft.template_key);
+        expect(independent.template.definition.title).toBe(independentDraft.title);
+
+        const independentReplay = await scopedCardRequest(
+          other, templatesPath, "POST", independentBody,
+        );
+        expect(independentReplay.status).toBe(200);
+        expect(independentReplay.payload, "B must replay only B's own receipt")
+          .toEqual(independentResponse.payload);
+        const independentRead = await scopedCardRequest(
+          other, templatesPath + "/" + independentId, "GET",
+        );
+        expect(independentRead.status).toBe(200);
+        expect((independentRead.payload as { template: { template_id: string } })
+          .template.template_id).toBe(independentId);
+        const ownerCannotReadB = await scopedCardRequest(
+          page, templatesPath + "/" + independentId, "GET",
+        );
+        expect([403, 404], "A must not see B's same-key record")
+          .toContain(ownerCannotReadB.status);
+        expect(ownerCannotReadB.cacheControl).toContain("no-store");
 
         // Read current source, historical list, historical source, and both
         // write paths. 403/404 are allowable denials; 401 is not, since this
@@ -572,7 +645,34 @@ test("KCARD-LIVE-ISOLATION: second real user cannot read, revise or archive owne
         expect(ownerTemplate.template.definition.title).toBe(title);
         expect(ownerTemplate.template.definition.template_key).toBe(key);
       } finally {
-        await archiveOwned(other, origin.origin, foreignId, 1);
+        // Always attempt both owned archives. A failed cleanup is a failed
+        // acceptance, and must not prevent the other cleanup attempt.
+        const cleanupErrors: unknown[] = [];
+        if (independentId) {
+          try {
+            const archived = await scopedCardRequest(
+              other, templatesPath + "/" + independentId + "/archive", "POST",
+              { idempotency_key: randomUUID(), expected_revision: 1 },
+            );
+            expect(archived.status, "Same-key disposable record must archive").toBe(200);
+            const receipt = archived.payload as Commit;
+            expect(receipt.committed).toBe(true);
+            expect(receipt.receipt.template_id).toBe(independentId);
+            expect(receipt.template.lifecycle).toBe("archived");
+          } catch (error) {
+            cleanupErrors.push(error);
+          }
+        }
+        try {
+          await archiveOwned(other, origin.origin, foreignId, 1);
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError(
+            cleanupErrors, "Second-account disposable Card Studio cleanup incomplete.",
+          );
+        }
       }
     } finally {
       await otherContext.close();

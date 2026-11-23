@@ -334,3 +334,219 @@ def test_only_real_database_row_counts_are_reported() -> None:
     assert "return 8" not in service
     assert "return 12" not in service
     assert "return 15" not in service
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception", "expected_status", "expected_detail"),
+    [
+        ("permission", 403, "Privacy request access denied"),
+        ("validation", 422, "Invalid privacy request"),
+        ("conflict", 409, "Privacy request conflict"),
+        ("not_found", 404, "Privacy request not found"),
+        ("sql", 500, "Privacy operation failed"),
+        ("known_permission", 403, "Invalid verification token"),
+        ("known_conflict", 409, "Privacy request was already claimed or is no longer pending"),
+        ("known_validation", 422, "Only JSON privacy exports are currently implemented"),
+    ],
+)
+async def test_privacy_http_errors_redact_untrusted_exception_text(
+    caplog: pytest.LogCaptureFixture,
+    exception: str,
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    import logging
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy.exc import StatementError
+
+    from ai_karen_engine.api_routes.auth import privacy
+
+    secret = "SECRET_PRIVACY_SQL_PARAMETER"
+    injected = StatementError(
+        "private", "SELECT :sensitive", {"sensitive": secret},
+        RuntimeError("secret database driver"),
+    )
+    failures: dict[str, Exception] = {
+        "permission": PermissionError(secret),
+        "validation": ValueError(secret),
+        "conflict": RuntimeError(secret),
+        "not_found": KeyError(secret),
+        "sql": injected,
+        "known_permission": PermissionError("Invalid verification token"),
+        "known_conflict": RuntimeError(
+            "Privacy request was already claimed or is no longer pending"
+        ),
+        "known_validation": ValueError("Only JSON privacy exports are currently implemented"),
+    }
+
+    class RejectingPrivacy:
+        async def create_privacy_request(self, **_kwargs: Any) -> None:
+            raise failures[exception]
+
+    app = FastAPI()
+    app.include_router(privacy.router)
+    app.dependency_overrides[privacy.get_current_user] = lambda: SimpleNamespace(
+        user_id="11111111-1111-4111-8111-111111111111",
+        tenant_id="22222222-2222-4222-8222-222222222222",
+    )
+    app.dependency_overrides[privacy.get_privacy_service] = RejectingPrivacy
+    with caplog.at_level(logging.ERROR, logger=privacy.__name__):
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post("/privacy/export/request", json={})
+    assert response.status_code == expected_status
+    assert response.json()["detail"] == expected_detail
+    for token in (secret, "SELECT :sensitive", "secret database driver"):
+        assert token not in response.text + caplog.text
+    assert all(
+        record.exc_info is None for record in caplog.records
+        if record.name == privacy.__name__
+    )
+
+
+@pytest.mark.asyncio
+async def test_privacy_status_readback_redacts_legacy_persisted_sql_text() -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from ai_karen_engine.api_routes.auth import privacy
+    from ai_karen_engine.services.privacy_compliance import (
+        PrivacyComplianceService, PrivacyRequestStatus,
+    )
+
+    secret = "OLD_STORED_PRIVATE_SQL_PARAMETER"
+    request_id = uuid4()
+
+    class LegacyService:
+        async def get_privacy_request_status(
+            self, _request_id: str, **_kwargs: Any,
+        ) -> SimpleNamespace:
+            return SimpleNamespace(
+                request_id=str(request_id), status=PrivacyRequestStatus.FAILED,
+                request_type="export", data_types=["memories"],
+                created_at=datetime.utcnow(), completed_at=datetime.utcnow(),
+                result_metadata={}, error_message=secret,
+            )
+
+    app = FastAPI()
+    app.include_router(privacy.router)
+    app.dependency_overrides[privacy.get_current_user] = lambda: SimpleNamespace(
+        user_id="11111111-1111-4111-8111-111111111111",
+        tenant_id="22222222-2222-4222-8222-222222222222",
+    )
+    app.dependency_overrides[privacy.get_privacy_service] = LegacyService
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get(f"/privacy/request/{request_id}/status")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error_message"] == "Privacy request processing failed"
+    assert secret not in response.text
+    row = {
+        "request_id": str(request_id), "request_type": "export",
+        "user_id": "11111111-1111-4111-8111-111111111111",
+        "tenant_id": "22222222-2222-4222-8222-222222222222",
+        "status": "failed", "data_types": ["memories"],
+        "created_at": datetime.utcnow(), "completed_at": datetime.utcnow(),
+        "result_metadata": {}, "error_message": secret,
+    }
+    hydrated = PrivacyComplianceService._request_from_row(row)
+    assert hydrated.error_message == "Privacy request processing failed"
+    assert secret not in repr(hydrated)
+
+
+@pytest.mark.asyncio
+async def test_privacy_failed_erasure_persists_only_fixed_reason_and_audit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+    from types import SimpleNamespace
+
+    from sqlalchemy.exc import StatementError
+
+    from ai_karen_engine.services.privacy_compliance import (
+        ErasureType, PrivacyComplianceService, PrivacyRequest,
+        PrivacyRequestStatus,
+    )
+
+    secret = "PRIVATE_ERASURE_BOUND_SQL"
+    sql_error = StatementError(
+        "sensitive operation", "SELECT :secret", {"secret": secret},
+        RuntimeError("private SQL driver"),
+    )
+    statements: list[tuple[str, dict[str, Any]]] = []
+    audits: list[dict[str, Any]] = []
+    commits = 0
+
+    class Session:
+        async def execute(self, query: Any, params: Any = None) -> Any:
+            statements.append((str(query), dict(params or {})))
+            return SimpleNamespace(rowcount=1)
+
+        async def commit(self) -> None:
+            nonlocal commits
+            commits += 1
+
+    class SessionContext:
+        async def __aenter__(self) -> Session:
+            return Session()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    class Database:
+        def get_async_session(self) -> SessionContext:
+            return SessionContext()
+
+    class FaultyEraser:
+        async def erase_user_data_in_session(self, *_args: Any, **_kwargs: Any) -> None:
+            raise sql_error
+
+    class AuditLogger:
+        def log_audit_event(self, event: dict[str, Any]) -> None:
+            audits.append(event)
+
+    service = PrivacyComplianceService.__new__(PrivacyComplianceService)
+    service.db_client = Database()
+    service.data_eraser = FaultyEraser()
+    service.audit_logger = AuditLogger()
+    request = PrivacyRequest(
+        request_id="11111111-1111-4111-8111-111111111111",
+        request_type="erasure",
+        user_id="22222222-2222-4222-8222-222222222222",
+        tenant_id="33333333-3333-4333-8333-333333333333",
+        status=PrivacyRequestStatus.PENDING,
+        created_at=datetime.utcnow(), data_types=["memories"],
+        erasure_type=ErasureType.HARD_DELETE,
+    )
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(StatementError):
+            await service._process_erasure_atomically(
+                request=request, user_id=request.user_id,
+                tenant_id=request.tenant_id, correlation_id="privacy-failure-test",
+            )
+    failures = [
+        params for query, params in statements if "SET status = 'failed'" in query
+    ]
+    assert len(failures) == 1
+    assert failures[0]["user_id"] == request.user_id
+    assert failures[0]["tenant_id"] == request.tenant_id
+    assert failures[0]["error_message"] == "Privacy request processing failed"
+    assert commits == 1
+    assert len(audits) == 1
+    assert audits[0]["metadata"]["error_message"] == "Privacy request processing failed"
+    for serialized in (repr(statements), repr(audits), caplog.text):
+        for token in (secret, "SELECT :secret", "private SQL driver"):
+            assert token not in serialized
