@@ -108,6 +108,12 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         )
         await raw.execute(f'CREATE ROLE "{role}" NOLOGIN')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+        await raw.execute(f'GRANT USAGE ON SCHEMA kari_internal TO "{role}"')
+        await raw.execute(
+            f'GRANT EXECUTE ON FUNCTION '
+            f'kari_internal.writing_style_authorized_document_sources('
+            f'uuid,uuid,uuid,text,uuid,bigint,text) TO "{role}"'
+        )
         await raw.execute(
             f'GRANT SELECT, INSERT, UPDATE ON public.writing_style_profiles, '
             f'public.writing_style_revisions, public.writing_style_grants, '
@@ -654,6 +660,12 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             await raw.execute(f'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM "{role}"')
             await raw.execute(f'REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM "{role}"')
             await raw.execute(f'REVOKE USAGE ON SCHEMA public FROM "{role}"')
+            await raw.execute(
+                f'REVOKE ALL ON FUNCTION '
+                f'kari_internal.writing_style_authorized_document_sources('
+                f'uuid,uuid,uuid,text,uuid,bigint,text) FROM "{role}"'
+            )
+            await raw.execute(f'REVOKE USAGE ON SCHEMA kari_internal FROM "{role}"')
             await raw.execute(f'DROP ROLE IF EXISTS "{role}"')
         finally:
             await raw.close()
