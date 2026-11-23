@@ -12,7 +12,7 @@ import logging
 import re
 import time
 import uuid
-from contextlib import suppress
+from contextlib import aclosing, suppress
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -377,15 +377,51 @@ async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
     a safe ERROR; cancellation propagates without a fabricated terminal.
     """
     correlation_id = runtime_request.context.correlation_id
+    terminal_seen = False
+    consumer_closed = False
     try:
-        async for chunk in get_chat_runtime().execute_stream(runtime_request):
-            encoded = json.dumps(
-                chunk.to_sse_payload(), ensure_ascii=False, allow_nan=False,
-            )
-            yield chunk.type, encoded
-            if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
-                return
+        # A client can disconnect just after receiving one SSE frame. Keep
+        # canonical producer cleanup deterministic, not dependent on GC.
+        async with aclosing(get_chat_runtime().execute_stream(runtime_request)) as stream:
+            async for chunk in stream:
+                encoded = json.dumps(
+                    chunk.to_sse_payload(), ensure_ascii=False, allow_nan=False,
+                )
+                # Set finality *before* yielding the terminal frame. An SSE
+                # consumer may close immediately at that suspension point.
+                if chunk.type in (ChatStreamEventType.COMPLETE, ChatStreamEventType.ERROR):
+                    terminal_seen = True
+                try:
+                    yield chunk.type, encoded
+                except GeneratorExit:
+                    # A downstream close is not a request for more SSE bytes.
+                    # Remember it even when producer cleanup replaces the
+                    # GeneratorExit with an ordinary exception.
+                    consumer_closed = True
+                    raise
+                if terminal_seen:
+                    return
     except Exception as exc:
+        if consumer_closed:
+            logger.error(
+                "chat_stream_cleanup_failed_on_consumer_close",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return
+        if terminal_seen:
+            # A producer teardown failure cannot put a second terminal event
+            # after one the consumer already received.
+            logger.error(
+                "chat_stream_cleanup_failed_after_terminal",
+                extra={
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return
         # Driver/provider errors may embed prompts, SQL parameters, or secrets.
         # Record the type and correlation only, never the raw exception text.
         logger.error(
@@ -432,8 +468,11 @@ async def _sse(runtime_request: ChatExecutionRequest):
     """Canonical SSE framing of one terminalized, authoritative runtime turn."""
     # The first comment flushes headers without claiming model progress.
     yield ": stream_connected\n\n"
-    async for _event_type, packet in _terminalized_chat_json_events(runtime_request):
-        yield f"data: {packet}\n\n"
+    # Close the serializer when the SSE consumer disconnects between frames.
+    # It in turn closes ChatRuntime.execute_stream, preserving cancellation.
+    async with aclosing(_terminalized_chat_json_events(runtime_request)) as events:
+        async for _event_type, packet in events:
+            yield f"data: {packet}\n\n"
     yield "data: [DONE]\n\n"
 
 
