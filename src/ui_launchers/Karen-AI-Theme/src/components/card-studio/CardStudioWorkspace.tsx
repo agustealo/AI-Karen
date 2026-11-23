@@ -108,11 +108,39 @@ function insertOrReplace(
     .sort((a, b) => a.template_key.localeCompare(b.template_key));
 }
 
+/**
+ * Authenticated identity owns the entire editor subtree. A remount on
+ * principal change destroys in-memory templates, selected revisions, draft
+ * fields, and mutation state, and prevents a late response from the former
+ * principal from repainting the next user's workspace.
+ *
+ * The existing server's session, tenant, RBAC and RLS guards remain the only
+ * authority for actually reading or writing templates.
+ */
 export function CardStudioWorkspace() {
-  const { user } = useAuth();
-  const principal = user?.tenant_id && user?.user_id
+  const { user, isLoading, isAuthenticated } = useAuth();
+  const principal = isAuthenticated && user?.tenant_id && user?.user_id
     ? storageKey(user.tenant_id, user.user_id)
     : null;
+
+  if (!principal) {
+    if (isLoading) {
+      return <p role="status" className="p-6 text-sm">
+        Verifying your Card Studio account scope…
+      </p>;
+    }
+    return <section data-testid="card-studio-auth-required" className="p-6">
+      <h2 className="text-lg font-semibold">Card Studio requires authentication</h2>
+      <p className="text-sm text-muted-foreground">
+        Sign in with an authorized account to load your templates.
+      </p>
+    </section>;
+  }
+
+  return <PrincipalCardStudioWorkspace key={principal} principal={principal} />;
+}
+
+function PrincipalCardStudioWorkspace({ principal }: { principal: string }) {
   const [readiness, setReadiness] = useState<Readiness>("loading");
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [templates, setTemplates] = useState<SavedCardTemplate[]>([]);
@@ -299,9 +327,6 @@ export function CardStudioWorkspace() {
     await load();
   };
 
-  if (!principal) {
-    return <p role="status" className="p-6 text-sm">Verifying your Card Studio account scope…</p>;
-  }
   if (readiness === "loading") {
     return <p role="status" className="p-6 text-sm">Checking Card Studio availability and your saved layouts…</p>;
   }

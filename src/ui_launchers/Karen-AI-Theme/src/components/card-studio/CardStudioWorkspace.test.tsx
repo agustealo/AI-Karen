@@ -8,13 +8,22 @@ const endpoint = vi.hoisted(() => ({
   list: vi.fn(),
   submit: vi.fn(),
 }));
-vi.mock("@/lib/useAuth", () => ({
-  useAuth: () => ({
+const identity = vi.hoisted(() => ({
+  current: {
+    isAuthenticated: true,
+    isLoading: false,
     user: {
       user_id: "11111111-1111-1111-1111-111111111111",
       tenant_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     },
-  }),
+  } as {
+    isAuthenticated: boolean;
+    isLoading: boolean;
+    user: { user_id: string; tenant_id: string } | null;
+  },
+}));
+vi.mock("@/lib/useAuth", () => ({
+  useAuth: () => identity.current,
 }));
 vi.mock("@/lib/card-studio-api", async (original) => {
   const actual = await original<typeof import("@/lib/card-studio-api")>();
@@ -48,6 +57,14 @@ const catalog: CatalogEntry[] = [{
 }];
 
 beforeEach(() => {
+  identity.current = {
+    isAuthenticated: true,
+    isLoading: false,
+    user: {
+      user_id: "11111111-1111-1111-1111-111111111111",
+      tenant_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    },
+  };
   endpoint.catalog.mockReset().mockResolvedValue(catalog);
   endpoint.list.mockReset().mockResolvedValue([]);
   endpoint.submit.mockReset();
@@ -78,6 +95,105 @@ function fillDraft() {
     target: { value: "saved-clock" },
   });
 }
+
+describe("Card Studio principal isolation", () => {
+  const otherTenant = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const otherUser = "22222222-2222-2222-2222-222222222222";
+  const otherPrincipal = () => {
+    identity.current = {
+      isAuthenticated: true,
+      isLoading: false,
+      user: { tenant_id: otherTenant, user_id: otherUser },
+    };
+  };
+
+  it("clears selected records and draft fields immediately on user switch", async () => {
+    const old = {
+      template_id: "55555555-5555-4555-8555-555555555555",
+      template_key: "old-account-clock",
+      revision: 4,
+      lifecycle: "draft" as const,
+      definition: { ...valid, template_key: "old-account-clock", title: "Old account secret layout" },
+    };
+    endpoint.list.mockResolvedValueOnce([old]).mockResolvedValue([]);
+    const { rerender } = render(<CardStudioWorkspace />);
+    await screen.findByTestId("card-studio-workspace");
+    fireEvent.click(screen.getByRole("button", { name: /Old account secret layout/ }));
+    expect(screen.getByLabelText("Title")).toHaveValue("Old account secret layout");
+    otherPrincipal();
+    rerender(<CardStudioWorkspace />);
+    expect(screen.queryByText("Old account secret layout")).not.toBeInTheDocument();
+    expect(screen.queryByText("Server revision 4")).not.toBeInTheDocument();
+    await screen.findByTestId("card-studio-workspace");
+    expect(screen.getByLabelText("Title")).toHaveValue("");
+    expect(screen.getByText("No saved layouts were returned by your account.")).toBeVisible();
+    expect(endpoint.submit).not.toHaveBeenCalled();
+  });
+
+  it("does not let the previous principal's late response repopulate a new identity", async () => {
+    let resolveFormer: ((value: unknown[]) => void) | undefined;
+    const formerReply = new Promise<unknown[]>(resolve => {
+      resolveFormer = resolve;
+    });
+    const old = {
+      template_id: "55555555-5555-4555-8555-555555555555",
+      template_key: "private-layout",
+      revision: 2,
+      lifecycle: "draft" as const,
+      definition: { ...valid, template_key: "private-layout", title: "Private former owner" },
+    };
+    endpoint.list.mockImplementationOnce(() => formerReply).mockResolvedValue([]);
+    const { rerender } = render(<CardStudioWorkspace />);
+    await waitFor(() => expect(endpoint.list).toHaveBeenCalledTimes(1));
+    otherPrincipal();
+    rerender(<CardStudioWorkspace />);
+    await screen.findByTestId("card-studio-workspace");
+    expect(endpoint.list).toHaveBeenCalledTimes(2);
+    resolveFormer?.([old]);
+    await waitFor(() => {
+      expect(screen.getByText("No saved layouts were returned by your account.")).toBeVisible();
+    });
+    expect(screen.queryByText("Private former owner")).not.toBeInTheDocument();
+    expect(endpoint.submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unverified mutation scoped to its originating principal", async () => {
+    endpoint.submit.mockRejectedValueOnce(new TypeError("uncertain"));
+    const { rerender } = render(<CardStudioWorkspace />);
+    await screen.findByTestId("card-studio-workspace");
+    fillDraft();
+    fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+    await screen.findByText("Unverified save outcome");
+    const originalKey = window.sessionStorage.key(0);
+    expect(originalKey).toContain("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    otherPrincipal();
+    rerender(<CardStudioWorkspace />);
+    await screen.findByTestId("card-studio-workspace");
+    expect(screen.queryByText("Unverified save outcome")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Title")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "Retry identical request" })).not.toBeInTheDocument();
+    expect(endpoint.submit).toHaveBeenCalledTimes(1);
+    expect(window.sessionStorage.key(0)).toBe(originalKey);
+  });
+
+  it("removes prior-account content during an unauthenticated transition", async () => {
+    endpoint.list.mockResolvedValueOnce([{
+      template_id: "55555555-5555-4555-8555-555555555555",
+      template_key: valid.template_key,
+      revision: 1,
+      lifecycle: "draft",
+      definition: valid,
+    }]);
+    const { rerender } = render(<CardStudioWorkspace />);
+    await screen.findByTestId("card-studio-workspace");
+    expect(screen.getByRole("button", { name: /Saved clock/ })).toBeVisible();
+    identity.current = { isAuthenticated: false, isLoading: false, user: null };
+    rerender(<CardStudioWorkspace />);
+    expect(screen.queryByTestId("card-studio-workspace")).not.toBeInTheDocument();
+    expect(screen.getByTestId("card-studio-auth-required")).toBeVisible();
+    expect(screen.queryByText("Saved clock")).not.toBeInTheDocument();
+  });
+});
 
 describe("authenticated Card Studio layout UI", () => {
   it("fails closed when the backend feature is off", async () => {
