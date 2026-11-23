@@ -18,13 +18,8 @@ import { AlarmPanel } from './components/AlarmPanel';
 import { TimezoneConversionPanel } from './components/TimezoneConversionPanel';
 import { DiagnosticsPanel } from './components/DiagnosticsPanel';
 
-const TimeQueryPage: React.FC = () => {
-  // Integrate with host extension runtime
-  const { api, isReady, error: hostError } = usePluginExtension('time-query');
-  
-  // API Service layer wrapping raw execute calls
-  const timeApi = useMemo(() => new TimeQueryApi(api), [api]);
-
+/** Mount plugin commands only after the canonical extension host is ready. */
+const TimeQueryWorkspace: React.FC<{ timeApi: TimeQueryApi }> = ({ timeApi }) => {
   // Specific Feature hooks
   const { data: timeData, error: timeError, refresh: refreshTime } = useTimeQuery(timeApi);
   const enrichedTime = useTimePayload(timeData);
@@ -33,13 +28,6 @@ const TimeQueryPage: React.FC = () => {
   const { state: stopwatchState, performAction: performStopwatchAction } = useStopwatch(timeApi);
   const { alarms, error: alarmsError, fetchAlarms, createAlarm, deleteAlarm, toggleAlarm } = useAlarms(timeApi);
 
-  if (!isReady) {
-    return <LoadingState message="Initializing Time Query Plugin..." />;
-  }
-
-  if (hostError) {
-    return <ErrorState error={`Extension Host Error: ${hostError}`} />;
-  }
 
   // Dashboard layout
   return (
@@ -85,6 +73,22 @@ const TimeQueryPage: React.FC = () => {
       </div>
     </div>
   );
+};
+
+const TimeQueryPage: React.FC = () => {
+  const { api, isReady, error: hostError } = usePluginExtension('time-query');
+  const timeApi = useMemo(() => new TimeQueryApi(api), [api]);
+
+  // A failed health check must not be masked by an endless loading state.
+  if (hostError) {
+    return <ErrorState error={`Extension Host Error: ${hostError}`} />;
+  }
+
+  if (!isReady) {
+    return <LoadingState message="Initializing Time Query Plugin..." />;
+  }
+
+  return <TimeQueryWorkspace timeApi={timeApi} />;
 };
 
 export default TimeQueryPage;
