@@ -167,34 +167,26 @@ A consumer release must not pass while any of these independent live checks
 fails. Never broaden deployment protection or replay a mutating chat request
 against an alternate host to work around missing backend connectivity.
 
-## November 23, 2026: KREADY-01A exact-production-revision hold
+## November 23, 2026: KREADY-01A production identity and consumer acceptance
 
-**Status: NO-GO for latest-main consumer acceptance; release of another build is not authorized by this audit.** This is an observed deployment/provenance gap, not evidence that the current production deployment is offline.
+**Latest observation: production *platform metadata* matches GitHub `main`; live consumer acceptance remains NO-GO until proven.** This is a timestamped evidence record, not an authorization to deploy or promote.
 
-| Evidence source | Observed fact |
-| --- | --- |
-| GitHub branch `main` | `573dea8e3104d8b5e1d429058917c868c13aaf7b`, PR #1262 merged |
-| Latest-main Actions | Main Quality Gate, Production First-Boot Smoke, Context Authority Contract and Cognitive Proof CI succeeded for this exact SHA |
-| GitHub combined commit status | Vercel reported failure, linking to the deployment build-rate-limit guidance |
-| Vercel production deployment | `dpl_6civMQw1LWrEZGcy8NsUppZp9Yfz`, READY, Git SHA `fbfea8f639252b9bd345b78546f2bbbba6d7b41d` (PR #1270) |
-| Production aliases on that deployment | `ai-karen-beta.vercel.app`; `ai-karen-zeustheeternal-3982.vercel.app` |
-| Exact Vercel deployment lookup for latest `main` | No matching deployment returned |
-| Authenticated end-to-end browser acceptance for latest `main` | Not observed; do not infer from source CI or static Vercel READY |
-| Runtime health from live browser-network requests | Not independently verified in this audit environment |
-| Independent release approval | No approval submission observed on PR #1262 |
+### Deployment transition observed during this audit
 
-**Authority boundary:** The current production deployment is valid as a separate deployed artifact, but it is not proof that the later `main` changes have been deployed and accepted. The previously documented Vercel frontend environment-variable ownership and canonical FastAPI backend readiness gates remain independent and unresolved until rerun with live evidence. Absence of errors or available logs is not health proof.
+1. At the start of the audit, GitHub `main` was `573dea8e3104d8b5e1d429058917c868c13aaf7b` (PR #1262). Main Quality Gate, Production First-Boot Smoke, Context Authority Contract and Cognitive Proof CI had succeeded, but the Vercel combined commit status was failure and an exact-SHA deployment lookup returned no result. The older production deployment `dpl_6civMQw1LWrEZGcy8NsUppZp9Yfz` was READY for `fbfea8f639252b9bd345b78546f2bbbba6d7b41d` (PR #1270).
+2. During inspection, `main` advanced through an unrelated database configuration PR to **`7c5369b68ff7cbbf4286cfb01b068a9ba89250b8`**. Vercel subsequently reported production deployment **`dpl_AevQLfM6K569mdLrKhkmrXeRtiVo` READY** with `githubCommitRef=main` and **exact matching `githubCommitSha=7c5369b68ff7cbbf4286cfb01b068a9ba89250b8`**. The live production aliases reported for this deployment were `ai-karen-beta.vercel.app` and `ai-karen-zeustheeternal-3982.vercel.app`. The GitHub Vercel combined commit status for `7c5369b` was success.
+3. **Resolution scope:** The earlier Vercel *platform source mismatch* is no longer a current blocker for `7c5369b`. **Not resolved:** independent proof of the runtime's `/api/deployment-revision` response, the Vercel function's connection to canonical FastAPI `GET /ready`, environment variable ownership, signed-in browser acceptance, model execution, and independent reviewer approval. Neither the Vercel READY state nor absence of recent runtime logs establishes them.
 
-### Reuse the existing release gate
+### Reuse the existing, fail-closed release gate
 
-1. Pin a reviewed **40-character** GitHub `main` commit and inspect the immutable Vercel deployment metadata, target, project ID and source SHA. If `main` advances during testing, restart the evidence run on the new head. Do not automatically promote a preview or substitute an older production alias.
-2. After operator-governed frontend credential scope remediation, run `.github/workflows/vercel-environment-boundary.yml` against the exact `main` SHA. Only the existing `scripts/ci/verify_vercel_environment_scopes.py` owns this check. Never request decrypted secrets or move backend-only credentials into frontend Preview or Production.
-3. On an explicitly approved immutable deployment hostname, run `scripts/ci/verify_vercel_deployment.py` with the matching `KAREN_VERCEL_ACCEPTANCE_TARGET` and `scripts/ci/verify_deployment_revision.py`. Demand matching platform metadata, running `/api/deployment-revision` identity and live `/api/health` backend readiness, followed by direct canonical FastAPI `GET /ready` verification from the web runtime network. A first-boot container test or frontend compile does not satisfy these checks.
-4. Execute the **existing protected** `.github/workflows/karen-history-browser-acceptance.yml` on that reviewed SHA, including the authenticated `copilotkit-consumer` flow and required failure/replay scenarios, using disposable tenant-scoped identities. Keep acceptance credentials, conversation content and traces private. The workflow's pre-/post-browser provenance checks are mandatory, not optional.
-5. Record sanitized proof links for exact GitHub run IDs, immutable Vercel deployment ID and commit, backend readiness response, authenticated browser results, independent review decision and rollback candidate. Missing evidence means **NO-GO**, not a green approximation.
+1. Pin the **current reviewed 40-character main SHA**. Inspect the actual immutable deployment target, Vercel project ID, deployment ID, source SHA and production aliases. Revalidate after tests to prevent source drift; do not automatically promote a preview or silently accept an older alias.
+2. After operator-governed frontend credential-scope remediation, execute `.github/workflows/vercel-environment-boundary.yml` with the matching SHA, using the existing read-only `scripts/ci/verify_vercel_environment_scopes.py`. Do not request decrypted values, disclose credentials or remove backend-owned credentials before verifying separately provisioned backend ownership.
+3. On the exact approved immutable deployed hostname, run `scripts/ci/verify_vercel_deployment.py` with `KAREN_VERCEL_ACCEPTANCE_TARGET=production` (or expressly approved `preview`), followed by `scripts/ci/verify_deployment_revision.py`. Require actual `/api/deployment-revision` SHA parity, `/api/health` successful backend readiness and canonical FastAPI `GET /ready` reached from the web runtime network. Source/CI boot tests do not substitute.
+4. Run the existing protected `.github/workflows/karen-history-browser-acceptance.yml`, including the authorized `copilotkit-consumer` and failure/replay scenarios, on that immutable deployment. Use isolated tenant-scoped test identities and preserve secret-free evidence. Revalidate Vercel platform metadata, serving application and `main` after the browser run.
+5. Record exact CI run IDs, deployment ID, sanitized backend readiness proof, browser outcome, independent reviewer decision and rollback candidate. Any missing gate means **NO-GO for consumer release**.
 
-**Administrative follow-up:** GitHub branch metadata reported `main.protected=false`, and a repository rulesets query returned no enforced rulesets. A separate branch-protection endpoint returned 403 for this integration. An administrator must verify the actual mandatory CI/review enforcement before declaring release governance complete; this audit does not claim the integration has administrative access.
+**Governance observation:** At the audit time, GitHub `main.protected` was `false` and the rulesets listing was empty, while the direct protection endpoint returned 403 to this integration. An administrator must independently verify mandatory check and reviewer enforcement; do not infer secure protection settings from successful CI alone.
 
-This section is a dated observation. The acceptance source of truth remains the existing release scripts, workflows, deployment metadata and runtime receipts, not this document. Do not create new deployment orchestrators, provider fallbacks, or UI-owned readiness flags.
+**Authority:** Release scripts, protected workflows, Vercel platform source, runtime responses and verified browser receipts own the decision. This dated documentation cannot certify production readiness or justify a duplicate orchestrator, provider fallback, UI readiness flag or deployment script.
 
-Evidence links: [main commit](https://github.com/agustealo/AI-Karen/commit/573dea8e3104d8b5e1d429058917c868c13aaf7b), [main quality](https://github.com/agustealo/AI-Karen/actions/runs/45206385059), [first boot](https://github.com/agustealo/AI-Karen/actions/runs/45206385175), [older READY production artifact](https://vercel.com/zeustheeternal-3982/ai-karen/6civMQw1LWrEZGcy8NsUppZp9Yfz).
+Evidence: [old main](https://github.com/agustealo/AI-Karen/commit/573dea8e3104d8b5e1d429058917c868c13aaf7b), [new main](https://github.com/agustealo/AI-Karen/commit/7c5369b68ff7cbbf4286cfb01b068a9ba89250b8), [older Vercel production](https://vercel.com/zeustheeternal-3982/ai-karen/6civMQw1LWrEZGcy8NsUppZp9Yfz), [matching Vercel production](https://vercel.com/zeustheeternal-3982/ai-karen/AevQLfM6K569mdLrKhkmrXeRtiVo).
