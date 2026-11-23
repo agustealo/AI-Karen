@@ -41,20 +41,22 @@ class UploadSessionRepository:
 
     @staticmethod
     def _identity(tenant_id: str, owner_user_id: str) -> dict[str, str]:
-        if not tenant_id or not tenant_id.strip():
-            raise ValueError("tenant_id is required")
+        try:
+            tenant = str(UUID(tenant_id))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("tenant_id must be a UUID") from exc
         try:
             owner = str(UUID(owner_user_id))
         except (ValueError, TypeError, AttributeError) as exc:
             raise ValueError("owner_user_id must be a UUID") from exc
-        return {"tenant_id": tenant_id, "owner_user_id": owner}
+        return {"tenant_id": tenant, "owner_user_id": owner}
 
     @staticmethod
     def _record(row) -> UploadSession:
         data = row._mapping
         return UploadSession(
             session_id=str(data["session_id"]),
-            tenant_id=data["tenant_id"],
+            tenant_id=str(data["tenant_id"]),
             owner_user_id=str(data["owner_user_id"]),
             destination_id=data["destination_id"],
             recipe=data["recipe"],
