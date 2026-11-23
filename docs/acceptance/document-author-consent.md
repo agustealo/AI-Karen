@@ -378,3 +378,46 @@ undetectable at this SQL boundary and needs separately verified storage
 integrity, reconciliation, and approved-host acceptance. Consumer document
 ingestion remains **OFF**; no implicit permission or model learning is
 introduced.
+
+### WS-04B6: canonical object key and unchanged-metadata storage drift proof
+
+An adversarial storage audit found a broken wire: the canonical
+`SupabaseArtifactStore.upload` persists text at
+`supabase://artifacts/{tenant_uuid}/{artifact_uuid}/content`, but the
+owner-bounded text and legacy code readers were looking up an object path
+ending in the user-visible filename. Existing mocked HTTP tests had used
+that filename path as well. The filename is metadata, not a storage key.
+
+The same existing `SupabaseArtifactStore` now owns a single
+`_canonical_object_key` constructor for new uploads, plus one strict
+`_verified_object_key` selector for reads. New uploads always write
+`/content`. Previously stored code artifacts may legitimately have
+`/{safe_filename}` as their object key; the reader accepts this historical
+format **only** when the owner-scoped, locked PostgreSQL file row has exactly
+that URI. It does not probe multiple paths or fall back on failures.
+Both bounded text and code readers pin a single validated key before
+signing or downloading. The signed URL must remain on the configured
+Supabase origin and exact recorded artifact path. Arbitrary filenames,
+aliases and caller-provided URLs are not authority.
+
+The bounded reader already checks the SHA-256 of **actual** streamed
+object bytes against the locked PostgreSQL digest, with strict 206 range,
+byte budget, UTF-8 and timeout checks. New adversarial transport tests prove
+that a same-length, out-of-band object rewrite with **unchanged** file row
+fails closed, then a later fresh read of restored bytes succeeds. Tests
+also cover the real upload-storage-key contract, invalid alias paths, safe
+signed URL logging, no buffered fallback, and the legacy code key alignment.
+A successful bounded read is not a consent or runtime-purpose grant.
+
+**Important boundary:** This rejects changed bytes only when the canonical
+bounded reader is actually invoked. It does not imply PostgreSQL's
+file-metadata triggers will observe an out-of-band storage rewrite, revoke
+an existing receipt, or invalidate a published delegated grant on their own.
+KariSignature's existing analysis path rechecks the bounded reader; the
+published-style delegate-resolution path currently checks SQL grants and
+consent but does **not** fetch external Storage bytes. That unclosed
+use-time boundary remains blocked from consumer activation. A real-host
+storage trial with a deliberately altered disposable object, independent
+author consent, and before/after delegate denial must be observed before
+claiming end-to-end acceptance. Missing/skipped host acceptance is not green.
+Consumer document ingestion and automatic style learning stay OFF.
