@@ -320,7 +320,8 @@ class ChatRunCoordinator:
                         yield ChatStreamChunk(
                             type=ChatStreamEventType.ERROR,
                             content=(
-                                "Chat execution was not authorized to complete."
+                                "The chat runtime is currently not accepting execution. "
+                                "Check maintenance or runtime status, then try again."
                                 if gated else
                                 "Chat response could not be confirmed in saved history."
                             ),

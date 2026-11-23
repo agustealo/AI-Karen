@@ -1,28 +1,12 @@
 {
   "expression": {
-    "active_engine": "builtin",
+    "active_engine": "local",
     "engines": {
       "builtin": {
         "enabled": true,
         "type": "builtin_provider_engine",
         "fallback_eligible": false,
-        "metadata": {
-          "preferred_provider": "vllm",
-          "preferred_model": "auto",
-          "providers": {
-            "vllm": {
-              "enabled": true,
-              "provider_type": "builtin",
-              "base_url": "http://vllm:8000/v1",
-              "health_url": "http://vllm:8000/health"
-            },
-            "transformers": {
-              "enabled": true,
-              "provider_type": "builtin",
-              "model_path": "models/transformers"
-            }
-          }
-        }
+        "base_url": "http://host.docker.internal:11434/v1"
       },
       "openai_compatible_local": {
         "enabled": false,

@@ -351,12 +351,14 @@ DEFAULT_CONFIG = {
         "show_debug_info": False,
     },
     "expression": {
-        "active_engine": "builtin",
-        "enabled_engines": ["builtin", "openai_compatible_local"],
-        "fallback_order": ["builtin", "openai_compatible_local", "llama_cpp_server", "glm"],
+        "active_engine": "local",
+        "enabled_engines": ["local", "ollama"],
+        "fallback_order": ["local", "ollama"],
         "policies": {
             "allow_third_party": True,
-            "allow_external": False
+            "allow_external": False,
+            "allow_external_engines": False,
+            "require_admin_for_external": True
         }
     },
 }

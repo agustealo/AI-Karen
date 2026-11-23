@@ -90,15 +90,17 @@
     "max_retries": 3
   },
   "expression": {
-    "active_engine": "cloud",
+    "active_engine": "local",
     "fallback_order": [
-      "cloud",
-      "builtin",
-      "local"
+      "local",
+      "ollama",
+      "builtin"
     ],
     "policies": {
       "allow_third_party": true,
-      "allow_external": true
+      "allow_external": false,
+      "allow_external_engines": false,
+      "require_admin_for_external": true
     },
     "engines": {
       "ollama": {
@@ -125,8 +127,8 @@
         }
       },
       "cloud": {
-        "enabled": true,
-        "fallback_eligible": true,
+        "enabled": false,
+        "fallback_eligible": false,
         "metadata": {
           "preferred_provider": "zai",
           "preferred_model": "glm-4.5"
@@ -134,9 +136,9 @@
       }
     },
     "enabled_engines": [
+      "local",
       "ollama",
-      "builtin",
-      "openai_compatible_local"
+      "builtin"
     ]
   },
   "security": {

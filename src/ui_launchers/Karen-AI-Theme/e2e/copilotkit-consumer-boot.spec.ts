@@ -101,6 +101,33 @@ async function expectObservedTranscriptPersistenceFailure(
 }
 
 /**
+ * Canonical generative response_source identifiers emitted by ExpressionGateway
+ * (src/ai_karen_engine/core/expression/gateway.py:MODEL_GENERATION_RESPONSE_SOURCES).
+ * Non-generative sources (memory, tool, persisted_history, emergency_static,
+ * model_unavailable, etc.) must always be rejected.
+ */
+const CANONICAL_GENERATIVE_RESPONSE_SOURCES = new Set([
+  "provider_runtime",
+  "fallback_provider_runtime",
+  "openai_compatible_engine",
+  "model",
+]);
+
+function isVerifiedGenerativeResponseSource(responseSource: string): boolean {
+  const normalized = responseSource.trim().toLowerCase();
+  if (
+    !normalized ||
+    /(?:^|[_-])(?:unavailable|error|failed|canned|static|replay|memory|tool)(?:[_-]|$)/.test(normalized)
+  ) {
+    return false;
+  }
+  return (
+    CANONICAL_GENERATIVE_RESPONSE_SOURCES.has(normalized) ||
+    /(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(normalized)
+  );
+}
+
+/**
  * Model text alone is insufficient release proof: backend-saved execution
  * provenance must be bound to the precise persisted assistant turn. The
  * thread gateway already verifies this snapshot before the SDK displays it.
@@ -144,7 +171,7 @@ async function expectVerifiedExecutionReceipt(
     // canned fallback, or replay. Require a generative provenance category.
     // This is provider-agnostic and accepts local, remote and fallback models.
     const responseSource = (metadata.response_source as string).trim().toLowerCase();
-    return /(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource);
+    return isVerifiedGenerativeResponseSource(responseSource);
   }, {
     timeout: 30_000,
     intervals: [500, 1000, 2000],
@@ -913,7 +940,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         // An observed model receipt must attest generation, not a tool,
         // static fallback or stale memory response with populated attribution.
         const responseSource = (model.response_source as string).trim().toLowerCase();
-        if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource)) {
+        if (!isVerifiedGenerativeResponseSource(responseSource)) {
           return false;
         }
       }

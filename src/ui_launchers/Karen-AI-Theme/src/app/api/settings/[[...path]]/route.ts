@@ -19,6 +19,7 @@ function getBackendPath(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   return proxyToBackend(request, getBackendPath(request), {
+    longTimeout: true,
     retryAttempts: 3,
     retryDelayMs: 250,
     retryOnStatusCodes: [500, 502, 503, 504],
@@ -27,6 +28,7 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   return proxyToBackend(request, getBackendPath(request), {
+    longTimeout: true,
     retryAttempts: 3,
     retryDelayMs: 250,
     retryOnStatusCodes: [500, 502, 503, 504],
@@ -35,6 +37,7 @@ export async function PUT(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   return proxyToBackend(request, getBackendPath(request), {
+    longTimeout: true,
     retryAttempts: 3,
     retryDelayMs: 250,
     retryOnStatusCodes: [500, 502, 503, 504],
@@ -43,6 +46,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   return proxyToBackend(request, getBackendPath(request), {
+    longTimeout: true,
     retryAttempts: 3,
     retryDelayMs: 250,
     retryOnStatusCodes: [500, 502, 503, 504],

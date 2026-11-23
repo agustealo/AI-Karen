@@ -52,10 +52,17 @@ def test_local_reuses_real_first_turn_model_persistence_and_replay_proof() -> No
 
 
 def test_real_first_turn_requires_generative_response_source_not_metadata_only() -> None:
+    from ai_karen_engine.core.expression.gateway import MODEL_GENERATION_RESPONSE_SOURCES
+
     source = SPEC.read_text(encoding="utf-8")
     assert 'const required = ["actual_provider", "actual_model", "response_source"] as const;' in source
     assert 'const responseSource = (metadata.response_source as string).trim().toLowerCase();' in source
-    assert '/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource)' in source
+    assert "function isVerifiedGenerativeResponseSource(responseSource: string): boolean" in source
+    assert "return isVerifiedGenerativeResponseSource(responseSource);" in source
+    for canonical_source in sorted(MODEL_GENERATION_RESPONSE_SOURCES):
+        assert f'"{canonical_source}"' in source
+    assert '/(?:^|[_-])(?:unavailable|error|failed|canned|static|replay|memory|tool)(?:[_-]|$)/.test(normalized)' in source
+    assert '/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(normalized)' in source
     assert 'return metadata.response_source !== "persisted_history";' not in source
     assert 'item.messageId === matching[0].id' in source
     assert 'matching.length !== 1' in source
@@ -71,7 +78,7 @@ def test_first_prompt_rich_presentation_replay_is_bound_to_original_assistant() 
     assert 'expect(matchingPresentations, "The exact presentation must replay once on its original assistant turn")' in source
     assert 'expect(replaySnapshot.threadId).toBe(conversationId)' in source
     assert 'savedEvents.some(event =>' not in source
-    assert 'if (!/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/.test(responseSource))' in source
+    assert 'if (!isVerifiedGenerativeResponseSource(responseSource))' in source
     assert 'if (receipts.length > 1) return false;' in source
     assert 'event.messageId === reply.id' in source
 

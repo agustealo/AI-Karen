@@ -237,6 +237,10 @@ export const getDegradedResponseMessage = (error: unknown): string => {
  * user is directed to verified conversation history before manual retry.
  */
 const RUN_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
+  CHAT_RUNTIME_GATED:
+    'Karen cannot accept chat execution until the runtime gate is cleared. Check system maintenance or runtime status, then retry.',
+  CHAT_TRANSCRIPT_NOT_PERSISTED:
+    'Karen could not confirm that the chat response was saved to conversation history. Check verified history before retrying.',
   CHAT_TRANSCRIPT_PERSISTENCE_FAILED:
     'Karen generated a response, but its conversation history could not be verified as saved. Check conversation history before sending the prompt again.',
   CHAT_EVENT_JOURNAL_UNAVAILABLE:
@@ -261,6 +265,8 @@ const RUN_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
     'The chat run was cancelled. Check verified history for any partial response before starting another run.',
   BACKEND_TARGET_NOT_CONFIGURED:
     'The chat backend address is not configured. An administrator must repair the deployment connection before prompts can run.',
+  external_admin_permission_required:
+    'Karen blocked an external provider because administrator authorization is not active. Choose an available local model or request external-provider approval.',
 };
 
 const RUN_FAILURE_UNKNOWN =
