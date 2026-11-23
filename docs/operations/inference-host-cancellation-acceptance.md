@@ -36,7 +36,7 @@ The existing Core provider SSE transport performs every inference call:
 2. Execute real model warm-up and sample the idle baseline.
 3. In an **isolated first phase**, open long generation A, observe an actual provider token and native running-request gauge. Require the native normal completion counter to be unchanged when cancellation starts.
 4. Close A and measure transport closure. Start the scheduler-drain budget at the **actual disconnect** rather than after a separate model request finishes. Require zero running/waiting counts before the deadline, a stable generated-token counter after a one-second quiet period, and no new normal stop/length completion for A.
-5. In a **second phase**, open long generation A2, then open independent B before closing A2. Verify B's own model token and genuine terminal completion. Drain the scheduler after B without reusing B's duration as a measurement of A's first-phase cancellation latency.
+5. In a **second phase**, open long generation A2, then open independent B before closing A2. Verify B's own model token and genuine terminal completion. Require **exactly one** new normal completion (B), and no extra normal completion for A2; check this again after a quiet interval. Drain the scheduler after B without reusing B's duration as a measurement of A's first-phase cancellation latency.
 6. Run a fresh model request without restarting the host; verify its terminal receipt and final idle scheduler.
 7. Save bounded technical evidence without prompts, generated text, credentials or identifying tenant data, with separate flags for quiescence observed and request-specific abort unverified.
 
