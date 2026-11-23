@@ -818,7 +818,7 @@ async def individual_extension_health(
 
         return {
             "extension": extension_name,
-            "status": metrics.status.value,
+            "status": metrics.health.value,
             "response_time_ms": metrics.response_time_ms,
             "uptime_seconds": metrics.uptime_seconds,
             "error_count": metrics.error_count,
@@ -828,7 +828,7 @@ async def individual_extension_health(
             "api_calls_per_minute": metrics.api_calls_per_minute,
             "memory_usage_mb": metrics.memory_usage_mb,
             "cpu_usage_percent": metrics.cpu_usage_percent,
-            "last_check": metrics.last_check.isoformat(),
+            "last_check": metrics.last_check.isoformat() if metrics.last_check else None,
             "error": safe_extension_health_error(metrics.error),
             "correlation_id": correlation_id,
             "timestamp": time.time(),

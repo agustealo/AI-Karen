@@ -203,3 +203,44 @@ async def test_service_health_failure_does_not_reflect_sql_parameters(
         "status": "unknown", "error": "Health check unavailable",
     }
     assert secret not in response.text
+
+
+
+@pytest.mark.asyncio
+async def test_individual_extension_health_uses_canonical_health_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.api_routes.monitoring import health
+    from ai_karen_engine.extensions import health as extension_health
+
+    secret = "PRIVATE_HEALTH_RECORD_ERROR"
+    metrics = SimpleNamespace(
+        health=SimpleNamespace(value="degraded"),
+        response_time_ms=12.0, uptime_seconds=50.0, error_count=2,
+        success_count=3, background_tasks_active=0, background_tasks_failed=1,
+        api_calls_per_minute=0.0, memory_usage_mb=10.0, cpu_usage_percent=1.0,
+        last_check=None, error=secret,
+    )
+    monitor = SimpleNamespace(
+        check_extension_system_health=AsyncMock(
+            return_value=SimpleNamespace(extension_metrics={"widget": metrics})
+        ),
+    )
+    monkeypatch.setattr(extension_health, "get_extension_health_monitor", lambda: monitor)
+    monkeypatch.setattr(
+        health, "get_structured_logging_service",
+        lambda: SimpleNamespace(log_api_request=lambda **_kwargs: None),
+    )
+    app = FastAPI()
+    app.include_router(health.router)
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/health/extensions/widget")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["last_check"] is None
+    assert response.json()["error"] == "Extension health check failed"
+    assert secret not in response.text
