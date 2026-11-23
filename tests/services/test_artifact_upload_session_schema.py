@@ -15,7 +15,9 @@ MIGRATION = (
 
 def test_upload_ledger_is_private_and_owner_scoped():
     sql = MIGRATION.read_text(encoding="utf-8").lower()
-    assert "tenant_id uuid not null" in sql
+    assert "tenant_id text not null" in sql
+    upgrade = (MIGRATION.parent / "20261123020000_68_artifact_upload_tenant_uuid.sql").read_text(encoding="utf-8").lower()
+    assert "alter column tenant_id type uuid using tenant_id::uuid" in upgrade
     assert "owner_user_id uuid not null" in sql
     assert "enable row level security" in sql
     assert "force row level security" in sql
