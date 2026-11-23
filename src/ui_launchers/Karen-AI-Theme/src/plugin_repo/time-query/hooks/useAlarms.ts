@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect } from 'react';
 import { TimeQueryApi } from '../services/timeQueryApi';
 import type { AlarmItem, AlarmCreateParams } from '../types';
-import { PluginExtensionError } from '@/lib/extensions/hooks/usePluginExtension';
+import { ApiError } from '@/lib/api';
 
 const isRateLimitError = (error: unknown) =>
-  error instanceof PluginExtensionError && error.status === 429;
+  error instanceof ApiError && error.status === 429;
 
 export function useAlarms(api: TimeQueryApi) {
   const [alarms, setAlarms] = useState<AlarmItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchAlarms = useCallback(async () => {
     setLoading(true);
@@ -16,8 +17,10 @@ export function useAlarms(api: TimeQueryApi) {
       const res = await api.getAlarms();
       if (res && res.status === 'success' && res.alarms) {
         setAlarms(res.alarms);
+        setError(null);
       }
     } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load alarms');
       if (!isRateLimitError(e)) {
         console.error(e);
       }
@@ -45,5 +48,5 @@ export function useAlarms(api: TimeQueryApi) {
     fetchAlarms();
   }, [fetchAlarms]);
 
-  return { alarms, loading, fetchAlarms, createAlarm, deleteAlarm, toggleAlarm };
+  return { alarms, loading, error, fetchAlarms, createAlarm, deleteAlarm, toggleAlarm };
 }
