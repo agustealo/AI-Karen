@@ -1,0 +1,315 @@
+"""WS-04A9C: read-only consent verifier contract tests.
+
+No test fixture grants authority to the runtime or issues a consent receipt.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+from fastapi import Request
+
+import pytest
+
+from ai_karen_engine.services.postgres_document_style_consent_issuer import (
+    PostgresDocumentStyleConsentIssuer,
+)
+
+pytestmark = pytest.mark.asyncio
+
+
+class FakeResult:
+    def __init__(self, row):
+        self.row = row
+
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return self.row
+
+
+class FakeContext:
+    def __init__(self, session):
+        self.session = session
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+def fixture():
+    tenant, actor, profile, artifact, receipt = (
+        str(uuid.uuid4()) for _ in range(5)
+    )
+    row = {
+        "receipt_id": uuid.UUID(receipt),
+        "author_actor_id": uuid.UUID(actor),
+        "analysis_allowed": True,
+        "style_use_allowed": False,
+        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        "source_sha256": "a" * 64,
+        "sha256": "a" * 64,
+    }
+    session = SimpleNamespace(execute=AsyncMock(return_value=FakeResult(row)))
+    client = SimpleNamespace(get_async_session=lambda: FakeContext(session))
+    issuer = PostgresDocumentStyleConsentIssuer(client_factory=lambda: client)
+    scope = dict(
+        tenant_id=tenant, actor_id=actor,
+        profile_id=profile, artifact_id=artifact,
+    )
+    return issuer, scope, session, row
+
+
+async def test_valid_receipt_matches_scope_and_preserves_separate_use_permission():
+    issuer, scope, session, row = fixture()
+    decision = await issuer.verify_current(**scope)
+    assert decision is not None
+    assert decision.tenant_id == scope["tenant_id"]
+    assert decision.source_id == scope["artifact_id"]
+    assert decision.consent_receipt_id == str(row["receipt_id"])
+    assert decision.analysis_allowed is True
+    assert decision.style_use_allowed is False
+    assert session.execute.await_count == 4  # three RLS config calls + SELECT
+    # A fake row cannot establish database authorization: require the actual
+    # statement to retain every source/consent lifetime and owner fence.
+    statement, params = session.execute.await_args.args
+    sql = str(statement)
+    for mandatory in (
+        "FOR SHARE OF c, f, p",
+        "c.revoked_at IS NULL",
+        "c.expires_at>clock_timestamp()",
+        "c.author_attested IS TRUE",
+        "c.analysis_allowed IS TRUE",
+        "f.deleted_at IS NULL",
+        "f.sha256=c.source_sha256",
+        "f.owner_user_id=c.author_actor_id",
+        "p.owner_actor_id=c.owner_actor_id",
+        "f.bytes BETWEEN 1 AND 65536",
+        "p.state<>'revoked'",
+    ):
+        assert mandatory in sql
+    assert params == {
+        "tenant": scope["tenant_id"],
+        "profile": scope["profile_id"],
+        "actor": scope["actor_id"],
+        "artifact": scope["artifact_id"],
+    }
+
+
+@pytest.mark.parametrize("field", ["tenant_id", "actor_id", "profile_id", "artifact_id"])
+async def test_noncanonical_scope_denied_before_database_access(field):
+    issuer, scope, session, _ = fixture()
+    scope[field] = str(uuid.uuid4()).upper()
+    assert await issuer.verify_current(**scope) is None
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing", "expired", "malformed_digest", "digest_drift",
+    "foreign_author", "invalid_receipt", "analysis_denied",
+    "invalid_use_value", "naive_expiry",
+])
+async def test_untrusted_or_stale_receipt_denied(mutation):
+    issuer, scope, session, row = fixture()
+    if mutation == "missing":
+        session.execute.return_value = FakeResult(None)
+    elif mutation == "expired":
+        row["expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    elif mutation == "malformed_digest":
+        row["source_sha256"] = ""
+    elif mutation == "digest_drift":
+        row["sha256"] = "b" * 64
+    elif mutation == "foreign_author":
+        row["author_actor_id"] = uuid.uuid4()
+    elif mutation == "invalid_receipt":
+        row["receipt_id"] = "not-a-uuid"
+    elif mutation == "analysis_denied":
+        row["analysis_allowed"] = False
+    elif mutation == "invalid_use_value":
+        row["style_use_allowed"] = 1
+    elif mutation == "naive_expiry":
+        row["expires_at"] = datetime.utcnow()
+    assert await issuer.verify_current(**scope) is None
+
+
+async def test_database_error_never_becomes_consent():
+    issuer, scope, session, _ = fixture()
+    session.execute.side_effect = RuntimeError("internal database credential")
+    assert await issuer.verify_current(**scope) is None
+
+
+
+async def test_default_issuer_cannot_mint_or_revoke_a_receipt():
+    issuer, scope, session, _ = fixture()
+    assert await issuer.issue_first_party(
+        **scope, analysis_allowed=True, style_use_allowed=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        correlation_id="no-policy",
+    ) is None
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="no-policy", request=None,
+    ) is False
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("case", [
+    "policy_denied", "falsey_consent", "expired", "invalid_scope",
+    "invalid_correlation", "naive_expiry", "wrong_use_type",
+])
+async def test_issue_denied_without_trusted_complete_authorization(case):
+    _, scope, session, _ = fixture()
+    policy = SimpleNamespace(
+        authorize_issuance=AsyncMock(return_value=True),
+        authorize_revocation=AsyncMock(return_value=True),
+    )
+    client = SimpleNamespace(get_async_session=lambda: FakeContext(session))
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: client, issuance_policy=policy
+    )
+    request = dict(
+        **scope, analysis_allowed=True, style_use_allowed=False,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        correlation_id="consent-correlation",
+    )
+    if case == "policy_denied":
+        policy.authorize_issuance.return_value = False
+    elif case == "falsey_consent":
+        request["analysis_allowed"] = False
+    elif case == "expired":
+        request["expires_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    elif case == "invalid_scope":
+        request["artifact_id"] = "arbitrary-document-id"
+    elif case == "invalid_correlation":
+        request["correlation_id"] = " "
+    elif case == "naive_expiry":
+        request["expires_at"] = datetime.utcnow()
+    elif case == "wrong_use_type":
+        request["style_use_allowed"] = 1
+    assert await issuer.issue_first_party(**request) is None
+    session.execute.assert_not_awaited()
+
+
+async def test_legacy_policy_boolean_cannot_mint_document_consent():
+    """A policy callback alone is not a durable author-confirmed approval."""
+    _, scope, session, _ = fixture()
+    policy = SimpleNamespace(
+        authorize_issuance=AsyncMock(return_value=True),
+        authorize_revocation=AsyncMock(return_value=True),
+    )
+    client = SimpleNamespace(get_async_session=lambda: FakeContext(session))
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: client, issuance_policy=policy
+    )
+    assert await issuer.issue_first_party(
+        **scope, analysis_allowed=True, style_use_allowed=True,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        correlation_id="legacy-policy-must-not-mint",
+    ) is None
+    policy.authorize_issuance.assert_not_awaited()
+    session.execute.assert_not_awaited()
+    # Approved receipt issuance is tested on a real disposable PostgreSQL
+    # transaction, including fresh bearer revalidation and source digest.
+
+
+async def test_revocation_requires_host_permission_and_scope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from ai_karen_engine.auth import session as auth_session
+    _, scope, session, _ = fixture()
+    request = Request({
+        "type": "http", "method": "POST", "path": "/internal/author-revoke",
+        "scheme": "https", "root_path": "",
+        "headers": [(b"authorization", b"Bearer verified-author-token")],
+        "query_string": b"", "server": ("localhost", 443),
+    })
+    actor = scope["actor_id"]
+    tenant = scope["tenant_id"]
+    principal = SimpleNamespace(user_id=actor, tenant_id=tenant)
+    context = SimpleNamespace(
+        user_id=actor, tenant_id=tenant,
+        require_authenticated_user=lambda: principal,
+    )
+    verify = AsyncMock(return_value=context)
+    monkeypatch.setattr(
+        auth_session, "get_document_style_consent_context", verify,
+    )
+    policy = SimpleNamespace(
+        authorize_issuance=AsyncMock(return_value=True),
+        authorize_revocation=AsyncMock(return_value=False),
+    )
+    client = SimpleNamespace(get_async_session=lambda: FakeContext(session))
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: client, issuance_policy=policy
+    )
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="deny-revoke", request=request,
+    ) is False
+    session.execute.assert_not_awaited()
+    policy.authorize_revocation.return_value = True
+    class Changed:
+        def first(self):
+            return (uuid.uuid4(),)
+    session.execute.side_effect = [
+        FakeResult(None), FakeResult(None), FakeResult(None), Changed(),
+    ]
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="revoke", request=request,
+    ) is True
+    assert session.execute.await_count == 4
+    assert "UPDATE public.writing_style_document_consents" in str(
+        session.execute.await_args_list[-1].args[0]
+    )
+    assert verify.await_count == 2
+
+
+@pytest.mark.parametrize("invalid", [
+    "foreign_actor", "foreign_tenant", "missing_request", "auth_denied",
+])
+async def test_revoke_fails_closed_on_unverified_or_foreign_author(
+    monkeypatch: pytest.MonkeyPatch, invalid: str,
+):
+    from ai_karen_engine.auth import session as auth_session
+    _, scope, session, _ = fixture()
+    context = SimpleNamespace(
+        user_id=scope["actor_id"],
+        tenant_id=scope["tenant_id"],
+        require_authenticated_user=lambda: SimpleNamespace(
+            user_id=scope["actor_id"],
+            tenant_id=scope["tenant_id"],
+        ),
+    )
+    if invalid == "foreign_actor":
+        context.user_id = str(uuid.uuid4())
+    if invalid == "foreign_tenant":
+        context.tenant_id = str(uuid.uuid4())
+    verify = AsyncMock(return_value=context)
+    if invalid == "auth_denied":
+        verify.side_effect = PermissionError("revoked_token")
+    monkeypatch.setattr(
+        auth_session, "get_document_style_consent_context", verify,
+    )
+    policy = SimpleNamespace(
+        authorize_revocation=AsyncMock(return_value=True),
+    )
+    issuer = PostgresDocumentStyleConsentIssuer(
+        client_factory=lambda: SimpleNamespace(
+            get_async_session=lambda: FakeContext(session)
+        ),
+        issuance_policy=policy,
+    )
+    request = None if invalid == "missing_request" else Request({
+        "type": "http", "method": "POST", "path": "/internal/author-revoke",
+        "scheme": "https", "root_path": "",
+        "headers": [(b"authorization", b"Bearer verified-author-token")],
+        "query_string": b"", "server": ("localhost", 443),
+    })
+    assert await issuer.revoke_first_party(
+        **scope, correlation_id="reject", request=request,
+    ) is False
+    policy.authorize_revocation.assert_not_awaited()
+    session.execute.assert_not_awaited()

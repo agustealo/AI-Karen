@@ -158,6 +158,80 @@ async def list_archived_artifacts(
     return items
 
 
+class OwnedArtifactPage(BaseModel):
+    """Tenant-and-owner scoped metadata projection. No source bytes or URLs."""
+    items: List[ArtifactMetadataResponse]
+    next_cursor: Optional[str] = None
+    has_more: bool = False
+
+
+@router.get("/owner-page", response_model=OwnedArtifactPage)
+async def list_owned_artifact_page(
+    limit: int = 100,
+    cursor: Optional[str] = None,
+    current_user = Depends(get_current_user),
+):
+    """Page through the existing canonical owner-only ArtifactStore query."""
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise HTTPException(status_code=422, detail="Invalid owner page limit")
+    if cursor is not None and (not cursor or len(cursor) > 768):
+        raise HTTPException(status_code=422, detail="Invalid owner page cursor")
+    tenant_id, user_id = _artifact_principal(current_user)
+    store = _get_artifact_store()
+    result = await store.list_owner_artifacts_page(
+        tenant_id, user_id, limit=limit, cursor=cursor,
+    )
+    if not result.success:
+        raise HTTPException(status_code=503, detail="Owned artifact inventory unavailable")
+    # The repository, not this HTTP boundary, owns paging decisions. An
+    # incomplete or malformed result must never masquerade as a final page.
+    meta = result.metadata
+    if (
+        not isinstance(result.data, list)
+        or len(result.data) > limit
+        or not isinstance(meta, dict)
+        or type(meta.get("has_more")) is not bool
+    ):
+        raise HTTPException(status_code=503, detail="Owned artifact page invalid")
+    has_more = meta["has_more"]
+    next_cursor = meta.get("next_cursor")
+    if has_more and (
+        not result.data
+        or not isinstance(next_cursor, str)
+        or not 1 <= len(next_cursor) <= 768
+        or next_cursor == cursor
+    ):
+        raise HTTPException(status_code=503, detail="Owned artifact cursor unavailable")
+    if not has_more and next_cursor is not None:
+        raise HTTPException(status_code=503, detail="Owned artifact cursor inconsistent")
+    items: List[ArtifactMetadataResponse] = []
+    for artifact in result.data:
+        if (
+            artifact.tenant_id != tenant_id
+            or artifact.user_id != user_id
+            or artifact.deleted_at is not None
+        ):
+            raise HTTPException(status_code=503, detail="Owned artifact scope mismatch")
+        items.append(ArtifactMetadataResponse(
+            id=artifact.id,
+            tenant_id=artifact.tenant_id,
+            user_id=artifact.user_id,
+            conversation_id=artifact.conversation_id,
+            message_id=artifact.message_id,
+            kind=artifact.kind,
+            mime_type=artifact.mime_type,
+            filename=artifact.filename,
+            size_bytes=artifact.size_bytes,
+            sha256=artifact.sha256,
+            created_at=artifact.created_at.isoformat() if artifact.created_at else "",
+            deleted_at=None,
+        ))
+    return OwnedArtifactPage(
+        items=items, has_more=has_more,
+        next_cursor=next_cursor if has_more else None,
+    )
+
+
 @router.get("/{artifact_id}", response_model=ArtifactMetadataResponse)
 async def get_artifact_metadata(
     artifact_id: str,

@@ -120,16 +120,23 @@ def test_verified_bearer_identity_resolver_is_required_for_admin_lifecycle() -> 
     auth_source = (ROOT / "src/ai_karen_engine/auth/session.py").read_text(
         encoding="utf-8"
     )
+    shared = auth_source.split(
+        "async def _verified_high_risk_bearer_context", 1
+    )[1].split("async def get_plugin_lifecycle_context", 1)[0]
     resolver = auth_source.split(
         "async def get_plugin_lifecycle_context", 1
-    )[1].split("__all__", 1)[0]
-    assert "should_bypass_auth()" in resolver
-    assert 'startswith("Bearer ")' in resolver
-    assert "validate_token(token)" in resolver
-    assert 'payload.get("token_id")' in resolver
-    assert "ChatExecutionContext(" in resolver
-    assert 'request.headers.get("X-Session-Id")' not in resolver
-    assert "get_dev_user_context" not in resolver
+    )[1].split("async def get_document_style_consent_context", 1)[0]
+    assert '_verified_high_risk_bearer_context(' in resolver
+    assert 'purpose="plugin-lifecycle"' in resolver
+    assert "should_bypass_auth()" in shared
+    assert 'startswith("Bearer ")' in shared
+    assert "validate_token(token)" in shared
+    assert 'payload.get("token_id")' in shared
+    assert "ChatExecutionContext(" in shared
+    assert 'request.headers.get("X-Session-Id")' not in shared + resolver
+    assert "get_dev_user_context" not in shared + resolver
+    assert "Permission.ADMIN_PLUGINS_MANAGE" in resolver
+    assert "rbac.audit_access_attempt" in resolver
 
     # Both HTTP surfaces must depend on the verified bearer resolver and
     # must never reconstruct a session or lifecycle scope in the route.

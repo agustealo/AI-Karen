@@ -9,10 +9,14 @@ import { defineConfig, devices } from '@playwright/test';
 // This mode runs the existing approved local-only acceptance test repeatedly.
 // Never hide intermittent failures with CI retries or require a desktop display.
 const localBenchmark = process.env.KAREN_LOCAL_LATENCY_BENCHMARK === '1';
-const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'true';
+// Document-author acceptance uses the existing private, no-retry authenticated
+// browser contract; do not introduce a competing capture/retry authority.
+const settingsAcceptance = process.env.KAREN_SETTINGS_VISUAL_ACCEPTANCE === 'true' ||
+  process.env.KAREN_DOCUMENT_AUTHOR_ACCEPTANCE === 'true';
 const navigationAcceptance = process.env.KAREN_NAV_VISUAL_ACCEPTANCE === 'true';
 const fileExplorerAcceptance = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === 'true';
 const pinReadbackAcceptance = process.env.KAREN_PIN_READBACK_ACCEPTANCE === '1';
+const documentAuthorAcceptance = process.env.KAREN_DOCUMENT_AUTHOR_ACCEPTANCE === 'true';
 // A local benchmark signs in with real credentials. Disable sensitive
 // recordings at configuration authority, even if a future spec forgets
 // its own test.use privacy override or someone opts into capture video.
@@ -42,7 +46,7 @@ export default defineConfig({
   // Authenticated Settings acceptance must not persist response text,
   // failure stacks or browser state into local HTML/JSON result artifacts.
   // The console list reporter supplies the protected job's result.
-  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance
+  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance
     ? [['list']]
     : [
         ['html', { outputFolder: 'playwright-report' }],

@@ -57,6 +57,7 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
     engine = None
     try:
         await raw.execute("""
+            DROP TABLE IF EXISTS public.writing_style_document_consents CASCADE;
             DROP TABLE IF EXISTS public.writing_style_sample_audit CASCADE;
             DROP TABLE IF EXISTS public.writing_style_sample_evidence CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_sample_revoke_only() CASCADE;
@@ -70,12 +71,26 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
             DROP TABLE IF EXISTS public.writing_style_revisions CASCADE;
             DROP TABLE IF EXISTS public.writing_style_profiles CASCADE;
             DROP FUNCTION IF EXISTS public.writing_style_prevent_revision_mutation() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_consent_validate() CASCADE;
+            DROP FUNCTION IF EXISTS public.writing_style_document_consent_revoke_fence() CASCADE;
+            DROP TABLE IF EXISTS public.files CASCADE;
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
+            CREATE TABLE public.files (
+                file_id text PRIMARY KEY,
+                tenant_id uuid NOT NULL,
+                owner_user_id uuid NOT NULL,
+                name text NOT NULL,
+                mime_type text NOT NULL,
+                bytes bigint NOT NULL,
+                sha256 text,
+                deleted_at timestamptz
+            );
         """)
         root = Path(__file__).resolve().parents[2] / "supabase/migrations"
         for file in (
             "20261120235900_60_writing_style_identity.sql",
             "20261122010001_61_writing_style_sample_evidence.sql",
+            "20261122010002_62_writing_style_document_author_consent.sql",
         ):
             await raw.execute((root / file).read_text(encoding="utf-8"))
         await raw.execute(
@@ -87,7 +102,11 @@ async def test_postgres_source_consent_principal_rls_and_revocation():
         await raw.execute(
             f'GRANT SELECT, INSERT, UPDATE ON public.writing_style_profiles, '
             f'public.writing_style_revisions, public.writing_style_grants, '
-            f'public.writing_style_sample_evidence TO "{role}"'
+            f'public.writing_style_sample_evidence, '
+            f'public.writing_style_document_consents TO "{role}"'
+        )
+        await raw.execute(
+            f'GRANT SELECT ON public.files TO "{role}"'
         )
         await raw.execute(
             f'GRANT SELECT, INSERT ON public.writing_style_audit, '

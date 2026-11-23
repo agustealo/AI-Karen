@@ -6,13 +6,32 @@ on:
     paths:
       - "src/ai_karen_engine/services/writing_style_profile_repository.py"
       - "src/ai_karen_engine/services/writing_style_sample_provenance.py"
+      - "src/ai_karen_engine/services/postgres_document_style_consent_issuer.py"
+      - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
+      - "src/ai_karen_engine/services/approvals.py"
+      - "src/ai_karen_engine/persistence/repositories/approval_repository.py"
+      - "src/ai_karen_engine/auth/session.py"
+      - "src/ai_karen_engine/core/runtime/document_consent_approval.py"
       - "src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py"
       - "tests/services/test_karisignature_persisted_sample_authority.py"
       - "src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py"
       - "supabase/migrations/*writing_style*.sql"
       - "tests/integration/test_writing_style_identity_postgres.py"
       - "tests/integration/test_writing_style_sample_postgres.py"
+      - "tests/integration/test_writing_style_document_consent_postgres.py"
       - "tests/extensions/test_writing_style_source_consent.py"
+      - "tests/services/test_postgres_document_style_consent_issuer.py"
+      - "tests/core/runtime/test_writing_style_document_consent_policy.py"
+      - "tests/core/runtime/test_document_consent_runtime_policy.py"
+      - "tests/services/test_writing_style_consent_approval_gate.py"
+      - "tests/services/test_document_consent_atomic_approval.py"
+      - "tests/services/test_document_consent_admission.py"
+      - "src/ai_karen_engine/api_routes/artifacts.py"
+      - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
+      - "tests/api_routes/test_document_author_owned_artifacts_http.py"
+      - "tests/api_routes/test_document_author_consent_http.py"
+      - "tests/auth/test_document_style_consent_session.py"
+      - "tests/core/runtime/test_document_consent_approval_scope.py"
       - "tests/core/runtime/test_karisignature_contract.py"
       - ".github/workflows/karisignature-postgres-proof.yml"
   push:
@@ -20,13 +39,32 @@ on:
     paths:
       - "src/ai_karen_engine/services/writing_style_profile_repository.py"
       - "src/ai_karen_engine/services/writing_style_sample_provenance.py"
+      - "src/ai_karen_engine/services/postgres_document_style_consent_issuer.py"
+      - "src/ai_karen_engine/core/runtime/policy/runtime_policy.py"
+      - "src/ai_karen_engine/services/approvals.py"
+      - "src/ai_karen_engine/persistence/repositories/approval_repository.py"
+      - "src/ai_karen_engine/auth/session.py"
+      - "src/ai_karen_engine/core/runtime/document_consent_approval.py"
       - "src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py"
       - "tests/services/test_karisignature_persisted_sample_authority.py"
       - "src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py"
       - "supabase/migrations/*writing_style*.sql"
       - "tests/integration/test_writing_style_identity_postgres.py"
       - "tests/integration/test_writing_style_sample_postgres.py"
+      - "tests/integration/test_writing_style_document_consent_postgres.py"
       - "tests/extensions/test_writing_style_source_consent.py"
+      - "tests/services/test_postgres_document_style_consent_issuer.py"
+      - "tests/core/runtime/test_writing_style_document_consent_policy.py"
+      - "tests/core/runtime/test_document_consent_runtime_policy.py"
+      - "tests/services/test_writing_style_consent_approval_gate.py"
+      - "tests/services/test_document_consent_atomic_approval.py"
+      - "tests/services/test_document_consent_admission.py"
+      - "src/ai_karen_engine/api_routes/artifacts.py"
+      - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
+      - "tests/api_routes/test_document_author_owned_artifacts_http.py"
+      - "tests/api_routes/test_document_author_consent_http.py"
+      - "tests/auth/test_document_style_consent_session.py"
+      - "tests/core/runtime/test_document_consent_approval_scope.py"
       - "tests/core/runtime/test_karisignature_contract.py"
       - ".github/workflows/karisignature-postgres-proof.yml"
   workflow_dispatch:
@@ -63,6 +101,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/chat.txt
+          # Artifact HTTP ingress declares UploadFile; FastAPI requires multipart
+          # at route-import time even when this test exercises metadata only.
+          python -m pip install 'python-multipart>=0.0.9,<1'
       - name: Create new dedicated disposable style test database
         run: |
           python - <<'PY'
@@ -86,11 +127,11 @@ jobs:
           PY
       - name: Verify compiled WS-01 and WS-02 source
         run: |
-          python -m py_compile             src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py             src/ai_karen_engine/services/writing_style_profile_repository.py             src/ai_karen_engine/services/writing_style_sample_provenance.py             src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py             tests/services/test_karisignature_persisted_sample_authority.py             tests/extensions/test_writing_style_source_consent.py             tests/integration/test_writing_style_sample_postgres.py             tests/core/runtime/test_karisignature_contract.py             tests/integration/test_writing_style_identity_postgres.py
+          python -m py_compile             src/ai_karen_engine/core/runtime/prompt/karisignature_contract.py             src/ai_karen_engine/services/writing_style_profile_repository.py             src/ai_karen_engine/services/writing_style_sample_provenance.py             src/ai_karen_engine/services/formatting/karisignature_persisted_sample_authority.py             tests/services/test_karisignature_persisted_sample_authority.py             tests/extensions/test_writing_style_source_consent.py             tests/integration/test_writing_style_sample_postgres.py             tests/core/runtime/test_karisignature_contract.py             tests/integration/test_writing_style_identity_postgres.py             tests/integration/test_writing_style_document_consent_postgres.py             src/ai_karen_engine/services/postgres_document_style_consent_issuer.py             tests/services/test_postgres_document_style_consent_issuer.py
       - name: Prove authenticated owner, purpose, revocation and immutable erasure on PostgreSQL
         run: |
-          pytest tests/core/runtime/test_karisignature_contract.py tests/extensions/test_writing_style_source_consent.py tests/services/test_karisignature_persisted_sample_authority.py -q -rs
-          pytest tests/integration/test_writing_style_identity_postgres.py tests/integration/test_writing_style_sample_postgres.py -q -rs --junitxml=karisignature-postgres-junit.xml
+          pytest tests/core/runtime/test_karisignature_contract.py tests/extensions/test_writing_style_source_consent.py tests/services/test_karisignature_persisted_sample_authority.py tests/services/test_postgres_document_style_consent_issuer.py tests/core/runtime/test_writing_style_document_consent_policy.py tests/core/runtime/test_document_consent_runtime_policy.py tests/services/test_writing_style_consent_approval_gate.py tests/core/runtime/test_document_consent_approval_scope.py tests/services/test_document_consent_atomic_approval.py tests/auth/test_document_style_consent_session.py tests/auth/test_plugin_lifecycle_session.py tests/services/test_document_consent_admission.py tests/api_routes/test_document_author_consent_http.py tests/api_routes/test_document_author_owned_artifacts_http.py -q -rs
+          pytest tests/integration/test_writing_style_identity_postgres.py tests/integration/test_writing_style_sample_postgres.py tests/integration/test_writing_style_document_consent_postgres.py -q -rs --junitxml=karisignature-postgres-junit.xml
       - name: Preserve PostgreSQL proof
         if: always()
         uses: actions/upload-artifact@v4

@@ -5,6 +5,7 @@ import type { ChatMessage, Citation } from '@/lib/types';
 import type { SuggestedAction } from '@/lib/agent-ui/service';
 import { apiClient } from '@/lib/api';
 import Image from 'next/image';
+import Link from 'next/link';
 import { format } from 'date-fns';
 import {
   AlertTriangle,
@@ -248,6 +249,13 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
   );
   const hasStructuredContent = structuredEntries.length > 0;
 
+  const isDocumentAuthorConsent = isAssistant && (
+    message.metadata?.intent === 'writing_style.document_consent.issue' ||
+    message.metadata?.approval_intent === 'writing_style.document_consent.issue'
+  );
+  const authorConsentApprovalId = String(message.metadata?.approval_id || '');
+  const canReviewAuthorConsent = isDocumentAuthorConsent &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(authorConsentApprovalId);
   const hasApprovalActions = Boolean(
     message.actions?.some((action) => action.type.startsWith('approval.')),
   );
@@ -645,7 +653,23 @@ export function MessageBubble({ message, onActionClick }: MessageBubbleProps) {
                 <SourceList citations={citations} />
               )}
 
-              {message.actions && message.actions.length > 0 && (
+              {isDocumentAuthorConsent && (
+                <div className="mt-3 space-y-2 rounded-lg border border-border p-3 text-sm">
+                  <p>Document author consent requires separate authenticated review.</p>
+                  {canReviewAuthorConsent ? (
+                    <Link
+                      href={'/approvals/document-consent/' + authorConsentApprovalId}
+                      className="inline-flex rounded-md border border-border px-3 py-2 font-medium text-primary"
+                    >
+                      Review document author consent
+                    </Link>
+                  ) : (
+                    <p role="status">Verified author review link is unavailable.</p>
+                  )}
+                </div>
+              )}
+
+              {!isDocumentAuthorConsent && message.actions && message.actions.length > 0 && (
                 <div className="mt-3 animate-in duration-500 fade-in slide-in-from-left-2 sm:mt-4">
                   <div className="mb-2 flex items-center gap-2">
                     <Badge variant="secondary" className="px-2 py-0.5 text-[10px]">

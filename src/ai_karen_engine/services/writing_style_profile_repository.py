@@ -112,6 +112,38 @@ class WritingStyleProfileRepository:
             ),
         )
 
+    async def list_owned_drafts(
+        self, *, tenant_id: str, actor_id: str, limit: int = 100,
+    ) -> list[dict[str, str]]:
+        """Read only current author-owned, unpublished drafts under tenant RLS.
+
+        This is a presentation inventory, not a grant, author attestation or
+        publication authorization. Initiation revalidates the selected row.
+        """
+        tenant, actor = map(_uuid, (tenant_id, actor_id))
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("invalid_style_profile_page_limit")
+        async with self._client_factory().get_async_session() as session:
+            await self._scope(session, tenant, actor)
+            result = await session.execute(
+                text(
+                    "SELECT profile_id, label, kind FROM public.writing_style_profiles "
+                    "WHERE tenant_id=CAST(:tenant AS uuid) "
+                    "AND owner_actor_id=CAST(:actor AS uuid) "
+                    "AND state='draft' AND publication_revision=0 "
+                    "ORDER BY created_at DESC, profile_id DESC LIMIT :limit"
+                ),
+                {"tenant": tenant, "actor": actor, "limit": limit},
+            )
+            return [
+                {
+                    "profile_id": str(row["profile_id"]),
+                    "label": str(row["label"]),
+                    "kind": str(row["kind"]),
+                }
+                for row in result.mappings().all()
+            ]
+
     async def create_draft(
         self,
         *,
@@ -258,6 +290,39 @@ class WritingStyleProfileRepository:
             if consent["usable"] is False:
                 raise WritingStyleAccessDenied("style_source_unavailable")
             expires_at = consent["expires_at"]
+            # Document receipts are governed independently from sample metadata.
+            # The owner-scoped grant writer must reject a stale document receipt,
+            # even when an older sample-evidence row still reports valid consent.
+            # This is an additional grant-time fence, not a durable use lease.
+            documents = await session.execute(
+                text(
+                    "SELECT bool_and(c.style_use_allowed IS TRUE "
+                    "AND c.analysis_allowed IS TRUE "
+                    "AND c.author_attested IS TRUE "
+                    "AND c.revoked_at IS NULL "
+                    "AND c.expires_at > clock_timestamp() "
+                    "AND f.file_id IS NOT NULL) AS usable, "
+                    "min(c.expires_at) AS expires_at "
+                    "FROM public.writing_style_document_consents c "
+                    "LEFT JOIN public.files f ON f.file_id=c.artifact_id::text "
+                    "AND f.tenant_id=c.tenant_id "
+                    "AND f.owner_user_id=c.author_actor_id "
+                    "AND f.sha256=c.source_sha256 "
+                    "AND f.deleted_at IS NULL "
+                    "AND f.mime_type='text/plain' "
+                    "AND f.bytes BETWEEN 1 AND 65536 "
+                    "WHERE c.tenant_id=CAST(:tenant AS uuid) "
+                    "AND c.profile_id=CAST(:profile AS uuid) "
+                    "AND c.owner_actor_id=CAST(:actor AS uuid)"
+                ),
+                dict(tenant=tenant, profile=profile, actor=actor),
+            )
+            document_consent = documents.mappings().one()
+            if document_consent["usable"] is False:
+                raise WritingStyleAccessDenied("style_source_unavailable")
+            document_expiry = document_consent["expires_at"]
+            if document_expiry is not None:
+                expires_at = min(expires_at, document_expiry) if expires_at else document_expiry
             await session.execute(
                 text(
                     "INSERT INTO public.writing_style_grants "
