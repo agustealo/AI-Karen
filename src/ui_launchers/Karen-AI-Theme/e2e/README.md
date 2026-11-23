@@ -615,3 +615,42 @@ This fixes a false-negative release-gate path: a valid preview could
 previously show Vercel deployment protection instead of Karen's login
 page. It does NOT authorize preview deployment, feature activation or
 database mutation and does NOT itself certify real-host browser acceptance.
+
+
+### KGUI-CARD-STUDIO-01H: independently authenticated owner isolation
+
+The approved `card-studio` protected workflow now **requires two distinct
+sanitized accounts**: existing `KAREN_UX_EMAIL` /
+`KAREN_UX_PASSWORD` and existing
+`KAREN_UX_ISOLATION_EMAIL` /
+`KAREN_UX_ISOLATION_PASSWORD` protected environment secrets.
+Both must be authorized to use Card Studio on the approved disposable
+preview; do not use normal user accounts. Local disposable execution likewise
+requires both credential pairs via secure environment variables.
+
+A new `KCARD-LIVE-ISOLATION` Chromium trial signs in as the first owner
+and creates a genuine PostgreSQL-backed template. It launches a fresh
+BrowserContext with **no shared Karen cookies or browser storage**, copying
+only the already-verified, exact-origin `_vercel_jwt` deployment-protection
+cookie when needed. A genuinely signed-in second user must have a **different verified
+login user ID**, must create their own disposable template and obtain an
+actual committed HTTP 200 receipt, and must receive HTTP 200
+for their own Card Studio inventory. They must not see the first owner's template
+in the GUI or the owner inventory, and must receive **403/404** for attempts
+to read its current revision, revision list, historical revision, revise it
+or archive it. HTTP 401 or an unavailable second-user catalog cannot count
+as an isolation success.
+
+The foreign account's own fixture must also be archived via a verified
+server receipt even when a denial assertion fails. The test then
+independently reads the original owner's authoritative record
+and verifies its template ID, title, template key, revision 1 and draft
+lifecycle are unchanged. It attempts to archive the disposable owner record
+even on a failing trial, reporting cleanup failures rather than concealing
+or guessing their outcome. On interruption, inspect `isolation-e2e-*`
+records in the approved disposable backend before rerunning.
+
+This strengthens release evidence; the already existing backend RuntimePolicy,
+RBAC, PostgreSQL RLS, API transport and default-disabled production feature
+remain the sole authorities. Source and CI passes are not evidence that the
+two-account live scenario actually ran on an approved host.

@@ -916,6 +916,8 @@ jobs:
               --config=e2e/playwright.config.ts --project=chromium \
               --grep='real authenticated saved-pin reference readback' --reporter=list --retries=0
           elif [[ "${{ inputs.scenario }}" == "card-studio" ]]; then
+            test -n "$KAREN_UX_ISOLATION_EMAIL" || { echo "::error::Card Studio requires a second sanitized identity"; exit 1; }
+            test -n "$KAREN_UX_ISOLATION_PASSWORD" || { echo "::error::Card Studio requires a second sanitized credential"; exit 1; }
             npx playwright test e2e/card-studio-live-acceptance.spec.ts \
               --config=e2e/playwright.config.ts \
               --project=chromium --reporter=list --retries=0
