@@ -145,7 +145,7 @@ def test_card_studio_real_second_principal_denies_all_owner_paths() -> None:
     assert 'await otherContext.addCookies(accessCookies)' in spec
     assert 'await signInApprovedKaren(other, isolationEmail, isolationPassword,' in spec
     assert 'await openStudio(other, origin.origin)' in spec
-    assert 'foreignUserId !== ownerUserId' in spec
+    assert 'foreignPrincipal.userId !== ownerPrincipal.userId' in spec
     assert 'const foreignCreated = await verifiedCommit(' in spec
     assert 'const foreignId = foreignCreated.saved.template.template_id' in spec
     assert 'item.template_id === foreignId' in spec
@@ -187,3 +187,30 @@ def test_card_studio_same_key_across_real_principals_cannot_replay_foreign_recei
     assert 'assert owner_b_replay.json() == owner_b_body' in integration
     assert 'assert owner_c_id not in (http_id, owner_b_id)' in integration
     assert 'for foreign_id in (owner_b_id, owner_c_id):' in integration
+
+
+def test_card_studio_live_isolation_proves_same_tenant_server_principals() -> None:
+    """Do not certify user-level isolation with only a cross-tenant denial."""
+    spec = (THEME / "e2e/card-studio-live-acceptance.spec.ts").read_text(
+        encoding="utf-8"
+    )
+    auth = (
+        ROOT / "src/ai_karen_engine/api_routes/auth/auth.py"
+    ).read_text(encoding="utf-8")
+    assert 'new URL("/api/auth/validate-session", window.location.origin)' in spec
+    assert 'Authorization: "Bearer " + token' in spec
+    assert 'response.status !== 200' in spec
+    assert 'envelope.session_valid !== true' in spec
+    assert 'envelope.authenticated !== true' in spec
+    assert '(stored as Record<string, unknown>).tenant_id !== user.tenant_id' in spec
+    assert 'const ownerPrincipal = await verifiedServerPrincipal(page)' in spec
+    assert 'const foreignPrincipal = await verifiedServerPrincipal(other)' in spec
+    assert '"Same-tenant isolation requires two users in one tenant"' in spec
+    assert 'toBe(ownerPrincipal.tenantId)' in spec
+    assert '@router.get("/validate-session")' in auth
+    assert '"session_valid": True' in auth
+    assert '"authenticated": True' in auth
+    # No new interception, artificial identity, endpoint or test skip.
+    assert 'route.fulfill(' not in spec
+    assert 'page.addInitScript(' not in spec
+    assert spec.count('test.skip(!enabled,') == 3

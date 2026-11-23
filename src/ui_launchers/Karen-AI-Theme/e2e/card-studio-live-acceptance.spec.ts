@@ -405,6 +405,63 @@ test("KCARD-LIVE-MUTATION: real PostgreSQL CAS, reload, response loss and archiv
  * fail all foreign-owner reads and writes. The two browser contexts share at
  * most the reviewed Vercel protection cookie, not Karen authentication state.
  */
+type ServerPrincipal = { userId: string; tenantId: string };
+
+/**
+ * Resolve both identities through Karen's real authenticated session API.
+ * Browser storage is only cross-checked, never treated as authorization.
+ * A distinct user in a different tenant proves only tenant isolation;
+ * this trial deliberately requires two principals within one tenant.
+ */
+async function verifiedServerPrincipal(page: Page): Promise<ServerPrincipal> {
+  return page.evaluate(async () => {
+    const token = window.localStorage.getItem("access_token");
+    if (!token) {
+      throw new Error("Browser did not establish a session bearer.");
+    }
+    const response = await window.fetch(
+      new URL("/api/auth/validate-session", window.location.origin).toString(), {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "error",
+        headers: { Authorization: "Bearer " + token },
+      },
+    );
+    if (response.status !== 200) {
+      throw new Error("Canonical authenticated session validation must return HTTP 200.");
+    }
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Canonical session identity envelope is missing.");
+    }
+    const envelope = payload as Record<string, unknown>;
+    if (envelope.valid !== true || envelope.session_valid !== true ||
+        envelope.authenticated !== true || !envelope.user ||
+        typeof envelope.user !== "object") {
+      throw new Error("Canonical session validation was not affirmative.");
+    }
+    const user = envelope.user as Record<string, unknown>;
+    const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+    if (typeof user.user_id !== "string" || !uuid.test(user.user_id) ||
+        typeof user.tenant_id !== "string" || !uuid.test(user.tenant_id)) {
+      throw new Error("Validated session has no canonical user/tenant scope.");
+    }
+    let stored: unknown;
+    try {
+      stored = JSON.parse(window.localStorage.getItem("user_data") || "null") as unknown;
+    } catch {
+      throw new Error("Browser identity cache is invalid.");
+    }
+    if (!stored || typeof stored !== "object" ||
+        (stored as Record<string, unknown>).user_id !== user.user_id ||
+        (stored as Record<string, unknown>).tenant_id !== user.tenant_id) {
+      throw new Error("Browser identity differs from the verified server principal.");
+    }
+    return { userId: user.user_id, tenantId: user.tenant_id };
+  });
+}
+
 async function scopedCardRequest(
   page: Page,
   path: string,
@@ -454,11 +511,7 @@ test("KCARD-LIVE-ISOLATION: second real user cannot read, revise or archive owne
   }
 
   const origin = await signIn(page);
-  const ownerUserId = await page.evaluate(() => {
-    const user = JSON.parse(window.localStorage.getItem("user_data") || "null") as { user_id?: unknown } | null;
-    if (typeof user?.user_id !== "string" || !user.user_id) throw new Error("Owner login did not resolve a user ID.");
-    return user.user_id;
-  });
+  const ownerPrincipal = await verifiedServerPrincipal(page);
   const root = await openStudio(page, origin.origin);
   const sample = randomUUID().replaceAll("-", "").slice(0, 16);
   const key = "isolation-e2e-" + sample;
@@ -498,12 +551,11 @@ test("KCARD-LIVE-ISOLATION: second real user cannot read, revise or archive owne
         allowLocalLoopback: localLoopback,
       });
       expect(new URL(other.url()).origin).toBe(origin.origin);
-      const foreignUserId = await other.evaluate(() => {
-        const user = JSON.parse(window.localStorage.getItem("user_data") || "null") as { user_id?: unknown } | null;
-        if (typeof user?.user_id !== "string" || !user.user_id) throw new Error("Second login did not resolve a user ID.");
-        return user.user_id;
-      });
-      expect(foreignUserId !== ownerUserId, "Isolation requires distinct authenticated users").toBe(true);
+      const foreignPrincipal = await verifiedServerPrincipal(other);
+      expect(foreignPrincipal.userId !== ownerPrincipal.userId,
+        "Isolation requires distinct server-validated users").toBe(true);
+      expect(foreignPrincipal.tenantId,
+        "Same-tenant isolation requires two users in one tenant").toBe(ownerPrincipal.tenantId);
       const foreignRoot = await openStudio(other, origin.origin);
       await expect(foreignRoot.getByRole("button", { name: new RegExp(title) }))
         .toHaveCount(0);
