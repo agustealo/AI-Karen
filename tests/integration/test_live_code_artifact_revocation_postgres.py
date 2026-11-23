@@ -1,9 +1,10 @@
 """CK-GEN-01D2 opt-in PostgreSQL evidence for owner and archive revocation.
 
-Run only on an explicitly disposable, migrated and seeded PostgreSQL
-database called karen_code_artifact_test. This never touches production
-records. Supabase object bytes are deliberately supplied by an in-process
-test bucket; a live object-store and signed-in browser run remain separate.
+Run only on the explicitly disposable, migrated PostgreSQL database
+karen_code_artifact_test at loopback port 5432. Never connect these fixture
+writes to a remote or implicitly selected PostgreSQL target. Automatic
+tests use controlled Storage fixtures; independent opt-in tests can read
+real disposable Supabase Storage. Signed-in browser acceptance is separate.
 """
 
 from __future__ import annotations
@@ -34,15 +35,19 @@ def _disposable_database_url(dsn: str):
     """Reject ambiguous asyncpg connection targets before any SQL opens."""
     try:
         parsed = make_url(dsn)
-    except (ArgumentError, ValueError, TypeError):
+        # SQLAlchemy defers port conversion until URL.port is accessed.
+        # Validate before constructing any connection pool.
+        port = parsed.port
+    except (ArgumentError, ValueError, TypeError, OverflowError):
         pytest.fail("Invalid disposable PostgreSQL connection URL")
     if (
         parsed.drivername not in ("postgresql", "postgresql+asyncpg")
         or parsed.database != _TEST_DB_NAME.lstrip("/")
-        or not parsed.host
+        or parsed.host not in {"127.0.0.1", "localhost"}
+        or port != 5432
         or parsed.query
     ):
-        pytest.fail("Refusing artifact proof outside an unambiguous disposable database")
+        pytest.fail("Refusing artifact proof outside local disposable PostgreSQL")
     return parsed.set(drivername="postgresql+asyncpg")
 
 
@@ -51,6 +56,14 @@ def _disposable_database_url(dsn: str):
     "postgresql+asyncpg://user:password@localhost/karen_code_artifact_test?host=production",
     "postgresql+asyncpg://user:password@localhost/karen_code_artifact_test?port=5433",
     "postgresql+asyncpg://user:password@localhost/production",
+    "postgresql+asyncpg://user:password@localhost/karen_code_artifact_test",
+    "postgresql+asyncpg://user:password@127.0.0.1/karen_code_artifact_test",
+    "postgresql+asyncpg://user:password@localhost:5433/karen_code_artifact_test",
+    "postgresql+asyncpg://user:password@127.0.0.1:5433/karen_code_artifact_test",
+    "postgresql+asyncpg://user:password@10.0.0.9:5432/karen_code_artifact_test",
+    "postgresql+asyncpg://user:password@db.example.com:5432/karen_code_artifact_test",
+    "postgresql+asyncpg://user:password@[::1]:5432/karen_code_artifact_test",
+    "postgresql+asyncpg://user:password@localhost:broken/karen_code_artifact_test",
     "postgresql+asyncpg:///karen_code_artifact_test",
     "sqlite:///karen_code_artifact_test",
     "not a database URL",
@@ -60,13 +73,15 @@ async def test_disposable_database_target_override_denied_before_engine(dsn):
         _disposable_database_url(dsn)
 
 
-async def test_disposable_database_url_preserves_explicit_target():
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"])
+async def test_disposable_database_url_preserves_explicit_target(host):
     parsed = _disposable_database_url(
-        "postgresql://test_user:test_password@localhost:5432/karen_code_artifact_test"
+        f"postgresql://test_user:test_password@{host}:5432/karen_code_artifact_test"
     )
     assert parsed.drivername == "postgresql+asyncpg"
     assert parsed.database == "karen_code_artifact_test"
-    assert parsed.host == "localhost"
+    assert parsed.host == host
+    assert parsed.port == 5432
     assert not parsed.query
 
 
@@ -241,8 +256,6 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
     if not dsn:
         pytest.fail("Missing disposable PostgreSQL connection URL")
     parsed = _disposable_database_url(dsn)
-    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
-        pytest.fail("Real Storage owner proof requires local disposable PostgreSQL")
 
     def required_uuid(name: str) -> str:
         raw = os.getenv(name, "")
@@ -883,8 +896,6 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
     if not dsn or not all(required):
         pytest.fail("Disposable PostgreSQL URL and seeded principals are required")
     parsed = _disposable_database_url(dsn)
-    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
-        pytest.fail("Refusing integration proof outside local disposable PostgreSQL")
     try:
         tenant, owner, other_owner = (str(UUID(value)) for value in required)
     except (ValueError, TypeError, AttributeError):
@@ -1182,8 +1193,6 @@ async def test_live_signed_range_read_uses_real_storage_and_disposable_postgres_
 
     dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
     parsed = _disposable_database_url(dsn)
-    if parsed.host not in {"127.0.0.1", "localhost"} or parsed.port != 5432:
-        pytest.fail("Real Storage acceptance requires local disposable PostgreSQL")
 
     def canonical_id(name: str) -> str:
         value = os.getenv(name, "")
