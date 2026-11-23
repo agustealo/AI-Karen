@@ -28,8 +28,6 @@ from ai_karen_engine.services.writing_style_profile_repository import (
     WritingStyleProfileRepository,
 )
 
-pytestmark = pytest.mark.asyncio
-
 TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 OWNER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 DELEGATE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
@@ -105,6 +103,7 @@ class SqlHarness:
 class StorageHarness:
     def __init__(self, *, sql: SqlHarness | None = None):
         self.content = SOURCE
+        self.mime_type = "text/plain"
         self.sql = sql
         self.calls = []
         self.delay = 0.0
@@ -122,6 +121,12 @@ class StorageHarness:
             raise self.storage_exception
         if self.delay:
             await asyncio.sleep(self.delay)
+        if (
+            artifact_id != ARTIFACT
+            or tenant_id != TENANT
+            or user_id != OWNER
+        ):
+            return RepositoryResult(success=False, error="denied")
         if self.change_grant_after_read and self.sql is not None:
             self.sql.authorized = False
         return RepositoryResult(
@@ -131,7 +136,7 @@ class StorageHarness:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 filename="author.txt",
-                mime_type="text/plain",
+                mime_type=self.mime_type,
                 sha256=DIGEST,
                 text=self.content,
             ),
@@ -145,6 +150,7 @@ def _repo(sql: SqlHarness, storage: StorageHarness | None):
     )
 
 
+@pytest.mark.asyncio
 async def test_delegate_receives_only_style_after_one_live_verified_read():
     sql = SqlHarness()
     store = StorageHarness(sql=sql)
@@ -159,6 +165,7 @@ async def test_delegate_receives_only_style_after_one_live_verified_read():
     store.download.assert_not_awaited()
 
 
+@pytest.mark.asyncio
 async def test_missing_store_does_not_disable_manually_authored_style():
     manually_authored = SqlHarness(document=False)
     assert await _repo(manually_authored, None).authorize_use(
@@ -170,6 +177,7 @@ async def test_missing_store_does_not_disable_manually_authored_style():
     ) is False
 
 
+@pytest.mark.asyncio
 async def test_bad_grant_blocks_private_scope_and_storage_read():
     sql = SqlHarness()
     sql.authorized = False
@@ -184,12 +192,13 @@ async def test_bad_grant_blocks_private_scope_and_storage_read():
 @pytest.mark.parametrize("change", [
     "same_length_tamper",
     "wrong_owner",
-    "wrong_tenant",
+    "wrong_mime",
     "wrong_artifact",
     "wrong_digest",
     "missing_text",
     "storage_exception",
 ])
+@pytest.mark.asyncio
 async def test_doc_use_fails_closed_without_leaking_private_source(change):
     sql = SqlHarness()
     store = StorageHarness()
@@ -197,8 +206,8 @@ async def test_doc_use_fails_closed_without_leaking_private_source(change):
         store.content = "authorN0te"
     elif change == "wrong_owner":
         sql.rows[0]["owner_actor_id"] = "99999999-9999-4999-8999-999999999999"
-    elif change == "wrong_tenant":
-        sql.rows[0]["source_sha256"] = "f" * 64
+    elif change == "wrong_mime":
+        store.mime_type = "application/pdf"
     elif change == "wrong_artifact":
         sql.rows[0]["artifact_id"] = "not-a-uuid"
     elif change == "wrong_digest":
@@ -217,6 +226,7 @@ async def test_doc_use_fails_closed_without_leaking_private_source(change):
     store.download.assert_not_awaited()
 
 
+@pytest.mark.asyncio
 async def test_revocation_after_storage_read_denies_release():
     sql = SqlHarness()
     store = StorageHarness(sql=sql)
@@ -228,6 +238,7 @@ async def test_revocation_after_storage_read_denies_release():
     assert len(store.calls) == 1
 
 
+@pytest.mark.asyncio
 async def test_private_receipt_set_change_between_checks_denies_release():
     sql = SqlHarness()
     store = StorageHarness(sql=sql)
@@ -246,6 +257,7 @@ async def test_private_receipt_set_change_between_checks_denies_release():
     assert len(store.calls) == 1
 
 
+@pytest.mark.asyncio
 async def test_bounded_total_deadline_rejects_slow_storage(monkeypatch):
     sql = SqlHarness()
     store = StorageHarness()
@@ -260,6 +272,7 @@ async def test_bounded_total_deadline_rejects_slow_storage(monkeypatch):
     assert len(store.calls) == 1
 
 
+@pytest.mark.asyncio
 async def test_private_source_count_cap_rejects_before_any_storage_read(monkeypatch):
     sql = SqlHarness()
     sql.rows = [
@@ -281,3 +294,33 @@ def test_reject_unbounded_store_substitute():
             client_factory=SqlHarness,
             artifact_store=object(),
         )
+
+
+def test_delegated_style_integrity_config_bounds(monkeypatch):
+    from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+
+    for variable, values, expected in (
+        (
+            "KAREN_STYLE_DELEGATED_MAX_DOCUMENT_SOURCES",
+            ("0", "65", "not-an-int", ""),
+            "Invalid delegated style document source limit",
+        ),
+        (
+            "KAREN_STYLE_DELEGATED_INTEGRITY_DEADLINE_SECONDS",
+            ("0", "121", "nan", "inf", "not-a-float", ""),
+            "Invalid delegated style integrity deadline",
+        ),
+    ):
+        for value in values:
+            monkeypatch.setenv(variable, value)
+            with pytest.raises(ValueError, match=expected):
+                ArtifactStorageConfig.from_environment()
+        monkeypatch.delenv(variable, raising=False)
+
+    monkeypatch.setenv("KAREN_STYLE_DELEGATED_MAX_DOCUMENT_SOURCES", "3")
+    monkeypatch.setenv(
+        "KAREN_STYLE_DELEGATED_INTEGRITY_DEADLINE_SECONDS", "0.5",
+    )
+    configured = ArtifactStorageConfig.from_environment()
+    assert configured.style_use_max_document_sources == 3
+    assert configured.style_use_integrity_total_timeout_seconds == 0.5
