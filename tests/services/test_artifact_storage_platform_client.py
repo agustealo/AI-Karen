@@ -407,7 +407,7 @@ async def test_bounded_signed_storage_httpx_logs_never_expose_token(
         monkeypatch,
         signed_url=(
             f"/storage/v1/object/sign/artifacts/{_TENANT}/"
-            f"{_ARTIFACT}/author.txt?token={secret}"
+            f"{_ARTIFACT}/content?token={secret}"
         ),
         transport=httpx.MockTransport(handle),
     )
