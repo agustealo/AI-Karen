@@ -22,6 +22,11 @@ on:
       - "tests/integration/test_card_studio_templates_postgres.py"
       - "tests/integration/test_card_studio_signed_session_postgres.py"
       - ".github/workflows/card-studio-postgres-proof.yml"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/card-studio-live-acceptance.spec.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.config.ts"
+      - ".github/workflows/karen-history-browser-acceptance.yml"
+      - "tests/architecture/test_card_studio_browser_acceptance_contract.py"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/README.md"
   push:
     branches: [main]
     paths:
@@ -43,6 +48,11 @@ on:
       - "tests/integration/test_card_studio_templates_postgres.py"
       - "tests/integration/test_card_studio_signed_session_postgres.py"
       - ".github/workflows/card-studio-postgres-proof.yml"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/card-studio-live-acceptance.spec.ts"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/playwright.config.ts"
+      - ".github/workflows/karen-history-browser-acceptance.yml"
+      - "tests/architecture/test_card_studio_browser_acceptance_contract.py"
+      - "src/ui_launchers/Karen-AI-Theme/e2e/README.md"
   workflow_dispatch:
 
 permissions:
@@ -125,6 +135,7 @@ jobs:
           python -m compileall -q \
             src/ai_karen_engine/persistence/repositories/card_studio_template_repository.py \
             tests/integration/test_card_studio_templates_postgres.py
+          pytest tests/architecture/test_card_studio_browser_acceptance_contract.py -q
           pytest tests/core/runtime/test_card_studio_template_repository.py \
             tests/core/runtime/test_card_template_contract.py \
             tests/core/runtime/test_card_studio_template_service.py \

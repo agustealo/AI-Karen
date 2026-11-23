@@ -524,3 +524,73 @@ A dispatched or skipped workflow is **not** a passed browser observation.
 Read the scenario job's actual conclusion before calling File Explorer
 consumer-ready. This read-only proof still does not establish safe download,
 two-account concurrency, concurrent deletion or throughput under load.
+
+
+## KGUI-CARD-STUDIO-01E: genuine Card Studio layout browser acceptance
+
+`card-studio-live-acceptance.spec.ts` is the **existing protected
+Playwright/Chromium harness** extended for Card Studio, not another UI
+renderer or synthetic test account. The test reuses
+`fixtures/approved-karen-login.ts`, verifies authenticated HTTP 200 JSON
+for the real backend host catalog and owned templates, and exercises the
+actual Dashboard Advanced Tools → Card Studio navigation.
+
+**Read-only browser proof:** Exact viewports of 390×844, 768×1024, 1024×768
+and 1440×900 CSS pixels, viewport overflow/geometry, unbound preview,
+real keyboard Tab traversal, and slot movement. A missing/disabled backend
+is **failure**, not an empty fake catalog or a mock fallback.
+
+**Disposable mutation proof:** Only on a deliberately approved **preview**
+deployment or an explicitly approved local disposable installation:
+real create receipt, reload/readback, two-tab revision competition (a real
+HTTP 409), manual reload of the current server revision, archive, and
+a transport-disconnect trial. The disconnect calls Playwright `route.fetch()`
+against the **real** server and waits for its successful committed response,
+then intentionally drops *only* the browser response; the next user-triggered
+retry must reuse the identical idempotency key and request body and return
+the same template ID/revision. **No JSON or model response is mocked.**
+Each successful disposable template is archived. If a trial fails mid-flow,
+inspect the specially named `card-e2e-*` or `retry-e2e-*` records on the
+approved disposable account before rerun.
+
+**Protected GitHub invocation:** Use the existing **KAREN Browser Acceptance**
+workflow on current `main`, scenario **card-studio**, deployment target
+**preview**, and `target_sha` exactly equal to the approved deployed main
+commit. The protected `karen-sanitized-browser-acceptance` environment
+must supply the existing `KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD`
+secrets, the new approved `KAREN_CARD_STUDIO_ACCEPTANCE_URL` variable,
+and **`KAREN_CARD_STUDIO_MUTATION_APPROVED=true`**. The deployment must be
+independently Vercel-attested and have the operator-enabled
+`KARI_ENABLE_CARD_STUDIO_CRUD=true` backend setting, with **disposable
+resources only**. The repository default remains `false`. No workflow
+writes that feature setting for the operator.
+
+The acceptance job runs the existing source/revision/approved-identity
+checks before Playwright, repeats Vercel deployment/revision and live
+main-commit checks afterward, and uploads **no private trace, screenshot,
+recording, login state or JSON report**. It has zero retries.
+
+For an **authorized local disposable environment**, start the normal KAREN
+stack with the feature explicitly enabled for that instance, provision a
+dedicated real account, then run from
+`src/ui_launchers/Karen-AI-Theme`:
+
+```bash
+KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE=true \
+KAREN_CARD_STUDIO_MUTATION_APPROVED=true \
+KAREN_SANITIZED_ACCOUNT=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+npx playwright test e2e/card-studio-live-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium --reporter=list --retries=0
+```
+
+Supply the existing `KAREN_UX_EMAIL` and `KAREN_UX_PASSWORD` as
+secure local shell variables, never embedded in commands, committed test
+fixtures or screenshots. If the account and environment are independently
+approved **sanitized**, an operator may opt into local
+`KAREN_CARD_STUDIO_SANITIZED_CAPTURE=true` to attach inspected viewport
+screenshots. These are never automatically uploaded by the protected
+workflow. A green code/CI gate **does not** mean an authenticated real-host
+browser trial has been executed. Observe the dispatched job and its receipt
+before claiming consumer-browser certification.

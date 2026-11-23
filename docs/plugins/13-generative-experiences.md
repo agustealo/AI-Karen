@@ -340,3 +340,42 @@ Focused client tests live in the **existing Vitest configuration** under
 `card-studio-api.test.ts` and `CardStudioWorkspace.test.tsx`. Python
 runtime and HTTP catalog tests run in the existing Card Studio PostgreSQL gate.
 The existing `DEV_FAST` job remains the focused PR entrypoint.
+
+
+## KGUI-CARD-STUDIO-01E: protected real-browser acceptance (operator-gated)
+
+Card Studio's visual editor is source-integrated, but **that is not a
+hosted-browser certification**. Reuse the existing `KAREN Browser Acceptance`
+workflow with `scenario=card-studio` on approved exact-head `main`,
+`deployment_target=preview`, and an independently verified deployed
+`target_sha`. This is the canonical protected browser workflow, **not** a
+new UI runner, template renderer, or auth/provenance authority.
+
+The approved `karen-sanitized-browser-acceptance` environment must provide:
+`KAREN_CARD_STUDIO_ACCEPTANCE_URL` (approved immutable HTTPS preview),
+`KAREN_CARD_STUDIO_MUTATION_APPROVED=true` (dedicated disposable mutations),
+and the existing real sanitized `KAREN_UX_EMAIL` /
+`KAREN_UX_PASSWORD` secrets. The backend must have an explicitly enabled
+`KARI_ENABLE_CARD_STUDIO_CRUD=true` **on that disposable preview only**;
+the checked-in application setting remains **OFF**. Protected checks compare
+the reviewed SHA to the running deployment both before and after acceptance.
+
+`e2e/card-studio-live-acceptance.spec.ts` authenticates using the existing
+approved sign-in fixture and checks genuine catalog/library HTTP 200 responses,
+four browser viewports (390/768/1024/1440), document geometry, keyboard Tab
+and slot movement. A second test on the disposable owner account exercises
+create, reload/readback, concurrent two-tab CAS (real HTTP 409), revision
+readback and archival. It then executes a **real committed HTTP request via
+Playwright route.fetch**, drops only the browser response, verifies the UI
+will not falsely claim success or automatically retry, reloads the tab and
+manually replays the same idempotency payload. This proves deterministic
+retry, not complete network-outage resilience.
+
+No fake card evidence, UI-created policy grants, mocked 200 responses,
+production publication, or cross-tenant fixture bypass is allowed. Traces,
+video, automatic screenshots and HTML/JSON reporters are disabled for
+authenticated trials. Independently approved local sanitized screenshot
+capture remains optional; protected GitHub jobs upload no private browser
+artifacts. The existing Card Studio PostgreSQL workflow checks the source
+wiring contract; passing that source check is **not evidence that an
+actual approved deployment/browser trial ran successfully**.

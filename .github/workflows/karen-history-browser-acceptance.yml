@@ -27,6 +27,7 @@ on:
           - content-intelligence-revocation
           - pins-readback
           - pins-mutation
+          - card-studio
       target_sha:
         description: Exact reviewed 40-character main commit SHA for protected acceptance
         type: string
@@ -746,7 +747,7 @@ jobs:
   # KUI: protected settings, navigation, and file-explorer browser acceptance.
   # Reuse the approved main/deployment/credential boundary, not a second runner.
   authenticated-settings-visual-acceptance:
-    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'card-studio' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: karen-sanitized-browser-acceptance
@@ -754,9 +755,9 @@ jobs:
       contents: read
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
-      KAREN_BASE_URL: ${{ ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario == 'settings' || inputs.scenario == 'navigation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
+      KAREN_BASE_URL: ${{ (inputs.scenario == 'card-studio' && vars.KAREN_CARD_STUDIO_ACCEPTANCE_URL) || ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || ((inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario == 'settings' || inputs.scenario == 'navigation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
-      KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && 'false' || 'true' }}
+      KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'settings' || inputs.scenario == 'navigation') && 'true' || 'false' }}
       KAREN_FILE_EXPLORER_ACCEPTANCE: ${{ (inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE: ${{ inputs.scenario == 'content-intelligence' && 'true' || 'false' }}
       KAREN_CONTENT_INTELLIGENCE_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_SOURCE_ID }}
@@ -771,6 +772,9 @@ jobs:
       KAREN_PIN_MUTATION_DISPOSABLE_APPROVED: ${{ vars.KAREN_PIN_MUTATION_DISPOSABLE_APPROVED }}
       KAREN_PIN_READBACK_PIN_ID: ${{ vars.KAREN_PIN_READBACK_PIN_ID }}
       KAREN_PIN_MUTATION_SECOND_PIN_ID: ${{ vars.KAREN_PIN_MUTATION_SECOND_PIN_ID }}
+      KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'card-studio' && 'true' || 'false' }}
+      KAREN_CARD_STUDIO_MUTATION_APPROVED: ${{ vars.KAREN_CARD_STUDIO_MUTATION_APPROVED || 'false' }}
+      KAREN_CARD_STUDIO_SANITIZED_CAPTURE: "false"
       KAREN_NAV_VISUAL_ACCEPTANCE: ${{ inputs.scenario == 'navigation' && 'true' || 'false' }}
       KAREN_NAV_SANITIZED_CAPTURE: "false"
       KAREN_SANITIZED_ACCOUNT: "true"
@@ -833,6 +837,27 @@ jobs:
             exit 1
           }
 
+      - name: Require disposable preview approval for persistent Card Studio acceptance
+        if: inputs.scenario == 'card-studio'
+        working-directory: .
+        shell: bash
+        env:
+          SELECTED_TARGET: ${{ inputs.deployment_target }}
+        run: |
+          set -euo pipefail
+          test "$SELECTED_TARGET" = "preview" || {
+            echo "::error::Card Studio browser mutations are preview-only"
+            exit 1
+          }
+          test "$KAREN_CARD_STUDIO_MUTATION_APPROVED" = "true" || {
+            echo "::error::Card Studio requires explicitly approved disposable mutation scope"
+            exit 1
+          }
+          test -n "$KAREN_BASE_URL" || {
+            echo "::error::Missing approved Card Studio preview URL"
+            exit 1
+          }
+
       - name: Verify independent Vercel deployment and live revision
         working-directory: .
         shell: bash
@@ -890,6 +915,10 @@ jobs:
             npx playwright test e2e/karen-pinned-readback-acceptance.spec.ts \
               --config=e2e/playwright.config.ts --project=chromium \
               --grep='real authenticated saved-pin reference readback' --reporter=list --retries=0
+          elif [[ "${{ inputs.scenario }}" == "card-studio" ]]; then
+            npx playwright test e2e/card-studio-live-acceptance.spec.ts \
+              --config=e2e/playwright.config.ts \
+              --project=chromium --reporter=list --retries=0
           elif [[ "${{ inputs.scenario }}" == "navigation" ]]; then
             npx playwright test e2e/ux-user-journeys.spec.ts \
               --config=e2e/playwright.config.ts \
