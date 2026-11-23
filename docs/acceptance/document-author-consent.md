@@ -434,7 +434,7 @@ every author-attested document receipt, before `KariSignatureResolver`
 releases the approved style expression.
 
 Private receipts remain governed by FORCE RLS. The forward-only migration
-`71_writing_style_delegated_storage_integrity` installs a restricted
+`72_writing_style_delegated_storage_integrity` installs a restricted
 `kari_internal.writing_style_authorized_document_sources` function in a
 **non-Data-API schema**. It accepts only the caller's transaction-local
 authenticated tenant, actor and purpose; independently validates the
