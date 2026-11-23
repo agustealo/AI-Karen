@@ -68,7 +68,7 @@ async def test_writing_style_publish_grant_isolation_revocation_and_atomicity():
             CREATE TABLE IF NOT EXISTS public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.files (
                 file_id text PRIMARY KEY,
-                tenant_id text NOT NULL,
+                tenant_id uuid NOT NULL,
                 owner_user_id uuid NOT NULL,
                 name text NOT NULL,
                 mime_type text NOT NULL,
