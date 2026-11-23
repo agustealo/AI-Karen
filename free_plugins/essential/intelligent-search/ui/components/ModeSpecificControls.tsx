@@ -1,5 +1,6 @@
 import React from 'react';
 import { SlidersHorizontal } from 'lucide-react';
+import { CrawlOptionsPanel } from './CrawlOptionsPanel';
 import { ModeConfigItem } from '../configs/modeConfig';
 import { IntelligentSearchOptions } from '../types';
 
@@ -96,6 +97,9 @@ export function ModeSpecificControls({ modeConfig, options, onOptionsChange, dis
         {renderInput('companyName', 'Company Name')}
         {renderInput('includePriceAction', 'Include Price Action', 'checkbox')}
         {renderInput('includeCompanyNews', 'Include Company News', 'checkbox')}
+        {visible.includes('crawlOptions') && !disabled && (
+          <CrawlOptionsPanel options={options} onChange={onOptionsChange} />
+        )}
       </div>
     </div>
   );

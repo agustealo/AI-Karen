@@ -30,20 +30,6 @@ export function useSearchPayload() {
       'crawlWaitForSelector',
     ];
 
-    // Build crawl object if any crawl options are present
-    const crawlOptions: Record<string, unknown> = {};
-    let hasCrawlOptions = false;
-
-    crawlKeys.forEach(key => {
-      if (options[key] !== undefined && options[key] !== '') {
-        // Remove 'crawl' prefix for backend
-        const backendKey = key.replace('crawl', '');
-        const lowerCaseKey = backendKey.charAt(0).toLowerCase() + backendKey.slice(1);
-        crawlOptions[lowerCaseKey] = options[key];
-        hasCrawlOptions = true;
-      }
-    });
-
     // Build context with non-crawl options
     const context: Record<string, unknown> = {};
     Object.entries(options).forEach(([key, value]) => {
@@ -72,11 +58,22 @@ export function useSearchPayload() {
       context,
     };
 
-    // Add crawl options if present
-    if (hasCrawlOptions) {
+    // The canonical backend validates limits against its authorized budget.
+    // Do not send inactive or unsupported crawl features as accepted options.
+    if (options.crawlEnabled === true) {
+      const domains = (values: string[] | undefined) =>
+        (values || []).map((value) => value.trim()).filter(Boolean);
       payload.crawl = {
-        enabled: crawlOptions.enabled === true,
-        ...crawlOptions,
+        enabled: true,
+        ...(options.crawlMaxPages !== undefined && { max_pages: options.crawlMaxPages }),
+        ...(options.crawlMaxDepth !== undefined && { max_depth: options.crawlMaxDepth }),
+        ...(options.crawlUseCache !== undefined && { use_cache: options.crawlUseCache }),
+        ...(domains(options.crawlIncludeDomains).length > 0 && {
+          include_domains: domains(options.crawlIncludeDomains),
+        }),
+        ...(domains(options.crawlExcludeDomains).length > 0 && {
+          exclude_domains: domains(options.crawlExcludeDomains),
+        }),
       };
     }
 
