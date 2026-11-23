@@ -210,3 +210,40 @@ PromptRegistry, template publication, migration, plugin UI, authenticated
 consumer acceptance or local-provider health. All remain separate gates.
 Source CI is required before merge; a successful source test does not certify
 end-user deployment.
+
+## KGUI-CARD-STUDIO-01B: Scoped durable draft storage (source candidate)
+
+This second slice reuses the canonical Postgres transaction manager
+(`async_transaction_scope`) and adds the first internal Card Studio
+repository under `persistence/repositories`. The migration
+`20261122235900_67_card_studio_template_drafts.sql` introduces three
+owner/tenant-scoped tables:
+
+- `card_studio_templates`: stable user-owned identity, slug, head revision,
+  lifecycle (draft or archived), timestamps; system-key namespace is reserved
+  and user templates cannot overwrite immutable catalog definitions
+- `card_studio_template_revisions`: append-only bounded JSON definitions,
+  scoped composite foreign key, revision history; never evidence or executable code
+- `card_studio_template_mutation_receipts`: idempotent create/revise/archive
+  receipts committed in the SAME transaction as their effects
+
+RLS is enabled and forced for all tables using the authenticated
+`app.current_tenant_id` and `app.current_user_id` settings. Direct
+anon/authenticated grants are revoked; immutable history rejects direct
+update/delete while governed parent deletion can cascade. The repository
+validates the already-merged inert draft contract and exact canonical
+principal IDs, uses CAS on revisions, prevents slug reuse, enforces a bounded
+live-draft library, exposes owner-scoped reads and version history, and soft
+archives without destroying historical revisions.
+
+**Boundary:** The migration/repository are not a deployment or consumer UI
+feature. There is no route, plugin tool, chat proposal, template publication,
+file execution, provider selection, active-card replay admission or public CRUD
+access. A runtime-approved authenticated caller must still supply the
+identities; declarative draft data is not a permission grant.
+
+**Release blockers:** Real PostgreSQL migration up/down/upgrade compatibility
+and simultaneous competing writes/uncertain-response retry; two-account RLS
+isolation; admin/support and tenant-deletion lifecycle proof; user-facing
+studio UI plus scoped API and RBAC; signed-in browser persistence and
+rollback. In-memory fake-session tests prove only repository SQL contracts.
