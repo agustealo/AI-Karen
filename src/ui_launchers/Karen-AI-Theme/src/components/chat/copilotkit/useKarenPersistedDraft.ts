@@ -13,7 +13,7 @@ export type DraftStatus = "loading" | "ready" | "conflict" | "unavailable";
 const MAX_CHARS = 65536;
 const MAX_BYTES = 262144;
 const SAVE_DELAY = 450;
-const REFRESH_DELAY = 10000;
+const RECOVERY_DELAY_MS = 10000;
 
 function validDraft(value: unknown): value is DraftRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -44,10 +44,22 @@ export function useKarenPersistedDraft(conversationId: string) {
   // Reuse the existing CAS write when Submit races with the debounce timer.
   // Do not create a second draft store or submit before an authenticated ack.
   const pendingSaveRef = useRef<Promise<boolean> | null>(null);
+  // Notifications contain only a revision. Draft content stays in the
+  // authenticated PostgreSQL-backed conversation repository.
+  const draftChannelRef = useRef<BroadcastChannel | null>(null);
 
   const endpoint = "/api/conversations/" + encodeURIComponent(conversationId) + "/draft";
 
   const readText = useCallback(() => textRef.current, []);
+
+  const announceRevision = useCallback((revision: number) => {
+    try {
+      draftChannelRef.current?.postMessage({ revision });
+    } catch {
+      // Cross-tab notification is best-effort; the verified CAS receipt
+      // remains authoritative even when this browser feature fails.
+    }
+  }, []);
 
   const setText = useCallback((value: string) => {
     if (typeof value !== "string" || value.length > MAX_CHARS ||
@@ -119,18 +131,56 @@ export function useKarenPersistedDraft(conversationId: string) {
     setStatus("loading");
     setFailureStatus(null);
     void refresh(true);
-    const onFocus = () => {
-      if (!document.hidden && !dirtyRef.current) void refresh(false);
+    // A healthy, unchanged composer must not generate network traffic while
+    // idle. Refresh only on a real foreground transition or a peer's CAS.
+    const effectGeneration = generationRef.current;
+    let resumeQueued = false;
+    const onResume = () => {
+      if (document.hidden || dirtyRef.current || resumeQueued) return;
+      resumeQueued = true;
+      queueMicrotask(() => {
+        resumeQueued = false;
+        if (activeRef.current && generationRef.current === effectGeneration &&
+            !document.hidden && !dirtyRef.current) {
+          void refresh(false);
+        }
+      });
     };
-    window.addEventListener("focus", onFocus);
-    const interval = window.setInterval(onFocus, REFRESH_DELAY);
+    window.addEventListener("focus", onResume);
+    document.addEventListener("visibilitychange", onResume);
+
+    // The channel never carries draft text, user identity or credentials.
+    // Every notification causes an authenticated canonical reread, not a
+    // client-side overwrite or a CopilotKit model submission.
+    if (typeof BroadcastChannel !== "undefined") {
+      try {
+        const channel = new BroadcastChannel("karen-composer-draft:" + conversationId);
+        draftChannelRef.current = channel;
+        channel.onmessage = (event: MessageEvent<unknown>) => {
+          const payload = event.data;
+          if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+          const revision = (payload as Record<string, unknown>).revision;
+          if (typeof revision !== "number" || !Number.isSafeInteger(revision) ||
+              revision < 0 || revisionRef.current === null ||
+              revision <= revisionRef.current || document.hidden ||
+              dirtyRef.current || busyRef.current) return;
+          void refresh(false);
+        };
+      } catch {
+        // No BroadcastChannel support: focus and visibility refresh still work.
+        draftChannelRef.current = null;
+      }
+    }
+
     return () => {
       activeRef.current = false;
       generationRef.current += 1;
       readSequenceRef.current += 1;
       abortRef.current?.abort();
-      window.clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", onResume);
+      document.removeEventListener("visibilitychange", onResume);
+      draftChannelRef.current?.close();
+      draftChannelRef.current = null;
       // Clear private transient input on unmount/logout, never mirror in storage.
       textRef.current = "";
       revisionRef.current = null;
@@ -194,6 +244,7 @@ export function useKarenPersistedDraft(conversationId: string) {
           controller.signal.aborted) return false;
       revisionRef.current = response.revision;
       readSequenceRef.current += 1;
+      announceRevision(response.revision);
       if (textRef.current === sentText) {
         dirtyRef.current = false;
         setSynced(true);
@@ -217,7 +268,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (abortRef.current === controller) abortRef.current = null;
       busyRef.current = false;
     }
-  }, [commitDraftWrite]);
+  }, [commitDraftWrite, announceRevision]);
 
   const startSave = useCallback((): Promise<boolean> => {
     if (pendingSaveRef.current) return pendingSaveRef.current;
@@ -261,6 +312,7 @@ export function useKarenPersistedDraft(conversationId: string) {
           controller.signal.aborted) return false;
       revisionRef.current = response.revision;
       readSequenceRef.current += 1;
+      announceRevision(response.revision);
       if (textRef.current === originalText || textRef.current === "") {
         textRef.current = "";
         dirtyRef.current = false;
@@ -287,7 +339,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (abortRef.current === controller) abortRef.current = null;
       busyRef.current = false;
     }
-  }, [commitDraftWrite]);
+  }, [commitDraftWrite, announceRevision]);
 
   const prepareSubmission = useCallback(async (submittedText: string): Promise<boolean> => {
     // Enter is a real user gesture, not permission to skip persistence.
@@ -410,7 +462,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     // keeps recovery armed even when a retry fails or the document is hidden.
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") retry();
-    }, REFRESH_DELAY);
+    }, RECOVERY_DELAY_MS);
     return () => window.clearInterval(timer);
   }, [status, failureStatus, retry, version]);
 
