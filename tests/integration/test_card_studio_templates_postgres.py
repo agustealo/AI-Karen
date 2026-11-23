@@ -409,6 +409,110 @@ async def test_real_postgres_card_studio_migration_rls_cas_retries_and_rollback(
         assert counts[0]["revisions"] == 3
         assert counts[0]["receipts"] == 4
 
+        # Full transport -> RuntimePolicy -> actual repository -> PostgreSQL
+        # proof. The auth *dependency is overridden*, so this proves scoped
+        # runtime/DB execution, NOT JWT validation or durable sessions.
+        from fastapi import FastAPI
+        from httpx import ASGITransport, AsyncClient
+        from ai_karen_engine.api_routes.chat import card_studio as card_api
+        from ai_karen_engine.api_routes.chat import runtime as chat_ingress
+        from ai_karen_engine.auth.models import UserData
+
+        actor = {"principal": UserData(
+            user_id=str(owner_a), tenant_id=str(tenant_a),
+            roles=["user"], permissions=[],
+        )}
+
+        def verified_test_actor():
+            return actor["principal"]
+
+        monkeypatch.setattr(
+            card_api, "get_runtime_settings",
+            lambda: SimpleNamespace(
+                features=SimpleNamespace(enable_card_studio_crud=True)
+            ),
+        )
+        application = FastAPI()
+        application.include_router(chat_ingress.router)
+        application.dependency_overrides[
+            card_api.bypass_user_context_func
+        ] = verified_test_actor
+        async with AsyncClient(
+            transport=ASGITransport(app=application, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as http:
+            bearer = {"Authorization": "Bearer disposable-scoped-test-principal"}
+            key = str(uuid.uuid4())
+            definition = _draft(key="http-clock")
+            created = await http.post(
+                "/chat/card-studio/templates",
+                headers=bearer,
+                json={"idempotency_key": key, "draft": definition},
+            )
+            assert created.status_code == 200, created.text
+            assert created.json()["committed"] is True
+            http_id = created.json()["template"]["template_id"]
+            retried = await http.post(
+                "/chat/card-studio/templates",
+                headers=bearer,
+                json={"idempotency_key": key, "draft": definition},
+            )
+            assert retried.status_code == 200
+            assert retried.json() == created.json()
+
+            actor["principal"] = UserData(
+                user_id=str(owner_b), tenant_id=str(tenant_a),
+                roles=["user"], permissions=[],
+            )
+            denied = await http.get(f"/chat/card-studio/templates/{http_id}")
+            assert denied.status_code == 404
+            actor["principal"] = UserData(
+                user_id=str(owner_c), tenant_id=str(tenant_b),
+                roles=["user"], permissions=[],
+            )
+            denied = await http.put(
+                f"/chat/card-studio/templates/{http_id}",
+                headers=bearer,
+                json={
+                    "idempotency_key": str(uuid.uuid4()),
+                    "expected_revision": 1,
+                    "draft": definition,
+                },
+            )
+            assert denied.status_code == 409
+            assert "committed" not in denied.text
+
+            actor["principal"] = UserData(
+                user_id=str(owner_a), tenant_id=str(tenant_a),
+                roles=["user"], permissions=[],
+            )
+            changed = await http.put(
+                f"/chat/card-studio/templates/{http_id}",
+                headers=bearer,
+                json={
+                    "idempotency_key": str(uuid.uuid4()),
+                    "expected_revision": 1,
+                    "draft": dict(definition, title="Updated in real PostgreSQL"),
+                },
+            )
+            assert changed.status_code == 200, changed.text
+            assert changed.json()["template"]["revision"] == 2
+            historical = await http.get(
+                f"/chat/card-studio/templates/{http_id}/revisions/1"
+            )
+            assert historical.status_code == 200
+            assert historical.json()["template"]["definition"] == definition
+            archived_http = await http.post(
+                f"/chat/card-studio/templates/{http_id}/archive",
+                headers=bearer,
+                json={
+                    "idempotency_key": str(uuid.uuid4()),
+                    "expected_revision": 2,
+                },
+            )
+            assert archived_http.status_code == 200
+            assert archived_http.json()["template"]["lifecycle"] == "archived"
+
         # Authorized parent erasure must preserve GDPR/tenant deletion path.
         await admin.execute("DELETE FROM public.tenants WHERE id=$1", tenant_a)
         for table in _TABLES:
