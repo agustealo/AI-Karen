@@ -423,8 +423,13 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
 
             # True committed readback through the canonical owner gateway
             # and fresh repository transaction, not the streaming fixture.
-            snapshot_a = await gateway.get_owned_snapshot(request_a.context)
-            snapshot_b = await gateway.get_owned_snapshot(request_b.context)
+            from dataclasses import replace
+            snapshot_a = await gateway.get_owned_snapshot(replace(
+                request_a.context, conversation_id=receipt_a.conversation_id,
+            ))
+            snapshot_b = await gateway.get_owned_snapshot(replace(
+                request_b.context, conversation_id=receipt_b.conversation_id,
+            ))
             assert [r.role for r in snapshot_a.messages] == ["user", "assistant"]
             assert [r.role for r in snapshot_b.messages] == ["user", "assistant"]
             assert [r.content for r in snapshot_a.messages] == [
@@ -440,7 +445,6 @@ async def test_live_postgres_authenticated_sse_disconnect_and_transcript(
 
             # Cross-tenant and same-tenant ownership checks are enforced by
             # ConversationRuntimeGateway before any transcript is disclosed.
-            from dataclasses import replace
             foreign = replace(
                 request_b.context, conversation_id=receipt_a.conversation_id,
             )
