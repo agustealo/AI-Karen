@@ -1406,6 +1406,8 @@ class InternetCapabilityService:
         normalized: List[Dict[str, Any]] = []
 
         for item in results:
+            if item is None:
+                continue
             if isinstance(item, dict):
                 if item.get("success") is False:
                     continue

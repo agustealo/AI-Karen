@@ -44,3 +44,44 @@ describe('Intelligent Search canonical search option payload', () => {
     expect(payload.context).toEqual({});
   });
 });
+
+
+describe('Intelligent Search governed deep-crawl transport', () => {
+  const { buildPayload } = useSearchPayload();
+
+  it('sends only implemented crawl settings in canonical snake_case', () => {
+    const payload = buildPayload('general', 'public sources', {
+      crawlEnabled: true,
+      crawlMaxPages: 4,
+      crawlMaxDepth: 2,
+      crawlUseCache: false,
+      crawlIncludeDomains: [' docs.example '],
+      crawlExcludeDomains: ['blocked.docs.example'],
+      crawlCaptureScreenshot: true,
+      crawlStructuredSchema: '{"type":"article"}',
+      crawlRespectRobotsTxt: false,
+    });
+    expect(payload).toEqual({
+      mode: 'general',
+      query: 'public sources',
+      context: {},
+      crawl: {
+        enabled: true,
+        max_pages: 4,
+        max_depth: 2,
+        use_cache: false,
+        include_domains: ['docs.example'],
+        exclude_domains: ['blocked.docs.example'],
+      },
+    });
+  });
+
+  it('does not forward inactive deep-crawl controls or imply traversal', () => {
+    const payload = buildPayload('general', 'public sources', {
+      crawlEnabled: false,
+      crawlMaxPages: 50,
+      crawlMaxDepth: 5,
+    });
+    expect(payload).toEqual({mode: 'general', query: 'public sources', context: {}});
+  });
+});
