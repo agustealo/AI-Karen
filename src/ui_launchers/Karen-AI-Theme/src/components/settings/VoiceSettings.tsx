@@ -19,6 +19,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { readPreferredBrowserVoiceURI, persistPreferredBrowserVoiceURI } from "@/lib/browser-voice-preference";
 import LocalVoiceEngineSettings from "@/components/settings/LocalVoiceEngineSettings";
+import { stopAssistantPlayback } from "@/components/chat/KarenBrowserSpeechPlayback";
 
 const DEFAULT_VOICE_SENTINEL = "_DEFAULT_VOICE_";
 const DISCOVERY_DELAYS_MS = [250, 1000, 3000] as const;
@@ -93,20 +94,22 @@ export default function VoiceSettings() {
     };
   }, [cycle]);
 
-  useEffect(() => () => {
+  const releasePreview = useCallback(() => {
+    // speechSynthesis is global to the tab. Never cancel audio owned by
+    // chat read-aloud when this settings panel has no active preview.
+    const owned = previewRef.current !== null;
     previewRef.current = null;
-    if (typeof window !== "undefined" && window.speechSynthesis) {
+    if (owned && typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
   }, []);
 
+  useEffect(() => () => { releasePreview(); }, [releasePreview]);
+
   const stopPreview = useCallback(() => {
-    previewRef.current = null;
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
+    releasePreview();
     setPreviewing(false);
-  }, []);
+  }, [releasePreview]);
 
   const selectedVoice = voices.find((voice) => voice.voiceURI === selectedVoiceURI);
   const missingSavedVoice = Boolean(selectedVoiceURI && status === "ready" && !selectedVoice);
@@ -122,6 +125,9 @@ export default function VoiceSettings() {
       setPreviewError("No verified browser voice is available for playback.");
       return;
     }
+    // Retire chat playback through its canonical owner first; a raw
+    // speechSynthesis.cancel() would leave its active state unresolved.
+    stopAssistantPlayback();
     stopPreview();
     setPreviewError(null);
     const speech = new SpeechSynthesisUtterance("Hello, I am Karen. This is my voice preview.");
