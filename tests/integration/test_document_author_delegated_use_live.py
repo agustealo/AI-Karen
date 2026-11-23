@@ -10,6 +10,7 @@ before the first run. A successful AFTER-only run is NOT acceptance evidence.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -37,6 +38,7 @@ _REVISION = "KAREN_DOCUMENT_PUBLISHED_REVISION_ID"
 _REVISION_NUMBER = "KAREN_DOCUMENT_PUBLISHED_REVISION_NUMBER"
 _REVISION_DIGEST = "KAREN_DOCUMENT_PUBLISHED_REVISION_SHA256"
 _PURPOSE = "KAREN_DOCUMENT_DELEGATED_PURPOSE"
+_EXPRESSION = "KAREN_DOCUMENT_PUBLISHED_EXPRESSION_JSON"
 
 def _uuid(name: str) -> str:
     value = os.environ.get(name, "")
@@ -65,6 +67,19 @@ def _fixture() -> tuple[KariSignatureRequest, KariSignatureRevision]:
     assert purpose in {"draft_email", "rewrite", "summarize", "chat_response"}, (
         "Approved delegated-use purpose required"
     )
+    try:
+        expression = json.loads(os.environ.get(_EXPRESSION, ""))
+    except (TypeError, ValueError) as exc:
+        raise AssertionError("Approved published expression JSON required") from exc
+    assert isinstance(expression, dict) and expression, (
+        "Approved nonempty published expression required"
+    )
+    assert all(isinstance(k, str) and isinstance(v, str) for k, v in expression.items()), (
+        "Approved expression fields must be strings"
+    )
+    assert KariSignatureRevision.digest(expression) == digest, (
+        "Approved expression and revision digest disagree"
+    )
     request = KariSignatureRequest(
         tenant_id=tenant, actor_id=actor, profile_id=profile,
         purpose=purpose, correlation_id="ws04a9-live-delegated-use",
@@ -72,7 +87,7 @@ def _fixture() -> tuple[KariSignatureRequest, KariSignatureRevision]:
     revision_record = KariSignatureRevision(
         tenant_id=tenant, profile_id=profile, revision_id=revision,
         revision_number=int(number), state="published",
-        approved_expression={}, content_digest=digest,
+        approved_expression=expression, content_digest=digest,
     )
     return request, revision_record
 
