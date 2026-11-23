@@ -105,6 +105,15 @@ async function nextRealPage(page: Page, target: URL) {
   }, { timeout: 45_000 });
 }
 
+async function nextRealAnalysis(page: Page, target: URL) {
+  return page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === target.origin &&
+      url.pathname === '/api/plugins/content-intelligence/owner-sources' &&
+      response.request().method() === 'POST';
+  }, { timeout: 45_000 });
+}
+
 async function verifyDisplayedInventory(page: Page, inventory: Inventory) {
   const explorer = page.getByRole("region", { name: "Shared File Explorer" });
   await expect(explorer).toBeVisible();
@@ -294,12 +303,17 @@ test('KCONTENT-LIVE: selected owner text is analyzed by the authorized runtime',
     page.getByRole('button', { name: 'Analyze selected files' }),
   ).toBeEnabled();
 
-  const analysisHttpPromise = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return url.origin === origin.origin &&
-      url.pathname === '/api/plugins/content-intelligence/owner-sources' &&
-      response.request().method() === 'POST';
-  }, { timeout: 45_000 });
+  // Observe actual requests; a refresh must never execute analysis implicitly.
+  let analysisPosts = 0;
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.origin === origin.origin &&
+        url.pathname === '/api/plugins/content-intelligence/owner-sources' &&
+        request.method() === 'POST') {
+      analysisPosts += 1;
+    }
+  });
+  const analysisHttpPromise = nextRealAnalysis(page, origin);
   await page.getByRole('button', { name: 'Analyze selected files' }).click();
   const analysisHttp = await analysisHttpPromise;
   const requestPayload = analysisHttp.request().postDataJSON();
@@ -319,6 +333,42 @@ test('KCONTENT-LIVE: selected owner text is analyzed by the authorized runtime',
   await expect(verifiedResult).toBeVisible();
   await expect(verifiedResult.getByText(selected.name)).toBeVisible();
   await expect(verifiedResult.getByText(/Lexical analysis of 1 authorized file/)).toBeVisible();
+  expect(analysisPosts).toBe(1);
+
+  // KPLUG-09: browser refresh must discard previously shown content evidence
+  // and the old selection. No source bytes, route stubs or Storage URLs enter
+  // the browser test. Re-analysis requires a fresh source reference and click.
+  const refreshResponse = nextRealPage(page, origin);
+  await explorer.getByRole('button', { name: 'Refresh' }).click();
+  const refreshedHttp = await refreshResponse;
+  expect(refreshedHttp.status()).toBe(200);
+  expect(new URL(refreshedHttp.request().url()).searchParams.has('cursor')).toBe(false);
+  const refreshed = inventoryResponse(await refreshedHttp.json());
+  const current = refreshed.items.find((file) => file.source_id === expectedId);
+  expect(current, 'Approved source must remain owner-active for refresh proof').toBeDefined();
+  if (!current) throw new Error('Refreshed source no longer eligible');
+  await verifyDisplayedInventory(page, refreshed);
+  await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+  await expect(page.getByRole('status', { name: 'Verified analysis results' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Analyze selected files' })).toHaveCount(0);
+  expect(analysisPosts, 'Refresh must never silently replay Content Intelligence').toBe(1);
+
+  await explorer.getByRole('checkbox', { name: 'Select ' + current.name }).first().check();
+  const secondAnalysisPromise = nextRealAnalysis(page, origin);
+  await page.getByRole('button', { name: 'Analyze selected files' }).click();
+  const secondAnalysisHttp = await secondAnalysisPromise;
+  expect(secondAnalysisHttp.request().postDataJSON()).toEqual({
+    operation: 'analyze',
+    references: [{ source_id: expectedId, revision: current.sha256 }],
+  });
+  expect(secondAnalysisHttp.status()).toBe(200);
+  const secondResult = await secondAnalysisHttp.json();
+  expect(secondResult.persisted).toBe(false);
+  expect(secondResult.documents).toHaveLength(1);
+  expect(secondResult.documents[0].id).toBe(expectedId);
+  expect(secondResult.documents[0].sha256).toBe(current.sha256);
+  await expect(page.getByRole('status', { name: 'Verified analysis results' })).toBeVisible();
+  expect(analysisPosts).toBe(2);
 });
 
 
