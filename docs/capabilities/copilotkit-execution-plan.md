@@ -1121,3 +1121,29 @@ completion, content-size or presentation validation to silence the UI.
 - **Not certified:** tenant/user CRUD, publish/share permissions, frontend
   Card Studio, template-to-chat integration, deployed consumer acceptance,
   action-card authorization, live card render latency and provider health.
+
+## KGUI-CARD-STUDIO-01B / KCON-720 / KCON-770: Authenticated owner-scoped template drafts (2026-11-22)
+
+- **Source candidate:** Extend canonical `persistence/repositories` and
+  `supabase/migrations` owners for the Card Studio draft store. Store one
+  user+tenant-scoped head row, immutable schema-validated JSON revisions and
+  same-transaction idempotency receipts. Force RLS on all three tables and
+  revoke public/client grants. CAS protects stale edit/archive, and the
+  application never accepts tenant/user from draft/model content.
+- **Proof:** `tests/core/runtime/test_card_studio_template_repository.py`
+  covers owner-scoped SQL, create retry, idempotency-key conflicts, CAS,
+  immutable revision writes, soft archive, history, ID validation, capacity
+  and migration isolation assertions. Existing template schema tests remain
+  mandatory. Exact-head CI required before merge.
+- **Real PostgreSQL acceptance:** The dedicated
+  `card-studio-postgres-proof.yml` workflow executes the real migration and
+  canonical repository using a disposable database and non-owner database
+  login. It tests failed migration rollback, user+tenant RLS on all three
+  tables, competing CAS writes, same-key concurrent replay, immutable revision
+  history, failed receipt rollback, archive/readback and tenant-deletion cascade.
+  The source gate must pass on the exact PR head. It does not establish
+  production database provisioning or hosted API authorization.
+- **NOT VERIFIED:** Full-schema upgrade/rollback, privileged production
+  database-role provisioning, signed-in API/RBAC, Card Studio UI, plugin
+  lifecycle, model-assisted draft authoring, end-to-end browser replay and
+  production release. No client mutation is enabled.
