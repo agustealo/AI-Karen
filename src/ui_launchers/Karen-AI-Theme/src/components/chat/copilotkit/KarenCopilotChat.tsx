@@ -1,6 +1,7 @@
 "use client";
 
 import { CopilotKitProvider } from "@copilotkit/react-core/v2";
+import type { ReactNode } from "react";
 import { useAuth } from "@/lib/useAuth";
 import { KarenCopilotHistoryGate } from "./KarenCopilotHistoryGate";
 import { KarenCopilotControlledChat } from "./KarenCopilotControlledChat";
@@ -38,6 +39,8 @@ export interface KarenCopilotChatProps {
   /** Authorized, session-scoped Agent Runtime handoff, not a routing command. */
   workspaceRunId?: string | null;
   onBusyChange?: (busy: boolean) => void;
+  /** Consumer-owned runtime preference controls, positioned alongside the response evidence rail. */
+  modelControls?: ReactNode;
   /** Canonical SessionProvider creation, available only in the full consumer workspace. */
   onStartNewConversation?: () => Promise<void>;
 }
@@ -48,6 +51,7 @@ export function KarenCopilotChat({
   preferredModel = null,
   workspaceRunId = null,
   onBusyChange,
+  modelControls,
   onStartNewConversation,
 }: KarenCopilotChatProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -107,7 +111,9 @@ export function KarenCopilotChat({
         <KarenCopilotHistoryGate conversationId={conversationId}
           onStartNewConversation={onStartNewConversation}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div data-testid="karen-copilot-conversation-column"
+              className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {modelControls}
               <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
               <div data-testid="karen-copilot-persona-footer"
                 className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
