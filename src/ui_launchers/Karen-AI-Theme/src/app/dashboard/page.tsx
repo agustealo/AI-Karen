@@ -184,7 +184,8 @@ function DashboardWorkspace() {
   const mountedRef = useRef(true);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { loading: pluginsLoading } = usePluginRegistry();
+  const { loading: pluginsLoading, getPluginsWithUI } = usePluginRegistry();
+  const fileExplorerPluginId = getPluginsWithUI().find(plugin => plugin.id === 'file-explorer')?.id;
   const { sidebarEntries, viewMap } = usePluginRoutes();
 
   const clearRetryTimeout = useCallback(() => {
@@ -545,6 +546,7 @@ function DashboardWorkspace() {
                   >
                     <KarenCopilotConsumerChat
                        onOpenAgents={() => setActiveMainView("agents")}
+                       fileExplorerPluginId={fileExplorerPluginId}
                        onOpenProviderSettings={() => {
                          setSettingsInitialSection('model');
                          setKarenPanelOpen(false);
