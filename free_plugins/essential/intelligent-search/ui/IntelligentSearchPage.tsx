@@ -21,7 +21,7 @@ export default function IntelligentSearchPage() {
         <SearchHeader modeConfig={modeConfig} state={state} />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-muted-foreground">
-            Search the web, inspect evidence, then ask Karen to verify or explain a source.
+            Search first. Open sources when you need them, or ask Karen for an explanation with citations.
           </p>
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setShowControls(value => !value)}
@@ -36,9 +36,9 @@ export default function IntelligentSearchPage() {
             </button>}
           </div>
         </div>
-        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
+        <div className="flex min-w-0 flex-col gap-4">
           <aside id="search-advanced-controls" className={showControls
-            ? 'min-w-0 xl:sticky xl:top-4 xl:self-start'
+            ? 'min-w-0'
             : 'min-w-0'}>
             <SearchControlsPanel state={state} modeConfig={modeConfig}
               onQueryChange={setQuery} onModeChange={setMode}

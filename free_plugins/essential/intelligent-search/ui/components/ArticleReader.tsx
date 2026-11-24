@@ -20,15 +20,20 @@ export function ArticleReader({ source }: ArticleReaderProps) {
   const [storedArticle, setStoredArticle] = useState<{ id: string; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
   const articleId = source?.article_id || null;
   const hasInlineComplete = source?.article_complete === true && Boolean(source?.full_content);
+
+  useEffect(() => {
+    setShowOriginal(false);
+  }, [articleId, source?.url]);
 
   useEffect(() => {
     let current = true;
     setStoredArticle(null);
     setLoadError(false);
     setLoading(false);
-    if (!articleId || hasInlineComplete) return () => { current = false; };
+    if (!showOriginal || !articleId || hasInlineComplete) return () => { current = false; };
     setLoading(true);
     IntelligentSearchApi.fetchArticle(articleId)
       .then(text => {
@@ -41,15 +46,19 @@ export function ArticleReader({ source }: ArticleReaderProps) {
         if (current) setLoading(false);
       });
     return () => { current = false; };
-  }, [articleId, hasInlineComplete]);
+  }, [articleId, hasInlineComplete, showOriginal]);
 
   if (!source) {
     return <p role="status" className="text-sm text-muted-foreground">Select a source to read.</p>;
   }
 
   const fetchedText = storedArticle?.id === articleId ? storedArticle.text : null;
-  const documentText = fetchedText || source.full_content || source.article_preview || source.content || source.snippet || '';
-  const hasArticle = Boolean(fetchedText || source.full_content || source.article_preview);
+  // A raw extraction is available only through a deliberate reading action.
+  // React renders all content as text. No HTML is executed or trusted.
+  const originalText = fetchedText || source.full_content || source.article_preview || '';
+  const readableText = source.readable_content || source.content || source.snippet || '';
+  const documentText = showOriginal ? (originalText || (loadError ? readableText : '')) : readableText;
+  const hasArticle = Boolean(documentText);
   const complete = Boolean(fetchedText) || hasInlineComplete;
   const paragraphs = documentText.replace(/\r\n?/g, '\n').split(/\n\s*\n/).filter(Boolean);
 
@@ -61,6 +70,10 @@ export function ArticleReader({ source }: ArticleReaderProps) {
         <p role="status" className="text-xs text-muted-foreground">
           {loading
             ? 'Loading the saved full article…'
+            : showOriginal && complete
+              ? 'Original extracted document, displayed as untrusted text.'
+            : !showOriginal && source.readable_content
+              ? 'Readable excerpts from the fetched page. Open the original site for full context.'
             : complete
               ? 'Full article text available in this view.'
               : loadError
@@ -69,6 +82,16 @@ export function ArticleReader({ source }: ArticleReaderProps) {
                   ? 'Discovery excerpt only. Full source content has not been provided.'
                   : 'Partial article preview. The full document is not available in this view.'}
         </p>
+        {(source.full_content || source.article_preview || source.article_id) && (
+          <button
+            type="button"
+            aria-pressed={showOriginal}
+            onClick={() => setShowOriginal(value => !value)}
+            className="min-h-10 rounded-xl border border-border/60 px-3 py-2 text-sm font-medium hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            {showOriginal ? 'Return to readable excerpts' : 'View original extracted text'}
+          </button>
+        )}
       </header>
       {paragraphs.length === 0 ? (
         <p role="status" className="text-sm text-muted-foreground">No readable source content is available.</p>

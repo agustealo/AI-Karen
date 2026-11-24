@@ -102,7 +102,9 @@ test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surfac
   await page.getByText('Intelligent Search', { exact: true }).first().click();
   const query = page.getByLabel('Query', { exact: true });
   await expect(query).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: 'Search settings' }).click();
   await page.getByLabel('Search mode').selectOption('auto');
+  await page.getByRole('button', { name: 'Hide search settings' }).click();
 
   // A location-free query may use an authorized profile/device/system location.
   // Otherwise the consumer must request one. Wikipedia snippets cannot count
@@ -130,6 +132,7 @@ test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surfac
   await expect(observation).toContainText('Provider timestamp:');
   await expect(page.getByRole('heading', { name: 'No sources found' })).toHaveCount(0);
 
+  await page.getByRole('button', { name: 'Research tools' }).click();
   await page.getByText('Technical search details').click();
   await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
   await expect(page.getByText('Provider', { exact: true }).first()).toBeVisible();
@@ -159,20 +162,23 @@ test('SEARCH-PLUGIN-03: general web retrieval proves independent source domains'
   await page.getByText('Intelligent Search', { exact: true }).first().click();
   const query = page.getByLabel('Query', { exact: true });
   await expect(query).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: 'Search settings' }).click();
   await page.getByLabel('Search mode').selectOption('general');
+  await page.getByRole('button', { name: 'Hide search settings' }).click();
   await query.fill('Python programming language official documentation and history');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
 
-  await expect(page.getByText('Technical search details')).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByRole('button', { name: 'Research tools' })).toBeVisible({ timeout: 120_000 });
+  await page.getByRole('button', { name: 'Research tools' }).click();
   await page.getByText('Technical search details').click();
   await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
-  const websites = page.getByText('Distinct websites', { exact: true }).locator('..');
+  const websites = page.getByText(/\d+ websites/, { exact: false }).first();
   await expect(websites).toBeVisible();
   // Provider diversity is an outcome of the live retrieval, not a static
   // render assertion. Poll the completed UI value without intercepting HTTP.
   await expect.poll(async () => {
     const label = await websites.innerText();
-    const matched = label.match(/Distinct websites\s+(\d+)/i);
+    const matched = label.match(/(\d+)\s+websites/i);
     return matched ? Number(matched[1]) : 0;
   }, {
     timeout: 30_000,
