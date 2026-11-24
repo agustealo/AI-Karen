@@ -385,3 +385,54 @@ describe('Content Intelligence canonical lexical token compatibility', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+describe('Content Intelligence document search', () => {
+  function searchResult(revision = SHA) {
+    return {
+      operation: 'search', persisted: false, query: 'vendor',
+      search_semantics: 'lexical_evidence_only',
+      matches: [{
+        document_id: FILE_A, document_name: 'alpha.txt', folder_id: null,
+        sha256: revision, offset: 0, end_offset: 6, excerpt: 'vendor',
+        matched_terms: ['vendor'], score: 1,
+      }],
+    };
+  }
+
+  async function selectSearch() {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    fireEvent.click(screen.getByText('Select A'));
+    fireEvent.change(screen.getByLabelText('Operation'), { target: { value: 'search' } });
+    fireEvent.change(screen.getByLabelText('Search terms'), { target: { value: 'vendor' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search selected files' }));
+  }
+
+  it('submits a bounded query and displays revision-bound passages', async () => {
+    mocks.post.mockResolvedValue(searchResult());
+    await selectSearch();
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Verified search results' })).toBeTruthy());
+    expect(mocks.post.mock.calls[0][1]).toEqual({
+      operation: 'search', query: 'vendor', references: [{ source_id: FILE_A, revision: SHA }],
+    });
+    expect(screen.getByText('vendor')).toBeTruthy();
+  });
+
+  it('rejects a substituted revision', async () => {
+    mocks.post.mockResolvedValue(searchResult('b'.repeat(64)));
+    await selectSearch();
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.queryByRole('status', { name: 'Verified search results' })).toBeNull();
+  });
+
+  it('discards an in-flight search when the query changes', async () => {
+    let resolveSearch!: (value: unknown) => void;
+    mocks.post.mockImplementation(() => new Promise((resolve) => { resolveSearch = resolve; }));
+    await selectSearch();
+    fireEvent.change(screen.getByLabelText('Search terms'), { target: { value: 'other' } });
+    await act(async () => resolveSearch(searchResult()));
+    expect(screen.queryByRole('status', { name: 'Verified search results' })).toBeNull();
+    expect(mocks.post.mock.calls[0][2].signal.aborted).toBe(true);
+  });
+});
