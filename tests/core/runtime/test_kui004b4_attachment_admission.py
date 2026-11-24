@@ -480,3 +480,20 @@ async def test_conversation_and_principal_denial_precedes_artifact_read(monkeypa
     with pytest.raises(AttachmentAdmissionDenied):
         await runtime._admit_attachments(request, plan, meter)
     assert reader.calls == []
+
+
+@pytest.mark.asyncio
+async def test_attachment_publication_rejects_substituted_text_with_authorized_revision():
+    request, plan, meter = await authority()
+    context = request.context
+    context.bind_runtime_attachment_scope(plan, meter, request.attachment_references)
+    with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
+        context.bind_runtime_attachment_documents(
+            plan, meter, [{**selected(), "text": "Substituted document."}],
+        )
+    with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
+        context.runtime_attachment_documents()
+    context.bind_runtime_attachment_documents(
+        plan, meter, [{**selected(), "text": BODY}],
+    )
+    assert context.runtime_attachment_documents() == [{**selected(), "text": BODY}]
