@@ -8,7 +8,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient, ApiError } from "@/lib/api";
 
-type DraftRecord = { text: string; revision: number };
+export type DraftAttachment = { source_id: string; revision: string };
+type DraftRecord = { text: string; revision: number; attachment_references: DraftAttachment[] };
+
+function validAttachments(value: unknown): value is DraftAttachment[] {
+  if (!Array.isArray(value) || value.length > 12) return false;
+  const seen = new Set<string>();
+  return value.every((ref: unknown) => {
+    if (!ref || typeof ref !== "object" || Array.isArray(ref)) return false;
+    const item = ref as Record<string, unknown>;
+    if (Object.keys(item).length !== 2 ||
+        typeof item.source_id !== "string" ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(item.source_id) ||
+        typeof item.revision !== "string" || !/^[a-f0-9]{64}$/.test(item.revision) ||
+        seen.has(item.source_id)) return false;
+    seen.add(item.source_id);
+    return true;
+  });
+}
+
+function sameAttachments(a: DraftAttachment[], b: DraftAttachment[]): boolean {
+  return a.length === b.length && a.every((ref, i) =>
+    ref.source_id === b[i].source_id && ref.revision === b[i].revision);
+}
 export type DraftStatus = "loading" | "ready" | "conflict" | "unavailable";
 const MAX_CHARS = 65536;
 const MAX_BYTES = 262144;
@@ -22,11 +44,14 @@ function validDraft(value: unknown): value is DraftRecord {
     result.text.length <= MAX_CHARS &&
     new TextEncoder().encode(result.text).length <= MAX_BYTES &&
     typeof result.revision === "number" &&
-    Number.isSafeInteger(result.revision) && result.revision >= 0;
+    Number.isSafeInteger(result.revision) && result.revision >= 0 &&
+    validAttachments(result.attachment_references);
 }
 
 export function useKarenPersistedDraft(conversationId: string) {
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
+  const attachmentsRef = useRef<DraftAttachment[]>([]);
   const [status, setStatus] = useState<DraftStatus>("loading");
   const [synced, setSynced] = useState(false);
   const [failureStatus, setFailureStatus] = useState<number | null>(null);
@@ -51,6 +76,16 @@ export function useKarenPersistedDraft(conversationId: string) {
   const endpoint = "/api/conversations/" + encodeURIComponent(conversationId) + "/draft";
 
   const readText = useCallback(() => textRef.current, []);
+  const updateAttachments = useCallback((value: DraftAttachment[]) => {
+    if (!activeRef.current || !validAttachments(value) ||
+        sameAttachments(value, attachmentsRef.current)) return;
+    const next = value.map(ref => ({ ...ref }));
+    attachmentsRef.current = next;
+    dirtyRef.current = true;
+    setAttachments(next);
+    setSynced(false);
+    setVersion(v => v + 1);
+  }, []);
 
   const announceRevision = useCallback((revision: number) => {
     try {
@@ -85,7 +120,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     const generation = generationRef.current;
     const readSequence = ++readSequenceRef.current;
     try {
-      const response: unknown = await apiClient.get<DraftRecord>(endpoint);
+      const response: unknown = await apiClient.get<DraftRecord>(endpoint + "?include_attachments=true");
       if (!activeRef.current || generationRef.current !== generation ||
           readSequenceRef.current !== readSequence) return;
       if (!validDraft(response)) throw new Error("Invalid server draft receipt");
@@ -98,11 +133,14 @@ export function useKarenPersistedDraft(conversationId: string) {
         throw new Error("Canonical draft revision regressed");
       }
       if (knownRevision !== null && saved.revision === knownRevision &&
-          !dirtyRef.current && textRef.current !== saved.text) {
+          !dirtyRef.current && (textRef.current !== saved.text ||
+            !sameAttachments(attachmentsRef.current, saved.attachment_references))) {
         throw new Error("Canonical draft changed without a new revision");
       }
       revisionRef.current = saved.revision;
       textRef.current = saved.text;
+      attachmentsRef.current = saved.attachment_references;
+      setAttachments(saved.attachment_references);
       dirtyRef.current = false;
       setDraft(saved.text);
       setSynced(true);
@@ -127,6 +165,9 @@ export function useKarenPersistedDraft(conversationId: string) {
     dirtyRef.current = false;
     busyRef.current = false;
     setDraft("");
+    attachmentsRef.current = [];
+    setAttachments([]);
+    pendingSaveRef.current = null;
     setSynced(false);
     setStatus("loading");
     setFailureStatus(null);
@@ -183,6 +224,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       draftChannelRef.current = null;
       // Clear private transient input on unmount/logout, never mirror in storage.
       textRef.current = "";
+      attachmentsRef.current = [];
       revisionRef.current = null;
       dirtyRef.current = false;
     };
@@ -194,14 +236,17 @@ export function useKarenPersistedDraft(conversationId: string) {
   // way to acknowledge its exact intended text and next revision.
   const commitDraftWrite = useCallback(async (
     intendedText: string, expectedRevision: number, signal: AbortSignal,
+    intendedAttachments: DraftAttachment[],
   ): Promise<DraftRecord> => {
     try {
       const receipt: unknown = await apiClient.put<DraftRecord>(
-        endpoint, { text: intendedText, expected_revision: expectedRevision },
+        endpoint, { text: intendedText, expected_revision: expectedRevision,
+          attachment_references: intendedAttachments },
         { signal },
       );
       if (!validDraft(receipt) || receipt.text !== intendedText ||
-          receipt.revision !== expectedRevision + 1) {
+          receipt.revision !== expectedRevision + 1 ||
+          !sameAttachments(receipt.attachment_references, intendedAttachments)) {
         throw new Error("Invalid draft CAS receipt");
       }
       return receipt;
@@ -215,12 +260,13 @@ export function useKarenPersistedDraft(conversationId: string) {
       // Fail closed if the read is unavailable or cannot prove this write.
       let saved: unknown;
       try {
-        saved = await apiClient.get<DraftRecord>(endpoint);
+        saved = await apiClient.get<DraftRecord>(endpoint + "?include_attachments=true");
       } catch {
         throw error;
       }
       if (!validDraft(saved) || saved.text !== intendedText ||
-          saved.revision !== expectedRevision + 1) {
+          saved.revision !== expectedRevision + 1 ||
+          !sameAttachments(saved.attachment_references, intendedAttachments)) {
         throw error;
       }
       return saved;
@@ -233,19 +279,20 @@ export function useKarenPersistedDraft(conversationId: string) {
     busyRef.current = true;
     const generation = generationRef.current;
     const sentText = textRef.current;
+    const sentAttachments = attachmentsRef.current;
     const expectedRevision = revisionRef.current;
     const controller = new AbortController();
     abortRef.current = controller;
     try {
       const response = await commitDraftWrite(
-        sentText, expectedRevision, controller.signal,
+        sentText, expectedRevision, controller.signal, sentAttachments,
       );
       if (!activeRef.current || generationRef.current !== generation ||
           controller.signal.aborted) return false;
       revisionRef.current = response.revision;
       readSequenceRef.current += 1;
       announceRevision(response.revision);
-      if (textRef.current === sentText) {
+      if (textRef.current === sentText && sameAttachments(attachmentsRef.current, sentAttachments)) {
         dirtyRef.current = false;
         setSynced(true);
       } else {
@@ -266,7 +313,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       return false;
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
-      busyRef.current = false;
+      if (generationRef.current === generation) busyRef.current = false;
     }
   }, [commitDraftWrite, announceRevision]);
 
@@ -288,7 +335,7 @@ export function useKarenPersistedDraft(conversationId: string) {
 
   const clearBeforeSubmit = useCallback(async (submittedText: string): Promise<boolean> => {
     if (!activeRef.current || busyRef.current || dirtyRef.current ||
-        revisionRef.current === null || !submittedText.trim()) {
+        revisionRef.current === null || attachmentsRef.current.length > 0 || !submittedText.trim()) {
       return false;
     }
     if (textRef.current.trim() !== submittedText.trim()) {
@@ -306,14 +353,14 @@ export function useKarenPersistedDraft(conversationId: string) {
     abortRef.current = controller;
     try {
       const response = await commitDraftWrite(
-        "", expectedRevision, controller.signal,
+        "", expectedRevision, controller.signal, [],
       );
       if (!activeRef.current || generationRef.current !== generation ||
           controller.signal.aborted) return false;
       revisionRef.current = response.revision;
       readSequenceRef.current += 1;
       announceRevision(response.revision);
-      if (textRef.current === originalText || textRef.current === "") {
+      if (attachmentsRef.current.length === 0 && (textRef.current === originalText || textRef.current === "")) {
         textRef.current = "";
         dirtyRef.current = false;
         setDraft("");
@@ -346,7 +393,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     // Flush an edited draft immediately and await a verified CAS receipt
     // before the existing revision-fenced clear and one SDK model run.
     if (!activeRef.current || revisionRef.current === null ||
-        !submittedText.trim()) {
+        attachmentsRef.current.length > 0 || !submittedText.trim()) {
       return false;
     }
     // CopilotKit or controlled inputs may clear their internal value to ""
@@ -378,7 +425,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       const ok = await startSave();
       if (!ok) return false;
     }
-    if (!activeRef.current || busyRef.current) {
+    if (!activeRef.current || busyRef.current || attachmentsRef.current.length > 0) {
       return false;
     }
     // If startSave succeeded, but an optimistic clear arrived while startSave
@@ -408,18 +455,21 @@ export function useKarenPersistedDraft(conversationId: string) {
         const sequence = ++readSequenceRef.current;
         void (async () => {
           try {
-            const response: unknown = await apiClient.get<DraftRecord>(endpoint);
+            const response: unknown = await apiClient.get<DraftRecord>(endpoint + "?include_attachments=true");
             if (!activeRef.current || generationRef.current !== generation ||
                 readSequenceRef.current !== sequence) return;
             if (!validDraft(response)) throw new Error("Invalid server draft receipt");
             const saved = response as DraftRecord;
             revisionRef.current = saved.revision;
-            if (saved.text !== "" && saved.text !== textRef.current) {
+            if ((saved.text !== "" && saved.text !== textRef.current) ||
+                (saved.attachment_references.length > 0 &&
+                  !sameAttachments(saved.attachment_references, attachmentsRef.current))) {
               setStatus("conflict");
               setSynced(false);
               return;
             }
-            if (saved.text === textRef.current) {
+            if (saved.text === textRef.current &&
+                sameAttachments(saved.attachment_references, attachmentsRef.current)) {
               dirtyRef.current = false;
               setSynced(true);
             } else {
@@ -438,7 +488,7 @@ export function useKarenPersistedDraft(conversationId: string) {
               setSynced(false);
             }
           } finally {
-            busyRef.current = false;
+            if (generationRef.current === generation) busyRef.current = false;
           }
         })();
         return;
@@ -476,7 +526,7 @@ export function useKarenPersistedDraft(conversationId: string) {
   }, [refresh, status]);
 
   return {
-    draft, setText, readText, status, synced, failureStatus,
+    draft, setText, readText, attachments, updateAttachments, status, synced, failureStatus,
     clearBeforeSubmit, prepareSubmission, retry, discardAndReload,
   };
 }
