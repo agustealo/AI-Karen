@@ -310,6 +310,7 @@ class ChatExecutionContext:
         self, plan: Any, meter: Any, documents: list[dict[str, str]],
     ) -> None:
         """Publish verified document content atomically after every source passes."""
+        self.require_authenticated_user()
         current = self.__dict__.get("_runtime_attachment_scope")
         if (
             current is None
@@ -333,6 +334,7 @@ class ChatExecutionContext:
 
     def runtime_attachment_documents(self) -> list[dict[str, str]]:
         """Release content only while the original policy plan/meter remain valid."""
+        self.require_authenticated_user()
         current = self.__dict__.get("_runtime_attachment_scope")
         documents = self.__dict__.get("_runtime_attachment_documents")
         if current is None:
