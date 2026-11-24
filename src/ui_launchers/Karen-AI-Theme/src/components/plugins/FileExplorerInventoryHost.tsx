@@ -306,7 +306,7 @@ export function FileExplorerInventoryHost({
   const selectedAnalysisSources = mode === 'analysis' && currentPage && !currentError && !loading
     ? selectedSourceIds.flatMap((id) => {
       const item = currentPage.items.find((entry) => entry.source_id === id);
-      return item ? [{ source_id: item.source_id, revision: item.revision }] : [];
+      return item ? [{ source_id: item.source_id, revision: item.revision, name: item.name }] : [];
     })
     : [];
   const selectionKey = props.pageKey + ':' +
