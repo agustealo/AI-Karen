@@ -271,9 +271,16 @@ class ChatRuntime:
         messages = [dict(message) for message in request.messages]
         if not request.attachment_references:
             return messages
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            validate_draft_attachment_references,
+        )
+
         documents = request.context.runtime_attachment_documents()
+        selected = validate_draft_attachment_references(request.attachment_references)
         if (
             not documents or not messages
+            or [(item["source_id"], item["revision"]) for item in selected]
+            != [(item["source_id"], item["revision"]) for item in documents]
             or str(messages[-1].get("role", "")).lower() != "user"
         ):
             raise AttachmentAdmissionDenied("attachment_admission_missing")
