@@ -334,6 +334,10 @@ class ChatExecutionContext:
             for item in documents
         )
 
+    def has_runtime_attachment_scope(self) -> bool:
+        """Retain the attachment restriction even if request selection is cleared."""
+        return "_runtime_attachment_scope" in self.__dict__
+
     def runtime_attachment_documents(self) -> list[dict[str, str]]:
         """Release content only while the original policy plan/meter remain valid."""
         self.require_authenticated_user()
