@@ -293,7 +293,7 @@ export function SourcesPanel({ response }: PanelProps) {
 
              <div className="p-6 pt-0 mt-auto flex gap-3">
                <button onClick={() => sendToChat(featuredSource)} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary text-primary-foreground text-xs font-bold uppercase tracking-wider shadow-lg hover:scale-105 active:scale-95 transition-all">
-                  <Send className="h-3.5 w-3.5" /> Inject into Conversation
+                  <Send className="h-3.5 w-3.5" /> Ask Karen about this source
                </button>
                {featuredSource?.url && (
                   <a href={featuredSource.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-border/60 hover:bg-muted text-xs font-bold uppercase tracking-wider text-muted-foreground transition-all">
@@ -308,86 +308,6 @@ export function SourcesPanel({ response }: PanelProps) {
   );
 }
 
-function ResultCard({ result, index, onSend }: { result: SearchResultItem; index: number; onSend: (item: ChatInjectItem) => void }) {
-  const [viewMode, setViewMode] = useState<ViewMode>('snippet');
-
-  return (
-    <article className="group relative rounded-3xl border border-border/60 bg-card/90 p-5 shadow-[0_18px_50px_rgba(0,0,0,0.16)] transition-all duration-300 hover:border-primary/40 hover:shadow-2xl">
-      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-        <button 
-          onClick={() => onSend(result)}
-          className="p-2.5 rounded-full bg-primary text-primary-foreground shadow-lg hover:scale-110 active:scale-95 transition-all"
-          title="Inject into chat"
-        >
-          <Send className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
-              {index + 1}
-            </span>
-            <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground">
-              {result.domain || domainFromUrl(result.url) || 'INTELLIGENCE UNIT'}
-            </span>
-          </div>
-          <h5 className="text-base font-semibold leading-relaxed text-foreground pr-8">
-            {result.title}
-          </h5>
-        </div>
-        {typeof result.score === 'number' && (
-          <div className="rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[10px] font-bold text-primary">
-            Score {result.score.toFixed(2)}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-border/40 bg-background/50 overflow-hidden">
-        <div className="flex items-center gap-3 border-b border-border/40 bg-muted/20 px-3 py-1.5">
-          {(['snippet', 'markdown', 'json'] as const).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode)}
-              className={`text-[9px] font-bold uppercase tracking-widest transition-colors px-2 py-1 rounded ${
-                viewMode === mode ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {mode}
-            </button>
-          ))}
-        </div>
-        <div className="p-4 overflow-auto max-h-48 custom-scrollbar min-h-[6rem]">
-          {viewMode === 'snippet' && (
-            <p className="whitespace-pre-wrap break-words text-xs leading-6 text-muted-foreground/90 font-medium">
-              {result.snippet || result.content || 'No unit content preview available.'}
-            </p>
-          )}
-          {viewMode === 'markdown' && (
-            <pre className="whitespace-pre-wrap break-words text-[10px] leading-5 text-foreground/90 font-mono">
-              {result.markdown || result.content || 'Markdown source not available for this unit.'}
-            </pre>
-          )}
-          {viewMode === 'json' && (
-            <pre className="text-[10px] leading-4 text-foreground/80 font-mono">
-              {JSON.stringify(result, null, 2)}
-            </pre>
-          )}
-        </div>
-      </div>
-
-      <a
-        href={result.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-4 inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-primary transition-all hover:gap-2"
-      >
-        Source Access <ExternalLink className="h-3 w-3" />
-      </a>
-    </article>
-  );
-}
 
 export function ExtractedDataPanel({ response }: PanelProps) {
   const sections = getPayloadSections(response);
