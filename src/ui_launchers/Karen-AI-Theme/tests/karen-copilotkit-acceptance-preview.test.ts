@@ -37,6 +37,8 @@ const personaOwner = readFileSync(resolve(root,
   "src/components/chat/KarenPersonaSelector.tsx"), "utf8");
 const catalogOwner = readFileSync(resolve(root,
   "src/components/chat/KarenComposerRuntimeCatalog.tsx"), "utf8");
+const agentDiscoveryOwner = readFileSync(resolve(root,
+  "src/components/chat/KarenComposerAgentDiscovery.tsx"), "utf8");
 const presentationOwner = readFileSync(resolve(root,
   "src/components/chat/KarenPresentationRegistry.tsx"), "utf8");
 const controlledChat = readFileSync(resolve(root,
@@ -54,11 +56,13 @@ describe("CK-07E8 isolated native CopilotKit browser acceptance surface", () => 
     expect(consumerChat).toContain('from "../KarenComposerRuntimeCatalog"');
     expect(verifiedHistory).toContain('from "@/components/chat/KarenPresentationRegistry"');
     for (const sourceModule of [copilotShell, consumerChat, verifiedHistory,
-      personaOwner, catalogOwner, presentationOwner]) {
+      personaOwner, catalogOwner, agentDiscoveryOwner, presentationOwner]) {
       expect(sourceModule).not.toContain("@assistant-ui/react");
       expect(sourceModule).not.toContain("@assistant-ui/react-ag-ui");
     }
-    expect(catalogOwner).toContain('"/api/agent-runtime/catalog"');
+    expect(catalogOwner).not.toContain('"/api/agent-runtime/catalog"');
+    expect(agentDiscoveryOwner).toContain('"/api/agent-runtime/catalog"');
+    expect(controlledChat).toContain('<KarenComposerAgentDiscovery');
     expect(presentationOwner).toContain("parseKarenPresentation");
   });
 
