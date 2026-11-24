@@ -16,6 +16,7 @@ export interface SearchSourceItem {
   content?: string;
   full_content?: string | null;
   article_preview?: string | null;
+  readable_content?: string | null;
   article_complete?: boolean;
   article_char_count?: number;
   article_id?: string | null;
