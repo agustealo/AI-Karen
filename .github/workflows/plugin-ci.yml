@@ -190,7 +190,9 @@ jobs:
 
   test-backend:
     name: Test Plugin Backend
-    runs-on: ubuntu-latest
+    # Playwright 1.58.0 Chromium does not support ubuntu26.04; use
+    # a supported and explicit GitHub runner for real-browser proof.
+    runs-on: ubuntu-24.04
     needs: lint
     services:
       postgres:
