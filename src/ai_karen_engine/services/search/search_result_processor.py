@@ -17,6 +17,10 @@ _MARKDOWN_LINK = re.compile(r"\[([^\]\n]+)\]\((?:\\.|[^)\n])*\)", re.IGNORECASE)
 _URL = re.compile(r"https?://[^\s)]+", re.IGNORECASE)
 _WORD = re.compile(r"\b\w+\b", re.UNICODE)
 _TAG = re.compile(r"<[^>\n]{1,500}>")
+_UNTRUSTED_HTML_BLOCK = re.compile(
+    r"<(script|style|nav|aside|footer)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
 _INLINE_CITATION = re.compile(r"\[(?:\d+|citation needed|edit)\]", re.IGNORECASE)
 _NAVIGATION = re.compile(
     r"^(?:jump to content|main menu|navigation|personal tools|contribute|"
@@ -31,22 +35,19 @@ _NAVIGATION = re.compile(
 _BOILERPLATE_START = re.compile(
     r"^(?:related posts?|recommended articles?|reader interactions?|"
     r"leave a reply|cancel reply|recent posts?|this day in history|"
-    r"references|notes|external links|see also|further reading|"
+    r"references(?:\s*\[edit\]|\s*\d+[.)]|:)|"
+    r"notes(?:\s*\[edit\]|\s*\d+[.)]|:)|"
+    r"external links|see also|further reading|"
     r"navigation|personal tools|tools|print/export|appearance|"
     r"main menu|jump to content|table of contents|posted in|"
     r"edit links|in other projects)(?:\s|:|\[|$)",
     re.IGNORECASE,
 )
-_MENU_MARKERS = (
-    "move to sidebar", "toggle the table of contents", "main menu",
-    "jump to content", "personal tools", "navigation menu",
-    "learn to edit", "create account", "download as pdf",
-)
-
 
 def _plain_text(text: str) -> str:
     """Canonical display/evidence text; never render untrusted markup."""
     normalized = html.unescape(str(text or ""))
+    normalized = _UNTRUSTED_HTML_BLOCK.sub(" ", normalized)
     normalized = _MARKDOWN_IMAGE.sub("", normalized)
     normalized = _MARKDOWN_LINK.sub(lambda match: match.group(1), normalized)
     normalized = _TAG.sub(" ", normalized)
@@ -54,7 +55,9 @@ def _plain_text(text: str) -> str:
     normalized = _URL.sub("", normalized)
     normalized = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", normalized)
     normalized = re.sub(r"(?m)^\s{0,3}>\s?", "", normalized)
-    normalized = normalized.replace("**", "").replace("__", "").replace(chr(96), "")
+    normalized = re.sub(r"\*\*(\S(?:.*?\S)?)\*\*", r"\1", normalized)
+    # Preserve __init__, _field_name and ** operators in technical docs.
+    normalized = normalized.replace(chr(96), "")
     normalized = re.sub(r"[ \t]+", " ", normalized)
     normalized = re.sub(r"[ \t]*\n[ \t]*", "\n", normalized)
     return normalized.strip()
@@ -71,8 +74,6 @@ def _is_article_content(section: str) -> bool:
         return False
     plain = _plain_text(stripped)
     if len(plain) < 90:
-        return False
-    if any(marker in stripped[:350].casefold() for marker in _MENU_MARKERS):
         return False
     # Reject link-heavy directories and headings dressed as page content.
     link_count = len(_MARKDOWN_LINK.findall(stripped)) + len(_MARKDOWN_IMAGE.findall(stripped))
@@ -102,6 +103,8 @@ class SearchResultProcessor:
         if not isinstance(text, str) or limit <= 0:
             return ""
         cleaned = " ".join(_plain_text(text[: max(limit * 5, 2000)]).split())
+        if _BOILERPLATE_START.match(cleaned):
+            return ""
         return cleaned[:limit].rstrip()
 
     def readable_preview(self, result: Dict[str, Any], limit: int = 12000) -> str:
@@ -122,6 +125,8 @@ class SearchResultProcessor:
                 continue
             used.add(fingerprint)
             if length + len(paragraph) + 2 > limit:
+                if not paragraphs:
+                    paragraphs.append(paragraph[:limit].rstrip())
                 break
             paragraphs.append(paragraph)
             length += len(paragraph) + 2
