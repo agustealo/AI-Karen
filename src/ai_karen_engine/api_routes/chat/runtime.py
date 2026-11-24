@@ -50,6 +50,9 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
 )
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.services.database.repositories.conversation_repository import (
+    validate_draft_attachment_references,
+)
 from ai_karen_engine.services.approvals import (
     ApprovalNotFoundError,
     ApprovalScopeError,
@@ -78,6 +81,14 @@ class ChatRequest(BaseModel):
     """Validated non-streaming or streaming chat request."""
 
     messages: List[ChatMessage] = Field(..., min_length=1, max_length=50)
+    attachment_references: List[Dict[str, str]] = Field(default_factory=list, max_length=12)
+
+    @field_validator("attachment_references")
+    @classmethod
+    def validate_attachment_references(
+        cls, value: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        return validate_draft_attachment_references(value)
     preferred_llm_provider: Optional[str] = Field(default=None, max_length=100)
     preferred_model: Optional[str] = Field(default=None, max_length=200)
     provider: Optional[str] = Field(
@@ -148,6 +159,14 @@ class ChatStreamRequest(BaseModel):
     # Provisional same-session user turns only. Durable history still comes
     # exclusively from the conversation repository in the runtime.
     recent_user_messages: List[str] = Field(default_factory=list, max_length=12)
+    attachment_references: List[Dict[str, str]] = Field(default_factory=list, max_length=12)
+
+    @field_validator("attachment_references")
+    @classmethod
+    def validate_attachment_references(
+        cls, value: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        return validate_draft_attachment_references(value)
     workspace_run_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
     session_id: Optional[str] = Field(
         default=None,
@@ -337,6 +356,7 @@ def _stream_execution_request(
         temperature=request.temperature,
         max_tokens=request.max_tokens,
         stream=True,
+        attachment_references=list(request.attachment_references),
         metadata={
             "transport": "sse",
             "ingress_recent_user_messages": [
@@ -511,6 +531,7 @@ async def create_chat_response(
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             stream=request.stream,
+            attachment_references=list(request.attachment_references),
             metadata={
                 "transport": "http",
                 **({"user_timezone": request.timezone} if request.timezone else {}),
@@ -1392,11 +1413,13 @@ async def stream_ag_ui_chat(
     workspace_ref = request.forwardedProps.get("workspace_run_id")
     requested_provider = request.forwardedProps.get("preferred_llm_provider")
     requested_model = request.forwardedProps.get("preferred_model")
+    selected_attachments = request.forwardedProps.get("attachment_references", [])
     # Only declared request hints are accepted. ChatRuntime remains responsible
     # for provider eligibility, permissions, model routing, and fallback.
     if (
         set(request.forwardedProps) - {
-            "workspace_run_id", "preferred_llm_provider", "preferred_model"
+            "workspace_run_id", "preferred_llm_provider", "preferred_model",
+            "attachment_references"
         }
         or (workspace_ref is not None and (
             not isinstance(workspace_ref, str)
@@ -1415,6 +1438,12 @@ async def stream_ag_ui_chat(
         )
     ):
         raise HTTPException(status_code=422, detail="Unsupported AG-UI request hints")
+    try:
+        selected_attachments = validate_draft_attachment_references(selected_attachments)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="Invalid attachment references",
+        ) from None
     # Reject ungoverned client-provided tools, shared state and context.
     if request.tools or request.state or request.context:
         raise HTTPException(
@@ -1480,6 +1509,7 @@ async def stream_ag_ui_chat(
         canonical_request = _stream_execution_request(
             request=ChatStreamRequest(
                 message=current_text,
+                attachment_references=selected_attachments,
                 session_id=session_id,
                 conversation_id=conversation_id,
                 # The validated AG-UI runId belongs to the same client run
