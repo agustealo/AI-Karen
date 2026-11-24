@@ -1156,6 +1156,9 @@ class PluginService:
         authorized_plan: Optional[AuthorizedExecutionPlan] = None,
         allowed_capabilities: Optional[List[str]] = None,
         forbidden_capabilities: Optional[List[str]] = None,
+        *,
+        runtime_context: Any = None,
+        execution_meter: Any = None,
     ) -> PluginExecutionResult:
         """Execute through RuntimePolicy and the one canonical extension executor."""
         del execution_mode  # Runtime isolation comes from the execution manifest.
@@ -1225,6 +1228,9 @@ class PluginService:
                 "authorized_plan_invalid",
                 "Plugin execution requires a typed AuthorizedExecutionPlan",
             )
+
+        if (runtime_context is not None or execution_meter is not None) and authorized_plan is None:
+            return failure("extension_runtime_authority_invalid", "Original runtime plan required")
 
         if authorized_plan is None:
             if policy_decision_id:
@@ -1317,6 +1323,14 @@ class PluginService:
                 "permissions": principal_permissions,
             },
         )
+        if runtime_context is not None or execution_meter is not None:
+            if plugin_name != "intelligent-search":
+                return failure("extension_runtime_authority_invalid", "Runtime search authority is restricted to Intelligent Search")
+            try:
+                context.bind_runtime_authority(runtime_context, authorized_plan, execution_meter, plugin_name)
+            except PermissionError:
+                return failure("extension_runtime_authority_invalid", "Original runtime authority does not match plugin execution")
+
         canonical_request = ExtensionExecutionRequest(
             plugin_id=plugin_name,
             capability=PluginKernel.EXECUTE_CAPABILITY,

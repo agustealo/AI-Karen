@@ -11,6 +11,7 @@ from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
+    SearchRetrievalOptions,
     ChatExecutionResult,
     ChatExecutionStatus,
     PersonaExecutionSnapshot,
@@ -301,6 +302,19 @@ class ChatRuntime:
                 },
             )
 
+    def _search_retrieval_admission(self, request: ChatExecutionRequest, decision: ExecutionDecision) -> bool:
+        options = request.search_retrieval_options
+        if options is None:
+            return True
+        return (
+            isinstance(options, SearchRetrievalOptions)
+            and decision.intent == "search.general"
+            and not decision.is_graph_required
+            and bool((decision.policy_constraints or {}).get("direct_capability"))
+            and get_direct_capability_executor().can_handle(decision)
+            and not self._is_explicit_save_turn(request)
+        )
+
     async def execute(self, request: ChatExecutionRequest) -> ChatExecutionResult:
         start = time.time()
         ctx = request.context
@@ -386,6 +400,20 @@ class ChatRuntime:
         decision_started = time.perf_counter()
         decision = await self._decide(request)
         cortex_duration_ms = (time.perf_counter() - decision_started) * 1000.0
+        if not self._search_retrieval_admission(request, decision):
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED, status="denied",
+                intent=decision.intent,
+                metadata={"error_code": "SEARCH_RETRIEVAL_UNSUPPORTED"},
+            )
+            return ChatExecutionResult(
+                answer="", status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    degraded_mode=True, degradation_reason="search_retrieval_unsupported",
+                    extra={"error_code": "SEARCH_RETRIEVAL_UNSUPPORTED"},
+                ),
+            )
         await self._record_user_behavior_observation(request, decision)
         self._emitter.emit(
             RuntimeEventType.CORTEX_DECISION,
@@ -1087,6 +1115,26 @@ class ChatRuntime:
         decision_started = time.perf_counter()
         decision = await self._decide(request)
         cortex_duration_ms = (time.perf_counter() - decision_started) * 1000.0
+        if not self._search_retrieval_admission(request, decision):
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED, status="denied",
+                intent=decision.intent,
+                metadata={"error_code": "SEARCH_RETRIEVAL_UNSUPPORTED"},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content="Retrieval options require an authorized general search.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={
+                        "error_code": "SEARCH_RETRIEVAL_UNSUPPORTED",
+                        "actual_provider": None, "actual_model": None,
+                        "response_source": "unavailable", "degraded_mode": True,
+                    },
+                ),
+                sequence, request_id, response_id, conversation_id,
+            )
+            return
         await self._record_user_behavior_observation(request, decision)
         plan = self._build_authorized_plan(request, decision)
         approval_gate = await self._resolve_human_approval_gate(request, decision)

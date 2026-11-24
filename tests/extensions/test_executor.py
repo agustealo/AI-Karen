@@ -505,3 +505,70 @@ async def test_admission_never_executes_untrusted_or_disabled_handler():
         await untrusted.admit(_request(plan=_plan()))
     ).error_code == "isolation_unavailable"
     assert handler.calls == 0
+
+
+def test_extension_runtime_authority_cannot_be_minted_from_unissued_chat_context():
+    from dataclasses import asdict, replace
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+    context = _context()
+    plan = _plan()
+    runtime_context = ChatExecutionContext(
+        user_id=context.user_id, tenant_id=context.tenant_id,
+        session_id=context.session_id, correlation_id=context.correlation_id,
+    )
+    meter = ExecutionBudgetMeter(plan.budget)
+    with pytest.raises(PermissionError, match="extension_runtime_authority_invalid"):
+        context.bind_runtime_authority(runtime_context, plan, meter, "echo")
+    assert context.runtime_authority("echo") is None
+    assert replace(context).runtime_authority("echo") is None
+    assert "_runtime_authority" not in asdict(context)
+    assert "_runtime_authority" not in context.to_audit_dict()
+
+
+def test_extension_runtime_authority_scope_and_copy_guard(monkeypatch):
+    from copy import copy
+    from dataclasses import replace
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+    context = _context()
+    plan = _plan()
+    meter = ExecutionBudgetMeter(plan.budget)
+    runtime_context = ChatExecutionContext(
+        user_id=context.user_id, tenant_id=context.tenant_id,
+        session_id=context.session_id, correlation_id=context.correlation_id,
+        conversation_id=context.conversation_id,
+    )
+    # Isolate extension propagation from the separately tested RuntimePolicy issuer.
+    monkeypatch.setattr(ChatExecutionContext, "is_runtime_model_plan_authorized",
+                        lambda self, p, m: self is runtime_context and p is plan and m is meter)
+    context.bind_runtime_authority(runtime_context, plan, meter, "echo")
+    assert context.runtime_authority("echo")[1] is meter
+    assert replace(context).runtime_authority("echo") is None
+    with pytest.raises(PermissionError):
+        copy(context).runtime_authority("echo")
+    with pytest.raises(PermissionError):
+        context.bind_runtime_authority(runtime_context, plan, ExecutionBudgetMeter(plan.budget), "echo")
+    with pytest.raises(PermissionError):
+        context.runtime_authority("different-plugin")
+    with pytest.raises(PermissionError):
+        replace(context, tenant_id="other").bind_runtime_authority(runtime_context, plan, meter, "echo")
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_runtime_authority_for_unrelated_plugin(monkeypatch):
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+    handler = FakeHandler()
+    plan = _plan()
+    meter = ExecutionBudgetMeter(plan.budget)
+    monkeypatch.setattr(ExtensionExecutionContext, "runtime_authority",
+                        lambda self, plugin_id: (plan, meter))
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler), lifecycle=FakeLifecycle(),
+    )
+    result = await service.execute(_request(plan=plan))
+    assert result.error_code == "extension_runtime_authority_invalid"
+    assert handler.calls == 0

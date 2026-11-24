@@ -45,3 +45,18 @@ def test_chat_runtime_service_callers_are_deprecated() -> None:
             "Migrate to ChatRuntime / ChatRuntimeControlPlane directly: "
             + ", ".join(sorted(violations))
         )
+
+
+def test_search_retrieval_ingress_reuses_canonical_validation():
+    from pydantic import ValidationError
+    import pytest
+    from ai_karen_engine.api_routes.chat.runtime import ChatRequest, ChatStreamRequest
+
+    options = {"allowed_domains": ["example.org"], "prefer_recent": False, "max_urls": 3}
+    http = ChatRequest(messages=[{"content": "release notes"}], search_retrieval_options=options)
+    sse = ChatStreamRequest(message="release notes", search_retrieval_options=options)
+    assert http.search_retrieval_options.to_runtime() == sse.search_retrieval_options.to_runtime()
+    assert http.search_retrieval_options.to_runtime().tool_parameters() == options
+    for invalid in ({"max_urls": True}, {"max_urls": 26}, {"prefer_recent": "false"}, {"authorized_plan": {}}):
+        with pytest.raises(ValidationError):
+            ChatStreamRequest(message="release notes", search_retrieval_options=invalid)

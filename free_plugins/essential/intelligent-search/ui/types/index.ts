@@ -133,6 +133,8 @@ export interface SearchEvidenceGraph {
 
 export interface IntelligentSearchResponse {
   summary: string;
+  runtimeAnswer?: { text: string; provider: string; model: string };
+  citations?: Array<{ url: string; title: string; sourceId: string }>;
   query?: string;
   mode?: SearchModeId | string;
   status?: string;

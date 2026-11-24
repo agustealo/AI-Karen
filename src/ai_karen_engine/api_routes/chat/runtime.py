@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr, ValidationError, field_validator, model_validator
 
 from ai_karen_engine.core.logging import get_structured_logger
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
@@ -39,6 +39,7 @@ from ai_karen_engine.core.runtime.chat_run_lifecycle import (
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
+    SearchRetrievalOptions,
     ChatExecutionRequest,
     ChatExecutionStatus,
     ChatStreamChunk,
@@ -74,6 +75,25 @@ class ChatMessage(BaseModel):
         return value.strip()
 
 
+class SearchRetrievalInput(BaseModel):
+    """Untrusted retrieval preferences; no execution grants or provider authority."""
+
+    model_config = ConfigDict(extra="forbid")
+    allowed_domains: tuple[StrictStr, ...] = ()
+    blocked_domains: tuple[StrictStr, ...] = ()
+    time_range: Optional[StrictStr] = None
+    prefer_recent: Optional[StrictBool] = None
+    max_urls: Optional[StrictInt] = None
+
+    def to_runtime(self) -> SearchRetrievalOptions:
+        return SearchRetrievalOptions(**self.model_dump())
+
+    @model_validator(mode="after")
+    def validate_runtime_contract(self) -> "SearchRetrievalInput":
+        self.to_runtime()
+        return self
+
+
 class ChatRequest(BaseModel):
     """Validated non-streaming or streaming chat request."""
 
@@ -103,6 +123,7 @@ class ChatRequest(BaseModel):
     )
     conversation_id: Optional[str] = Field(default=None, max_length=100)
     timezone: Optional[str] = Field(default=None, max_length=100)
+    search_retrieval_options: Optional[SearchRetrievalInput] = None
 
     @field_validator("timezone")
     @classmethod
@@ -163,6 +184,7 @@ class ChatStreamRequest(BaseModel):
     approval_id: Optional[str] = Field(default=None, max_length=64)
     planner_idempotency_key: Optional[uuid.UUID] = None
     timezone: Optional[str] = Field(default=None, max_length=100)
+    search_retrieval_options: Optional[SearchRetrievalInput] = None
 
     @field_validator("timezone")
     @classmethod
@@ -336,6 +358,7 @@ def _stream_execution_request(
         preferred_model=request.preferred_model,
         temperature=request.temperature,
         max_tokens=request.max_tokens,
+        search_retrieval_options=request.search_retrieval_options.to_runtime() if request.search_retrieval_options is not None else None,
         stream=True,
         metadata={
             "transport": "sse",
@@ -510,6 +533,7 @@ async def create_chat_response(
             preferred_model=preferred_model,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            search_retrieval_options=request.search_retrieval_options.to_runtime() if request.search_retrieval_options is not None else None,
             stream=request.stream,
             metadata={
                 "transport": "http",
