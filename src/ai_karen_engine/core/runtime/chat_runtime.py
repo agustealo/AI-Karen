@@ -3587,7 +3587,7 @@ class ChatRuntime:
                     dict(item) for item in
                     (policy_constraints.get("attachment_references") or [])
                 ],
-            } if request.attachment_references else {},
+            } if policy_constraints.get("attachment_references") else {},
             budget=budget,
             memory_scope=decision.memory_scope,
             reasoning_modes=list(decision.reasoning_modes),
