@@ -124,6 +124,9 @@ _CANONICAL_META_KEYS = (
     "degradation_type",
     "degraded_mode",
     "degradation_reason",
+    "conversation_history_status",
+    "history_message_count",
+    "conversation_history_materialized",
 )
 
 
@@ -2067,6 +2070,11 @@ class ChatRuntime:
             response_metadata={
                 **{
                     key: value
+                    for key, value in (request.metadata or {}).items()
+                    if key in _CANONICAL_META_KEYS
+                },
+                **{
+                    key: value
                     for key, value in durable_meta.items()
                     if key in _CANONICAL_META_KEYS or key in _RICH_RESULT_KEYS
                 },
@@ -2840,6 +2848,7 @@ class ChatRuntime:
             request.messages = [current]
             request.metadata["conversation_history_status"] = "unavailable"
             request.metadata["conversation_history_reason"] = "persona_scope_unavailable"
+            request.metadata["history_message_count"] = 0
             return
         persona_scope_id = (
             snapshot.persona_id if snapshot.memory_filter_required else None
@@ -2884,6 +2893,14 @@ class ChatRuntime:
                     request.messages = [*prior, current]
                     request.metadata["conversation_history_source"] = "canonical_repository"
                     request.metadata["conversation_history_materialized"] = True
+                    request.metadata["conversation_history_status"] = "materialized"
+                    request.metadata["history_message_count"] = len(prior)
+                else:
+                    request.metadata["conversation_history_status"] = "empty"
+                    request.metadata["history_message_count"] = 0
+            else:
+                request.metadata.setdefault("conversation_history_status", "empty")
+                request.metadata.setdefault("history_message_count", 0)
         except PermissionError:
             # Never fall through to an unscoped continuity or provider path.
             raise
@@ -2901,6 +2918,9 @@ class ChatRuntime:
                 "Authorized conversation history unavailable: %s",
                 type(exc).__name__,
             )
+            request.metadata["conversation_history_status"] = "unavailable"
+            request.metadata["conversation_history_reason"] = type(exc).__name__
+            request.metadata["history_message_count"] = 0
         # Caller metadata must not choose a new effective mutation query.
         self._discard_untrusted_clarification_metadata(request)
         if not self._resolve_typed_pending_clarification(request):
@@ -5585,6 +5605,12 @@ class ChatRuntime:
             if isinstance(item, dict)
             and str(item.get("id") or "") in included_refs
             and str(item.get("id") or "")
+        )
+        prompt_telemetry["conversation_history_status"] = str(
+            (request.metadata or {}).get("conversation_history_status", "empty")
+        )
+        prompt_telemetry["history_messages_included"] = len(
+            [m for m in request.messages[:-1] if str(m.get("role", "")).lower() in {"user", "assistant"}]
         )
         prompt_telemetry["assembly_duration_ms"] = (
             time.perf_counter() - assembly_started
