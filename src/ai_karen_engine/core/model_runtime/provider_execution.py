@@ -312,6 +312,13 @@ def provider_endpoint_requires_external_permission(endpoint: ProviderEndpoint) -
     bypass installation external opt-out or authenticated administrator RBAC.
     Return True for unknown or malformed targets, never infer cloud permission.
     """
+    return _resolved_destination_requires_external_permission(endpoint, _resolve_base_url(endpoint))
+
+
+def _resolved_destination_requires_external_permission(
+    endpoint: ProviderEndpoint, url: str | None,
+) -> bool:
+    """Classify exactly the URL that will be used by the transport."""
     if (
         endpoint.kind is EndpointKind.CLOUD_PROVIDER
         or endpoint.locality is Locality.CLOUD
@@ -319,7 +326,6 @@ def provider_endpoint_requires_external_permission(endpoint: ProviderEndpoint) -
     ):
         return True
     try:
-        url = _resolve_base_url(endpoint)
         parsed = urlsplit(url) if isinstance(url, str) else None
         if (
             parsed is None
@@ -562,8 +568,11 @@ def _sync_openai_compatible_request(
     max_tokens: int,
     temperature: float,
     personal_key: str | None = None,
+    local_only: bool = False,
 ) -> ProviderExecutionResult:
     base_url = _resolve_base_url(endpoint)
+    if local_only and _resolved_destination_requires_external_permission(endpoint, base_url):
+        raise ProviderExecutionError("private_evidence_local_only")
     if not base_url:
         raise ProviderExecutionError(
             f"provider_endpoint_missing_base_url:{endpoint.provider_id}"
@@ -655,6 +664,7 @@ async def execute_provider_endpoint(
     max_tokens: int,
     temperature: float,
     personal_model_grant: PersonalModelTransportGrant | None = None,
+    local_only: bool = False,
 ) -> ProviderExecutionResult:
     """Execute a canonical endpoint without importing extension implementations."""
 
@@ -675,6 +685,7 @@ async def execute_provider_endpoint(
         max_tokens=max_tokens,
         temperature=temperature,
         personal_key=personal_key,
+        **({"local_only": True} if local_only else {}),
     )
 
 
@@ -763,6 +774,7 @@ async def stream_provider_endpoint(
     temperature: float,
     timeout_ms: int,
     personal_model_grant: PersonalModelTransportGrant | None = None,
+    local_only: bool = False,
 ) -> AsyncIterator[ProviderStreamEvent]:
     """Stream actual provider tokens from the existing canonical endpoint.
 
@@ -782,6 +794,8 @@ async def stream_provider_endpoint(
     if max_tokens <= 0 or timeout_ms <= 0:
         raise ProviderExecutionError("provider_stream_invalid_budget")
     base_url = _resolve_base_url(endpoint)
+    if local_only and _resolved_destination_requires_external_permission(endpoint, base_url):
+        raise ProviderExecutionError("private_evidence_local_only")
     if not base_url:
         raise ProviderExecutionError("provider_stream_endpoint_missing")
 
