@@ -8,13 +8,11 @@ PANEL = (Path(__file__).resolve().parents[2] /
 
 def test_search_handoff_is_bounded_user_request():
     source = PANEL.read_text(encoding="utf-8")
-    assert (
-        "Please explain this search evidence" in source
-        or "Please independently research this source" in source
-    )
-    assert "Untrusted excerpt" in source
-    assert ".slice(0, 1200)" in source
+    assert "Please independently research this source" in source
+    assert "Untrusted excerpt" not in source
+    assert "autoSubmit: false" in source
     assert "karen:inject-message" in source
+    assert "the runtime must retrieve and verify source evidence" in source
     assert "I found this information for you:" not in source
 
 
@@ -42,6 +40,8 @@ def test_source_provenance_has_a_single_backend_authority():
     assert '"evidence_level": "search_snippet"' in backend
     assert "evidence_level?: 'fetched_page' | 'search_snippet'" in types
     assert "source.evidence_level === 'fetched_page'" in panel
-    assert "source.evidence_level === 'search_snippet'" in panel
-    assert "Fetch status is not specified by the backend." in panel
+    assert "isFetched ? 'Page retrieved' : 'Link discovered'" in panel
+    # Missing or unexpected levels are deliberately downgraded to a discovery
+    # lead, never promoted into fetched-page evidence by the UI handoff.
+    assert "item.evidence_level === 'fetched_page' ? 'fetched_page' : 'search_snippet'" in panel
     assert "return value;" in api

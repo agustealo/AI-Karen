@@ -880,7 +880,7 @@ class InternetCapabilityService:
         if status != "permission_denied":
             for discovered in discovered_sources:
                 if discovered["url"] not in fetched_urls:
-                    snippet_text = str(discovered.get("snippet") or "")
+                    snippet_text = self.processor.clean_excerpt(str(discovered.get("snippet") or ""), 1000)
                     sources.append({
                         "id": f"source_{len(sources)}",
                         **discovered,
@@ -1614,6 +1614,7 @@ class InternetCapabilityService:
             if not clean_passages:
                 continue
             preview_source = clean_passages[0]["content"]
+            readable_content = self.processor.readable_preview(result)
             # Keep the actual document separate from the ranked excerpt. Bounded
             # inline content is a preview, never silently described as complete.
             document = str(result.get("markdown") or result.get("text") or "")
@@ -1634,6 +1635,7 @@ class InternetCapabilityService:
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
+                    "readable_content": readable_content,
                     "full_content": bounded_markdown,
                     "markdown": bounded_markdown,
                     "article_preview": article_body if not article_complete else None,
@@ -1697,29 +1699,22 @@ class InternetCapabilityService:
                 )
             return f"No live sources were found for '{query}'."
 
-        # A retrieval overview is not an answer. Give a short, source-attributed
-        # evidence preview instead of displaying internal crawl statistics.
-        # Only fetched passages may contribute answer-preview text; discovery
-        # snippets are displayed separately with their own evidence labels.
-        excerpts: List[str] = []
-        seen_domains: set[str] = set()
-        for result in results:
-            url = self._normalize_url(result.get("url"))
-            domain = urlparse(url).netloc if url else ""
-            snippet = str(result.get("snippet") or "").strip()
-            if not url or not snippet or domain in seen_domains:
-                continue
-            seen_domains.add(domain)
-            excerpts.append(f"{self._summarize_text(snippet, 220)} (Source: {url})")
-            if len(excerpts) == 3:
-                break
-
-        if excerpts:
-            return "Relevant retrieved excerpts (not a generated answer): " + " ".join(excerpts)
-
+        # A retrieval response MUST NOT impersonate the runtime's sourced
+        # synthesis. Display sources separately and keep these user-facing
+        # status words free of repeated snippets, raw markdown and URLs.
+        fetched_count = sum(
+            item.get("evidence_level") == "fetched_page" for item in sources
+        )
+        if fetched_count:
+            return (
+                f"Found {fetched_count} fetched source"
+                f"{'s' if fetched_count != 1 else ''} for this search. "
+                "Research evidence is ready, but Karen has not generated an answer."
+            )
         return (
-            f"Found {len(sources)} search links for '{query}', but no fetched "
-            "passages are available to summarize. Open a source to verify its content."
+            f"Found {len(sources)} discovery link"
+            f"{'s' if len(sources) != 1 else ''}, but no fetched passages. "
+            "These links are not a generated or verified answer."
         )
 
     def _build_insights(

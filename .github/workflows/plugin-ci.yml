@@ -43,6 +43,13 @@ on:
       - 'tests/services/test_search_article_chat_reference.py'
       - 'tests/services/test_search_article_document_service.py'
       - 'tests/services/test_search_crawl_execution_contract.py'
+      - 'tests/services/test_search_readable_evidence_contract.py'
+      - 'tests/services/test_search_chat_injection_contract.py'
+      - 'tests/services/test_search_evidence_summary_contract.py'
+      - 'tests/services/test_search_consumer_readiness_contract.py'
+      - 'tests/services/test_search_ui_empty_evidence_contract.py'
+      - 'src/ui_launchers/Karen-AI-Theme/tests/intelligent-search-consumer-ux.test.tsx'
+      - 'src/ui_launchers/Karen-AI-Theme/e2e/intelligent-search-replay.spec.ts'
       - 'tests/services/test_crawl4ai_browser_egress_policy.py'
       - 'tests/integration/test_crawl4ai_browser_egress_real.py'
       - 'tests/services/test_search_plugin_option_contract.py'
@@ -100,6 +107,13 @@ on:
       - 'tests/services/test_search_article_chat_reference.py'
       - 'tests/services/test_search_article_document_service.py'
       - 'tests/services/test_search_crawl_execution_contract.py'
+      - 'tests/services/test_search_readable_evidence_contract.py'
+      - 'tests/services/test_search_chat_injection_contract.py'
+      - 'tests/services/test_search_evidence_summary_contract.py'
+      - 'tests/services/test_search_consumer_readiness_contract.py'
+      - 'tests/services/test_search_ui_empty_evidence_contract.py'
+      - 'src/ui_launchers/Karen-AI-Theme/tests/intelligent-search-consumer-ux.test.tsx'
+      - 'src/ui_launchers/Karen-AI-Theme/e2e/intelligent-search-replay.spec.ts'
       - 'tests/services/test_crawl4ai_browser_egress_policy.py'
       - 'tests/integration/test_crawl4ai_browser_egress_real.py'
       - 'tests/services/test_search_plugin_option_contract.py'
@@ -272,6 +286,11 @@ jobs:
             tests/services/test_search_article_document_service.py \
             tests/services/test_search_plugin_option_contract.py \
             tests/services/test_search_crawl_execution_contract.py \
+            tests/services/test_search_readable_evidence_contract.py \
+            tests/services/test_search_chat_injection_contract.py \
+            tests/services/test_search_evidence_summary_contract.py \
+            tests/services/test_search_consumer_readiness_contract.py \
+            tests/services/test_search_ui_empty_evidence_contract.py \
             tests/services/test_crawl4ai_browser_egress_policy.py \
             tests/integration/test_crawl4ai_browser_egress_real.py \
             tests/services/test_runtime_search_citation_validator.py \

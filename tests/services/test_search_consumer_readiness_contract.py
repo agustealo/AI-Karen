@@ -26,7 +26,10 @@ def test_sidebar_scroll_and_source_first_results():
     results = (ROOT / "src/ui_launchers/Karen-AI-Theme/src/plugin_repo/intelligent-search/components/Panels.tsx").read_text(encoding="utf-8")
     assert "overflow-y-auto overscroll-contain" in sidebar
     assert 'aria-label="Relevant search passages"' in results
-    assert "results.slice(0, 5)" in results
+    assert "distinctSources.slice(0, 4)" in results
+    assert "Your research sources" in results
+    assert "Ask Karen to explain" in results
+    assert "autoSubmit: false" in results
 
 
 def test_public_search_response_does_not_embed_unbounded_crawler_payloads():
