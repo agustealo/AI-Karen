@@ -263,39 +263,16 @@ class PluginService:
             cursor=cursor,
         )
 
-    async def analyze_content_owner_sources(
-        self,
-        *,
-        user_id: str,
-        tenant_id: str,
-        roles: List[str],
-        permissions: List[str],
-        request_id: str,
-        correlation_id: str,
-        operation: str,
-        references: List[Dict[str, str]],
-        query: Optional[str] = None,
-        left_id: Optional[str] = None,
-        right_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Apply fresh RuntimePolicy before owner-source text and plugin execution."""
-        from ai_karen_engine.database.factory import get_database_client
-        from ai_karen_engine.integrations.supabase_client import get_supabase_platform
-        from ai_karen_engine.extensions.content_intelligence_sources import (
-            ContentSourceHost,
-        )
-        from ai_karen_engine.services.database.repositories.repository_factory import (
-            RepositoryFactory,
-        )
-
+    async def _authorize_content_owner_access(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+    ):
+        """Issue a fresh scoped policy plan for either metadata or text access."""
         if (
             not user_id or not tenant_id or not request_id or not correlation_id
             or "data:read" not in permissions
         ):
             raise PermissionError("content_source_read_permission_required")
-        if not isinstance(references, list) or not 1 <= len(references) <= 12:
-            raise ValueError("content_source_reference_count_invalid")
-
         await self._ensure_initialized()
         kernel = self._get_kernel()
         record = kernel.get_record("content-intelligence")
@@ -331,6 +308,87 @@ class PluginService:
             )
         ):
             raise PermissionError("content_source_policy_scope_denied")
+        return kernel, decision, plan
+
+    async def list_content_owner_page(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        limit: int = 100, cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Read metadata independently of File Explorer lifecycle state."""
+        from ai_karen_engine.database.factory import get_database_client
+        from ai_karen_engine.extensions.content_intelligence_sources import ContentSourceHost
+        from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
+        from ai_karen_engine.services.database.repositories.repository_factory import (
+            RepositoryFactory,
+        )
+
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("content_inventory_limit_invalid")
+        if cursor is not None and (
+            not isinstance(cursor, str) or not 1 <= len(cursor) <= 768
+        ):
+            raise ValueError("content_inventory_cursor_invalid")
+        kernel, decision, plan = await self._authorize_content_owner_access(
+            user_id=user_id, tenant_id=tenant_id, roles=roles,
+            permissions=permissions, request_id=request_id, correlation_id=correlation_id,
+        )
+        context = ExtensionExecutionContext(
+            request_id=request_id, correlation_id=correlation_id,
+            user_id=user_id, tenant_id=tenant_id,
+            policy_decision_id=decision.decision_id,
+            allowed_capabilities=list(plan.allowed_capabilities), resource_scope={},
+            audit_context={"origin": "authenticated_content_owner_inventory",
+                           "user_roles": list(roles), "permissions": list(permissions)},
+        )
+        await ContentSourceHost.admit_owner_access(kernel=kernel, context=context, plan=plan)
+        database = get_database_client()
+        if database is None or not callable(getattr(database, "get_async_session", None)):
+            raise RuntimeError("content_inventory_database_unavailable")
+        repository = RepositoryFactory(
+            session_factory=database.get_async_session,
+        ).create_artifact_store()
+        page = await ArtifactSourceAdapter(repository).list_owner_sources_page(
+            tenant_id=tenant_id, user_id=user_id, limit=limit, cursor=cursor,
+        )
+        logger.info("content_owner_inventory_page", extra={
+            "request_id": request_id, "correlation_id": correlation_id,
+            "user_id": user_id, "tenant_id": tenant_id,
+            "item_count": len(page["items"]), "status": "success",
+        })
+        return {**page, "request_id": request_id, "correlation_id": correlation_id}
+
+    async def analyze_content_owner_sources(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        roles: List[str],
+        permissions: List[str],
+        request_id: str,
+        correlation_id: str,
+        operation: str,
+        references: List[Dict[str, str]],
+        query: Optional[str] = None,
+        left_id: Optional[str] = None,
+        right_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Apply fresh RuntimePolicy before owner-source text and plugin execution."""
+        from ai_karen_engine.database.factory import get_database_client
+        from ai_karen_engine.integrations.supabase_client import get_supabase_platform
+        from ai_karen_engine.extensions.content_intelligence_sources import (
+            ContentSourceHost,
+        )
+        from ai_karen_engine.services.database.repositories.repository_factory import (
+            RepositoryFactory,
+        )
+
+        if not isinstance(references, list) or not 1 <= len(references) <= 12:
+            raise ValueError("content_source_reference_count_invalid")
+        kernel, decision, plan = await self._authorize_content_owner_access(
+            user_id=user_id, tenant_id=tenant_id, roles=roles,
+            permissions=permissions, request_id=request_id, correlation_id=correlation_id,
+        )
         database = get_database_client()
         if database is None or not callable(getattr(database, "get_async_session", None)):
             raise RuntimeError("content_source_database_unavailable")

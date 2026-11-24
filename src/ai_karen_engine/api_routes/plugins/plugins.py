@@ -504,6 +504,73 @@ async def list_file_explorer_inventory(
         ) from None
 
 
+@router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)
+async def list_content_inventory(
+    request: Request,
+    limit: int = Query(100, ge=1, le=200),
+    cursor: Optional[str] = Query(None, min_length=1, max_length=768),
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerInventoryResponse:
+    """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
+    user_id = str(current_user.get("user_id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    try:
+        if str(UUID(user_id)) != user_id or str(UUID(tenant_id)) != tenant_id:
+            raise ValueError("unscoped")
+    except (TypeError, ValueError, AttributeError):
+        raise HTTPException(status_code=401, detail="Authenticated user and tenant required") from None
+
+    rbac = get_rbac_manager()
+    permitted = rbac.has_permission(current_user, Permission.DATA_READ)
+    meta = _response_meta(request)
+    rbac.audit_access_attempt(
+        current_user,
+        Permission.DATA_READ,
+        resource=request.url.path,
+        granted=permitted,
+        request=request,
+        additional_context={
+            "operation": "content_owner_inventory",
+            "request_id": meta["request_id"],
+            "correlation_id": meta["correlation_id"],
+        },
+    )
+    if not permitted:
+        raise HTTPException(status_code=403, detail="Content inventory read access denied")
+
+    try:
+        page = await plugin_service.list_content_owner_page(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"],
+            correlation_id=meta["correlation_id"],
+            limit=limit,
+            cursor=cursor,
+        )
+        return FileExplorerInventoryResponse.model_validate(page)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Content inventory access denied") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Content inventory request invalid") from None
+    except Exception as exc:
+        logger.warning(
+            "content_owner_inventory_unavailable",
+            extra={
+                "request_id": meta["request_id"],
+                "correlation_id": meta["correlation_id"],
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=503, detail="Content inventory is unavailable"
+        ) from None
+
+
 @router.post("/content-intelligence/owner-sources")
 async def analyze_content_owner_sources(
     payload: ContentOwnerSourcesRequest,
