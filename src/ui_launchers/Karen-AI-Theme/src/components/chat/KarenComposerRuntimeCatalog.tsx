@@ -24,7 +24,7 @@ export function getRuntimeProviderStatusLabel(provider: RuntimeProviderCatalogPr
   if (status === "unhealthy") return "Unhealthy";
   if (status !== "healthy" || provider.healthy !== true) return "Unverified";
   const available = (provider.models ?? []).filter((model) => model.available === true).length;
-  return available > 0 ? `${available} ready models` : "No verified models";
+  return available > 0 ? `${available} ready model${available === 1 ? "" : "s"}` : "No verified models";
 }
 
 export type ComposerModelRequest = { provider: string; model: string } | null;
@@ -157,8 +157,35 @@ export function KarenComposerRuntimeCatalog({
 
   return (
     <section aria-label="Runtime provider discovery" className="min-w-0 space-y-2">
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="min-w-[150px] flex-1 sm:max-w-[260px]">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold leading-5">Provider / Model</h2>
+          <p className="text-[11px] leading-4 text-muted-foreground">
+            An optional request. The runtime confirms the actual executor after each response.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setRefreshGeneration((generation) => generation + 1)}
+            disabled={isLoading}
+            className="min-h-9 rounded-lg border border-input px-2.5 text-xs font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+          >
+            {isLoading ? "Checking…" : "Refresh models"}
+          </button>
+          {onOpenProviders && (
+            <button
+              type="button"
+              onClick={onOpenProviders}
+              className="min-h-9 rounded-lg border border-input px-2.5 text-xs font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              Configure providers
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="min-w-0">
           <label htmlFor="karen-provider-request" className="mb-1 block text-xs font-medium text-muted-foreground">
             Provider
           </label>
@@ -171,7 +198,7 @@ export function KarenComposerRuntimeCatalog({
               setBrowsedProvider(event.target.value);
               onSelectionChange(null);
             }}
-            className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm"
+            className="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
           >
             <option value="">Automatic routing (Karen default)</option>
             {providers.map((provider) => (
@@ -181,7 +208,7 @@ export function KarenComposerRuntimeCatalog({
             ))}
           </select>
         </div>
-        <div className="min-w-[150px] flex-1 sm:max-w-[280px]">
+        <div className="min-w-0">
           <label htmlFor="karen-model-request" className="mb-1 block text-xs font-medium text-muted-foreground">
             Model
           </label>
@@ -199,7 +226,7 @@ export function KarenComposerRuntimeCatalog({
               }
               onSelectionChange({ provider: displayedProvider.id, model });
             }}
-            className="h-10 w-full rounded-lg border border-input bg-background px-2 text-sm disabled:opacity-60"
+            className="h-10 w-full min-w-0 rounded-lg border border-input bg-background px-2 text-sm focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-60"
           >
             <option value="">{browsedProvider ? "Select an available model" : "Karen chooses automatically"}</option>
             {models.map((model) => (
@@ -207,23 +234,6 @@ export function KarenComposerRuntimeCatalog({
             ))}
           </select>
         </div>
-        <button
-          type="button"
-          onClick={() => setRefreshGeneration((generation) => generation + 1)}
-          disabled={isLoading}
-          className="min-h-10 rounded-lg border border-input px-3 text-xs font-medium hover:bg-muted disabled:opacity-50"
-        >
-          {isLoading ? "Checking…" : "Refresh models"}
-        </button>
-        {onOpenProviders && (
-          <button
-            type="button"
-            onClick={onOpenProviders}
-            className="min-h-10 rounded-lg border border-input px-3 text-xs font-medium hover:bg-muted"
-          >
-            Configure providers
-          </button>
-        )}
       </div>
 
       {loadError || !validCatalog ? (

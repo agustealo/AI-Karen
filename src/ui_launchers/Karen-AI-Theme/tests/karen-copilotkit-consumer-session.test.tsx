@@ -55,12 +55,12 @@ vi.mock("@/components/chat/KarenComposerRuntimeCatalog", () => ({
 }));
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotChat", () => ({
-  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, workspaceRunId, onBusyChange, onStartNewConversation }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null; onBusyChange: (busy: boolean) => void; onStartNewConversation?: () => Promise<void> }) => {
+  KarenCopilotChat: ({ conversationId, preferredProvider, preferredModel, workspaceRunId, onBusyChange, onStartNewConversation, modelControls }: { conversationId: string; preferredProvider: string | null; preferredModel: string | null; workspaceRunId: string | null; onBusyChange: (busy: boolean) => void; onStartNewConversation?: () => Promise<void>; modelControls?: React.ReactNode }) => {
     state.mounts.push(conversationId);
     state.modelProps.push({ preferredProvider, preferredModel, workspaceRunId });
     state.onBusyChange = onBusyChange;
     state.onStartNewConversation = onStartNewConversation;
-    return <div data-testid="owned-copilot-chat">{conversationId}</div>;
+    return <>{modelControls}<div data-testid="owned-copilot-chat">{conversationId}</div></>;
   },
 }));
 

@@ -204,7 +204,7 @@
   color: var(--kari-text-muted);
   font-size: 12px;
 }
-[data-kari-root][data-testid="karen-copilot-consumer-chat"] > [data-testid="karen-copilot-model-discovery"] {
+[data-kari-root][data-testid="karen-copilot-consumer-chat"] [data-testid="karen-copilot-model-discovery"] {
   background: var(--kari-panel);
   border-color: var(--kari-line);
 }

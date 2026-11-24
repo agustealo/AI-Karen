@@ -344,26 +344,36 @@ export function KarenCopilotConsumerChat({
           </div>
         </section>
       )}
-      {modelRequest && <p role="status" data-testid="karen-pending-model-preference" className="shrink-0 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">Requested for upcoming messages: {modelRequest.provider} / {modelRequest.model}. Karen determines and reports the actual executor.</p>}
-      <section data-testid="karen-copilot-model-discovery"
-        aria-label="Conversation model preferences"
-        className="shrink-0 border-b border-border/60 px-4 py-2">
-        <fieldset disabled={runBusy} className="min-w-0 disabled:opacity-60">
-          <legend className="sr-only">Model preferences</legend>
-          <KarenComposerRuntimeCatalog
-            selection={modelRequest}
-            onSelectionChange={handleModelRequest}
-            onOpenAgents={onOpenAgents}
-            onOpenProviders={onOpenProviderSettings}
-          />
-        </fieldset>
-        {runBusy && <p role="status" className="text-xs text-muted-foreground">
-          Model changes are unavailable while Karen is processing this message.
-        </p>}
-      </section>
       <KarenCopilotChat
         key={currentSession.id}
         conversationId={currentSession.id}
+        modelControls={
+          <section data-testid="karen-copilot-model-discovery"
+            aria-label="Conversation model preferences"
+            className="shrink-0 border-b border-border/60 bg-background/80 px-3 py-3 sm:px-4">
+            <fieldset disabled={runBusy} className="min-w-0 disabled:opacity-60">
+              <legend className="sr-only">Model preferences</legend>
+              <KarenComposerRuntimeCatalog
+                selection={modelRequest}
+                onSelectionChange={handleModelRequest}
+                onOpenAgents={onOpenAgents}
+                onOpenProviders={onOpenProviderSettings}
+              />
+            </fieldset>
+            {modelRequest && (
+              <p role="status" data-testid="karen-pending-model-preference"
+                className="mt-2 text-xs text-muted-foreground">
+                Requested for upcoming messages: {modelRequest.provider} / {modelRequest.model}.
+                Karen determines and reports the actual executor.
+              </p>
+            )}
+            {runBusy && (
+              <p role="status" className="mt-2 text-xs text-muted-foreground">
+                Model changes are unavailable while Karen is processing this message.
+              </p>
+            )}
+          </section>
+        }
         preferredProvider={modelRequest?.provider ?? null}
         preferredModel={modelRequest?.model ?? null}
         workspaceRunId={workspaceRunId}

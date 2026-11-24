@@ -367,7 +367,7 @@ describe('consumer provider health presentation', () => {
       ...base,
       healthy: true,
       health: { status: 'healthy' },
-    })).toBe('1 ready models');
+    })).toBe('1 ready model');
     expect(getRuntimeProviderStatusLabel({
       ...base,
       healthy: false,
