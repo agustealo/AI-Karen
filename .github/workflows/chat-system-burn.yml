@@ -94,6 +94,9 @@ jobs:
             src/ai_karen_engine/llm_orchestrator.py \
             tests/core/model_runtime/test_legacy_preload_no_inference.py
 
+      - name: Prove KUI-004B4.1 runtime attachment authority and bounded admission
+        run: pytest tests/core/runtime/test_kui004b4_attachment_admission.py -q
+
       - name: Prove real model response attribution and fail-closed generation
         run: |
           pytest -q \
