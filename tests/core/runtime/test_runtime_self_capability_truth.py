@@ -318,11 +318,12 @@ async def test_partial_catalog_failures_do_not_fabricate_readiness_or_hide_core_
             return_value=schedules,
         ),
     ):
+        p = plan()
         observed = await DirectCapabilityExecutor().execute(
             request=request("List your available tools."),
             decision=SimpleNamespace(intent="runtime.inspect"),
-            plan=plan(),
-            meter=meter(plan()),
+            plan=p,
+            meter=meter(p),
         )
     assert observed.success
     assert observed.source == "runtime_registry_observation"
