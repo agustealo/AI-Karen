@@ -74,8 +74,8 @@ DEFAULT_PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
         "priority": 87,
     },
     "wikipedia": {
-        # Encyclopedia retrieval is available for historical / encyclopedic queries.
-        "enabled": True,
+        # Encyclopedia retrieval is disabled by default for general web search.
+        "enabled": False,
         "priority": 85,
     },
     "google_custom_search": {

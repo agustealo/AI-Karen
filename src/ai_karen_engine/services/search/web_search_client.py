@@ -143,12 +143,6 @@ class WebSearchClient:
 
         # Determine encyclopedic / historical eligibility
         allow_encyclopedic = bool(kwargs.get("allow_encyclopedic", False))
-        if not allow_encyclopedic:
-            try:
-                from ai_karen_engine.services.search.search_query_planner import SearchQueryPlanner
-                allow_encyclopedic = SearchQueryPlanner.is_historical_or_encyclopedic(query)
-            except Exception:
-                allow_encyclopedic = False
 
         # The registry owns eligibility and order. Search transports may fail
         # independently; never mistake one failed endpoint for an unavailable
