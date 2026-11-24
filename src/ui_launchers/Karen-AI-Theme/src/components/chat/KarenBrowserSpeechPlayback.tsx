@@ -42,9 +42,29 @@ export function useAssistantPlaybackPhase(): AssistantPlaybackPhase {
   return useSyncExternalStore(subscribePlayback, getPlaybackPhase, () => "idle");
 }
 
-/** Stop active read-aloud from anywhere in the current Copilot workspace. */
+/** Stop the current tab-owned speech output from the Copilot workspace. */
 export function stopAssistantPlayback(): void {
   activePlayback?.();
+}
+
+/** Canonical single-output owner for opt-in chat speech and studio previews. */
+export function claimVoiceOutput(
+  stop: () => void,
+  phase: AssistantPlaybackPhase,
+): () => void {
+  activePlayback?.();
+  activePlayback = stop;
+  publishPlaybackPhase(phase);
+  return () => {
+    // A late callback must never clear a newer output owner.
+    if (activePlayback !== stop) return;
+    activePlayback = null;
+    publishPlaybackPhase("idle");
+  };
+}
+
+export function markVoiceOutputSpeaking(stop: () => void): void {
+  if (activePlayback === stop) publishPlaybackPhase("speaking");
 }
 
 /** Only locally-authored, fixed guidance can be displayed as an error. */
@@ -121,8 +141,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
     }
     if (!eligible) return;
 
-    // Revoke any prior message playback before creating the new session.
-    activePlayback?.();
+    // The tab-wide owner retires any earlier chat or preview session.
     setError(null);
     const abort = new AbortController();
     let stopped = false;
@@ -130,6 +149,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
     let objectUrl: string | null = null;
     let pendingResolve: (() => void) | null = null;
     const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+    let releaseVoiceOutput: (() => void) | null = null;
 
     const stopSession = () => {
       if (stopped) return;
@@ -147,10 +167,8 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
       }
       pendingResolve?.();
       pendingResolve = null;
-      if (activePlayback === stopSession) {
-        activePlayback = null;
-        publishPlaybackPhase("idle");
-      }
+      releaseVoiceOutput?.();
+      releaseVoiceOutput = null;
       if (session.current === stopSession) session.current = null;
       setState("idle");
     };
@@ -174,8 +192,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
     };
 
     session.current = stopSession;
-    activePlayback = stopSession;
-    publishPlaybackPhase("preparing");
+    releaseVoiceOutput = claimVoiceOutput(stopSession, "preparing");
     setState("speaking");
 
     const playBrowser = async (chunks: string[]) => {
@@ -204,9 +221,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
           utterance.onerror = () => completion.fail("Browser speech playback failed.");
           try {
             synth.speak(utterance);
-            if (!stopped && activePlayback === stopSession) {
-              publishPlaybackPhase("speaking");
-            }
+            if (!stopped) markVoiceOutputSpeaking(stopSession);
           } catch {
             completion.fail("The browser could not start speech playback.");
           }
@@ -227,9 +242,7 @@ export function KarenBrowserSpeechPlayback({ message }: { message: unknown }) {
           playing.onended = completion.done;
           playing.onerror = () => completion.fail("Karen's local speech could not be played.");
           void playing.play().then(() => {
-            if (!stopped && activePlayback === stopSession) {
-              publishPlaybackPhase("speaking");
-            }
+            if (!stopped) markVoiceOutputSpeaking(stopSession);
           }).catch(() => completion.fail("Karen's local speech could not be played."));
         });
         if (stopped) break;
