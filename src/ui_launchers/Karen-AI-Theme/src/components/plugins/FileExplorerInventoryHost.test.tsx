@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FileExplorerInventoryHost, type InventoryConsumer } from './FileExplorerInventoryHost';
 
+import { ContentIntelligenceWorkspace } from './ContentIntelligenceWorkspace';
+
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
@@ -552,5 +554,32 @@ describe('Independent Content Intelligence inventory consumer', () => {
     await waitFor(() => expect(screen.getByTestId('error').textContent).toContain('access was denied'));
     expect(screen.getByTestId('authorized').textContent).toBe('false');
     expect(mocks.get.mock.calls).toEqual([['/api/plugins/content-intelligence/inventory?limit=100']]);
+  });
+});
+
+
+describe('Standalone Content Intelligence workspace', () => {
+  it('discovers sources independently and mounts the shared investigation operations', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<ContentIntelligenceWorkspace />);
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Select alpha.txt' })).toBeTruthy());
+    expect(mocks.get.mock.calls).toEqual([['/api/plugins/content-intelligence/inventory?limit=100']]);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha.txt' }));
+    expect(screen.getByRole('button', { name: 'Analyze selected files' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Search documents' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Compare documents' })).toBeTruthy();
+    expect(mocks.post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+  });
+
+  it('keeps denied inventory unavailable without falling back or exposing operations', async () => {
+    mocks.get.mockRejectedValue(new Error('denied'));
+    render(<ContentIntelligenceWorkspace />);
+    await waitFor(() => expect(screen.getByText('Document investigation is unavailable until inventory access is verified.')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.get.mock.calls).toEqual([['/api/plugins/content-intelligence/inventory?limit=100']]);
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });
