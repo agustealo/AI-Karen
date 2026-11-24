@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ArrowUpRight, Database, Radar, Sparkles } from 'lucide-react';
 import { IntelligentSearchState } from '../types';
 import { ModeConfigItem } from '../configs/modeConfig';
@@ -13,7 +13,7 @@ interface ResultsWorkspaceProps {
 
 export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<string>(modeConfig.resultTabs[0] || 'results');
-  const [activeSourceIndex, setActiveSourceIndex] = useState(0);
+  const [showResearchTools, setShowResearchTools] = useState(false);
   const [detailsWidth, setDetailsWidth] = useState(280);
   const [showDetails, setShowDetails] = useState(false);
 
@@ -24,7 +24,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
       : modeConfig.resultTabs,
     [modeConfig.resultTabs, response?.evidenceGraph],
   );
-  const currentTab = validTabs.includes(activeTab) ? activeTab : validTabs[0];
+  const currentTab = showResearchTools && validTabs.includes(activeTab) ? activeTab : 'results';
   const sources = response?.sources ?? [];
   const sourceCount = response?.sources?.length ?? 0;
   const resultCount = response?.results?.length ?? 0;
@@ -61,20 +61,6 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   const searchFailure = response?.status === 'error' || response?.can_execute === false && response?.reason;
   const failureMessage = typeof response?.reason === 'string' ? response.reason : 'The requested live information is unavailable. Please retry or refine your search.';
 
-  useEffect(() => {
-    if (activeSourceIndex > sources.length - 1) {
-      setActiveSourceIndex(0);
-    }
-
-    if (
-      response?.sources?.length &&
-      !response?.results?.length &&
-      validTabs.includes('sources') &&
-      currentTab === 'results'
-    ) {
-      setActiveTab('sources');
-    }
-  }, [activeSourceIndex, currentTab, response?.results?.length, response?.sources?.length, sources.length, validTabs]);
 
   // Handle states where we don't show the tabs
   if (state.isLoading) return <LoadingState state={state} />;
@@ -114,44 +100,37 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
   };
 
   return (
-    <div className="relative flex min-h-[70vh] flex-1 flex-col overflow-hidden rounded-tl-3xl border-l border-t border-border/60 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.12),transparent_30%),radial-gradient(circle_at_top_right,rgba(16,185,129,0.10),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.03),transparent_18%),hsl(var(--background))] shadow-[0_-1px_0_rgba(255,255,255,0.03),0_24px_70px_rgba(0,0,0,0.35)]">
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),transparent_22%,transparent_78%,rgba(255,255,255,0.03))]" />
-
-      <div className="relative border-b border-border/60 bg-background/70 px-5 py-5 backdrop-blur-xl lg:px-6">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div className="space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-[11px] uppercase tracking-[0.32em] text-muted-foreground shadow-sm">
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
-              Search results
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-2xl font-semibold tracking-tight text-foreground md:text-3xl">
-                {response.mode && response.mode !== 'auto' ? String(response.mode).replace(/_/g, ' ') : modeConfig.label}
-              </h2>
-              <p className="max-w-4xl text-sm leading-6 text-muted-foreground">
-                {response.summary || 'Retrieved evidence is available below.'}
-                <span className="mt-1 block text-xs">Source summaries and excerpts are not verified AI-generated answers.</span>
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <StatBadge label="Sources" value={sourceCount} />
-            <StatBadge label="Distinct websites" value={distinctHosts} />
-
-          </div>
+    <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border/60 bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-base font-semibold">Search evidence</h2>
+          <span className="text-xs text-muted-foreground">{sourceCount} sources · {distinctHosts} websites</span>
         </div>
-
-        <details className="mt-5 rounded-xl border border-border/50 bg-card/60 p-3"><summary className="cursor-pointer text-sm font-medium text-muted-foreground">Technical search details</summary><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <SignalTile label="Query" value={response.query || 'live request'} icon={<Radar className="h-4 w-4" />} />
-          <SignalTile label="Provider" value={providerLabel} icon={<Database className="h-4 w-4" />} />
-          <SignalTile label="Actual mode" value={actualMode} icon={<Radar className="h-4 w-4" />} />
-          <SignalTile label="Providers used" value={searchProviders.length ? searchProviders.join(", ") : "Not reported"} icon={<Database className="h-4 w-4" />} />
-          <SignalTile label="Correlation ID" value={correlationId || "Not reported"} icon={<Radar className="h-4 w-4" />} />
-          <SignalTile label="URLs" value={response.diagnostics?.urlsFound ?? sourceCount} icon={<ArrowUpRight className="h-4 w-4" />} />
-          <SignalTile label="Retrieved chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
-        </div></details>
+        <button type="button"
+          onClick={() => {
+            setShowResearchTools(value => !value);
+            setShowDetails(false);
+          }}
+          aria-expanded={showResearchTools}
+          className="min-h-10 rounded-xl border border-border/60 px-3 py-2 text-sm font-medium hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          {showResearchTools ? 'Hide research tools' : 'Research tools'}
+        </button>
       </div>
+      {showResearchTools && (
+        <details className="mx-4 mt-3 rounded-xl border border-border/50 bg-background p-3">
+          <summary className="cursor-pointer text-sm font-medium text-muted-foreground">Technical search details</summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <SignalTile label="Query" value={response.query || 'live request'} icon={<Radar className="h-4 w-4" />} />
+            <SignalTile label="Provider" value={providerLabel} icon={<Database className="h-4 w-4" />} />
+            <SignalTile label="Actual mode" value={actualMode} icon={<Radar className="h-4 w-4" />} />
+            <SignalTile label="Providers used" value={searchProviders.length ? searchProviders.join(', ') : 'Not reported'} icon={<Database className="h-4 w-4" />} />
+            <SignalTile label="Correlation ID" value={correlationId || 'Not reported'} icon={<Radar className="h-4 w-4" />} />
+            <SignalTile label="URLs" value={response.diagnostics?.urlsFound ?? sourceCount} icon={<ArrowUpRight className="h-4 w-4" />} />
+            <SignalTile label="Retrieved chunks" value={response.diagnostics?.chunksProduced ?? resultCount} icon={<Sparkles className="h-4 w-4" />} />
+          </div>
+        </details>
+      )}
 
       {hasWeatherObservation && weatherData && (
         <section aria-label="Weather observation" className="relative mx-4 mt-4 rounded-2xl border border-border/60 bg-card p-5 lg:mx-6">
@@ -168,11 +147,11 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
         </section>
       )}
 
-      <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
+      <div className={`relative grid min-h-[65vh] flex-1 grid-cols-1 gap-4 px-4 py-4 lg:px-6 lg:py-6 ${showResearchTools && showDetails ? 'lg:grid-cols-[minmax(0,1fr)_var(--detail-width)]' : ''}`}
         style={{ '--detail-width': `${detailsWidth}px` } as React.CSSProperties}>
         <section className="flex min-h-[55vh] min-w-0 flex-col gap-4">
-          <div className="rounded-3xl border border-border/60 bg-card/70 p-2 shadow-sm backdrop-blur">
-            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Explore sources</span><button type="button" onClick={() => setShowDetails(value => !value)} className="rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
+          {showResearchTools && <div className="rounded-xl border border-border/60 bg-background/70 p-2">
+            <div className="flex items-center justify-between gap-2 px-2 pb-2"><span className="text-xs text-muted-foreground">Research workspace</span><button type="button" onClick={() => setShowDetails(value => !value)} className="min-h-10 rounded-lg border border-border/60 px-3 py-1 text-xs" aria-expanded={showDetails}>{showDetails ? 'Hide details' : 'Show details'}</button></div>
             <nav aria-label="Search result sections" className="flex flex-wrap gap-2">
               {validTabs.map((tabId) => {
                 const label = tabId.replace(/([A-Z])/g, ' $1').replace(/^./, (str) => str.toUpperCase());
@@ -196,14 +175,14 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
                 );
               })}
             </nav>
-          </div>
+          </div>}
 
           <div className="min-h-[50vh] min-w-0 flex-1 overflow-y-auto rounded-3xl border border-border/60 bg-card/80 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-6">
             {renderTabContent()}
           </div>
         </section>
 
-        {showDetails && <aside className="min-h-[50vh] min-w-0 overflow-y-auto rounded-3xl border border-border/60 bg-card/75 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-5">
+        {showResearchTools && showDetails && <aside className="min-h-[50vh] min-w-0 overflow-y-auto rounded-3xl border border-border/60 bg-card/75 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.18)] lg:p-5">
           <div className="space-y-4">
             <label className="flex items-center gap-2 text-xs text-muted-foreground">Details width<input aria-label="Details width" type="range" min={240} max={600} step={20} value={detailsWidth} onChange={event => setDetailsWidth(Number(event.target.value))} className="min-w-0 flex-1" /></label>
             <div className="rounded-3xl border border-border/60 bg-background/70 p-4">
@@ -245,15 +224,6 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
           </div>
         </aside>}
       </div>
-    </div>
-  );
-}
-
-function StatBadge({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/80 px-3 py-1.5 text-xs text-muted-foreground shadow-sm">
-      <span className="uppercase tracking-[0.24em]">{label}</span>
-      <span className="font-medium text-foreground">{value}</span>
     </div>
   );
 }
