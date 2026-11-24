@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import VoiceSettings from "@/components/settings/VoiceSettings";
 import { KAREN_SETTINGS_LS_KEY } from "@/lib/constants";
 
-const playback = vi.hoisted(() => ({ stopAssistantPlayback: vi.fn() }));
+const playback = vi.hoisted(() => ({
+  claimVoiceOutput: vi.fn(() => vi.fn()),
+}));
 vi.mock("@/components/chat/KarenBrowserSpeechPlayback", () => playback);
 
 const notifications = vi.hoisted(() => ({ toast: vi.fn() }));
@@ -23,7 +25,8 @@ describe("browser voice settings lifecycle", () => {
     vi.useFakeTimers();
     localStorage.clear();
     notifications.toast.mockReset();
-    playback.stopAssistantPlayback.mockReset();
+    playback.claimVoiceOutput.mockReset();
+    playback.claimVoiceOutput.mockImplementation(() => vi.fn());
     voiceList = [];
     listeners = new Map();
     speak = vi.fn();
@@ -74,7 +77,7 @@ describe("browser voice settings lifecycle", () => {
     act(() => listeners.get("voiceschanged")?.forEach((handler) => handler()));
     expect(screen.getByRole("combobox", { name: "Browser voice" })).toBeTruthy();
     fireEvent.click(screen.getByText("Preview voice"));
-    expect(playback.stopAssistantPlayback).toHaveBeenCalledTimes(1);
+    expect(playback.claimVoiceOutput).toHaveBeenCalledTimes(1);
     expect(speak).toHaveBeenCalledTimes(1);
     expect(utterances[0].voice?.voiceURI).toBe("local:en");
     expect(screen.getByText("Stop preview")).toBeTruthy();
@@ -121,7 +124,7 @@ describe("browser voice settings lifecycle", () => {
     expect(listeners.get("voiceschanged")?.size).toBe(0);
     // Unmounting an inactive settings panel must not cancel chat playback.
     expect(cancel).not.toHaveBeenCalled();
-    expect(playback.stopAssistantPlayback).not.toHaveBeenCalled();
+    expect(playback.claimVoiceOutput).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(3000));
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -131,7 +134,7 @@ describe("browser voice settings lifecycle", () => {
     voiceList = [{ name: "Local speech", lang: "en-US", default: true, voiceURI: "local:en" }];
     const view = render(<VoiceSettings />);
     fireEvent.click(screen.getByText("Preview voice"));
-    expect(playback.stopAssistantPlayback).toHaveBeenCalledTimes(1);
+    expect(playback.claimVoiceOutput).toHaveBeenCalledTimes(1);
     expect(speak).toHaveBeenCalledTimes(1);
     expect(cancel).not.toHaveBeenCalled();
 
@@ -146,7 +149,7 @@ describe("browser voice settings lifecycle", () => {
     render(<VoiceSettings />);
     fireEvent.click(screen.getByText("Reset to Default"));
     expect(cancel).not.toHaveBeenCalled();
-    expect(playback.stopAssistantPlayback).not.toHaveBeenCalled();
+    expect(playback.claimVoiceOutput).not.toHaveBeenCalled();
     expect(speak).not.toHaveBeenCalled();
   });
 });
