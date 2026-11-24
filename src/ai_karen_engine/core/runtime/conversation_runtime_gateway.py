@@ -26,6 +26,9 @@ from ai_karen_engine.services.database.repositories import (
     Message,
     RepositoryFactory,
 )
+from ai_karen_engine.services.database.repositories.conversation_repository import (
+    validate_draft_attachment_references,
+)
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
 logger = get_logger(__name__)
@@ -577,16 +580,22 @@ class ConversationRuntimeGateway:
         })
 
     async def read_composer_draft(
-        self, context: ChatExecutionContext,
+        self, context: ChatExecutionContext, *, include_attachments: bool = False,
     ) -> Dict[str, Any]:
         """Only an owned conversation can expose its unsubmitted draft."""
         existing = await self.require_owned_conversation(context)
-        result = await self._repository.get_composer_draft(
+        reader = (
+            self._repository.get_composer_draft_with_attachments
+            if include_attachments else self._repository.get_composer_draft
+        )
+        result = await reader(
             str(existing.id), context.tenant_id, user_id=context.user_id,
         )
         if not result.success:
             if result.error == "conversation_not_found":
                 raise RuntimeError("conversation_not_found")
+            if result.error == "composer_attachment_client_required":
+                raise ValueError("composer_attachment_client_required")
             self._log_composer_draft_storage_failure(
                 context, operation="read", metadata=result.metadata,
             )
@@ -603,6 +612,7 @@ class ConversationRuntimeGateway:
     async def write_composer_draft(
         self, context: ChatExecutionContext, *,
         text: str, expected_revision: int,
+        attachment_references: list[dict[str, str]] | None = None,
     ) -> Dict[str, Any]:
         """Compare-and-swap one draft. A conflicting tab must reread."""
         if (
@@ -613,10 +623,18 @@ class ConversationRuntimeGateway:
         ):
             raise ValueError("composer_draft_invalid")
         existing = await self.require_owned_conversation(context)
-        result = await self._repository.put_composer_draft(
-            str(existing.id), context.tenant_id, user_id=context.user_id,
-            content=text, expected_revision=expected_revision,
-        )
+        if attachment_references is None:
+            result = await self._repository.put_composer_draft(
+                str(existing.id), context.tenant_id, user_id=context.user_id,
+                content=text, expected_revision=expected_revision,
+            )
+        else:
+            refs = validate_draft_attachment_references(attachment_references)
+            result = await self._repository.put_composer_draft_with_attachments(
+                str(existing.id), context.tenant_id, user_id=context.user_id,
+                content=text, expected_revision=expected_revision,
+                attachment_references=refs,
+            )
         if not result.success:
             if result.error == "composer_draft_revision_conflict":
                 logger.info("conversation_draft_write_conflict", extra={
@@ -627,8 +645,11 @@ class ConversationRuntimeGateway:
                 raise ValueError("composer_draft_revision_conflict")
             if result.error == "conversation_not_found":
                 raise RuntimeError("conversation_not_found")
-            if result.error == "composer_draft_invalid":
-                raise ValueError("composer_draft_invalid")
+            if result.error in {
+                "composer_draft_invalid", "composer_attachment_invalid",
+                "composer_attachment_unavailable",
+            }:
+                raise ValueError(result.error)
             self._log_composer_draft_storage_failure(
                 context, operation="write", metadata=result.metadata,
             )

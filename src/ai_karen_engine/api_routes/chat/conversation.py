@@ -133,12 +133,17 @@ class UpdateConversationRequest(BaseModel):
 
 class UpdateComposerDraftRequest(BaseModel):
     text: str = Field(..., max_length=65536)
-    expected_revision: int = Field(..., ge=0, le=9223372036854775805)
+    expected_revision: int = Field(..., strict=True, ge=0, le=9223372036854775805)
+    attachment_references: Optional[List[Dict[str, Any]]] = Field(default=None, max_length=12)
 
 
 class ComposerDraftResponse(BaseModel):
     text: str
     revision: int
+
+
+class AttachmentComposerDraftResponse(ComposerDraftResponse):
+    attachment_references: List[Dict[str, str]]
 
 
 class UpdateUIContextRequest(BaseModel):
@@ -594,7 +599,7 @@ async def get_conversation(
             user_message="Failed to get conversation. Please try again.",
         )
 
-@router.get("/{conversation_id}/draft", response_model=ComposerDraftResponse)
+@router.get("/{conversation_id}/draft", response_model=ComposerDraftResponse | AttachmentComposerDraftResponse)
 async def get_composer_draft(
     conversation_id: str,
     conversation_gateway: ConversationRuntimeGateway = Depends(
@@ -602,6 +607,7 @@ async def get_composer_draft(
     ),
     tenant_id: str = Depends(get_current_tenant_id),
     user_ctx: Dict[str, Any] = Depends(bypass_user_context_func),
+    include_attachments: bool = False,
 ):
     """Read only this principal's canonical unsent draft, never a model run."""
     try:
@@ -610,14 +616,18 @@ async def get_composer_draft(
             _conversation_api_context(
                 tenant_id=tenant_id, user_id=_require_user_id(user_ctx),
                 conversation_id=conversation_id,
-            )
+            ),
+            include_attachments=include_attachments,
         )
-        result = ComposerDraftResponse(**data)
+        response_type = AttachmentComposerDraftResponse if include_attachments else ComposerDraftResponse
+        result = response_type(**data)
         return JSONResponse(
             content=result.model_dump(mode="json"),
             headers={"Cache-Control": "private, no-store"},
         )
     except ValueError as exc:
+        if str(exc) == "composer_attachment_client_required":
+            raise HTTPException(status_code=409, detail="Attachment-aware draft client required") from exc
         raise HTTPException(status_code=422, detail="Invalid draft request") from exc
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
@@ -628,7 +638,7 @@ async def get_composer_draft(
         raise HTTPException(status_code=503, detail="Composer draft unavailable") from exc
 
 
-@router.put("/{conversation_id}/draft", response_model=ComposerDraftResponse)
+@router.put("/{conversation_id}/draft", response_model=ComposerDraftResponse | AttachmentComposerDraftResponse)
 async def put_composer_draft(
     conversation_id: str,
     request: UpdateComposerDraftRequest,
@@ -647,13 +657,17 @@ async def put_composer_draft(
                 conversation_id=conversation_id,
             ),
             text=request.text, expected_revision=request.expected_revision,
+            attachment_references=request.attachment_references,
         )
-        result = ComposerDraftResponse(**data)
+        response_type = AttachmentComposerDraftResponse if request.attachment_references is not None else ComposerDraftResponse
+        result = response_type(**data)
         return JSONResponse(
             content=result.model_dump(mode="json"),
             headers={"Cache-Control": "private, no-store"},
         )
     except ValueError as exc:
+        if str(exc) == "composer_attachment_unavailable":
+            raise HTTPException(status_code=409, detail="Draft attachment unavailable; reload first") from exc
         if str(exc) == "composer_draft_revision_conflict":
             raise HTTPException(
                 status_code=409, detail="Draft changed in another window; reload first",

@@ -1208,3 +1208,10 @@ completion, content-size or presentation validation to silence the UI.
 - Owner, tenant, digest and active artifact metadata checked under transaction locks; legacy text-only clients cannot silently discard attachments. References are not runtime admission or proof of byte integrity.
 - Regression coverage: canonical reference validation, disposable PostgreSQL migrations, owner/tenant denial, archive and revision mismatch, concurrent CAS and explicit removal. Chat System Burn runs the new proof. Minimal fixture tables do not certify production RLS or deployed storage.
 - DEV_FAST before merge-gate promotion; API exposure, runtime admission, actual browser acceptance and deployment remain outstanding.
+
+## KCON-770 / KUI-004B3.2: Authenticated draft attachment API (2026-11-24, SOURCE_CANDIDATE)
+
+- B3.1 merged via #1294 at `fabac99bdac076ef5c03a2e40ffdffcd47703865`; eight exact-head workflow gates passed. Deployment and post-merge verification remain separate.
+- Extend existing authenticated draft GET/PUT and ConversationRuntimeGateway, retaining ownership, CAS, canonical validation and private no-store responses. GET opt-in uses include_attachments=true; omitted/null references retain legacy semantics, empty array explicitly clears references.
+- HTTP regression suite exercises route registration, controlled principal dependencies, canonical gateway, conflict handling, ownership denial and telemetry privacy. Chat System Burn executes this suite alongside the reference and real PostgreSQL tests. Controlled HTTP dependencies are not production authentication proof.
+- DEV_FAST first, then merge-gate acceptance. No browser attachment controls, content admission or deployment approval in this slice.

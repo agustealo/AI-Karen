@@ -40,6 +40,7 @@ on:
       - "tests/architecture/test_*langgraph*.py"
       - "tests/integration/test_chat_*.py"
       - "tests/services/database/repositories/test_composer_attachment_references.py"
+      - "tests/api_routes/test_composer_drafts.py"
       - "src/ai_karen_engine/services/database/repositories/*conversation_repository.py"
       - "supabase/migrations/*composer_draft*.sql"
       - "scripts/ci/start-postgres-container.sh"
@@ -336,6 +337,7 @@ jobs:
         env:
           KAREN_TEST_DISPOSABLE_DATABASE: "1"
         run: |
+          pytest -q tests/api_routes/test_composer_drafts.py
           pytest -q tests/services/database/repositories/test_composer_attachment_references.py
           pytest -q tests/integration/test_chat_composer_attachment_postgres.py
 
