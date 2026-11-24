@@ -782,7 +782,8 @@ class ChatRuntime:
                 # to invoke a different model or persist a fallback answer.
                 fallback = (
                     None
-                    if str(exc) == "memory_source_revoked_or_unverifiable"
+                    if request.attachment_references or isinstance(exc, AttachmentAdmissionDenied)
+                    or str(exc) == "memory_source_revoked_or_unverifiable"
                     else await build_runtime_fallback(
                         runtime=self,
                         request=request,
@@ -1610,6 +1611,8 @@ class ChatRuntime:
                 # delivered to the client by a different provider/model.
                 if (
                     _stream_fallback_allowed(streamed_text)
+                    and not request.attachment_references
+                    and not isinstance(exc, AttachmentAdmissionDenied)
                     and str(exc) != "memory_source_revoked_or_unverifiable"
                 ):
                     fallback = await build_runtime_fallback(
@@ -5783,6 +5786,23 @@ class ChatRuntime:
 
         assembly_started = time.perf_counter()
         result = await get_prompt_runtime_service().assemble_prompt(assembly_request)
+        if request.attachment_references:
+            expected = [
+                (item.get("role"), item.get("content"))
+                for item in assembly_request.messages
+                if item.get("source") in {
+                    "verified_attachment_data", "runtime_attachment_data_boundary",
+                }
+            ]
+            actual = [
+                (item.get("role"), item.get("content"))
+                for item in result.messages
+                if item.get("source") in {
+                    "verified_attachment_data", "runtime_attachment_data_boundary",
+                }
+            ]
+            if not expected or actual != expected or result.token_estimate > assembly_request.token_budget:
+                raise AttachmentAdmissionDenied("attachment_prompt_integrity_denied")
         prompt_telemetry = dict(
             (result.metadata or {}).get("consumer_token_telemetry") or {}
         )
