@@ -49,6 +49,7 @@ def request(text: str, *, authenticated: bool = True) -> ChatExecutionRequest:
 def plan(
     *, granted: bool = True, tenant: str = TENANT,
     allowed_tools: list[str] | None = None,
+    plugin_inspect: bool = False,
 ) -> AuthorizedExecutionPlan:
     return AuthorizedExecutionPlan(
         execution_id="capability-inspection",
@@ -56,7 +57,10 @@ def plan(
         authorized_user_id=USER,
         authorized_tenant_id=tenant,
         authorized_session_id="capability-session",
-        allowed_capabilities=["runtime.inspect"] if granted else [],
+        allowed_capabilities=(
+            ["runtime.inspect", *(["plugin.inspect"] if plugin_inspect else [])]
+            if granted else []
+        ),
         allowed_tools=allowed_tools or [],
         topology=ExecutionTopology.DIRECT,
         budget=ExecutionBudget(
@@ -190,7 +194,7 @@ async def test_catalog_answer_reports_only_observed_registration_with_scope_limi
             return_value=schedules,
         ),
     ):
-        p = plan()
+        p = plan(plugin_inspect=True)
         observed = await DirectCapabilityExecutor().execute(
             request=request("what tools do you currently have available?"),
             decision=SimpleNamespace(
@@ -213,6 +217,9 @@ async def test_catalog_answer_reports_only_observed_registration_with_scope_limi
     snapshot = observed.normalized_metadata()["structured_content"]["capability_snapshot"]
     assert snapshot["source"] == "authenticated_runtime_observation"
     assert snapshot["core"]["count"] == 2
+    assert "automation.create" in snapshot["routed_actions"]["names"]
+    assert "automation.create" in observed.text
+    assert snapshot["routed_actions"]["status"] == "registered_not_execution_verified"
     assert snapshot["tools"]["marked_available"] == 2
     assert snapshot["tools"]["allowed_for_inspection"] == []
     assert snapshot["tools"]["execution_verified"] is False
@@ -318,7 +325,7 @@ async def test_partial_catalog_failures_do_not_fabricate_readiness_or_hide_core_
             return_value=schedules,
         ),
     ):
-        p = plan()
+        p = plan(plugin_inspect=True)
         observed = await DirectCapabilityExecutor().execute(
             request=request("List your available tools."),
             decision=SimpleNamespace(intent="runtime.inspect"),
@@ -361,7 +368,7 @@ async def test_malformed_catalog_and_schedule_receipts_fail_closed_independently
             return_value=schedules,
         ),
     ):
-        p = plan()
+        p = plan(plugin_inspect=True)
         observed = await DirectCapabilityExecutor().execute(
             request=request("What can you actually do?"),
             decision=SimpleNamespace(intent="runtime.inspect"),
@@ -376,3 +383,38 @@ async def test_malformed_catalog_and_schedule_receipts_fail_closed_independently
     assert snapshot["agents"]["status"] == "requires_task_specific_policy"
     assert snapshot["providers"]["status"] == "requires_verified_model_selection"
     assert snapshot["voice"]["status"] == "requires_engine_health_check"
+
+
+@pytest.mark.asyncio
+async def test_self_inspection_never_bypasses_separate_plugin_catalog_grant() -> None:
+    plugins = SimpleNamespace(inspect_for_conversation=AsyncMock())
+    schedules = SimpleNamespace(cron_summary=AsyncMock(return_value={
+        "total_cron_jobs": 0,
+        "enabled_cron_jobs": 0,
+    }))
+    with (
+        patch(
+            "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+            return_value=plugins,
+        ) as plugin_factory,
+        patch(
+            "ai_karen_engine.services.automation.definitions.get_automation_definition_service",
+            return_value=schedules,
+        ),
+    ):
+        p = plan()
+        observed = await DirectCapabilityExecutor().execute(
+            request=request("What tools do you currently have available?"),
+            decision=SimpleNamespace(intent="runtime.inspect"),
+            plan=p, meter=meter(p),
+        )
+        plugin_factory.assert_not_called()
+    assert observed.success
+    snapshot = observed.payload["capability_snapshot"]
+    assert snapshot["plugins"]["status"] == (
+        "requires_separate_plugin_inspection_authorization"
+    )
+    assert "requires separate plugin inspection" in observed.text
+    assert "automation.create" in snapshot["routed_actions"]["names"]
+    assert "plugin.inspect" in snapshot["routed_actions"]["names"]
+    assert snapshot["automations"]["saved_count"] == 0
