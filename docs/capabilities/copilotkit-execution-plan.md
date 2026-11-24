@@ -1201,3 +1201,10 @@ completion, content-size or presentation validation to silence the UI.
 - Reuse the dashboard registry's verified role-aware UI eligibility for injected routes and the composer. Scope the eligibility snapshot by tenant, user, roles and permissions; hide it while loading or after failure. The backend remains the file authorization owner.
 - Lazy Browse files disclosure reuses PluginHost and FileExplorerInventoryHost selection mode. No content read, analysis, attachment transport, inference or draft mutation. Closing or losing eligibility unmounts selection. Strict acceptance preview remains unchanged.
 - Regression candidates cover role revocation, native draft continuity, lazy disclosure and selection-only labeling. DEV_FAST first, Plugin Ecosystem and Main Quality required. Browser and durable attachment acceptance remain outstanding.
+
+## KCON-770 / KUI-004B3.1: Durable draft attachment references (2026-11-24, SOURCE_CANDIDATE)
+
+- Extend canonical conversation_composer_drafts with bounded revision references under the existing CAS and RLS contract; migration 73 and deployment preflight required.
+- Owner, tenant, digest and active artifact metadata checked under transaction locks; legacy text-only clients cannot silently discard attachments. References are not runtime admission or proof of byte integrity.
+- Regression coverage: canonical reference validation, disposable PostgreSQL migrations, owner/tenant denial, archive and revision mismatch, concurrent CAS and explicit removal. Chat System Burn runs the new proof. Minimal fixture tables do not certify production RLS or deployed storage.
+- DEV_FAST before merge-gate promotion; API exposure, runtime admission, actual browser acceptance and deployment remain outstanding.
