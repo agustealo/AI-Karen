@@ -92,6 +92,7 @@ async def authority(*, grant=True, bind=True, references=None):
         authenticated_user=UserData(
             user_id=user_id, tenant_id=tenant_id,
             is_active=True, is_verified=True,
+            permissions=["data:read"] if grant else [],
         ),
     )
     policy = RuntimePolicyEnforcer()
@@ -100,6 +101,7 @@ async def authority(*, grant=True, bind=True, references=None):
         tenant_id=context.tenant_id,
         session_id=context.session_id,
         correlation_id=context.correlation_id,
+        permissions=["data:read"] if grant else [],
         requested_capabilities=["data:read"] if grant else [],
         attachment_references=selected_refs if grant else [],
         max_model_calls=2,
@@ -422,3 +424,15 @@ async def test_denied_attachment_stops_both_entrypoints_before_provider_or_fallb
         assert result.status.value == "error"
         assert result.metadata.to_dict()["error_code"] == "CHAT_ATTACHMENT_ADMISSION_DENIED"
     assert reader.calls
+
+
+@pytest.mark.asyncio
+async def test_selected_attachments_do_not_self_grant_read_permission():
+    decision = await RuntimePolicyEnforcer().evaluate(PolicyEvaluationRequest(
+        user_id=str(uuid.uuid4()), tenant_id=str(uuid.uuid4()),
+        session_id="session-1", correlation_id="correlation-1",
+        roles=[], permissions=[], requested_capabilities=["data:read"],
+        attachment_references=[selected()], max_model_calls=1,
+    ))
+    assert not decision.allowed
+    assert "data:read" in decision.denied_capabilities
