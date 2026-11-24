@@ -12,7 +12,7 @@ from ai_karen_engine.core.cortex.routing_intents import (
     CAPABILITY_ROUTES,
     parse_plugin_inspection_request,
 )
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest, SearchRetrievalOptions
 from ai_karen_engine.core.runtime.plugin_management_contract import (
     validate_plugin_management_preflight,
 )
@@ -1647,6 +1647,17 @@ class DirectCapabilityExecutor:
         tool_name = str(route.get("handler") or "").strip()
         mode = str(route.get("plugin_mode") or "").strip() or None
         attempts: List[Dict[str, Any]] = []
+        retrieval_options = getattr(request, "search_retrieval_options", None)
+        if retrieval_options is not None and (
+            not isinstance(retrieval_options, SearchRetrievalOptions)
+            or decision.intent != "search.general"
+            or tool_name != "web_search"
+        ):
+            return self._unavailable(
+                started, capability, tool_name or preferred_plugin,
+                "Search retrieval options are not supported by this capability.",
+                attempts,
+            )
 
         if decision.intent == "search.weather":
             from ai_karen_engine.core.runtime.location_context import resolve_location
@@ -1701,7 +1712,7 @@ class DirectCapabilityExecutor:
                 tool_result = await get_tool_service().execute_tool(
                     ToolInput(
                         tool_name=tool_name,
-                        parameters=self._tool_parameters(query, mode),
+                        parameters=self._tool_parameters(query, mode, retrieval_options),
                         user_context={
                             "request_id": (
                                 request.context.request_id
@@ -1715,6 +1726,10 @@ class DirectCapabilityExecutor:
                             "allowed_capabilities": list(plan.allowed_capabilities),
                             "authorized_plan": plan,
                             "policy_decision_id": plan.policy_decision_id,
+                            **({
+                                "runtime_search_context": request.context,
+                                "execution_meter": meter,
+                            } if tool_name == "web_search" and decision.intent == "search.general" else {}),
                         },
                         user_id=request.context.user_id,
                         session_id=request.context.session_id,
@@ -1813,6 +1828,10 @@ class DirectCapabilityExecutor:
                         mode,
                         resolved_context,
                     ),
+                    **({
+                        "runtime_context": request.context,
+                        "execution_meter": meter,
+                    } if decision.intent == "search.general" else {}),
                     user_id=request.context.user_id,
                     tenant_id=request.context.tenant_id,
                     session_id=request.context.session_id,
@@ -1921,9 +1940,19 @@ class DirectCapabilityExecutor:
         if result is not None:
             return result
 
-        result = await run_plugin()
-        if result is not None:
-            return result
+        fallback_denial = self._search_plugin_fallback_denial(
+            decision.intent, retrieval_options, preferred_plugin,
+            request.context, plan, meter, mode,
+        )
+        if fallback_denial is None:
+            result = await run_plugin()
+            if result is not None:
+                return result
+        elif preferred_plugin:
+            attempts.append({
+                "type": "plugin", "id": preferred_plugin,
+                "status": "skipped", "error": fallback_denial,
+            })
 
         target = tool_name or preferred_plugin or capability or "live capability"
         reason = self._last_attempt_error(
@@ -1937,6 +1966,28 @@ class DirectCapabilityExecutor:
             reason,
             attempts,
         )
+
+    @staticmethod
+    def _search_plugin_fallback_denial(
+        intent: str, retrieval_options: Any, plugin_id: Optional[str] = None,
+        runtime_context: Any = None, plan: Any = None, meter: Any = None,
+        mode: Optional[str] = None,
+    ) -> Optional[str]:
+        """Permit general fallback only on the original governed execution."""
+        if intent != "search.general":
+            return "restricted_search_fallback_unverified" if (
+                retrieval_options is not None and retrieval_options.tool_parameters()
+            ) else None
+        if (
+            plugin_id != "intelligent-search"
+            or mode not in (None, "general")
+            or runtime_context is None or plan is None or meter is None
+            or not runtime_context.is_runtime_model_plan_authorized(plan, meter)
+        ):
+            return "search_fallback_execution_meter_unverified"
+        if meter.exhausted or meter.external_requests >= meter.budget.max_external_requests:
+            return "search_fallback_external_budget_exhausted"
+        return None
 
     @staticmethod
     def _latest_user_text(request: ChatExecutionRequest) -> str:
@@ -2190,10 +2241,15 @@ class DirectCapabilityExecutor:
         return None
 
     @staticmethod
-    def _tool_parameters(query: str, mode: Optional[str]) -> Dict[str, Any]:
+    def _tool_parameters(
+        query: str, mode: Optional[str],
+        retrieval_options: Optional[SearchRetrievalOptions] = None,
+    ) -> Dict[str, Any]:
         params: Dict[str, Any] = {"query": query}
         if mode:
             params["mode"] = mode
+        if retrieval_options is not None:
+            params.update(retrieval_options.tool_parameters())
         return params
 
     def _plugin_parameters(
@@ -2226,6 +2282,14 @@ class DirectCapabilityExecutor:
             if timezone_name:
                 params["timezone"] = timezone_name
             return params
+
+        if intent == "search.general":
+            options = getattr(request, "search_retrieval_options", None)
+            return {
+                "query": query,
+                "mode": "general",
+                "context": options.tool_parameters() if options is not None else {},
+            }
 
         params = {
             "query": query,

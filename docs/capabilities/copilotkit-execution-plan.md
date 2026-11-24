@@ -432,6 +432,12 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-24: KIS-UX-02B governed general search, PR #1292
+
+- **KCON-213 / KCON-260 / KCON-750, SOURCE_CANDIDATE:** Reuses ChatRuntime and CORTEX admission for typed general-search retrieval options in HTTP/SSE; propagates the original authorized plan and cumulative execution meter through primary retrieval and eligible Intelligent Search fallback. Source-matched supporting citations in the three synchronized plugin UI distributions are not claim-level verification. Unsupported specialized/crawl options retain the existing plugin path; runtime denial does not trigger a UI retry. No new orchestrator or provider registry.
+- **Proof:** Prior reconciled head `8e8b6aa2256b5176643a27778306018ba3354a11` passed DEV_FAST, frontend-fast, Plugin Frontend, Context Authority and Chat System Burn. Full backend quality stopped at the existing ledger-update requirement, before its substantive tests. This candidate incorporates the latest main runtime changes via context-matched hunks; new exact-head CI, full backend and first-boot acceptance, real authenticated browser/replay, and live provider quota proof remain pending. All three KCON tasks remain unchecked.
+
+
 ### 2026-11-19: KCHAT native CopilotKit response failure diagnostics, PR #1116
 
 - **KCON-130 / KCON-652 / KCON-770, IN_PROGRESS:** On native CopilotKit v2 prompt submission, the generic SDK console error `Unable to complete the response.` does not identify a failure cause. The existing backend AG-UI projection already emits bounded `RUN_ERROR.code`, but the UI controller previously replaced observed run failure with a generic sentence. Reuse the existing `getDegradedResponseMessage.tsx` presentation owner, and pass lifecycle/rejected SDK errors through a strictly allowlisted error-code/HTTP-status mapping with actionable consumer guidance. Do not display raw exception messages, provider secrets, stacks, tokens or arbitrary error codes. Unknown SDK failures must be described as **unknown**, with verified history inspection before retry; no silent retry, model fallback, or fabricated completion.

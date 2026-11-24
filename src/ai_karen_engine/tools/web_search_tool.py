@@ -11,6 +11,7 @@ from ai_karen_engine.services.tooling.internet_capability_service import Interne
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionContext,
+    ExecutionBudgetMeter,
 )
 from ai_karen_engine.tools.http_client_tool import HTTPClientTool
 from ai_karen_engine.tools.filesystem_tool import FileSystemTool
@@ -60,6 +61,33 @@ class WebSearchTool(BaseTool):
                     description="Maximum number of sources to crawl",
                     required=False,
                     default=5
+                ),
+                ToolParameter(
+                    name="allowed_domains",
+                    type=list,
+                    description="Restrict results to these domains",
+                    required=False,
+                    validation_rules={"min_length": 1, "max_length": 50},
+                ),
+                ToolParameter(
+                    name="blocked_domains",
+                    type=list,
+                    description="Exclude these domains",
+                    required=False,
+                    validation_rules={"min_length": 1, "max_length": 50},
+                ),
+                ToolParameter(
+                    name="time_range",
+                    type=str,
+                    description="Provider search time range",
+                    required=False,
+                    validation_rules={"min_length": 1, "max_length": 32},
+                ),
+                ToolParameter(
+                    name="prefer_recent",
+                    type=bool,
+                    description="Prefer recently published sources",
+                    required=False,
                 )
             ],
             return_type=dict,
@@ -81,11 +109,48 @@ class WebSearchTool(BaseTool):
         query = parameters["query"]
         mode = parameters.get("mode", "general")
         max_urls = parameters.get("max_urls", 5)
+        config_override = {"mode": mode, "max_urls": max_urls}
+        for key in ("allowed_domains", "blocked_domains"):
+            if key not in parameters:
+                continue
+            domains = parameters[key]
+            if not isinstance(domains, list) or not 1 <= len(domains) <= 50 or any(
+                not isinstance(domain, str) or not domain.strip() or len(domain) > 253
+                for domain in domains
+            ):
+                raise ValueError(f"Invalid {key} restriction")
+            config_override[key] = domains
+        for key in ("time_range", "prefer_recent"):
+            if key in parameters:
+                config_override[key] = parameters[key]
+        if mode == "weather" and any(
+            key in config_override
+            for key in ("allowed_domains", "blocked_domains", "time_range", "prefer_recent")
+        ):
+            raise ValueError("Weather observations do not support web source restrictions")
 
         raw_context = dict(context or {})
         authorized_plan = raw_context.get("authorized_plan")
         if not isinstance(authorized_plan, AuthorizedExecutionPlan):
             authorized_plan = None
+
+        meter = raw_context.get("execution_meter")
+        runtime_context = raw_context.get("runtime_search_context")
+        if meter is not None or runtime_context is not None:
+            from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+            if (
+                not isinstance(meter, ExecutionBudgetMeter)
+                or not isinstance(runtime_context, ChatExecutionContext)
+                or authorized_plan is None
+                or not runtime_context.is_runtime_model_plan_authorized(authorized_plan, meter)
+                or "web_search" not in authorized_plan.allowed_tools
+                or any(
+                    raw_context.get(key) != getattr(runtime_context, key)
+                    for key in ("user_id", "tenant_id", "session_id", "correlation_id")
+                )
+            ):
+                raise PermissionError("Invalid runtime search execution authority")
 
         execution_context = ExecutionContext(
             request_id=str(raw_context.get("request_id") or ""),
@@ -112,12 +177,10 @@ class WebSearchTool(BaseTool):
         service = self._get_service()
         result = await service.execute(
             query,
-            config_override={
-                "mode": mode,
-                "max_urls": max_urls,
-            },
+            config_override=config_override,
             context=execution_context,
             authorized_plan=authorized_plan,
+            **({"execution_meter": meter} if meter is not None else {}),
         )
 
         return result

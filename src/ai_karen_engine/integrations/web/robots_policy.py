@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +34,7 @@ class RobotsPolicy:
         self.user_agent = user_agent
         self._cache: dict[str, tuple[bool, str]] = {}
 
-    async def is_allowed(self, url: str, session: Optional[aiohttp.ClientSession] = None) -> tuple[bool, str]:
+    async def is_allowed(self, url: str, session: Optional[aiohttp.ClientSession] = None, *, execution_meter: Optional[ExecutionBudgetMeter] = None) -> tuple[bool, str]:
         """
         Check whether the given URL is allowed by robots.txt.
 
@@ -45,12 +47,15 @@ class RobotsPolicy:
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         key = f"{parsed.scheme}://{parsed.netloc}"
 
-        if key in self._cache:
+        # Legacy cache contains path-specific decisions, not parsed rules.
+        # Governed calls must not reuse those decisions across paths.
+        if execution_meter is None and key in self._cache:
             allowed, reason = self._cache[key]
             return allowed, reason
 
-        allowed, reason = await self._fetch_and_check(robots_url, url, session=session)
-        self._cache[key] = (allowed, reason)
+        allowed, reason = await self._fetch_and_check(robots_url, url, session=session, **({"execution_meter": execution_meter} if execution_meter is not None else {}))
+        if execution_meter is None:
+            self._cache[key] = (allowed, reason)
         return allowed, reason
 
     async def _fetch_and_check(
@@ -58,23 +63,37 @@ class RobotsPolicy:
         robots_url: str,
         target_url: str,
         session: Optional[aiohttp.ClientSession] = None,
+        *, execution_meter: Optional[ExecutionBudgetMeter] = None,
     ) -> tuple[bool, str]:
+        if execution_meter is not None and (
+            not isinstance(execution_meter, ExecutionBudgetMeter)
+            or not execution_meter.retains_initial_budget_limits()
+            or not await execution_meter.reserve_external_request()
+        ):
+            return False, "External request budget exhausted or invalid"
+        transport_options = {"allow_redirects": False} if execution_meter is not None else {}
         try:
             if session is not None:
-                async with session.get(robots_url, timeout=10) as response:
+                async with session.get(robots_url, timeout=10, **transport_options) as response:
                     if response.status != 200:
+                        if execution_meter is not None and response.status not in (404, 410):
+                            return False, "robots.txt unavailable or redirected"
                         return True, "robots.txt not found or unreachable; allowed by default"
                     body = await response.text()
             else:
                 async with aiohttp.ClientSession() as local_session:
-                    async with local_session.get(robots_url, timeout=10) as response:
+                    async with local_session.get(robots_url, timeout=10, **transport_options) as response:
                         if response.status != 200:
+                            if execution_meter is not None and response.status not in (404, 410):
+                                return False, "robots.txt unavailable or redirected"
                             return True, "robots.txt not found or unreachable; allowed by default"
-                        body = await local_session.text()
+                        body = await response.text()
 
             return self._evaluate(body, target_url)
         except Exception as exc:
             logger.debug("Failed to fetch robots.txt from %s: %s", robots_url, exc)
+            if execution_meter is not None:
+                return False, "robots.txt fetch failed"
             return True, f"robots.txt fetch failed ({exc}); allowed by default"
 
     def _evaluate(self, body: str, target_url: str) -> tuple[bool, str]:

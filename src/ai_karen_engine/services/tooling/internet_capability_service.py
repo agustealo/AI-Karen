@@ -39,7 +39,7 @@ from ..search.search_result_processor import SearchResultProcessor
 from ..search.web_search_provider_registry import WebSearchProviderRegistry
 from ..search.web_search_client import WebSearchClient
 from ...config.config_manager import get_config_value
-from ...core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan, ExecutionBudget, ExecutionContext
+from ...core.runtime.contracts import ActionExecutionGate, AuthorizedExecutionPlan, ExecutionBudget, ExecutionBudgetMeter, ExecutionContext
 from ...core.runtime.policy.runtime_policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
 from ...integrations.web.crawl4ai_integration import Crawl4AIIntegration
 
@@ -340,6 +340,8 @@ class InternetCapabilityService:
         config_override: Optional[Dict[str, Any]] = None,
         context: Optional[ExecutionContext] = None,
         authorized_plan: Optional[AuthorizedExecutionPlan] = None,
+        *,
+        execution_meter: Optional[ExecutionBudgetMeter] = None,
     ) -> Dict[str, Any]:
         """
         Execute a full live internet intelligence cycle.
@@ -383,6 +385,22 @@ class InternetCapabilityService:
 
         try:
             await self._authorize(execution_context, authorized_plan)
+            if execution_meter is not None and (
+                not isinstance(execution_meter, ExecutionBudgetMeter)
+                or authorized_plan is None
+                or execution_meter.budget is not authorized_plan.budget
+                or not execution_meter.retains_initial_budget_limits()
+                or not authorized_plan.matches_execution_scope(
+                    user_id=execution_context.user_id,
+                    tenant_id=execution_context.tenant_id,
+                    session_id=execution_context.session_id,
+                    policy_decision_id=execution_context.policy_decision_id,
+                )
+            ):
+                raise PermissionError("Invalid search execution meter.")
+            budget = execution_context.budget or (authorized_plan.budget if authorized_plan else None)
+            if budget is not None and budget.max_external_requests <= 0:
+                raise PermissionError("External request budget exhausted.")
 
             if mode == "weather":
                 from ..search.weather_observation_provider import fetch_weather_observation
@@ -444,7 +462,6 @@ class InternetCapabilityService:
                         },
                     }
 
-            budget = execution_context.budget or (authorized_plan.budget if authorized_plan else None)
             effective_timeout = self._effective_timeout(request, budget)
             effective_max_urls = self._effective_max_urls(strategy, request, budget)
 
@@ -456,6 +473,7 @@ class InternetCapabilityService:
                     effective_max_urls,
                     provider_sink=search_providers,
                     discovery_sink=discovered_sources,
+                    **({"execution_meter": execution_meter} if execution_meter is not None else {}),
                 ),
                 timeout=effective_timeout,
             )
@@ -488,6 +506,7 @@ class InternetCapabilityService:
                     self._crawl_many(
                         urls, request, page_budget=effective_max_urls,
                         attempt_sink=crawl_attempts,
+                        **({"execution_meter": execution_meter} if execution_meter is not None else {}),
                     ),
                     timeout=effective_timeout,
                 )
@@ -638,6 +657,7 @@ class InternetCapabilityService:
         max_urls: int,
         provider_sink: Optional[List[str]] = None,
         discovery_sink: Optional[List[Dict[str, Any]]] = None,
+        execution_meter: Optional[ExecutionBudgetMeter] = None,
     ) -> Tuple[List[str], List[str]]:
         """
         Fetch unique URLs from the configured search provider.
@@ -645,6 +665,9 @@ class InternetCapabilityService:
         This avoids importing plugin files directly. The caller should inject a
         first-class search client/factory from Karen config/bootstrap.
         """
+
+        if max_urls <= 0:
+            return [], []
 
         client = self._resolve_search_client()
         all_urls: List[str] = []
@@ -657,6 +680,7 @@ class InternetCapabilityService:
                         query=search_query,
                         max_results=max_urls,
                         time_range=strategy.get("time_range"),
+                        **({"execution_meter": execution_meter} if execution_meter is not None else {}),
                     )
 
                 provider = str(getattr(response, "provider", "") or "").strip()
@@ -705,6 +729,8 @@ class InternetCapabilityService:
         remaining slots from the original ranking, so scarce-domain queries
         retain useful results rather than losing evidence.
         """
+        if limit <= 0:
+            return []
         selected: List[str] = []
         seen: set[str] = set()
         for url in urls:
@@ -729,6 +755,7 @@ class InternetCapabilityService:
         *,
         page_budget: Optional[int] = None,
         attempt_sink: Optional[List[str]] = None,
+        execution_meter: Optional[ExecutionBudgetMeter] = None,
     ) -> List[Dict[str, Any]]:
         """Bounded same-site traversal using the canonical Crawl4AI acquisition path.
 
@@ -739,7 +766,9 @@ class InternetCapabilityService:
         if not urls:
             return []
 
-        limit = max(1, min(page_budget or 25, 25))
+        limit = max(0, min(25 if page_budget is None else page_budget, 25))
+        if limit == 0:
+            return []
         if request.crawl_enabled:
             limit = min(limit, request.crawl_max_pages or 5)
         max_depth = (request.crawl_max_depth or 0) if request.crawl_enabled else 0
@@ -777,6 +806,8 @@ class InternetCapabilityService:
             batch = pending[:limit - attempts]
             if not batch:
                 break
+            if execution_meter is not None and not isinstance(self.crawler, Crawl4AIIntegration):
+                raise PermissionError("Crawler cannot enforce the original execution meter.")
             attempts += len(batch)
             if attempt_sink is not None:
                 attempt_sink.extend(batch)
@@ -784,6 +815,7 @@ class InternetCapabilityService:
             if not extraction_strategy and hasattr(self.crawler, "fetch_many"):
                 fetched = await self.crawler.fetch_many(
                     batch, bypass_cache=request.bypass_cache, depth=depth,
+                    **({"execution_meter": execution_meter} if execution_meter is not None else {}),
                 )
             else:
                 semaphore = asyncio.Semaphore(request.crawl_concurrency)
@@ -795,6 +827,7 @@ class InternetCapabilityService:
                                 url,
                                 bypass_cache=request.bypass_cache,
                                 extraction_strategy=extraction_strategy,
+                                **({"execution_meter": execution_meter} if execution_meter is not None else {}),
                             )
                         except Exception as exc:
                             logger.warning(
@@ -1215,7 +1248,7 @@ class InternetCapabilityService:
         requested = max(1, min(requested, 25))
         if budget is None:
             return requested
-        return min(requested, max(1, budget.max_external_requests))
+        return min(requested, max(0, budget.max_external_requests))
 
     async def _apply_extraction(
         self,

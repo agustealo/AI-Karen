@@ -79,3 +79,50 @@ def test_auto_selection_uses_cortex_decision_and_explicit_general_is_respected()
     assert resolver._resolve_mode({"query": "weather in Detroit"}) == "weather"
     assert resolver._resolve_mode({"mode": "auto", "query": "weather in Detroit"}) == "weather"
     assert resolver._resolve_mode({"mode": "general", "query": "weather in Detroit"}) == "general"
+
+
+def test_governed_search_handlers_remain_identical():
+    root = Path(__file__).resolve().parents[2]
+    shipped = root / "free_plugins/essential/intelligent-search/handler.py"
+    bundled = root / "src/ai_karen_engine/extensions/plugins/intelligent-search/handler.py"
+    assert shipped.read_bytes() == bundled.read_bytes()
+
+
+def test_governed_handler_forwards_original_plan_and_meter():
+    import asyncio
+    from types import SimpleNamespace
+    from typing import Any, Dict
+    from unittest.mock import AsyncMock
+
+    from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter, ExecutionContext
+    from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+    from ai_karen_engine.services.tooling.internet_capability_service import InternetExecutionContext
+
+    path = Path(__file__).resolve().parents[2] / "free_plugins/essential/intelligent-search/handler.py"
+    tree = ast.parse(path.read_text())
+    dispatcher = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "WebSearchDispatcher")
+    run = next(n for n in dispatcher.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "run")
+    scope = dict(Any=Any, Dict=Dict, ExtensionExecutionContext=ExtensionExecutionContext,
+                 ExecutionContext=ExecutionContext, InternetExecutionContext=InternetExecutionContext)
+    exec(compile(ast.Module(body=[run], type_ignores=[]), str(path), "exec"), scope)
+    plan = AuthorizedExecutionPlan(execution_id="e", policy_decision_id="p")
+    meter = ExecutionBudgetMeter(plan.budget)
+    ctx = ExtensionExecutionContext(request_id="r", correlation_id="c", user_id="u")
+    object.__setattr__(ctx, "runtime_authority", lambda plugin: (plan, meter))
+    handler = SimpleNamespace(prepare=AsyncMock(return_value={}), execute=AsyncMock())
+    service = SimpleNamespace(execute=AsyncMock(return_value={"success": False, "status": "permission_denied"}))
+    dispatcher = SimpleNamespace(_resolve_mode=lambda params: "general",
+                                 _effective_mode_query=lambda query, mode, context: query,
+                                 _get_handler=lambda mode: handler,
+                                 _get_manifest_id=lambda: "intelligent-search",
+                                 _internet_service=service,
+                                 logger=__import__("logging").getLogger(__name__))
+    result = asyncio.run(scope["run"](dispatcher, {"query": "release notes"}, ctx))
+    assert result["success"] is False
+    assert service.execute.await_args.kwargs["authorized_plan"] is plan
+    assert service.execute.await_args.kwargs["execution_meter"] is meter
+    handler.execute.assert_not_awaited()
+    dispatcher._internet_service = None
+    result = asyncio.run(scope["run"](dispatcher, {"query": "release notes"}, ctx))
+    assert result["success"] is False
+    handler.execute.assert_not_awaited()

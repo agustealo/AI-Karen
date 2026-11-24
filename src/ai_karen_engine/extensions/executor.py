@@ -215,6 +215,20 @@ class ExtensionExecutionService:
                 data_classification,
             )
 
+        try:
+            runtime_authority = context.runtime_authority(plugin_id)
+            if runtime_authority is not None and (
+                plugin_id != "intelligent-search" or runtime_authority[0] is not plan
+            ):
+                raise PermissionError("extension_runtime_authority_invalid")
+        except PermissionError:
+            return self._fail_with_provenance(
+                request, start, execution_id,
+                "extension_runtime_authority_invalid",
+                "Extension runtime authority is invalid",
+                trust_tier, result_trust, data_classification,
+            )
+
         if not context.policy_decision_id or context.policy_decision_id != plan.policy_decision_id:
             return self._fail_with_provenance(
                 request,
@@ -460,6 +474,18 @@ class ExtensionExecutionService:
             )
 
         timeout_ms = self._get_timeout(request, manifest, capability_obj)
+        try:
+            if runtime_authority is not None:
+                current_authority = context.runtime_authority(plugin_id)
+                if current_authority is None or current_authority[0] is not plan or current_authority[1] is not runtime_authority[1]:
+                    raise PermissionError("extension_runtime_authority_invalid")
+        except PermissionError:
+            return self._fail_with_provenance(
+                request, start, execution_id,
+                "extension_runtime_authority_invalid",
+                "Extension runtime authority changed before invocation",
+                trust_tier, result_trust, data_classification,
+            )
         try:
             raw_result = await asyncio.wait_for(
                 self._invoke(handler, request), timeout=timeout_ms / 1000.0
