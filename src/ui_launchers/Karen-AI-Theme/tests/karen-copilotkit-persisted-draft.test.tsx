@@ -20,10 +20,15 @@ import { useKarenPersistedDraft } from "@/components/chat/copilotkit/useKarenPer
 const CONV = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TARGET = "/api/conversations/" + CONV + "/draft";
 
+const ATTACHMENT = { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision: "a".repeat(64) };
+
 function Surface() {
   const draft = useKarenPersistedDraft(CONV);
   const [clearConfirmed, setClearConfirmed] = React.useState<boolean | null>(null);
   return <div>
+    <span data-testid="attachments">{JSON.stringify(draft.attachments)}</span>
+    <button onClick={() => draft.updateAttachments([ATTACHMENT])}>Attach file</button>
+    <button onClick={() => draft.updateAttachments([])}>Remove files</button>
     <span data-testid="clear-confirmed">{String(clearConfirmed)}</span>
     <button onClick={() => {
       void draft.clearBeforeSubmit(draft.draft).then(setClearConfirmed);
@@ -51,8 +56,8 @@ function Surface() {
 beforeEach(() => {
   backend.get.mockReset().mockResolvedValue({ text: "Persisted earlier", revision: 4, attachment_references: [] });
   backend.put.mockReset().mockImplementation(
-    async (_path: string, payload: { text: string; expected_revision: number }) =>
-      ({ text: payload.text, revision: payload.expected_revision + 1, attachment_references: [] }),
+    async (_path: string, payload: { text: string; expected_revision: number; attachment_references: typeof ATTACHMENT[] }) =>
+      ({ text: payload.text, revision: payload.expected_revision + 1, attachment_references: payload.attachment_references }),
   );
 });
 
@@ -77,7 +82,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
       .toBe("true"));
     expect(input.value).toBe("New in this window");
-    expect(backend.get).toHaveBeenCalledWith(TARGET);
+    expect(backend.get).toHaveBeenCalledWith(TARGET + "?include_attachments=true");
   });
 
   it("saves and clears a just-typed message on the first Enter without debounce wait", async () => {
@@ -215,8 +220,8 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4, attachment_references: [] })
       .mockResolvedValueOnce({ text: "", revision: 6, attachment_references: [] });
     backend.put.mockImplementationOnce(
-      async (_path: string, payload: { text: string; expected_revision: number }) =>
-        ({ text: payload.text, revision: payload.expected_revision + 1, attachment_references: [] }),
+      async (_path: string, payload: { text: string; expected_revision: number; attachment_references: typeof ATTACHMENT[] }) =>
+        ({ text: payload.text, revision: payload.expected_revision + 1, attachment_references: payload.attachment_references }),
     ).mockRejectedValueOnce(new ApiError(502, "clear receipt lost"));
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
@@ -534,5 +539,45 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("unavailable"));
     expect(backend.put).not.toHaveBeenCalled();
+  });
+});
+
+describe("Attachment-aware draft persistence", () => {
+  it("restores references, blocks clearing for inference, and saves explicit removal", async () => {
+    backend.get.mockResolvedValueOnce({ text: "Keep this text", revision: 4, attachment_references: [ATTACHMENT] });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    expect(screen.getByTestId("attachments").textContent).toBe(JSON.stringify([ATTACHMENT]));
+    fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
+    await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("false"));
+    expect(backend.put).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove files" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledWith(TARGET,
+      { text: "Keep this text", expected_revision: 4, attachment_references: [] },
+      expect.objectContaining({ signal: expect.any(Object) })), { timeout: 4000 });
+    await waitFor(() => expect(screen.getByTestId("draft-synced").textContent).toBe("true"));
+  });
+
+  it("rejects a receipt that acknowledges text and revision but silently drops attachments", async () => {
+    backend.put.mockResolvedValueOnce({ text: "Persisted earlier", revision: 5, attachment_references: [] });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Attach file" }));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("unavailable"), { timeout: 4000 });
+    expect(screen.getByTestId("draft-synced").textContent).toBe("false");
+    expect(screen.getByTestId("attachments").textContent).toBe(JSON.stringify([ATTACHMENT]));
+  });
+
+  it("rejects uncertain write readback when the reference set does not match", async () => {
+    backend.put.mockRejectedValueOnce(new ApiError(503, "receipt lost"));
+    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4, attachment_references: [] })
+      .mockResolvedValueOnce({ text: "Persisted earlier", revision: 5, attachment_references: [] });
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Attach file" }));
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("unavailable"), { timeout: 4000 });
+    expect(screen.getByTestId("draft-synced").textContent).toBe("false");
+    expect(screen.getByTestId("attachments").textContent).toBe(JSON.stringify([ATTACHMENT]));
+    expect(backend.put).toHaveBeenCalledTimes(1);
   });
 });
