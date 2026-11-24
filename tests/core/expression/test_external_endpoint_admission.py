@@ -312,3 +312,32 @@ def test_canonical_wire_preserves_loopback_openers(monkeypatch):
     )
     assert response == ("http://127.0.0.1:11434/v1/models", 1.0)
     assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_private_evidence_denies_remote_transport_even_with_admin_approval(stream):
+    endpoint = _endpoint("https://remote.example/v1")
+    engine = OpenAICompatibleEngine()
+    engine.engine_id = "local"
+    sink = AsyncMock() if stream else None
+    task = _task(token_sink=sink)
+    task.local_only = True
+    approval = AsyncMock(return_value=True)
+    task.authorize_external_engine_attempt = approval
+    with (
+        patch("ai_karen_engine.core.model_runtime.provider_registry_service.get_provider_registry_service",
+              return_value=SimpleNamespace(get_provider_endpoint=lambda _: endpoint)),
+        patch.object(engine, "_resolve_provider", return_value=endpoint.provider_id),
+        patch("ai_karen_engine.core.expression.engines.openai_compatible_engine.execute_provider_endpoint",
+              new_callable=AsyncMock) as regular,
+        patch("ai_karen_engine.core.expression.engines.openai_compatible_engine.stream_provider_endpoint") as streaming,
+    ):
+        result = await engine.generate(task)
+    regular.assert_not_awaited()
+    streaming.assert_not_called()
+    approval.assert_not_awaited()
+    assert result.degradation_reason == "private_evidence_local_only"
+    assert not task.stream_started
+    if sink is not None:
+        sink.assert_not_awaited()
