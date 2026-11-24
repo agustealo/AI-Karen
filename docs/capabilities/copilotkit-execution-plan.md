@@ -1174,3 +1174,8 @@ completion, content-size or presentation validation to silence the UI.
 
 - Reuse the single native CopilotChatView and existing draft port. The controlled chat owns one accessory region for persona, voice and pending draft synchronization. Remove the separate sticky persona footer; preserve the backend revision-fenced persona selection and existing voice discovery, capture, and playback stop controls. No new execution or persistence path.
 - Proof candidate: shell and controlled-chat tests assert the relocated persona slot, single native view, draft continuity across accessory rerender and no inference on preference presentation. Existing voice and draft recovery contracts remain required. Exact-head CI and authenticated responsive browser acceptance remain outstanding. No claim of full KUI-004 completion or deployed layout proof.
+
+## KCON-770 / KUI-004B2A: Reusable selection-only file inventory (2026-11-24, SOURCE_CANDIDATE)
+
+- Extend the existing authenticated FileExplorerInventoryHost with an explicit selection mode, preserving default analysis behavior and canonical inventory/reference validation. Selection mode does not mount Content Intelligence or grant file access. Hide inventory immediately during authentication revalidation.
+- Tests cover selection without analysis, forged reference rejection and auth revalidation. No composer attachment action, durable reference submission or runtime file admission is enabled by this slice. Exact-head CI and authenticated browser acceptance remain required.
