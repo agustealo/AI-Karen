@@ -17,7 +17,7 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-type DraftRecord = { text: string; revision: number };
+type DraftRecord = { text: string; revision: number; attachment_references: { source_id: string; revision: string }[] };
 
 class DraftBroadcastChannel {
   static channels: DraftBroadcastChannel[] = [];
@@ -74,7 +74,7 @@ describe("authenticated persisted composer draft synchronization", () => {
       get: () => visibility !== "visible",
     });
     vi.stubGlobal("BroadcastChannel", DraftBroadcastChannel);
-    getDraft.mockResolvedValue({ text: "", revision: 0 } as never);
+    getDraft.mockResolvedValue({ text: "", revision: 0, attachment_references: [] } as never);
   });
 
   afterEach(() => {
@@ -123,12 +123,12 @@ describe("authenticated persisted composer draft synchronization", () => {
   });
 
   it("notifies another tab with revision only, then rereads canonical server text", async () => {
-    let canonical: DraftRecord = { text: "", revision: 0 };
+    let canonical: DraftRecord = { text: "", revision: 0, attachment_references: [] };
     getDraft.mockImplementation(async () => ({ ...canonical } as never));
     putDraft.mockImplementation(async (_endpoint, payload) => {
       const request = payload as { text: string; expected_revision: number };
       expect(request.expected_revision).toBe(canonical.revision);
-      canonical = { text: request.text, revision: canonical.revision + 1 };
+      canonical = { text: request.text, revision: canonical.revision + 1, attachment_references: [] };
       return { ...canonical } as never;
     });
 
