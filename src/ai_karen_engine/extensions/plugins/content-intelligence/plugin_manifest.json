@@ -3,7 +3,7 @@
   "name": "content-intelligence",
   "display_name": "Content Intelligence",
   "version": "0.2.0",
-  "description": "Standalone bounded analysis of host-authorized text sources; file exploration belongs to the independent shared File Explorer extension.",
+  "description": "Standalone bounded analysis of host-authorized text sources with a governed investigation workspace.",
   "purpose": "Analyze authorized invocation-supplied content without accessing files, global memory or external indexes.",
   "author": "KAREN Engineering",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "retrieval"
   ],
   "capabilities": {
-    "provides_ui": false,
+    "provides_ui": true,
     "provides_api": false,
     "prompt_first": true
   },
@@ -115,5 +115,25 @@
       "documents"
     ],
     "additional_properties": false
+  },
+  "ui": {
+    "hook_zones": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "Content Intelligence",
+        "icon": "brain-circuit",
+        "order": 36
+      }
+    ],
+    "source_path": "ui",
+    "entry_file": "ContentIntelligencePage.tsx",
+    "menu": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "Content Intelligence",
+        "icon": "brain-circuit",
+        "order": 36
+      }
+    ]
   }
 }

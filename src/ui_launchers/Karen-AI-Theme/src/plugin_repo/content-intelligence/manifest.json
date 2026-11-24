@@ -1,0 +1,47 @@
+{
+  "id": "content-intelligence",
+  "name": "content-intelligence",
+  "plugin_id": "content-intelligence",
+  "gui_manifest_version": "1.0",
+  "display_name": "Content Intelligence",
+  "version": "0.2.0",
+  "description": "Standalone bounded analysis of host-authorized text sources with a governed investigation workspace.",
+  "category": "integration",
+  "entrypoint": "handler:MainExtension",
+  "capabilities": {
+    "provides_ui": true,
+    "provides_api": false,
+    "prompt_first": true
+  },
+  "ui": {
+    "hook_zones": [
+      {
+        "zone": "sidebar.plugins",
+        "label": "Content Intelligence",
+        "icon": "brain-circuit",
+        "order": 36
+      }
+    ]
+  },
+  "rbac": {
+    "allowed_roles": [
+      "user",
+      "admin",
+      "developer"
+    ],
+    "default_enabled": false
+  },
+  "entry": {
+    "id": "content-intelligence-main",
+    "default": true,
+    "entry_file": "ContentIntelligencePage.tsx"
+  },
+  "tags": [
+    "documents",
+    "folders",
+    "knowledge",
+    "local-first",
+    "retrieval"
+  ],
+  "purpose": "Analyze authorized invocation-supplied content without accessing files, global memory or external indexes."
+}
