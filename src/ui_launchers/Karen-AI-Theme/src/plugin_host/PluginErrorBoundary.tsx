@@ -14,6 +14,8 @@ import React from 'react';
 export interface PluginErrorBoundaryProps {
   pluginId: string;
   children: React.ReactNode;
+  onRenderError?: () => void;
+  onReload?: () => void;
 }
 
 export interface PluginErrorBoundaryState {
@@ -37,6 +39,7 @@ export class PluginErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
+    this.props.onRenderError?.();
     console.error(
       `[PluginErrorBoundary] Plugin "${this.props.pluginId}" crashed:`,
       error,
@@ -45,6 +48,7 @@ export class PluginErrorBoundary extends React.Component<
   }
 
   handleReload = () => {
+    this.props.onReload?.();
     this.setState({ hasError: false, error: null });
   };
 
