@@ -25,7 +25,11 @@ export const test = base.extend<{ approvedDeploymentAccess: void }>({
       const platform = process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM || 'vercel';
       const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
       const approvedUrl = process.env.KAREN_BASE_URL;
-      if (!baseURL || !approvedUrl || !['vercel', 'docker'].includes(platform)) {
+      const allowLocal =
+        platform === 'local' &&
+        process.env.KAREN_LOCAL_SEARCH_ACCEPTANCE === '1';
+
+      if (!baseURL || !approvedUrl || (!['vercel', 'docker'].includes(platform) && !allowLocal)) {
         throw new Error('Missing approved search deployment URL or platform');
       }
 
@@ -42,12 +46,31 @@ export const test = base.extend<{ approvedDeploymentAccess: void }>({
         url.port === '' &&
         !url.username && !url.password &&
         url.pathname === '/' && !url.search && !url.hash;
+
+      const validLocalOrigin = (url: URL): boolean =>
+        url.protocol === 'http:' &&
+        (url.hostname === 'localhost' || url.hostname === '127.0.0.1') &&
+        (url.port === '8010' || url.port === '3000') &&
+        !url.username && !url.password &&
+        url.pathname === '/' && !url.search && !url.hash;
+
       if (
-        !validOrigin(approved) ||
-        !validOrigin(configured) ||
-        approved.origin !== configured.origin
+        !(allowLocal && validLocalOrigin(approved) && validLocalOrigin(configured) && approved.origin === configured.origin) &&
+        (
+          !validOrigin(approved) ||
+          !validOrigin(configured) ||
+          approved.origin !== configured.origin
+        )
       ) {
         throw new Error('Refusing authenticated search on an unapproved HTTPS origin');
+      }
+
+      if (platform === 'local') {
+        if (bypassSecret !== undefined) {
+          throw new Error('Local acceptance must not inherit a Vercel bypass secret');
+        }
+        await use();
+        return;
       }
 
       if (platform === 'docker') {

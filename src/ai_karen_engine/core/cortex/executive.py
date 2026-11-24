@@ -50,7 +50,8 @@ class CortexExecutionDecider:
         reason_codes: List[str] = []
 
         user_content = str(meta.get("clarification_effective_query") or self._extract_user_content(request.messages))
-        analysis = await self._analyze_request(user_content, ctx)
+        has_search_options = getattr(request, "search_retrieval_options", None) is not None
+        analysis = await self._analyze_request(user_content, ctx, has_search_options=has_search_options)
 
         explicit_graph = bool(meta.get("graph_required") or meta.get("force_graph"))
         if explicit_graph:
@@ -350,12 +351,12 @@ class CortexExecutionDecider:
         return str(messages[-1].get("content", ""))
 
     async def _analyze_request(
-        self, text: str, ctx: ChatExecutionContext
+        self, text: str, ctx: ChatExecutionContext, has_search_options: bool = False
     ) -> Dict[str, Any]:
         if not text or not text.strip():
             return self._default_analysis()
 
-        capability_decision = resolve_capability_decision(text)
+        capability_decision = resolve_capability_decision(text, has_search_options=has_search_options)
 
         try:
             analysis = await self._intelligence.analyze(
@@ -389,6 +390,7 @@ class CortexExecutionDecider:
             capability_decision = resolve_capability_decision(
                 text,
                 confidence=float(confidence),
+                has_search_options=has_search_options,
             )
             direct_capability = self._apply_direct_capability_route(
                 capability_decision,
