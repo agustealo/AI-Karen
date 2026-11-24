@@ -47,7 +47,7 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedRail", () => ({
 vi.mock("@/components/chat/copilotkit/KarenCopilotControlledChat", () => ({
   KarenCopilotControlledChat: (props: Record<string, unknown>) => {
     sdk.controlled.push(props);
-    return <div data-testid="copilot-controlled-chat" />;
+    return <div data-testid="copilot-controlled-chat">{props.personaControls as React.ReactNode}</div>;
   },
 }));
 
@@ -85,7 +85,7 @@ describe("Karen CopilotKit chat compatibility shell", () => {
   it("binds the current canonical conversation UUID to CopilotKit's thread", () => {
     render(<KarenCopilotChat conversationId={CONVERSATION} />);
     expect(screen.getByTestId("copilot-controlled-chat")).toBeTruthy();
-    expect(screen.getByTestId("karen-copilot-persona-footer")).toBeTruthy();
+    expect(screen.getByTestId("copilot-controlled-chat").contains(screen.getByTestId("backend-governed-persona"))).toBe(true);
     expect(screen.getByTestId("backend-governed-persona")).toBeTruthy();
     expect(screen.getByTestId("verified-context-rail")).toBeTruthy();
     expect(sdk.controlled[0].conversationId).toBe(CONVERSATION);
