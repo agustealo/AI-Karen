@@ -154,6 +154,7 @@ export function FileExplorerInventoryHost({
   mode = 'analysis',
   consumer = 'file-explorer',
   onAttach,
+  renderAnalysis,
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
   /** Selection mode exposes metadata only; it never mounts the analysis workflow. */
@@ -161,6 +162,8 @@ export function FileExplorerInventoryHost({
   /** Trusted UI composition selects a fixed endpoint; the server authorizes it. */
   consumer?: InventoryConsumer;
   onAttach?: (references: { source_id: string; revision: string }[]) => void;
+  /** Optional layout slot; authorization and selection remain host-owned. */
+  renderAnalysis?: (panel: ReactNode, props: FileExplorerInventoryProps) => ReactNode;
 }) {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const principalKey = useMemo(() => {
@@ -331,6 +334,14 @@ export function FileExplorerInventoryHost({
   const selectionKey = props.pageKey + ':' +
     selectedAnalysisSources.map((source) => source.source_id + ':' + source.revision).join('|');
 
+  const panel = selectedAnalysisSources.length > 0 ? (
+    <ContentIntelligenceSelectionPanel
+      key={selectionKey}
+      sources={selectedAnalysisSources}
+      onRefreshInventory={onRefresh}
+    />
+  ) : null;
+
   return (
     <>
       {children(props)}
@@ -343,13 +354,7 @@ export function FileExplorerInventoryHost({
           Attach selected files ({selectedDraftSources.length})
         </button>
       )}
-      {selectedAnalysisSources.length > 0 && (
-        <ContentIntelligenceSelectionPanel
-          key={selectionKey}
-          sources={selectedAnalysisSources}
-          onRefreshInventory={onRefresh}
-        />
-      )}
+      {mode === 'analysis' && (renderAnalysis ? renderAnalysis(panel, props) : panel)}
     </>
   );
 }
