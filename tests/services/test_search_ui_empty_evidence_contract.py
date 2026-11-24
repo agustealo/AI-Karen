@@ -11,5 +11,7 @@ def test_empty_retrieval_renders_truthful_state():
     ).read_text(encoding="utf-8")
     assert "No search evidence retrieved" in ui
     assert "No sources found" in ui
+    assert "No result or citation has been verified." in ui
+    assert "Search failed: no evidence" in ui
     assert "Search could not be completed" in ui
     assert "response?.summary ||" not in ui.split("const featuredPreview =", 1)[1].split("const featuredHref", 1)[0]

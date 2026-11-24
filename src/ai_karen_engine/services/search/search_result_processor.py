@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import html
 import logging
-import math
 import re
 from typing import Any, Dict, List
 from urllib.parse import urlparse
@@ -188,9 +187,12 @@ class SearchResultProcessor:
         matched = sum(1 for word in query_words if frequencies.get(word, 0))
         if not matched:
             return 0.0
-        # Favor coverage of the whole query, then damp repetition; normalize
-        # long pages so repeated incidental words cannot saturate a fixed cap.
-        term_signal = sum(math.log1p(frequencies.get(word, 0)) for word in query_words)
+        raw_score = float(sum(min(frequencies.get(word, 0), 5) for word in query_words))
+        coverage = matched / len(query_words)
+        score = raw_score * coverage
+        if content.startswith("#"):
+            score *= 1.5
         total_terms = sum(frequencies.values())
-        return round((matched / len(query_words)) * term_signal /
-                     math.sqrt(max(1.0, total_terms / 100.0)), 6)
+        if len(frequencies) > 1 and total_terms > 10:
+            score = round(score / (1.0 + 0.005 * (total_terms - 10)), 4)
+        return score

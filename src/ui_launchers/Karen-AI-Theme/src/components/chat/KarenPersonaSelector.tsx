@@ -95,7 +95,7 @@ export function KarenPersonaSelector({
   }
   if (!preferences.show_persona_selector) return null;
 
-  return <div className="flex min-w-0 items-center gap-2">
+  return <div className="flex min-w-0 flex-wrap items-center gap-2">
     <label htmlFor="karen-persona-selector" className="text-xs text-muted-foreground">Persona</label>
     <select id="karen-persona-selector" aria-label="Active Karen persona"
       value={preferences.active_persona_id || ""} disabled={saving || stale}

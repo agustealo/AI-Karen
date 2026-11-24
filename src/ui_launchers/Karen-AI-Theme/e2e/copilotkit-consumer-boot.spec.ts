@@ -1154,6 +1154,34 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       await page.waitForTimeout(750);
       expect(failures, "No chunk fetch errors or uncaught page exceptions are permitted").toEqual([]);
     }
+
+    // KUI: the runtime preference toolbar and verified evidence rail must
+    // share a pixel-aligned desktop row, without hiding context on mobile.
+    const layoutShell = page.getByTestId("karen-copilot-consumer-chat");
+    const modelDiscovery = layoutShell.getByTestId("karen-copilot-model-discovery");
+    const responseContext = layoutShell.getByTestId("karen-copilot-response-context");
+    const mobileContext = layoutShell.getByTestId("karen-copilot-mobile-intelligence");
+    for (const width of [390, 768, 1024, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(modelDiscovery.getByRole("heading", { name: "Provider / Model" })).toBeVisible();
+
+      if (width >= 1280) {
+        await expect(responseContext).toBeVisible();
+        await expect(mobileContext).toBeHidden();
+        const modelBounds = await modelDiscovery.boundingBox();
+        const contextBounds = await responseContext.boundingBox();
+        expect(modelBounds).not.toBeNull();
+        expect(contextBounds).not.toBeNull();
+        expect(Math.abs(modelBounds!.y - contextBounds!.y),
+          `Runtime and response context top edges differ at ${width}px`).toBeLessThanOrEqual(1);
+        expect(contextBounds!.x,
+          `Response context must be immediately right of Provider / Model at ${width}px`)
+          .toBeGreaterThanOrEqual(modelBounds!.x + modelBounds!.width - 1);
+      } else {
+        await expect(responseContext).toBeHidden();
+        await expect(mobileContext).toBeVisible();
+      }
+    }
   });
   // KCON-770: operator-authorized runtime failure only. This test never
   // manufactures a response or overrides network requests in Playwright.

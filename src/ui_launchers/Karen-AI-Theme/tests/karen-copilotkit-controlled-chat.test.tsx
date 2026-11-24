@@ -197,6 +197,21 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.runAgent).not.toHaveBeenCalled();
   });
 
+  it("keeps one native composer while persona and voice share its accessory bar", () => {
+    const view = render(<KarenCopilotControlledChat conversationId={THREAD}
+      personaControls={<button type="button">Persona preference</button>} />);
+    const accessories = screen.getByTestId("karen-copilot-composer-accessories");
+    expect(accessories.contains(screen.getByRole("button", { name: "Persona preference" }))).toBe(true);
+    expect(accessories.contains(screen.getByTestId("shared-local-dictation"))).toBe(true);
+    expect(screen.getAllByTestId("native-copilot-view")).toHaveLength(1);
+    act(() => input().onChange("Keep this draft"));
+    view.rerender(<KarenCopilotControlledChat conversationId={THREAD}
+      personaControls={<button type="button">Updated preference</button>} />);
+    expect(input().value).toBe("Keep this draft");
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+  });
+
   it("keeps an unsent native draft controlled and never starts inference while typing", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     expect(input().value).toBe("");

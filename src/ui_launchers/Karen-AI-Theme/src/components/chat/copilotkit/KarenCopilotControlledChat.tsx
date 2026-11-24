@@ -11,6 +11,7 @@
  */
 import { CopilotChatView, useCopilotKit } from "@copilotkit/react-core/v2";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { KarenCopilotVoiceDock } from "./KarenCopilotVoiceDock";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
@@ -58,9 +59,11 @@ function validStopReceipt(value: unknown): value is StopReceipt {
 export function KarenCopilotControlledChat({
   conversationId,
   onBusyChange,
+  personaControls,
 }: {
   conversationId: string;
   onBusyChange?: (busy: boolean) => void;
+  personaControls?: ReactNode;
 }) {
   const { agent, isReady } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
@@ -442,9 +445,6 @@ export function KarenCopilotControlledChat({
           </div>
         </div>
       )}
-      {draftStatus === "ready" && !draftSynced && <p role="status" className="px-3 text-xs text-muted-foreground">
-        Draft changes pending save…
-      </p>}
       <div data-testid="karen-copilot-sdk-chat"
         className="flex min-h-0 min-w-0 flex-1 flex-col">
         <CopilotChatView
@@ -458,10 +458,15 @@ export function KarenCopilotControlledChat({
           input={{ value: draft, onChange: onDraftChange, onSubmitMessage, onStop }}
         />
       </div>
-      <KarenCopilotVoiceDock
-        port={draftPort}
-        disabled={draftStatus !== "ready" || agent.isRunning || failedSubmission !== null}
-      />
+      <div data-testid="karen-copilot-composer-accessories" aria-label="Composer preferences"
+        className="shrink-0 min-w-0 border-t border-border/60 bg-background/95">
+        {draftStatus === "ready" && !draftSynced && <p role="status" className="px-3 pt-1 text-xs text-muted-foreground">
+          Draft changes pending save…
+        </p>}
+        <KarenCopilotVoiceDock port={draftPort}
+          disabled={draftStatus !== "ready" || agent.isRunning || failedSubmission !== null}
+          personaControls={personaControls} />
+      </div>
     </div>
   );
 }

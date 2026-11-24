@@ -8,6 +8,7 @@
  * never submits a message, chooses a model for ChatRuntime or saves audio.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { AudioLines, RefreshCw, Settings2, ShieldCheck } from "lucide-react";
 
 import { KarenBrowserDictationCapture } from "../KarenBrowserDictationCapture";
@@ -40,9 +41,11 @@ function installedSelection(
 export function KarenCopilotVoiceDock({
   port,
   disabled = false,
+  personaControls,
 }: {
   port: KarenVoiceDraftPort;
   disabled?: boolean;
+  personaControls?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const playbackPhase = useAssistantPlaybackPhase();
@@ -194,22 +197,25 @@ export function KarenCopilotVoiceDock({
     <section
       data-testid="karen-copilot-voice-dock"
       aria-label="Copilot voice controls"
-      className="shrink-0 border-t border-border/60 bg-card/70 px-3 py-2 sm:px-4"
+      className="shrink-0 min-w-0 px-3 py-2 sm:px-4"
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+        {personaControls && <div data-testid="karen-copilot-persona-footer" className="min-w-0 max-w-full">
+          {personaControls}
+        </div>}
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
             <AudioLines className="h-4 w-4 text-primary" aria-hidden="true" />
             Voice
           </span>
           <span data-testid="karen-copilot-voice-listening"
-            className="text-xs text-muted-foreground">
+            className="sr-only">
             Listen: {disabled ? "Dictation paused" :
               listening === "ready" ? "Local dictation ready" :
               listening === "checking" ? "Checking…" : "Local dictation unavailable"}
           </span>
           <span data-testid="karen-copilot-voice-output"
-            className="max-w-full truncate text-xs text-muted-foreground"
+            className={open ? "max-w-full truncate text-xs text-muted-foreground" : "sr-only"}
             title={outputLabel}>
             Speak: {outputLabel}
           </span>
