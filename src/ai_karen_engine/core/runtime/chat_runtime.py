@@ -5033,6 +5033,7 @@ class ChatRuntime:
                 "topology": plan.topology.value,
             },
             token_sink=token_sink,
+            local_only=bool(request.attachment_references),
             reserve_additional_model_call=meter.consume_model_call,
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
