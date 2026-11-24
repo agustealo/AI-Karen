@@ -177,6 +177,11 @@ class ChatRuntime:
         """All-or-nothing selection and bounded content admission before inference."""
         references = request.attachment_references
         if references == []:
+            if (
+                plan.resource_scope.get("attachment_references")
+                or request.context.has_runtime_attachment_scope()
+            ):
+                raise AttachmentAdmissionDenied("attachment_selection_changed")
             return
         from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
         from ai_karen_engine.services.database.repositories.artifact_store import (
@@ -284,12 +289,19 @@ class ChatRuntime:
             )
             raise AttachmentAdmissionDenied("attachment_admission_denied") from None
 
+    @staticmethod
+    def _attachment_restriction_required(request: ChatExecutionRequest) -> bool:
+        return bool(
+            request.attachment_references
+            or request.context.has_runtime_attachment_scope()
+        )
+
     def _require_supported_attachment_execution(
         self, request: ChatExecutionRequest, decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan,
     ) -> None:
         """Reject execution paths without a verified attachment prompt contract."""
-        if not request.attachment_references:
+        if not ChatRuntime._attachment_restriction_required(request):
             return
         if (
             decision.topology.value != "direct"
@@ -310,7 +322,7 @@ class ChatRuntime:
         request: ChatExecutionRequest,
     ) -> List[Dict[str, Any]]:
         messages = [dict(message) for message in request.messages]
-        if not request.attachment_references:
+        if not ChatRuntime._attachment_restriction_required(request):
             return messages
         from ai_karen_engine.services.database.repositories.conversation_repository import (
             validate_draft_attachment_references,
@@ -851,7 +863,8 @@ class ChatRuntime:
                 # to invoke a different model or persist a fallback answer.
                 fallback = (
                     None
-                    if request.attachment_references or isinstance(exc, AttachmentAdmissionDenied)
+                    if ChatRuntime._attachment_restriction_required(request)
+                    or isinstance(exc, AttachmentAdmissionDenied)
                     or str(exc) == "memory_source_revoked_or_unverifiable"
                     else await build_runtime_fallback(
                         runtime=self,
@@ -1710,7 +1723,7 @@ class ChatRuntime:
                 # delivered to the client by a different provider/model.
                 if (
                     _stream_fallback_allowed(streamed_text)
-                    and not request.attachment_references
+                    and not ChatRuntime._attachment_restriction_required(request)
                     and not isinstance(exc, AttachmentAdmissionDenied)
                     and str(exc) != "memory_source_revoked_or_unverifiable"
                 ):
@@ -5090,7 +5103,7 @@ class ChatRuntime:
                 "topology": plan.topology.value,
             },
             token_sink=token_sink,
-            local_only=bool(request.attachment_references),
+            local_only=ChatRuntime._attachment_restriction_required(request),
             reserve_additional_model_call=meter.consume_model_call,
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
@@ -5886,7 +5899,7 @@ class ChatRuntime:
 
         assembly_started = time.perf_counter()
         result = await get_prompt_runtime_service().assemble_prompt(assembly_request)
-        if request.attachment_references:
+        if ChatRuntime._attachment_restriction_required(request):
             expected = [
                 (item.get("role"), item.get("content"))
                 for item in assembly_request.messages
