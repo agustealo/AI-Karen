@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -322,6 +323,7 @@ class ChatExecutionContext:
                 or item.get("source_id") != source_id
                 or item.get("revision") != revision
                 or not isinstance(item.get("text"), str)
+                or hashlib.sha256(item["text"].encode("utf-8")).hexdigest() != revision
                 for item, (source_id, revision) in zip(documents, current[2])
             )
             or "_runtime_attachment_documents" in self.__dict__
