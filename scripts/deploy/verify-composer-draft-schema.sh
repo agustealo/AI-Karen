@@ -87,6 +87,17 @@ BEGIN
     IF NOT revision_ok THEN
         RAISE EXCEPTION 'composer_draft_revision_contract_missing';
     END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute
+        WHERE attrelid = drafts AND attname = 'attachment_references'
+          AND atttypid = 'jsonb'::regtype AND attnotnull AND NOT attisdropped
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = drafts AND conname = 'ck_composer_attachment_references_array'
+          AND contype = 'c' AND convalidated
+    ) THEN
+        RAISE EXCEPTION 'composer_draft_attachment_contract_missing: apply canonical migration 73';
+    END IF;
     -- Run against the API's actual runtime database role. Schema/RLS
     -- existence alone cannot prove that this role can read and CAS drafts.
     -- Do not assume that a migrator/superuser connection is the API role.

@@ -39,6 +39,9 @@ on:
       - "tests/architecture/test_*tenant*.py"
       - "tests/architecture/test_*langgraph*.py"
       - "tests/integration/test_chat_*.py"
+      - "tests/services/database/repositories/test_composer_attachment_references.py"
+      - "src/ai_karen_engine/services/database/repositories/*conversation_repository.py"
+      - "supabase/migrations/*composer_draft*.sql"
       - "scripts/ci/start-postgres-container.sh"
       - "requirements/ci/chat.txt"
       - ".github/workflows/chat-system-burn.yml"
@@ -328,6 +331,14 @@ jobs:
 
       - name: Burn canonical transcript isolation against real PostgreSQL
         run: pytest tests/integration/test_chat_transcript_postgres_isolation.py -q
+
+      - name: Prove revision-bound composer attachments against PostgreSQL
+        env:
+          KAREN_TEST_DISPOSABLE_DATABASE: "1"
+        run: |
+          pytest -q tests/services/database/repositories/test_composer_attachment_references.py
+          pytest -q tests/integration/test_chat_composer_attachment_postgres.py
+
 
       - name: Run provider authority contract
         run: pytest tests/architecture/test_provider_chat_authority.py -q

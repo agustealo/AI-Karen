@@ -23,6 +23,7 @@ from ai_karen_engine.services.database.repositories.conversation_repository impo
     ConversationRepository,
     Message,
     RepositoryResult,
+    validate_draft_attachment_references,
 )
 from ai_karen_engine.services.database.repositories.observability import (
     instrument_repository,
@@ -462,6 +463,24 @@ class PostgresConversationRepository(ConversationRepository):
     async def get_composer_draft(
         self, conversation_id: str, tenant_id: str, *, user_id: str,
     ) -> RepositoryResult[Dict[str, Any]]:
+        return await self._get_composer_draft(
+            conversation_id, tenant_id, user_id=user_id, include_attachments=False,
+        )
+
+    @instrument_repository(
+        operation="get_composer_draft_with_attachments", repository="PostgresConversationRepository"
+    )
+    async def get_composer_draft_with_attachments(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        return await self._get_composer_draft(
+            conversation_id, tenant_id, user_id=user_id, include_attachments=True,
+        )
+
+    async def _get_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        include_attachments: bool,
+    ) -> RepositoryResult[Dict[str, Any]]:
         """Read only an authorized unsent draft; never expose another user."""
         try:
             async with await self._session() as session:
@@ -492,7 +511,7 @@ class PostgresConversationRepository(ConversationRepository):
                         return RepositoryResult(success=False, error="conversation_not_found")
                     query = await session.execute(
                         text("""
-                            SELECT draft_text, revision
+                            SELECT draft_text, revision, attachment_references
                             FROM public.conversation_composer_drafts
                             WHERE conversation_id = CAST(:conversation AS uuid)
                               AND tenant_id = CAST(:tenant AS uuid)
@@ -501,11 +520,17 @@ class PostgresConversationRepository(ConversationRepository):
                         params,
                     )
                     row = query.mappings().one_or_none()
+                    references = validate_draft_attachment_references(
+                        row["attachment_references"] if row else []
+                    )
+                    if references and not include_attachments:
+                        return RepositoryResult(success=False, error="composer_attachment_client_required")
                     return RepositoryResult(
                         success=True,
                         data={
                             "text": row["draft_text"] if row else "",
                             "revision": int(row["revision"]) if row else 0,
+                            **({"attachment_references": references} if include_attachments else {}),
                         },
                     )
         except Exception as exc:
@@ -528,6 +553,33 @@ class PostgresConversationRepository(ConversationRepository):
     async def put_composer_draft(
         self, conversation_id: str, tenant_id: str, *, user_id: str,
         content: str, expected_revision: int,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        return await self._put_composer_draft(
+            conversation_id, tenant_id, user_id=user_id, content=content,
+            expected_revision=expected_revision, attachment_references=None,
+        )
+
+    @instrument_repository(
+        operation="put_composer_draft_with_attachments", repository="PostgresConversationRepository"
+    )
+    async def put_composer_draft_with_attachments(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        content: str, expected_revision: int,
+        attachment_references: list[dict[str, str]],
+    ) -> RepositoryResult[Dict[str, Any]]:
+        try:
+            references = validate_draft_attachment_references(attachment_references)
+        except ValueError:
+            return RepositoryResult(success=False, error="composer_attachment_invalid")
+        return await self._put_composer_draft(
+            conversation_id, tenant_id, user_id=user_id, content=content,
+            expected_revision=expected_revision, attachment_references=references,
+        )
+
+    async def _put_composer_draft(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        content: str, expected_revision: int,
+        attachment_references: Optional[list[dict[str, str]]],
     ) -> RepositoryResult[Dict[str, Any]]:
         """One SQL CAS boundary prevents stale windows overwriting newer drafts.
 
@@ -552,6 +604,8 @@ class PostgresConversationRepository(ConversationRepository):
                         "owner": user_id,
                         "content": content,
                         "expected": expected_revision,
+                        "attachments": json.dumps(attachment_references or []),
+                        "attachment_aware": attachment_references is not None,
                     }
                     await session.execute(
                         text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
@@ -573,14 +627,31 @@ class PostgresConversationRepository(ConversationRepository):
                     )
                     if owned.scalar_one_or_none() is None:
                         return RepositoryResult(success=False, error="conversation_not_found")
+                    # Lock live canonical metadata rows in deterministic order.
+                    # This validates references only; runtime must reauthorize bytes.
+                    for reference in sorted(attachment_references or [], key=lambda item: item["source_id"]):
+                        matched = await session.execute(
+                            text("""
+                                SELECT file_id FROM public.files
+                                WHERE file_id = :source_id
+                                  AND tenant_id = :tenant
+                                  AND owner_user_id = CAST(:owner AS uuid)
+                                  AND sha256 = :revision
+                                  AND deleted_at IS NULL
+                                FOR SHARE
+                            """),
+                            {**params, **reference},
+                        )
+                        if matched.scalar_one_or_none() is None:
+                            return RepositoryResult(success=False, error="composer_attachment_unavailable")
                     statement = await session.execute(
                         text("""
                             INSERT INTO public.conversation_composer_drafts AS d
                               (conversation_id, tenant_id, user_id,
-                               draft_text, revision, updated_at)
+                               draft_text, revision, updated_at, attachment_references)
                             SELECT CAST(:conversation AS uuid),
                                    CAST(:tenant AS uuid), CAST(:owner AS uuid),
-                                   :content, 1, clock_timestamp()
+                                   :content, 1, clock_timestamp(), CAST(:attachments AS jsonb)
                             WHERE :expected = 0 OR EXISTS (
                                 SELECT 1 FROM public.conversation_composer_drafts
                                 WHERE conversation_id = CAST(:conversation AS uuid)
@@ -590,12 +661,14 @@ class PostgresConversationRepository(ConversationRepository):
                             )
                             ON CONFLICT (conversation_id) DO UPDATE
                             SET draft_text = EXCLUDED.draft_text,
+                                attachment_references = EXCLUDED.attachment_references,
                                 revision = d.revision + 1,
                                 updated_at = clock_timestamp()
                             WHERE d.tenant_id = EXCLUDED.tenant_id
                               AND d.user_id = EXCLUDED.user_id
                               AND d.revision = :expected
-                            RETURNING revision, draft_text
+                              AND (:attachment_aware OR d.attachment_references = '[]'::jsonb)
+                            RETURNING revision, draft_text, attachment_references
                         """),
                         params,
                     )
@@ -607,6 +680,8 @@ class PostgresConversationRepository(ConversationRepository):
                     return RepositoryResult(success=True, data={
                         "text": result["draft_text"],
                         "revision": int(result["revision"]),
+                        **({"attachment_references": validate_draft_attachment_references(result["attachment_references"])}
+                           if attachment_references is not None else {}),
                     })
         except Exception as exc:
             # Only a bounded SQLSTATE-derived class crosses this repository
