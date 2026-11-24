@@ -144,8 +144,11 @@ function assertInventoryPage(data: unknown): InventoryPage {
 
 export function FileExplorerInventoryHost({
   children,
+  mode = 'analysis',
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
+  /** Selection mode exposes metadata only; it never mounts the analysis workflow. */
+  mode?: 'analysis' | 'selection';
 }) {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const principalKey = useMemo(() => {
@@ -224,8 +227,8 @@ export function FileExplorerInventoryHost({
     };
   }, [principalKey, authLoading, request]);
 
-  const currentPage = page?.principalKey === principalKey ? page : null;
-  const currentError = errorState?.principalKey === principalKey ? errorState.message : null;
+  const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
+  const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
 
   const onSelect = useCallback((references: ExplorerSelection[]) => {
     if (!currentPage || loading || currentError) {
@@ -300,7 +303,7 @@ export function FileExplorerInventoryHost({
     pageKey: principalKey + ':' + (currentPage?.generation ?? 'pending'),
   };
 
-  const selectedAnalysisSources = currentPage && !currentError && !loading
+  const selectedAnalysisSources = mode === 'analysis' && currentPage && !currentError && !loading
     ? selectedSourceIds.flatMap((id) => {
       const item = currentPage.items.find((entry) => entry.source_id === id);
       return item ? [{ source_id: item.source_id, revision: item.revision }] : [];
