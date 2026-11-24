@@ -579,7 +579,12 @@ def _plugin_inspection_decision(
     )
 
 
-def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> CapabilityDecision:
+def resolve_capability_decision(
+    query: str,
+    *,
+    confidence: float = 0.9,
+    has_search_options: bool = False,
+) -> CapabilityDecision:
     # Exact, owner-scoped artifact viewing outranks broad search and model intents.
     # A parsed identifier is a lookup request, not permission to read it.
     if parse_owner_code_artifact_view(query) is not None:
@@ -654,6 +659,23 @@ def resolve_capability_decision(query: str, *, confidence: float = 0.9) -> Capab
                     else []
                 ),
             )
+
+    # Explicit general search retrieval options route any non-private query
+    # to search.general when no other specialized capability matched.
+    if has_search_options and not (private_update or private_happening):
+        route = CAPABILITY_ROUTES["search.general"]
+        return CapabilityDecision(
+            intent="search.general",
+            confidence=max(confidence, 0.9),
+            requires_tool=True,
+            requires_live_data=bool(route.get("requires_live_data", False)),
+            capability=route.get("required_capability"),
+            preferred_plugin=route.get("preferred_plugin"),
+            handler=route.get("handler"),
+            requires_chat_capable_model=bool(route.get("allow_llm_only", False)),
+            allow_llm_only=bool(route.get("allow_llm_only", False)),
+            missing_requirements=(),
+        )
 
     # Generic "set up" wording is a lower-priority plugin fallback.
     # Registered automation, timer, time, and weather intents win first.
