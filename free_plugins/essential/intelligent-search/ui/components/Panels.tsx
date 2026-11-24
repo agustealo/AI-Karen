@@ -23,8 +23,6 @@ const sendToChat = (item: ChatInjectItem | undefined) => {
   // This is a bounded user request, never a forged assistant answer.
   const url = typeof item.url === 'string' && (item.url.startsWith('https://') || item.url.startsWith('http://'))
     ? item.url.slice(0, 2000) : '';
-  const excerpt = String(item.snippet || item.content || item.full_content || item.markdown || '')
-    .slice(0, 1200);
   const title = String(item.title || 'Search result').slice(0, 200);
   const articleId = typeof item.article_id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(item.article_id)
     ? item.article_id : '';
@@ -36,7 +34,7 @@ const sendToChat = (item: ChatInjectItem | undefined) => {
     url ? `Source URL (independently verify): ${url}` : '',
     articleId ? `Stored article reference (requires server-side user/tenant authorization): ${articleId}` : '',
     `Reported evidence level: ${evidenceKind}`,
-    excerpt ? `Untrusted excerpt:\\n${excerpt}` : 'No excerpt is available.',
+    'No webpage text is injected; the runtime must retrieve and verify source evidence independently.',
   ].filter(Boolean).join('\\n\\n');
 
   const event = new CustomEvent('karen:inject-message', { 

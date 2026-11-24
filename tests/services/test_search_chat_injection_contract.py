@@ -8,10 +8,11 @@ PANEL = (Path(__file__).resolve().parents[2] /
 
 def test_search_handoff_is_bounded_user_request():
     source = PANEL.read_text(encoding="utf-8")
-    assert "Please explain this search evidence" in source
-    assert "Untrusted excerpt" in source
-    assert ".slice(0, 1200)" in source
+    assert "Please independently research this source" in source
+    assert "Untrusted excerpt" not in source
+    assert "autoSubmit: false" in source
     assert "karen:inject-message" in source
+    assert "the runtime must retrieve and verify source evidence" in source
     assert "I found this information for you:" not in source
 
 
