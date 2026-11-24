@@ -90,14 +90,25 @@ describe('Intelligent Search human-first evidence presentation', () => {
     expect(screen.getByText(/Main menu Related posts/)).toBeTruthy();
   });
 
+  it('shows an honest error when the canonical chat has not accepted the draft', () => {
+    render(<ResultsPanel response={response()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare a question for Karen using these sources' }));
+    expect(screen.getByRole('alert').textContent).toContain('chat is not ready');
+  });
+
   it('prepares a user draft and never auto-submits untrusted source content', () => {
     const events: CustomEvent[] = [];
-    const handler = (event: Event) => events.push(event as CustomEvent);
+    const handler = (event: Event) => {
+      events.push(event as CustomEvent);
+      event.preventDefault();
+    };
     window.addEventListener('karen:inject-message', handler);
     try {
       render(<ResultsPanel response={response()} />);
       fireEvent.click(screen.getByRole('button', { name: 'Prepare a question for Karen using these sources' }));
       expect(events).toHaveLength(1);
+      expect(events[0].cancelable).toBe(true);
+      expect(events[0].defaultPrevented).toBe(true);
       expect(events[0].detail.role).toBe('user');
       expect(events[0].detail.autoSubmit).toBe(false);
       expect(events[0].detail.content).toContain('Question: What is the history of Jamaica?');

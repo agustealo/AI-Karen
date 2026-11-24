@@ -117,3 +117,20 @@ Focus on actual usability, not screenshot threshold tricks. If a screenshot fail
 - Fake confidence percentages, source ranking scores rendered as truth probability.
 - Hiding errors under “successful” empty response envelopes.
 - Treating plugin hook execution as permission to invoke another external integration.
+
+## KIS-UX-02A | Canonical source-to-chat draft handoff
+
+The main Search results and advanced source inspector emit a bounded, explicitly
+user-role, `autoSubmit: false` browser event only when the user chooses Ask Karen.
+The authenticated, mounted CopilotKit controller accepts the event only when its
+conversation and PostgreSQL-backed draft owner are ready. It appends to rather
+than overwrites existing unsent text and uses the existing revision-checked draft
+save path. No model run, new provider router, client-side evidence assertion or
+new draft store is introduced. The dashboard navigates only after local draft
+acceptance, while the composer separately reports pending/successful persistence.
+
+Search reports a visible failure when the event is unhandled. Untrusted source
+text remains excluded from the user-role draft. This is a handoff repair,
+**not** a claim that standalone Search now automatically composes an answer.
+Answer-first runtime synthesis and live signed-in browser acceptance at
+390, 768, 1024 and 1440 pixels remain separate release gates.

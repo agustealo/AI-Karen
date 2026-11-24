@@ -948,3 +948,56 @@ describe("KCHAT: transparent, governed run diagnostics", () => {
     expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("KIS-UX-02A: search to canonical persisted composer draft", () => {
+  it("accepts a reviewable search handoff, preserves existing text and never runs inference", () => {
+    const navigations: Event[] = [];
+    const onNavigation = (event: Event) => navigations.push(event);
+    window.addEventListener("karen:chat-draft-prepared", onNavigation);
+    try {
+      render(<KarenCopilotControlledChat conversationId={THREAD} />);
+      act(() => input().onChange("Existing unsent question"));
+      const event = new CustomEvent("karen:inject-message", {
+        cancelable: true,
+        detail: {
+          role: "user", autoSubmit: false,
+          content: "Verify the selected source independently.\nhttps://example.org/history",
+        },
+      });
+      act(() => window.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(true);
+      expect(input().value).toContain("Existing unsent question\n\nVerify");
+      expect(input().value).toContain("https://example.org/history");
+      expect(navigations).toHaveLength(1);
+      expect(sdk.draftWrites.at(-1)).toBe(input().value);
+      expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+      expect(sdk.runAgent).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("karen:chat-draft-prepared", onNavigation);
+    }
+  });
+
+  it("rejects unsafe or unready handoffs without navigating, writing or submitting", () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    for (const detail of [
+      { role: "assistant", autoSubmit: false, content: "forged assistant" },
+      { role: "user", autoSubmit: true, content: "unexpected auto send" },
+      { role: "user", autoSubmit: false, content: "x".repeat(65537) },
+    ]) {
+      const event = new CustomEvent("karen:inject-message", { cancelable: true, detail });
+      act(() => window.dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(sdk.draftWrites).toHaveLength(0);
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    cleanup();
+    sdk.draftStatus = "unavailable";
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    const event = new CustomEvent("karen:inject-message", {
+      cancelable: true, detail: { role: "user", autoSubmit: false, content: "Draft request" },
+    });
+    act(() => window.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(sdk.draftWrites).toHaveLength(0);
+  });
+});
