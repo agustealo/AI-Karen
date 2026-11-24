@@ -63,6 +63,16 @@ describe('Intelligent Search human-first evidence presentation', () => {
     expect(screen.queryByText(/People shaped the island/)).toBeNull();
   });
 
+  it('keeps the full untrusted extraction available only after explicit selection', () => {
+    render(<ResultsPanel response={response()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Read source' }));
+    expect(screen.queryByText(/Main menu Related posts/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'View original extracted text' }));
+    expect(screen.getByText(/Main menu Related posts/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to readable excerpts' }));
+    expect(screen.queryByText(/Main menu Related posts/)).toBeNull();
+  });
+
   it('prepares a user draft and never auto-submits untrusted source content', () => {
     const events: CustomEvent[] = [];
     const handler = (event: Event) => events.push(event as CustomEvent);
