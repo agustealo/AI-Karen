@@ -129,6 +129,14 @@ class TestLanguageAdaptationContracts:
         prompt = _EVIDENCE_FIRST_INSTRUCTION.lower()
         assert "this instruction does not authorize a tool, memory write, or disclosure" in prompt
 
+    def test_lang_21_no_literal_dialect_prime_token_leakage(self):
+        """Verify universal system prompt avoids literal Patwa greeting primes that leak into other dialects on small models."""
+        prompt = _EVIDENCE_FIRST_INSTRUCTION.lower()
+        assert "wa a gwaan" not in prompt
+        assert "wah gwaan" not in prompt
+        assert "never teach or generate phrase lists in dialects or languages you are not fluent in" in prompt
+        assert "not a request for a language lesson" in prompt
+
 
 class TestPromptAssemblyWithLanguageAdaptation:
     """Verifies that PromptAssembler properly bundles language adaptation and history context."""
