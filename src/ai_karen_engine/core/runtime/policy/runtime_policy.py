@@ -1153,9 +1153,19 @@ class RuntimePolicyEnforcer:
                 )
             except ValueError:
                 authorized_attachments = []
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
             if (
                 not authorized_attachments
                 or "data:read" not in request.requested_capabilities
+                or not get_rbac_manager().has_permission(principal, Permission.DATA_READ)
             ):
                 return PolicyDecision(
                     decision_id=decision_id,
