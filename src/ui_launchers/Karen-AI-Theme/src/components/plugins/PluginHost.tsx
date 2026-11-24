@@ -240,10 +240,8 @@ function PluginMountTracker({
   useEffect(() => {
     setPluginInstanceState(pluginId, instance, 'mounted');
 
-    // Host owns final release. A render failure is reported by its boundary.
-    return () => {
-      setPluginInstanceState(pluginId, instance, 'loading');
-    };
+    // Only the host releases this observation. Child cleanup must not
+    // resurrect it after host teardown or overwrite a boundary error.
   }, [pluginId, instance]);
 
   return <>{children}</>;
