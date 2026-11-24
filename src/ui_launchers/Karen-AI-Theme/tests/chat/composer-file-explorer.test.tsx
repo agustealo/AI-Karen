@@ -27,7 +27,8 @@ describe("Composer file browser", () => {
     fireEvent.click(button);
     expect(calls.inventory).toHaveBeenCalledWith("selection");
     expect(calls.plugin).toHaveBeenCalledWith("file-explorer", { authorized: false, items: [] });
-    expect(screen.getByText(/Selection is not attached/)).toBeTruthy();
+    expect(screen.getByText(/Attach selected files to save references in your draft/)).toBeTruthy();
+    expect(screen.getByText(/File contents are not read, and attached messages cannot be sent yet/)).toBeTruthy();
     fireEvent.click(button);
     expect(screen.queryByText("Shared file browser")).toBeNull();
     expect(button.getAttribute("aria-expanded")).toBe("false");

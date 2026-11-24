@@ -153,12 +153,14 @@ export function FileExplorerInventoryHost({
   children,
   mode = 'analysis',
   consumer = 'file-explorer',
+  onAttach,
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
   /** Selection mode exposes metadata only; it never mounts the analysis workflow. */
   mode?: 'analysis' | 'selection';
   /** Trusted UI composition selects a fixed endpoint; the server authorizes it. */
   consumer?: InventoryConsumer;
+  onAttach?: (references: { source_id: string; revision: string }[]) => void;
 }) {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const principalKey = useMemo(() => {
@@ -320,12 +322,27 @@ export function FileExplorerInventoryHost({
       return item ? [{ source_id: item.source_id, revision: item.revision, name: item.name }] : [];
     })
     : [];
+  const selectedDraftSources = mode === 'selection' && currentPage && !currentError && !loading
+    ? selectedSourceIds.flatMap(id => {
+      const item = currentPage.items.find(entry => entry.source_id === id);
+      return item ? [{ source_id: item.source_id, revision: item.revision }] : [];
+    })
+    : [];
   const selectionKey = props.pageKey + ':' +
     selectedAnalysisSources.map((source) => source.source_id + ':' + source.revision).join('|');
 
   return (
     <>
       {children(props)}
+      {mode === 'selection' && onAttach && selectedDraftSources.length > 0 && (
+        <button type="button" className="m-2 min-h-11 rounded-lg border border-input px-3 text-sm"
+          onClick={() => {
+            if (!currentPage || currentPage.generation !== generationRef.current) return;
+            onAttach(selectedDraftSources);
+          }}>
+          Attach selected files ({selectedDraftSources.length})
+        </button>
+      )}
       {selectedAnalysisSources.length > 0 && (
         <ContentIntelligenceSelectionPanel
           key={selectionKey}
