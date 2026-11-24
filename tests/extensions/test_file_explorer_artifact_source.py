@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
+
 ROOT = Path(__file__).resolve().parents[2]
 FILE = ROOT / "src/ai_karen_engine/extensions/plugins/file-explorer/artifact_source.py"
 SPEC = importlib.util.spec_from_file_location("file_explorer_artifact_source", FILE)
@@ -251,3 +253,7 @@ def test_malformed_repository_paging_evidence_fails_closed(metadata):
         run(SOURCE.ArtifactSourceAdapter(repo).list_owner_sources_page(
             tenant_id=TENANT, user_id=OWNER,
         ))
+
+
+def test_legacy_adapter_is_the_canonical_host_adapter():
+    assert SOURCE.ArtifactSourceAdapter is ArtifactSourceAdapter
