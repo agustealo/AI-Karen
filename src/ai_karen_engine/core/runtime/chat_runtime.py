@@ -264,6 +264,27 @@ class ChatRuntime:
             )
             raise AttachmentAdmissionDenied("attachment_admission_denied") from None
 
+    def _require_supported_attachment_execution(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+    ) -> None:
+        """Reject execution paths without a verified attachment prompt contract."""
+        if not request.attachment_references:
+            return
+        if (
+            decision.topology.value != "direct"
+            or decision.is_graph_required
+            or self._should_execute_authorized_reasoning(decision, plan)
+            or self._is_explicit_save_turn(request)
+            or self._grounded_personal_response(
+                decision, tenant_id=request.context.tenant_id,
+                user_id=request.context.user_id,
+            ) is not None
+            or get_direct_capability_executor().can_handle(decision)
+            or decision.intent in {"planner.create", "planner.update"}
+        ):
+            raise AttachmentAdmissionDenied("attachment_execution_topology_unsupported")
+
     @staticmethod
     def _prompt_messages_with_admitted_attachments(
         request: ChatExecutionRequest,
@@ -572,6 +593,7 @@ class ChatRuntime:
         meter.start()
         try:
             await self._admit_attachments(request, plan, meter)
+            self._require_supported_attachment_execution(request, decision, plan)
         except AttachmentAdmissionDenied:
             self._emitter.emit(
                 RuntimeEventType.REQUEST_FAILED,
@@ -1296,6 +1318,7 @@ class ChatRuntime:
         meter.start()
         try:
             await self._admit_attachments(request, plan, meter)
+            self._require_supported_attachment_execution(request, decision, plan)
         except AttachmentAdmissionDenied:
             denial = {
                 "status": "error",
