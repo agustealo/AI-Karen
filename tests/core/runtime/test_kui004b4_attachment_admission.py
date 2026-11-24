@@ -7,6 +7,8 @@ import hashlib
 import uuid
 from copy import copy
 from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -76,7 +78,7 @@ def selected(source_id=SOURCE, digest=DIGEST):
     return {"source_id": source_id, "revision": digest}
 
 
-async def authority(*, grant=True):
+async def authority(*, grant=True, bind=True):
     user_id, tenant_id = str(uuid.uuid4()), str(uuid.uuid4())
     context = ChatExecutionContext(
         user_id=user_id,
@@ -96,14 +98,21 @@ async def authority(*, grant=True):
         session_id=context.session_id,
         correlation_id=context.correlation_id,
         requested_capabilities=["data:read"] if grant else [],
+        attachment_references=[selected()] if grant else [],
         max_model_calls=2,
     ))
     assert decision.allowed
     policy.bind_chat_model_policy(context=context, decision=decision)
     plan = decision.to_authorized_plan()
+    if grant:
+        plan.resource_scope["attachment_references"] = [
+            dict(item) for item in
+            decision.runtime_constraints["attachment_references"]
+        ]
     meter = ExecutionBudgetMeter(plan.budget)
-    context.bind_runtime_model_authority(plan, meter)
-    meter.start()
+    if bind:
+        context.bind_runtime_model_authority(plan, meter)
+        meter.start()
     request = ChatExecutionRequest(
         messages=[{"role": "user", "content": "Summarize the attachment"}],
         context=context,
@@ -331,3 +340,83 @@ def test_invalid_attachment_config_denied_at_configuration(
             chat_attachment_max_total_bytes=total_limit,
             chat_attachment_integrity_total_timeout_seconds=deadline,
         )
+
+
+@pytest.mark.asyncio
+async def test_forged_source_revision_in_policy_plan_is_denied_before_binding():
+    request, plan, _meter = await authority(bind=False)
+    plan.resource_scope["attachment_references"] = [
+        selected(SECOND, "a" * 64)
+    ]
+    with pytest.raises(PermissionError, match="runtime_model_execution_authority_invalid"):
+        request.context.bind_runtime_model_authority(
+            plan, ExecutionBudgetMeter(plan.budget),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_denied_attachment_stops_both_entrypoints_before_provider_or_fallback(
+    monkeypatch, stream,
+):
+    request, plan, _meter = await authority(bind=False)
+    reader = BoundedReader({SOURCE: None})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    runtime._emitter = SimpleNamespace(emit=lambda *args, **kwargs: None)
+    runtime._trajectory_recorder = SimpleNamespace(
+        start=lambda: pytest.fail("Denied read must not begin model execution")
+    )
+    runtime._composition = SimpleNamespace(
+        expression_gateway=SimpleNamespace(
+            generate=lambda *args, **kwargs: pytest.fail(
+                "Denied read must never reach an inference provider"
+            )
+        )
+    )
+    monkeypatch.setattr(
+        runtime, "_bind_observability_context", lambda *_: None,
+    )
+    monkeypatch.setattr(
+        runtime, "_apply_selected_model_settings", lambda *_: None,
+    )
+    monkeypatch.setattr(
+        runtime, "_freeze_persona_snapshot",
+        AsyncMock(return_value=SimpleNamespace(status="none")),
+    )
+    monkeypatch.setattr(
+        runtime, "_prepare_conversation_continuation", AsyncMock(),
+    )
+    decision = SimpleNamespace(
+        intent="general_assist",
+        policy_decision_id=plan.policy_decision_id,
+        topology=SimpleNamespace(value="direct"),
+        execution_mode=SimpleNamespace(value="direct"),
+        reason_codes=[],
+        reasoning_modes=[],
+        max_model_calls=2,
+    )
+    monkeypatch.setattr(runtime, "_decide", AsyncMock(return_value=decision))
+    monkeypatch.setattr(
+        runtime, "_record_user_behavior_observation", AsyncMock(),
+    )
+    monkeypatch.setattr(
+        runtime, "_resolve_human_approval_gate", AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        runtime, "_resolve_gate", AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        runtime, "_build_authorized_plan", lambda *_: plan,
+    )
+    if stream:
+        events = [
+            item async for item in runtime.execute_stream(request)
+        ]
+        assert [str(event.type.value) for event in events] == ["error", "complete"]
+        assert all(event.metadata["error_code"] == "CHAT_ATTACHMENT_ADMISSION_DENIED"
+                   for event in events)
+    else:
+        result = await runtime.execute(request)
+        assert result.status.value == "error"
+        assert result.metadata.to_dict()["error_code"] == "CHAT_ATTACHMENT_ADMISSION_DENIED"
+    assert reader.calls
