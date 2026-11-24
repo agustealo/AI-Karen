@@ -31,6 +31,7 @@ from urllib.parse import urljoin, urlparse
 
 from ai_karen_engine.integrations.web.web_utils import canonicalize_url, is_content_type_binary
 from ai_karen_engine.integrations.web.robots_policy import RobotsPolicy
+from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
 
 from prometheus_client import Counter, Histogram
 
@@ -310,6 +311,7 @@ class Crawl4AIIntegration:
         timeout_seconds: Optional[float] = None,
         metadata: Optional[Mapping[str, Any]] = None,
         extraction_strategy: Optional[Any] = None,
+        *, execution_meter: Optional[ExecutionBudgetMeter] = None,
     ) -> Dict[str, Any]:
         """
         Fetch a single URL and return normalized content.
@@ -325,12 +327,12 @@ class Crawl4AIIntegration:
                 "_extraction_strategy": extraction_strategy,
             },
         )
-        result = await self.fetch(request)
+        result = await self.fetch(request, **({"execution_meter": execution_meter} if execution_meter is not None else {}))
         return result.to_dict()
 
-    async def fetch(self, request: CrawlRequest) -> CrawlResult:
+    async def fetch(self, request: CrawlRequest, *, execution_meter: Optional[ExecutionBudgetMeter] = None) -> CrawlResult:
         """Fetch a single CrawlRequest and return a CrawlResult."""
-        results = await self.fetch_requests([request])
+        results = await self.fetch_requests([request], **({"execution_meter": execution_meter} if execution_meter is not None else {}))
         if not results:
             return self._failure_result(
                 url=request.url,
@@ -347,6 +349,7 @@ class Crawl4AIIntegration:
         bypass_cache: Optional[bool] = None,
         timeout_seconds: Optional[float] = None,
         depth: int = 0,
+        *, execution_meter: Optional[ExecutionBudgetMeter] = None,
     ) -> List[CrawlResult]:
         """
         Fetch multiple URLs concurrently with bounded concurrency.
@@ -364,10 +367,10 @@ class Crawl4AIIntegration:
             for index, url in enumerate(urls)
         ]
 
-        results = await self.fetch_requests(requests)
+        results = await self.fetch_requests(requests, **({"execution_meter": execution_meter} if execution_meter is not None else {}))
         return results
 
-    async def fetch_requests(self, requests: Sequence[CrawlRequest]) -> List[CrawlResult]:
+    async def fetch_requests(self, requests: Sequence[CrawlRequest], *, execution_meter: Optional[ExecutionBudgetMeter] = None) -> List[CrawlResult]:
         """
         Fetch multiple CrawlRequest objects with bounded concurrency.
 
@@ -403,13 +406,13 @@ class Crawl4AIIntegration:
             async with crawler_factory(config=self.browser_config) as crawler:
                 # A missing route-capable Crawl4AI SDK must fail closed.
                 # This is installed before any public page navigation.
-                self._install_browser_egress_hook(crawler)
+                self._install_browser_egress_hook(crawler, **({"execution_meter": execution_meter} if execution_meter is not None else {}))
                 semaphore = asyncio.Semaphore(self.settings.max_concurrency)
 
                 async def crawl_one(index: int, req: CrawlRequest) -> None:
                     async with semaphore:
                         pending_results[index] = await self._fetch_with_crawler(
-                            crawler, req
+                            crawler, req, **({"execution_meter": execution_meter} if execution_meter is not None else {})
                         )
 
                 tasks = [
@@ -455,7 +458,7 @@ class Crawl4AIIntegration:
 
         return final_results
 
-    def _install_browser_egress_hook(self, crawler: Any) -> None:
+    def _install_browser_egress_hook(self, crawler: Any, *, execution_meter: Optional[ExecutionBudgetMeter] = None) -> None:
         """Install one network gate in the canonical acquisition owner.
 
         Crawl4AI exposes on_page_context_created before page navigation.
@@ -481,7 +484,7 @@ class Crawl4AIIntegration:
                 budget = {"count": 0, "lock": asyncio.Lock()}
 
                 async def guard(request_route: Any) -> None:
-                    await self._guard_browser_request(request_route, budget)
+                    await self._guard_browser_request(request_route, budget, **({"execution_meter": execution_meter} if execution_meter is not None else {}))
 
                 await route("**/*", guard)
                 setattr(context, "_karen_public_egress_installed", True)
@@ -493,6 +496,7 @@ class Crawl4AIIntegration:
         self,
         route: Any,
         budget: Dict[str, Any],
+        *, execution_meter: Optional[ExecutionBudgetMeter] = None,
     ) -> None:
         """Validate each target before fetching; follow redirects ourselves.
 
@@ -533,10 +537,18 @@ class Crawl4AIIntegration:
                     raise PermissionError("Unsafe crawl destination.")
 
                 if is_navigation and self.settings.respect_robots_txt:
-                    allowed, _ = await self.robots_policy.is_allowed(candidate)
+                    allowed, _ = await self.robots_policy.is_allowed(candidate, **({"execution_meter": execution_meter} if execution_meter is not None else {}))
                     if not allowed:
                         reason = "robots_blocked"
                         raise PermissionError("Redirect target denied by robots policy.")
+
+                if execution_meter is not None and (
+                    not isinstance(execution_meter, ExecutionBudgetMeter)
+                    or not execution_meter.retains_initial_budget_limits()
+                    or not await execution_meter.reserve_external_request()
+                ):
+                    reason = "external_request_budget"
+                    raise PermissionError("External request budget exhausted or invalid.")
 
                 response = await route.fetch(
                     url=candidate,
@@ -609,7 +621,7 @@ class Crawl4AIIntegration:
             )
         return self._domain_semaphores[hostname]
 
-    async def _fetch_with_crawler(self, crawler: Any, req: CrawlRequest) -> CrawlResult:
+    async def _fetch_with_crawler(self, crawler: Any, req: CrawlRequest, *, execution_meter: Optional[ExecutionBudgetMeter] = None) -> CrawlResult:
         """Fetch one request using an already-open Crawl4AI crawler."""
         started = time.perf_counter()
         normalized_url = self._normalize_url(req.url)
@@ -629,7 +641,7 @@ class Crawl4AIIntegration:
             self._observe_result(result)
             return result
 
-        if self.settings.respect_robots_txt:
+        if self.settings.respect_robots_txt and execution_meter is None:
             allowed, reason = await self.robots_policy.is_allowed(normalized_url)
             if not allowed:
                 result = self._failure_result(

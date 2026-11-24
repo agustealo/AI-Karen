@@ -7,6 +7,7 @@ from ai_karen_engine.services.tooling.internet_capability_service import (
 )
 from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
 from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+from ai_karen_engine.core.runtime.contracts import ExecutionContext
 from ai_karen_engine.services.database.repositories.repository_factory import (
     get_runtime_search_article_service,
 )
@@ -198,6 +199,15 @@ class WebSearchDispatcher(ExtensionBase):
             }
 
         try:
+            authority = (
+                execution_context.runtime_authority("intelligent-search")
+                if isinstance(execution_context, ExtensionExecutionContext)
+                else None
+            )
+            if authority is not None and (
+                self._internet_service is None or mode != "general"
+            ):
+                raise PermissionError("Governed search acquisition is unavailable")
             prepared = await handler.prepare(query, context)
 
             if self._internet_service:
@@ -217,6 +227,21 @@ class WebSearchDispatcher(ExtensionBase):
                         if isinstance(execution_context, ExtensionExecutionContext)
                         else None
                     )
+                    authority_options = {}
+                    if authority is not None:
+                        plan, meter = authority
+                        trusted_context = ExecutionContext(
+                            user_id=execution_context.user_id,
+                            tenant_id=execution_context.tenant_id,
+                            session_id=execution_context.session_id,
+                            conversation_id=execution_context.conversation_id,
+                            correlation_id=execution_context.correlation_id,
+                            request_id=execution_context.request_id,
+                            policy_decision_id=plan.policy_decision_id,
+                            allowed_capabilities=list(plan.allowed_capabilities),
+                            budget=plan.budget,
+                        )
+                        authority_options = {"authorized_plan": plan, "execution_meter": meter}
                     internet_result = await self._internet_service.execute(
                         query,
                         config_override={
@@ -228,6 +253,7 @@ class WebSearchDispatcher(ExtensionBase):
                             "requested_mode": mode,
                         },
                         context=trusted_context,
+                        **authority_options,
                     )
                     if internet_result.get("status") == "error" or internet_result.get("success") is False:
                         internet_result["can_execute"] = False

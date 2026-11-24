@@ -269,6 +269,28 @@ class WebSearchClient:
             + "; ".join(errors),
         )
 
+    @staticmethod
+    def _transport_options(options: Dict[str, Any]) -> Dict[str, Any]:
+        """Prevent unmetered automatic redirect hops on governed requests."""
+        if options.get("execution_meter") is not None:
+            return {"allow_redirects": False}
+        return {}
+
+    @staticmethod
+    async def _reserve_transport(options: Dict[str, Any]) -> None:
+        """Reserve against the caller's existing meter before outbound I/O."""
+        meter = options.get("execution_meter")
+        if meter is None:
+            return
+        from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+        if not isinstance(meter, ExecutionBudgetMeter):
+            raise PermissionError("Invalid external execution meter.")
+        if not meter.retains_initial_budget_limits():
+            raise PermissionError("External execution budget changed.")
+        if not await meter.reserve_external_request():
+            raise PermissionError("External request budget exhausted.")
+
     async def _search_with_provider(
         self,
         provider_name: str,
@@ -322,7 +344,9 @@ class WebSearchClient:
                 "DNT": "1",
             }
 
-            async with self.session.get(url, params=params, headers=headers) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.get(url, params=params, headers=headers, **self._transport_options(kwargs)) as response:
                 if response.status not in (200, 202):
                     return SearchResponse(
                         query=query,
@@ -388,7 +412,9 @@ class WebSearchClient:
                     time_map = {"d": "day", "w": "week", "m": "month", "y": "year"}
                     params["time_range"] = time_map.get(time_range.lower(), time_range)
 
-                async with self.session.get(url, params=params, timeout=timeout) as response:
+                await self._reserve_transport(kwargs)
+
+                async with self.session.get(url, params=params, timeout=timeout, **self._transport_options(kwargs)) as response:
                     if response.status != 200:
                         last_error = f"HTTP {response.status} from {instance_url}"
                         continue
@@ -436,7 +462,9 @@ class WebSearchClient:
             params = {"q": query, "count": max_results}
             headers = {"Accept": "application/json", "X-Subscription-Token": api_key}
 
-            async with self.session.get(api_url, params=params, headers=headers) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.get(api_url, params=params, headers=headers, **self._transport_options(kwargs)) as response:
                 if response.status != 200:
                     return SearchResponse(
                         query=query,
@@ -481,7 +509,9 @@ class WebSearchClient:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.8,*/*;q=0.8",
             }
 
-            async with self.session.get(url, params=params, headers=headers) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.get(url, params=params, headers=headers, **self._transport_options(kwargs)) as response:
                 if response.status != 200:
                     return SearchResponse(
                         query=query,
@@ -537,7 +567,9 @@ class WebSearchClient:
             params = {"q": query}
             headers = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.8,*/*;q=0.8"}
 
-            async with self.session.get(url, params=params, headers=headers) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.get(url, params=params, headers=headers, **self._transport_options(kwargs)) as response:
                 if response.status != 200:
                     return SearchResponse(
                         query=query,
@@ -597,7 +629,9 @@ class WebSearchClient:
             }
             headers = {"User-Agent": "AI-Karen-Search-Plugin/1.0 (https://ai-karen.ai; contact@ai-karen.ai)"}
 
-            async with self.session.get(search_url, params=search_params, headers=headers) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.get(search_url, params=search_params, headers=headers, **self._transport_options(kwargs)) as response:
                 if response.status != 200:
                     return SearchResponse(
                         query=query,
@@ -620,7 +654,9 @@ class WebSearchClient:
                     "exsectionformat": "plain",
                 }
 
-                async with self.session.get(search_url, params=extract_params, headers=headers) as response:
+                await self._reserve_transport(kwargs)
+
+                async with self.session.get(search_url, params=extract_params, headers=headers, **self._transport_options(kwargs)) as response:
                     if response.status != 200:
                         return await self._wikipedia_fallback_results(search_data, query)
 
@@ -707,7 +743,9 @@ class WebSearchClient:
             if days:
                 payload["days"] = days
 
-            async with self.session.post(api_url, json=payload) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.post(api_url, json=payload, **self._transport_options(kwargs)) as response:
                 data = await response.json()
 
             if response.status != 200:
@@ -755,7 +793,9 @@ class WebSearchClient:
             if time_range:
                 params["dateRestrict"] = time_range
 
-            async with self.session.get(api_url, params=params) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.get(api_url, params=params, **self._transport_options(kwargs)) as response:
                 data = await response.json()
 
             if response.status != 200:
@@ -805,7 +845,9 @@ class WebSearchClient:
             data = {"query": query, "cat": "web", "language": "english"}
             headers = {"Origin": "https://www.startpage.com", "Referer": "https://www.startpage.com/"}
 
-            async with self.session.post(url, data=data, headers=headers) as response:
+            await self._reserve_transport(kwargs)
+
+            async with self.session.post(url, data=data, headers=headers, **self._transport_options(kwargs)) as response:
                 if response.status != 200:
                     return SearchResponse(
                         query=query,

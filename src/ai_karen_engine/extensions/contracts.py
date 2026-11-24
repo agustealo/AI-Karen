@@ -279,6 +279,59 @@ class ExtensionExecutionContext:
             if "exhausted" not in self.budget:
                 raise ValueError("budget must contain 'exhausted'")
 
+    def bind_runtime_authority(self, runtime_context: Any, plan: Any, meter: Any, plugin_id: str) -> None:
+        """Bind an existing chat grant, never mint a new extension quota."""
+        from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+        from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+        if (
+            not isinstance(runtime_context, ChatExecutionContext)
+            or not isinstance(plan, AuthorizedExecutionPlan)
+            or not isinstance(meter, ExecutionBudgetMeter)
+            or not runtime_context.is_runtime_model_plan_authorized(plan, meter)
+            or not self._matches_runtime_authority(runtime_context, plan, plugin_id)
+        ):
+            raise PermissionError("extension_runtime_authority_invalid")
+        binding = self.__dict__.get("_runtime_authority")
+        if binding is not None:
+            if not (
+                binding[0] is self and binding[1] is runtime_context
+                and binding[2] is plan and binding[3] is meter and binding[4] == plugin_id
+            ):
+                raise PermissionError("extension_runtime_authority_invalid")
+            return
+        object.__setattr__(self, "_runtime_authority", (self, runtime_context, plan, meter, plugin_id))
+
+    def _matches_runtime_authority(self, runtime_context: Any, plan: Any, plugin_id: str) -> bool:
+        return (
+            self.user_id == runtime_context.user_id
+            and self.tenant_id == runtime_context.tenant_id
+            and self.session_id == runtime_context.session_id
+            and self.correlation_id == runtime_context.correlation_id
+            and self.conversation_id == runtime_context.conversation_id
+            and self.policy_decision_id == plan.policy_decision_id
+            and plugin_id in plan.allowed_plugins
+            and set(self.allowed_capabilities).issubset(plan.allowed_capabilities)
+            and plan.matches_execution_scope(
+                user_id=self.user_id, tenant_id=self.tenant_id,
+                session_id=self.session_id, policy_decision_id=self.policy_decision_id,
+            )
+        )
+
+    def runtime_authority(self, plugin_id: str) -> Optional[tuple[Any, Any]]:
+        """Return the original plan and meter only for this bound instance."""
+        binding = self.__dict__.get("_runtime_authority")
+        if binding is None:
+            return None
+        owner, runtime_context, plan, meter, bound_plugin = binding
+        if (
+            owner is not self or bound_plugin != plugin_id
+            or not self._matches_runtime_authority(runtime_context, plan, plugin_id)
+            or not runtime_context.is_runtime_model_plan_authorized(plan, meter)
+        ):
+            raise PermissionError("extension_runtime_authority_invalid")
+        return plan, meter
+
     @property
     def is_budget_exhausted(self) -> bool:
         """Check if execution budget is exhausted."""

@@ -334,6 +334,46 @@ class PersonaExecutionSnapshot:
         )
 
 
+@dataclass(frozen=True)
+class SearchRetrievalOptions:
+    """Internal retrieval preferences, never an authorization or evidence receipt."""
+
+    allowed_domains: tuple[str, ...] = ()
+    blocked_domains: tuple[str, ...] = ()
+    time_range: Optional[str] = None
+    prefer_recent: Optional[bool] = None
+    max_urls: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        for domains in (self.allowed_domains, self.blocked_domains):
+            if not isinstance(domains, tuple) or len(domains) > 50 or any(
+                not isinstance(domain, str) or not domain.strip() or len(domain) > 253
+                for domain in domains
+            ):
+                raise ValueError("Invalid search domain restrictions")
+        if self.time_range is not None and (
+            not isinstance(self.time_range, str)
+            or not self.time_range.strip()
+            or len(self.time_range) > 32
+        ):
+            raise ValueError("Invalid search time range")
+        if self.prefer_recent is not None and not isinstance(self.prefer_recent, bool):
+            raise ValueError("Invalid search freshness preference")
+        if self.max_urls is not None and (
+            type(self.max_urls) is not int or not 1 <= self.max_urls <= 25
+        ):
+            raise ValueError("Invalid search source limit")
+
+    def tool_parameters(self) -> Dict[str, Any]:
+        return {
+            **({"allowed_domains": list(self.allowed_domains)} if self.allowed_domains else {}),
+            **({"blocked_domains": list(self.blocked_domains)} if self.blocked_domains else {}),
+            **({"time_range": self.time_range} if self.time_range is not None else {}),
+            **({"prefer_recent": self.prefer_recent} if self.prefer_recent is not None else {}),
+            **({"max_urls": self.max_urls} if self.max_urls is not None else {}),
+        }
+
+
 @dataclass
 class ChatExecutionRequest:
     """Canonical input contract for the chat runtime.
@@ -351,6 +391,8 @@ class ChatExecutionRequest:
     max_tokens: Optional[int] = None
     stream: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Validated retrieval preferences; runtime admission remains authoritative.
+    search_retrieval_options: Optional[SearchRetrievalOptions] = None
     # Minted by runtime admission only; never copied from SDK metadata or prompt.
     runtime_run_lease: Optional["ChatRunLease"] = field(
         default=None, repr=False, compare=False,

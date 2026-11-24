@@ -349,3 +349,34 @@ async def test_reused_context_cannot_reinstall_route_or_reset_request_budget():
     assert first.fulfilled and not first.aborted
     assert second.fetched == []
     assert second.aborted == 1
+
+
+@pytest.mark.asyncio
+async def test_original_meter_blocks_redirect_after_first_browser_fetch():
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudget, ExecutionBudgetMeter
+
+    origin = "https://public.example/start"
+    second = "https://public.example/second"
+    crawler = integration(allowed_urls=[origin, second])
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_external_requests=1))
+    route = Route(origin, [Response(302, {"location": second}, b"")])
+    await crawler._guard_browser_request(route, budget(), execution_meter=meter)
+    assert [call["url"] for call in route.fetched] == [origin]
+    assert route.aborted == 1
+    assert meter.external_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_robots_exhausted_meter_denies_without_network():
+    from unittest.mock import MagicMock
+
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudget, ExecutionBudgetMeter
+    from ai_karen_engine.integrations.web.robots_policy import RobotsPolicy
+
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_external_requests=0))
+    session = MagicMock()
+    allowed, _ = await RobotsPolicy().is_allowed(
+        "https://public.example/start", session=session, execution_meter=meter,
+    )
+    assert not allowed
+    session.get.assert_not_called()
