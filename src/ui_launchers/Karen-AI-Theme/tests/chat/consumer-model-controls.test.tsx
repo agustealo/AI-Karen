@@ -70,7 +70,7 @@ describe("consumer provider and model controls", () => {
     expect(screen.queryByRole("option", { name: /Unconfigured provider/ })).toBeNull();
     expect(screen.queryByRole("option", { name: /Restricted provider/ })).toBeNull();
     expect(screen.getByText(/provider hidden from chat selection/)).not.toBeNull();
-    const disclosure = screen.getByText("Advanced provider and agent details");
+    const disclosure = screen.getByText("Advanced provider details");
     const panel = disclosure.closest("details");
     expect(panel).not.toBeNull();
     fireEvent.click(disclosure);
@@ -80,6 +80,7 @@ describe("consumer provider and model controls", () => {
     fireEvent(panel!, new Event("toggle"));
     expect(await screen.findByText("Unconfigured provider")).not.toBeNull();
     expect(screen.getByText("Not configured")).not.toBeNull();
+    expect(api.get).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Configure providers" }));
     expect(setup).toHaveBeenCalledTimes(1);
     expect(change).not.toHaveBeenCalled();
