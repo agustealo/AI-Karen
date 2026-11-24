@@ -8,9 +8,8 @@ global.fetch = vi.fn() as unknown as Mock;
 const mockedFetch = vi.mocked(fetch);
 
 // Mock authentication
-vi.mock('@/lib/useAuth', () => ({
-  useAuth: () => ({ user: { id: 'test-user', roles: ['user', 'admin'] } })
-}));
+const auth = vi.hoisted(() => ({ user: { user_id: 'test-user', tenant_id: 'test-tenant', roles: ['user', 'admin'], permissions: [] as string[] }, isLoading: false }));
+vi.mock('@/lib/useAuth', () => ({ useAuth: () => auth }));
 
 // Both the legacy default import and the canonical named import must use
 // the same controlled HTTP mock. Production registry uses the named export.
@@ -124,6 +123,29 @@ describe('Concurrent plugin lifecycle observations', () => {
         setPluginInstanceState(id, dashboard, 'idle');
         setPluginInstanceState(id, composer, 'idle');
       });
+    }
+  });
+});
+
+
+describe('Verified plugin UI eligibility', () => {
+  it('removes prior principal eligibility immediately during role change and denies unlisted roles', async () => {
+    const entry = { name: 'file-explorer', status: 'enabled', version: '1.0.0', capabilities: { provides_ui: true }, rbac: { allowed_roles: ['admin'] } };
+    auth.user.roles = ['admin'];
+    mockGet.mockReset().mockResolvedValue([entry]);
+    const view = renderHook(() => usePluginRegistry(), {
+      wrapper: ({ children }) => React.createElement(PluginRegistryProvider, null, children),
+    });
+    try {
+      await waitFor(() => expect(view.result.current.getPluginsWithUI().map(p => p.id)).toEqual(['file-explorer']));
+      auth.user.roles = ['user'];
+      view.rerender();
+      expect(view.result.current.getPluginsWithUI()).toEqual([]);
+      await waitFor(() => expect(view.result.current.loading).toBe(false));
+      expect(view.result.current.getPluginsWithUI()).toEqual([]);
+    } finally {
+      view.unmount();
+      auth.user.roles = ['user', 'admin'];
     }
   });
 });
