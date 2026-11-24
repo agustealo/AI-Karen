@@ -49,10 +49,10 @@ function Surface() {
 }
 
 beforeEach(() => {
-  backend.get.mockReset().mockResolvedValue({ text: "Persisted earlier", revision: 4 });
+  backend.get.mockReset().mockResolvedValue({ text: "Persisted earlier", revision: 4, attachment_references: [] });
   backend.put.mockReset().mockImplementation(
     async (_path: string, payload: { text: string; expected_revision: number }) =>
-      ({ text: payload.text, revision: payload.expected_revision + 1 }),
+      ({ text: payload.text, revision: payload.expected_revision + 1, attachment_references: [] }),
   );
 });
 
@@ -71,7 +71,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     fireEvent.change(input, { target: { value: "New in this window" } });
     expect(screen.getByTestId("draft-synced").textContent).toBe("false");
     await waitFor(() => expect(backend.put).toHaveBeenCalledWith(
-      TARGET, { text: "New in this window", expected_revision: 4 },
+      TARGET, { text: "New in this window", expected_revision: 4, attachment_references: [] },
       expect.objectContaining({ signal: expect.any(Object) }),
     ), { timeout: 4000 });
     await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
@@ -90,10 +90,10 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
     expect(backend.put).toHaveBeenCalledTimes(2);
     expect(backend.put.mock.calls[0][1]).toEqual({
-      text: "Send immediately without repeated Enter", expected_revision: 4,
+      text: "Send immediately without repeated Enter", expected_revision: 4, attachment_references: [],
     });
     expect(backend.put.mock.calls[1][1]).toEqual({
-      text: "", expected_revision: 5,
+      text: "", expected_revision: 5, attachment_references: [],
     });
     expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
   });
@@ -108,16 +108,16 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
     expect(backend.put).toHaveBeenCalledTimes(2);
     expect(backend.put.mock.calls[0][1]).toEqual({
-      text: "Tell me about myself", expected_revision: 4,
+      text: "Tell me about myself", expected_revision: 4, attachment_references: [],
     });
     expect(backend.put.mock.calls[1][1]).toEqual({
-      text: "", expected_revision: 5,
+      text: "", expected_revision: 5, attachment_references: [],
     });
     expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
   });
 
   it("keeps the second prompt revision correct after CopilotKit replays an unchanged empty composer", async () => {
-    backend.get.mockResolvedValueOnce({ text: "", revision: 0 });
+    backend.get.mockResolvedValueOnce({ text: "", revision: 0, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
     const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
@@ -144,10 +144,10 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(input.value).toBe(""));
     await waitFor(() => expect(screen.getByTestId("draft-synced").textContent).toBe("true"));
     expect(backend.put.mock.calls.map(call => call[1])).toEqual([
-      { text: "First question", expected_revision: 0 },
-      { text: "", expected_revision: 1 },
-      { text: "Tell me more about myself", expected_revision: 2 },
-      { text: "", expected_revision: 3 },
+      { text: "First question", expected_revision: 0, attachment_references: [] },
+      { text: "", expected_revision: 1, attachment_references: [] },
+      { text: "Tell me more about myself", expected_revision: 2, attachment_references: [] },
+      { text: "", expected_revision: 3, attachment_references: [] },
     ]);
     expect(input.value).toBe("");
     expect(screen.getByTestId("draft-synced").textContent).toBe("true");
@@ -169,7 +169,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
   });
 
   it("reuses an in-flight autosave instead of racing a duplicate CAS write", async () => {
-    let finishSave!: (receipt: { text: string; revision: number }) => void;
+    let finishSave!: (receipt: { text: string; revision: number; attachment_references: { source_id: string; revision: string }[] }) => void;
     backend.put.mockImplementationOnce(
       () => new Promise(resolve => { finishSave = resolve; }),
     );
@@ -181,17 +181,17 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(1), { timeout: 4000 });
     fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
     expect(backend.put).toHaveBeenCalledTimes(1);
-    await act(async () => finishSave({ text: "One pending save", revision: 5 }));
+    await act(async () => finishSave({ text: "One pending save", revision: 5, attachment_references: [] }));
     await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
     expect(backend.put).toHaveBeenCalledTimes(2);
     expect(backend.put.mock.calls[1][1]).toEqual({
-      text: "", expected_revision: 5,
+      text: "", expected_revision: 5, attachment_references: [],
     });
   });
 
   it("recovers a committed save whose 502 receipt was lost using exactly one authenticated readback", async () => {
-    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 })
-      .mockResolvedValueOnce({ text: "Send exactly once", revision: 5 });
+    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4, attachment_references: [] })
+      .mockResolvedValueOnce({ text: "Send exactly once", revision: 5, attachment_references: [] });
     backend.put.mockRejectedValueOnce(new ApiError(502, "gateway lost CAS receipt"));
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
@@ -203,20 +203,20 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     expect(backend.get).toHaveBeenCalledTimes(2);
     expect(backend.put).toHaveBeenCalledTimes(2);
     expect(backend.put.mock.calls[0][1]).toEqual({
-      text: "Send exactly once", expected_revision: 4,
+      text: "Send exactly once", expected_revision: 4, attachment_references: [],
     });
     expect(backend.put.mock.calls[1][1]).toEqual({
-      text: "", expected_revision: 5,
+      text: "", expected_revision: 5, attachment_references: [],
     });
     expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
   });
 
   it("recovers a committed clear whose 502 receipt was lost without repeating that PUT", async () => {
-    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 })
-      .mockResolvedValueOnce({ text: "", revision: 6 });
+    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4, attachment_references: [] })
+      .mockResolvedValueOnce({ text: "", revision: 6, attachment_references: [] });
     backend.put.mockImplementationOnce(
       async (_path: string, payload: { text: string; expected_revision: number }) =>
-        ({ text: payload.text, revision: payload.expected_revision + 1 }),
+        ({ text: payload.text, revision: payload.expected_revision + 1, attachment_references: [] }),
     ).mockRejectedValueOnce(new ApiError(502, "clear receipt lost"));
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
@@ -227,13 +227,13 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("true"));
     expect(backend.get).toHaveBeenCalledTimes(2);
     expect(backend.put).toHaveBeenCalledTimes(2);
-    expect(backend.put.mock.calls[1][1]).toEqual({ text: "", expected_revision: 5 });
+    expect(backend.put.mock.calls[1][1]).toEqual({ text: "", expected_revision: 5, attachment_references: [] });
     expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
   });
 
   it("never treats a lost write receipt as success when server readback stayed at the old revision", async () => {
-    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 })
-      .mockResolvedValueOnce({ text: "Persisted earlier", revision: 4 });
+    backend.get.mockResolvedValueOnce({ text: "Persisted earlier", revision: 4, attachment_references: [] })
+      .mockResolvedValueOnce({ text: "Persisted earlier", revision: 4, attachment_references: [] });
     backend.put.mockRejectedValueOnce(new ApiError(502, "unknown commit outcome"));
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
@@ -264,7 +264,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
   });
 
   it("refuses to clear old submitted text if a newer edit arrived during flush", async () => {
-    let finishSave!: (receipt: { text: string; revision: number }) => void;
+    let finishSave!: (receipt: { text: string; revision: number; attachment_references: { source_id: string; revision: string }[] }) => void;
     backend.put.mockImplementationOnce(
       () => new Promise(resolve => { finishSave = resolve; }),
     );
@@ -275,7 +275,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit with pending changes" }));
     expect(backend.put).toHaveBeenCalledTimes(1);
     fireEvent.change(input, { target: { value: "Newer private text" } });
-    await act(async () => finishSave({ text: "Earlier prompt", revision: 5 }));
+    await act(async () => finishSave({ text: "Earlier prompt", revision: 5, attachment_references: [] }));
     await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent).toBe("false"));
     expect(input.value).toBe("Newer private text");
     expect(backend.put.mock.calls.filter((call) => call[1].text === "")).toHaveLength(0);
@@ -296,8 +296,8 @@ describe("CK-07E6 authenticated composer draft hook", () => {
   });
 
   it("refreshes saved contents on focus when no local unsent edits exist", async () => {
-    backend.get.mockResolvedValueOnce({ text: "Old tab", revision: 1 })
-      .mockResolvedValueOnce({ text: "Edited from second tab", revision: 2 });
+    backend.get.mockResolvedValueOnce({ text: "Old tab", revision: 1, attachment_references: [] })
+      .mockResolvedValueOnce({ text: "Edited from second tab", revision: 2, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("ready"));
@@ -312,12 +312,12 @@ describe("CK-07E6 authenticated composer draft hook", () => {
   });
 
   it("never lets an older focus read overwrite a later authenticated response", async () => {
-    let finishOld!: (result: { text: string; revision: number }) => void;
-    backend.get.mockResolvedValueOnce({ text: "Initial", revision: 1 })
+    let finishOld!: (result: { text: string; revision: number; attachment_references: { source_id: string; revision: string }[] }) => void;
+    backend.get.mockResolvedValueOnce({ text: "Initial", revision: 1, attachment_references: [] })
       .mockImplementationOnce(() => new Promise(resolve => {
         finishOld = resolve;
       }))
-      .mockResolvedValueOnce({ text: "Newer cross-window state", revision: 2 });
+      .mockResolvedValueOnce({ text: "Newer cross-window state", revision: 2, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("ready"));
@@ -327,14 +327,14 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(backend.get).toHaveBeenCalledTimes(3));
     const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
     await waitFor(() => expect(input.value).toBe("Newer cross-window state"));
-    await act(async () => finishOld({ text: "Older response", revision: 1 }));
+    await act(async () => finishOld({ text: "Older response", revision: 1, attachment_references: [] }));
     expect(input.value).toBe("Newer cross-window state");
     expect(screen.getByTestId("draft-synced").textContent).toBe("true");
   });
 
   it("ignores a read started before a successfully committed draft write", async () => {
-    let finishOld!: (result: { text: string; revision: number }) => void;
-    backend.get.mockResolvedValueOnce({ text: "Initial", revision: 4 })
+    let finishOld!: (result: { text: string; revision: number; attachment_references: { source_id: string; revision: string }[] }) => void;
+    backend.get.mockResolvedValueOnce({ text: "Initial", revision: 4, attachment_references: [] })
       .mockImplementationOnce(() => new Promise(resolve => {
         finishOld = resolve;
       }));
@@ -348,17 +348,17 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
       .toBe("true"), { timeout: 4000 });
     expect(backend.put).toHaveBeenCalledWith(
-      TARGET, { text: "Locally confirmed revision five", expected_revision: 4 },
+      TARGET, { text: "Locally confirmed revision five", expected_revision: 4, attachment_references: [] },
       expect.objectContaining({ signal: expect.any(Object) }),
     );
-    await act(async () => finishOld({ text: "Obsolete revision four", revision: 4 }));
+    await act(async () => finishOld({ text: "Obsolete revision four", revision: 4, attachment_references: [] }));
     expect(input.value).toBe("Locally confirmed revision five");
     expect(screen.getByTestId("draft-status").textContent).toBe("ready");
   });
 
   it("fails closed if a new server read regresses a confirmed CAS revision", async () => {
-    backend.get.mockResolvedValueOnce({ text: "Current revision", revision: 9 })
-      .mockResolvedValueOnce({ text: "Rolled-back data", revision: 8 });
+    backend.get.mockResolvedValueOnce({ text: "Current revision", revision: 9, attachment_references: [] })
+      .mockResolvedValueOnce({ text: "Rolled-back data", revision: 8, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("ready"));
@@ -377,7 +377,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
       .toBe("ready"));
     fireEvent.click(screen.getByRole("button", { name: "Confirm durable clear" }));
     await waitFor(() => expect(backend.put).toHaveBeenCalledWith(
-      TARGET, { text: "", expected_revision: 4 },
+      TARGET, { text: "", expected_revision: 4, attachment_references: [] },
       expect.objectContaining({ signal: expect.any(Object) }),
     ));
     await waitFor(() => expect(screen.getByTestId("clear-confirmed").textContent)
@@ -388,7 +388,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
   });
 
   it("retains new whitespace-only edits while a durable send-clear is in flight", async () => {
-    let finishClear!: (reply: { text: string; revision: number }) => void;
+    let finishClear!: (reply: { text: string; revision: number; attachment_references: { source_id: string; revision: string }[] }) => void;
     backend.put.mockImplementationOnce(() => new Promise(resolve => {
       finishClear = resolve;
     }));
@@ -399,10 +399,10 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(1));
     const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: "  Persisted earlier  " } });
-    await act(async () => finishClear({ text: "", revision: 5 }));
+    await act(async () => finishClear({ text: "", revision: 5, attachment_references: [] }));
     expect(input.value).toBe("  Persisted earlier  ");
     await waitFor(() => expect(backend.put).toHaveBeenCalledWith(
-      TARGET, { text: "  Persisted earlier  ", expected_revision: 5 },
+      TARGET, { text: "  Persisted earlier  ", expected_revision: 5, attachment_references: [] },
       expect.objectContaining({ signal: expect.any(Object) }),
     ), { timeout: 4000 });
   });
@@ -431,7 +431,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
 
   it("recovers typed text after initial 503 using the real server revision", async () => {
     backend.get.mockRejectedValueOnce(new ApiError(503, "storage outage"))
-      .mockResolvedValueOnce({ text: "", revision: 0 });
+      .mockResolvedValueOnce({ text: "", revision: 0, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("unavailable"));
@@ -442,7 +442,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("ready"));
     await waitFor(() => expect(backend.put).toHaveBeenCalledWith(
-      TARGET, { text: "Written while offline", expected_revision: 0 },
+      TARGET, { text: "Written while offline", expected_revision: 0, attachment_references: [] },
       expect.objectContaining({ signal: expect.any(Object) }),
     ), { timeout: 4000 });
     await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
@@ -451,7 +451,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
 
   it("does not overwrite locally written text if recovery finds an existing remote draft", async () => {
     backend.get.mockRejectedValueOnce(new ApiError(503, "storage outage"))
-      .mockResolvedValueOnce({ text: "Remote saved draft", revision: 7 });
+      .mockResolvedValueOnce({ text: "Remote saved draft", revision: 7, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("unavailable"));
@@ -469,7 +469,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
 
   it("recovers from a failed first read using an authenticated reread, without a fake save", async () => {
     backend.get.mockRejectedValueOnce(new ApiError(503, "temporarily unavailable"))
-      .mockResolvedValueOnce({ text: "Saved after recovery", revision: 3 });
+      .mockResolvedValueOnce({ text: "Saved after recovery", revision: 3, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("unavailable"));
@@ -484,9 +484,9 @@ describe("CK-07E6 authenticated composer draft hook", () => {
   });
 
   it("rereads a clean draft after refresh failure rather than claiming a save", async () => {
-    backend.get.mockResolvedValueOnce({ text: "Known", revision: 5 })
+    backend.get.mockResolvedValueOnce({ text: "Known", revision: 5, attachment_references: [] })
       .mockRejectedValueOnce(new ApiError(503, "read unavailable"))
-      .mockResolvedValueOnce({ text: "Changed elsewhere", revision: 6 });
+      .mockResolvedValueOnce({ text: "Changed elsewhere", revision: 6, attachment_references: [] });
     render(<Surface />);
     await waitFor(() => expect(screen.getByTestId("draft-status").textContent)
       .toBe("ready"));
@@ -519,7 +519,7 @@ describe("CK-07E6 authenticated composer draft hook", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(2), { timeout: 4000 });
     expect(backend.put).toHaveBeenLastCalledWith(
-      TARGET, { text: "Unsent preserved", expected_revision: 4 },
+      TARGET, { text: "Unsent preserved", expected_revision: 4, attachment_references: [] },
       expect.objectContaining({ signal: expect.any(Object) }),
     );
     await waitFor(() => expect(screen.getByTestId("draft-synced").textContent)
