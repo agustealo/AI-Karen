@@ -40,6 +40,6 @@ def test_source_provenance_has_a_single_backend_authority():
     assert '"evidence_level": "search_snippet"' in backend
     assert "evidence_level?: 'fetched_page' | 'search_snippet'" in types
     assert "source.evidence_level === 'fetched_page'" in panel
-    assert "source.evidence_level === 'search_snippet'" in panel
+    assert "isFetched ? 'Page retrieved' : 'Link discovered'" in panel
     assert "Fetch status is not specified by the backend." in panel
     assert "return value;" in api

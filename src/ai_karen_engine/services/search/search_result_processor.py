@@ -60,6 +60,9 @@ def _plain_text(text: str) -> str:
     normalized = normalized.replace(chr(96), "")
     normalized = re.sub(r"[ \t]+", " ", normalized)
     normalized = re.sub(r"[ \t]*\n[ \t]*", "\n", normalized)
+    # Removing HTML tags can leave spaces before punctuation. Do not alter
+    # meaningful operators or identifiers in technical source text.
+    normalized = re.sub(r" +([,.;:!?])", r"\1", normalized)
     return normalized.strip()
 
 
