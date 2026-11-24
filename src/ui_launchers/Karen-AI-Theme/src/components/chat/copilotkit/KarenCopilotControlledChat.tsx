@@ -24,7 +24,8 @@ import {
   KarenCopilotAssistantSlot,
   KarenCopilotUserSlot,
 } from "./KarenCopilotVerifiedHistory";
-import { useKarenPersistedDraft } from "./useKarenPersistedDraft";
+import { useKarenPersistedDraft, type DraftAttachment } from "./useKarenPersistedDraft";
+import { FileText, X } from "lucide-react";
 
 const MAX_INPUT_CHARS = 65536;
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -90,6 +91,7 @@ export function KarenCopilotControlledChat({
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
   const {
     draft, setText: setDraftText, readText: readDraftText,
+    attachments, updateAttachments,
     status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, prepareSubmission,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
@@ -115,6 +117,38 @@ export function KarenCopilotControlledChat({
   // A second click before SDK state flips to running must not start a
   // concurrent run or produce duplicate user-message writes.
   const submitPending = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const attachmentEditsDisabled = draftStatus !== "ready" || agent.isRunning ||
+    submitting || failedSubmission !== null;
+  const attachFiles = useCallback((references: DraftAttachment[]) => {
+    if (!isReady || attachmentEditsDisabled || submitPending.current ||
+        agent.threadId !== conversationId) return;
+    const next = [...attachments];
+    for (const reference of references) {
+      const previous = next.find(item => item.source_id === reference.source_id);
+      if (previous) {
+        if (previous.revision !== reference.revision) {
+          setError("A selected file has changed. Remove its older reference before attaching it again.");
+          return;
+        }
+        continue;
+      }
+      next.push(reference);
+    }
+    if (next.length > 12) {
+      setError("A draft can contain up to 12 file references. Remove a file before adding more.");
+      return;
+    }
+    setError(null);
+    updateAttachments(next);
+  }, [agent.threadId, attachmentEditsDisabled, attachments, conversationId, isReady, updateAttachments]);
+
+  const removeAttachment = useCallback((sourceId: string) => {
+    if (!isReady || attachmentEditsDisabled || submitPending.current ||
+        agent.threadId !== conversationId) return;
+    setError(null);
+    updateAttachments(attachments.filter(item => item.source_id !== sourceId));
+  }, [agent.threadId, attachmentEditsDisabled, attachments, conversationId, isReady, updateAttachments]);
   // Presentation only: an explicit SDK invocation may fail before AG-UI
   // supplies a valid run ID. This is never backend run identity/stop authority.
   const sdkInvocationPending = useRef(false);
@@ -207,6 +241,10 @@ export function KarenCopilotControlledChat({
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
+    if (attachments.length > 0) {
+      setError("Sending attached files is not supported yet. Remove the attachments before sending your message.");
+      return;
+    }
     if (failedSubmission !== null) {
       setError("Copy, restore or dismiss the failed unsent message before sending another.");
       return;
@@ -219,6 +257,7 @@ export function KarenCopilotControlledChat({
       return;
     }
     submitPending.current = true;
+    setSubmitting(true);
     reportBusy(true);
     setError(null);
     // This is an explicit user gesture. Durable draft clearance is a
@@ -271,12 +310,15 @@ export function KarenCopilotControlledChat({
         }
       } finally {
         submitPending.current = false;
-        if (mounted.current) reportBusy(Boolean(agent.isRunning));
+        if (mounted.current) {
+          setSubmitting(false);
+          reportBusy(Boolean(agent.isRunning));
+        }
       }
     })();
   }, [
     agent, conversationId, copilotkit, isReady, prepareSubmission,
-    draftStatus, readDraftText, setDraftText, failedSubmission,
+    draftStatus, readDraftText, setDraftText, failedSubmission, attachments.length,
     reportBusy,
   ]);
 
@@ -391,7 +433,7 @@ export function KarenCopilotControlledChat({
   const recoveryPanel = draftStatus === "conflict" || draftStatus === "unavailable" ? (() => {
     const conflict = draftStatus === "conflict";
     const explanation = conflict
-      ? "This draft changed in another window. We have not replaced your local text."
+      ? "This draft or an attached file changed or became unavailable. Your local text and references have been retained."
       : draftFailureStatus === 401 || draftFailureStatus === 403
         ? "Your session must be verified before Karen can access saved drafts."
         : draftFailureStatus === 404
@@ -425,7 +467,7 @@ export function KarenCopilotControlledChat({
             {conflict ? "Resolve draft conflict" : "Other recovery options"}
           </summary>
           <p className="mt-2 text-xs text-muted-foreground">
-            Reloading fetches the server draft and discards unsaved local changes. Copy your message first.
+            Reloading fetches the server draft and discards unsaved text and attachment changes. Copy your message first.
           </p>
           <button type="button" onClick={discardAndReload}
             className="mt-2 min-h-11 rounded-lg border border-input px-3 text-sm">
@@ -500,7 +542,41 @@ export function KarenCopilotControlledChat({
         {draftStatus === "ready" && !draftSynced && <p role="status" className="px-3 pt-1 text-xs text-muted-foreground">
           Draft changes pending save…
         </p>}
-        {fileExplorerPluginId && <KarenComposerFileExplorer key={fileExplorerPluginId} pluginId={fileExplorerPluginId} />}
+        {attachments.length > 0 && (
+          <section aria-label="Draft attachments" className="space-y-2 px-3 pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium">{attachments.length} / 12 file references</p>
+              <p role="status" className="text-xs text-muted-foreground">
+                {draftStatus === "ready" && draftSynced ? "References saved" : "References not confirmed saved"}
+              </p>
+            </div>
+            <ul className="flex flex-wrap gap-2">
+              {attachments.map((reference) => (
+                <li key={reference.source_id}
+                  className="flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-border px-2">
+                  <FileText aria-hidden="true" className="h-4 w-4 shrink-0" />
+                  <span title={reference.source_id} className="truncate font-mono text-xs">
+                    File {reference.source_id.slice(0, 8)} · {reference.revision.slice(0, 8)}
+                  </span>
+                  <button type="button" disabled={attachmentEditsDisabled}
+                    aria-label={`Remove file reference ${reference.source_id}`}
+                    onClick={() => removeAttachment(reference.source_id)}
+                    className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50">
+                    <X aria-hidden="true" className="h-4 w-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-muted-foreground">
+              File references are saved with the draft, not sent to a model. Remove them before sending.
+            </p>
+          </section>
+        )}
+        {fileExplorerPluginId && <KarenComposerFileExplorer
+          key={conversationId + ":" + fileExplorerPluginId}
+          pluginId={fileExplorerPluginId}
+          onAttach={attachFiles}
+          disabled={attachmentEditsDisabled} />}
         {onOpenAgents && <KarenComposerAgentDiscovery onOpenAgents={onOpenAgents}
           disabled={draftStatus !== "ready" || !draftSynced || agent.isRunning || failedSubmission !== null} />}
         <KarenCopilotVoiceDock port={draftPort}
