@@ -266,6 +266,32 @@ def project_owned_history(
                     or metadata.get("verified_presentations_v1") is not None
                 ):
                     raise UnreplayableHistory("unsupported_rich_history")
+            elif (
+                metadata.get("response_source") == "runtime_registry_observation"
+                and metadata.get("runtime_engine") == "direct_capability"
+                and metadata.get("actual_provider") is None
+                and metadata.get("actual_model") is None
+                and metadata.get("verified_presentations_v1") is None
+                and isinstance(structured, Mapping)
+            ):
+                # Runtime inspection is a text observation with structured snapshot
+                # metadata. Reject arbitrary payloads, unobserved statuses, or
+                # foreign observation origins.
+                if (
+                    structured.get("status") != "observed"
+                    or structured.get("required_capability") != "runtime.inspect"
+                    or not set(structured).issubset({
+                        "status", "required_capability", "capability_snapshot",
+                    })
+                ):
+                    raise UnreplayableHistory("unsupported_rich_history")
+                snapshot_val = structured.get("capability_snapshot")
+                if snapshot_val is not None:
+                    if (
+                        not isinstance(snapshot_val, Mapping)
+                        or snapshot_val.get("source") != "authenticated_runtime_observation"
+                    ):
+                        raise UnreplayableHistory("unsupported_rich_history")
             else:
                 captured = metadata.get("verified_presentations_v1")
                 if (

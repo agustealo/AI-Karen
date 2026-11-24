@@ -11,6 +11,7 @@ This module provides a comprehensive rate limiting system with:
 
 import asyncio
 import logging
+import os
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -765,6 +766,16 @@ STRICT_AUTH_ENDPOINTS = (
 )
 
 
+def _int_env(name: str, default: int) -> int:
+    val = os.getenv(name)
+    if val:
+        try:
+            return int(val)
+        except ValueError:
+            pass
+    return default
+
+
 # Default rate limiting rules
 DEFAULT_RATE_LIMIT_RULES = [
     # High priority rule for unauthenticated credential/session-minting edges.
@@ -772,7 +783,7 @@ DEFAULT_RATE_LIMIT_RULES = [
         name="auth_strict",
         scope=RateLimitScope.IP_ENDPOINT,
         algorithm=RateLimitAlgorithm.SLIDING_WINDOW,
-        limit=10,
+        limit=_int_env("RATE_LIMIT_AUTH_STRICT", 10),
         window_seconds=60,
         priority=100,
         endpoints=list(STRICT_AUTH_ENDPOINTS),
@@ -787,9 +798,9 @@ DEFAULT_RATE_LIMIT_RULES = [
         name="user_general",
         scope=RateLimitScope.USER,
         algorithm=RateLimitAlgorithm.TOKEN_BUCKET,
-        limit=1000,
+        limit=_int_env("RATE_LIMIT_USER_LIMIT", 5000),
         window_seconds=3600,  # 1 hour
-        burst_limit=100,
+        burst_limit=_int_env("RATE_LIMIT_USER_BURST", 2000),
         priority=50,
         description="General rate limiting per user"
     ),
@@ -799,7 +810,7 @@ DEFAULT_RATE_LIMIT_RULES = [
         name="ip_general",
         scope=RateLimitScope.IP,
         algorithm=RateLimitAlgorithm.SLIDING_WINDOW,
-        limit=300,
+        limit=_int_env("RATE_LIMIT_IP_LIMIT", 1000),
         window_seconds=60,
         priority=25,
         description="General rate limiting per IP address"

@@ -23,6 +23,7 @@ from ai_karen_engine.core.runtime.contracts import (
 from ai_karen_engine.core.runtime.direct_capability_executor import (
     DirectCapabilityExecutor,
 )
+import ai_karen_engine.services.automation.definitions  # noqa: F401
 
 USER = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 TENANT = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
