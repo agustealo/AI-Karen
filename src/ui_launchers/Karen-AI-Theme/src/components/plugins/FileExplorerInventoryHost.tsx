@@ -153,6 +153,7 @@ export function FileExplorerInventoryHost({
   children,
   mode = 'analysis',
   consumer = 'file-explorer',
+  onAttach,
   renderAnalysis,
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
@@ -160,6 +161,7 @@ export function FileExplorerInventoryHost({
   mode?: 'analysis' | 'selection';
   /** Trusted UI composition selects a fixed endpoint; the server authorizes it. */
   consumer?: InventoryConsumer;
+  onAttach?: (references: { source_id: string; revision: string }[]) => void;
   /** Optional layout slot; authorization and selection remain host-owned. */
   renderAnalysis?: (panel: ReactNode, props: FileExplorerInventoryProps) => ReactNode;
 }) {
@@ -323,6 +325,12 @@ export function FileExplorerInventoryHost({
       return item ? [{ source_id: item.source_id, revision: item.revision, name: item.name }] : [];
     })
     : [];
+  const selectedDraftSources = mode === 'selection' && currentPage && !currentError && !loading
+    ? selectedSourceIds.flatMap(id => {
+      const item = currentPage.items.find(entry => entry.source_id === id);
+      return item ? [{ source_id: item.source_id, revision: item.revision }] : [];
+    })
+    : [];
   const selectionKey = props.pageKey + ':' +
     selectedAnalysisSources.map((source) => source.source_id + ':' + source.revision).join('|');
 
@@ -337,7 +345,16 @@ export function FileExplorerInventoryHost({
   return (
     <>
       {children(props)}
-      {renderAnalysis ? renderAnalysis(panel, props) : panel}
+      {mode === 'selection' && onAttach && selectedDraftSources.length > 0 && (
+        <button type="button" className="m-2 min-h-11 rounded-lg border border-input px-3 text-sm"
+          onClick={() => {
+            if (!currentPage || currentPage.generation !== generationRef.current) return;
+            onAttach(selectedDraftSources);
+          }}>
+          Attach selected files ({selectedDraftSources.length})
+        </button>
+      )}
+      {mode === 'analysis' && (renderAnalysis ? renderAnalysis(panel, props) : panel)}
     </>
   );
 }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sdk = vi.hoisted(() => ({
   views: [] as Array<Record<string, unknown>>,
   draftWrites: [] as string[],
+  initialAttachments: [] as { source_id: string; revision: string }[],
   agent: {
     messages: [] as Array<{ id: string; role: string; content: string }>,
     isRunning: false,
@@ -60,8 +61,9 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
   useKarenPersistedDraft: () => {
     const [draft, setDraft] = React.useState("");
     const text = React.useRef("");
+    const [attachments, updateAttachments] = React.useState(sdk.initialAttachments);
     return {
-      draft,
+      draft, attachments, updateAttachments,
       setText: (value: string) => {
         if (value.length > 65536) return;
         sdk.draftWrites.push(value);
@@ -97,6 +99,7 @@ const THREAD = "8d3f7a11-bc7a-4caa-bf1d-6932891d42d0";
 beforeEach(() => {
   sdk.views.length = 0;
   sdk.draftWrites.length = 0;
+  sdk.initialAttachments = [];
   sdk.useAgentOptions.length = 0;
   sdk.isReady = true;
   sdk.draftSynced = true;
@@ -1020,5 +1023,22 @@ describe("KUI-004B2B composer file eligibility", () => {
     expect(input().value).toBe("Preserve this draft");
     expect(sdk.runAgent).not.toHaveBeenCalled();
     expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("Attachment-aware controlled composer", () => {
+  it("blocks inference with restored references and permits text submission after explicit removal", async () => {
+    const ref = { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) };
+    sdk.initialAttachments = [ref];
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+    act(() => input().onSubmitMessage("Do not send attached content"));
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove file reference " + ref.source_id }));
+    expect(screen.queryByText("1 / 12 file references")).toBeNull();
+    act(() => input().onSubmitMessage("Text only"));
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
   });
 });

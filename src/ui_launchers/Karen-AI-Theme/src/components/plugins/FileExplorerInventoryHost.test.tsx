@@ -52,9 +52,9 @@ function auth(userId = 'owner-one') {
   };
 }
 
-function Consumer({ mode, consumer }: { mode?: 'analysis' | 'selection'; consumer?: InventoryConsumer } = {}) {
+function Consumer({ mode, consumer, onAttach }: { mode?: 'analysis' | 'selection'; consumer?: InventoryConsumer; onAttach?: (refs: { source_id: string; revision: string }[]) => void } = {}) {
   return (
-    <FileExplorerInventoryHost mode={mode} consumer={consumer}>
+    <FileExplorerInventoryHost mode={mode} consumer={consumer} onAttach={onAttach}>
       {(props) => (
         <section>
           <output data-testid="authorized">{String(props.authorized)}</output>
@@ -554,6 +554,34 @@ describe('Independent Content Intelligence inventory consumer', () => {
     await waitFor(() => expect(screen.getByTestId('error').textContent).toContain('access was denied'));
     expect(screen.getByTestId('authorized').textContent).toBe('false');
     expect(mocks.get.mock.calls).toEqual([['/api/plugins/content-intelligence/inventory?limit=100']]);
+  });
+});
+
+describe('Explicit composer attachment handoff', () => {
+  it('passes only verified references after explicit confirmation and rejects forged selections', async () => {
+    const onAttach = vi.fn();
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<Consumer mode="selection" onAttach={onAttach} />);
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    fireEvent.click(screen.getByText('Select A'));
+    expect(onAttach).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Attach selected files (1)' }));
+    expect(onAttach).toHaveBeenCalledExactlyOnceWith([{ source_id: FILE_A, revision: SHA }]);
+    fireEvent.click(screen.getByText('Forged hash'));
+    expect(screen.queryByRole('button', { name: /Attach selected files/ })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('revokes the attachment action when authentication is revalidated', async () => {
+    const onAttach = vi.fn();
+    mocks.get.mockResolvedValue(response(FILE_A));
+    const view = render(<Consumer mode="selection" onAttach={onAttach} />);
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    fireEvent.click(screen.getByText('Select A'));
+    mocks.useAuth.mockReturnValue({ ...auth(), isLoading: true });
+    view.rerender(<Consumer mode="selection" onAttach={onAttach} />);
+    expect(screen.queryByRole('button', { name: /Attach selected files/ })).toBeNull();
+    expect(onAttach).not.toHaveBeenCalled();
   });
 });
 
