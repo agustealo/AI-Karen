@@ -50,9 +50,9 @@ function auth(userId = 'owner-one') {
   };
 }
 
-function Consumer() {
+function Consumer({ mode }: { mode?: 'analysis' | 'selection' } = {}) {
   return (
-    <FileExplorerInventoryHost>
+    <FileExplorerInventoryHost mode={mode}>
       {(props) => (
         <section>
           <output data-testid="authorized">{String(props.authorized)}</output>
@@ -219,6 +219,33 @@ function analyzed(id = FILE_A, revision = SHA) {
     }],
   };
 }
+
+describe('File Explorer selection-only host', () => {
+  it('validates selection without mounting or invoking Content Intelligence', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<Consumer mode="selection" />);
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    fireEvent.click(screen.getByText('Select A'));
+    expect(screen.getByTestId('selection').textContent).toBe(FILE_A);
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    fireEvent.click(screen.getByText('Forged hash'));
+    expect(screen.getByTestId('selection').textContent).toBe('');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('hides previously verified inventory during authentication revalidation', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    const view = render(<Consumer mode="selection" />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    mocks.useAuth.mockReturnValue({ ...auth(), isLoading: true });
+    view.rerender(<Consumer mode="selection" />);
+    expect(screen.getByTestId('authorized').textContent).toBe('false');
+    expect(screen.getByTestId('page').textContent).toBe('');
+    expect(screen.getByTestId('selection').textContent).toBe('');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+});
 
 describe('File Explorer to Content Intelligence handoff', () => {
   it('submits only the selected source id and revision, then displays verified analysis', async () => {
