@@ -43,6 +43,8 @@ on:
       - 'tests/services/test_search_article_chat_reference.py'
       - 'tests/services/test_search_article_document_service.py'
       - 'tests/services/test_search_crawl_execution_contract.py'
+      - 'tests/services/test_crawl4ai_browser_egress_policy.py'
+      - 'tests/integration/test_crawl4ai_browser_egress_real.py'
       - 'tests/services/test_search_plugin_option_contract.py'
       - 'tests/services/test_runtime_search_citation_validator.py'
       - 'tests/architecture/test_grounded_article_reference_boundary.py'
@@ -98,6 +100,8 @@ on:
       - 'tests/services/test_search_article_chat_reference.py'
       - 'tests/services/test_search_article_document_service.py'
       - 'tests/services/test_search_crawl_execution_contract.py'
+      - 'tests/services/test_crawl4ai_browser_egress_policy.py'
+      - 'tests/integration/test_crawl4ai_browser_egress_real.py'
       - 'tests/services/test_search_plugin_option_contract.py'
       - 'tests/services/test_runtime_search_citation_validator.py'
       - 'tests/architecture/test_grounded_article_reference_boundary.py'
@@ -186,7 +190,9 @@ jobs:
 
   test-backend:
     name: Test Plugin Backend
-    runs-on: ubuntu-latest
+    # Playwright 1.58.0 Chromium does not support ubuntu26.04; use
+    # a supported and explicit GitHub runner for real-browser proof.
+    runs-on: ubuntu-24.04
     needs: lint
     services:
       postgres:
@@ -239,6 +245,9 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio pytest-cov pytest-timeout
 
+      - name: Install Chromium for browser egress acceptance
+        run: python -m playwright install --with-deps chromium
+
       - name: Run plugin runtime contracts
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/karen_test
@@ -263,6 +272,8 @@ jobs:
             tests/services/test_search_article_document_service.py \
             tests/services/test_search_plugin_option_contract.py \
             tests/services/test_search_crawl_execution_contract.py \
+            tests/services/test_crawl4ai_browser_egress_policy.py \
+            tests/integration/test_crawl4ai_browser_egress_real.py \
             tests/services/test_runtime_search_citation_validator.py \
             tests/architecture/test_grounded_article_reference_boundary.py \
             tests/architecture/test_extension_lifecycle_authority.py \
