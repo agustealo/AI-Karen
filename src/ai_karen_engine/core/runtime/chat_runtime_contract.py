@@ -289,6 +289,16 @@ class ChatExecutionContext:
         ):
             raise PermissionError("runtime_attachment_authority_invalid")
         scope = tuple((item["source_id"], item["revision"]) for item in selected)
+        issued_scope = root.resource_scope.get("attachment_references", [])
+        if (
+            not isinstance(issued_scope, list)
+            or tuple(
+                (item.get("source_id"), item.get("revision"))
+                for item in issued_scope if isinstance(item, dict)
+            ) != scope
+            or len(issued_scope) != len(scope)
+        ):
+            raise PermissionError("runtime_attachment_scope_denied")
         current = self.__dict__.get("_runtime_attachment_scope")
         if current is not None and (
             current[0] is not plan or current[1] is not meter or current[2] != scope
