@@ -30,7 +30,8 @@ describe("CopilotKit model request transport", () => {
     expect(catalog).toContain("provider.allowed_for_current_user !== false");
     expect(catalog).toContain("onSelectionChange(null)");
     expect(catalog).toContain("Automatic lets Karen choose an available model.");
-    expect(catalog).toContain("Advanced provider and agent details");
+    expect(catalog).toContain("Advanced provider details");
+    expect(catalog).not.toContain("/api/agent-runtime/catalog");
   });
 
   it("exposes provider and model choices without burying selection or fabricating backend readiness", () => {

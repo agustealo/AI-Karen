@@ -43,7 +43,7 @@ describe("provider/model and selected response context alignment", () => {
     expect(catalog).toContain('aria-label="Requested model"');
     expect(catalog).toContain("isRuntimeProviderOperational(provider)");
     expect(catalog).toContain("model.available === true");
-    expect(catalog).toContain("Advanced provider and agent details");
+    expect(catalog).toContain("Advanced provider details");
     expect(catalog).toContain("Refresh models");
     expect(catalog).toContain("Configure providers");
     expect(catalog).not.toContain("providerRegistryFallback");

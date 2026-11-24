@@ -1179,3 +1179,8 @@ completion, content-size or presentation validation to silence the UI.
 
 - Extend the existing authenticated FileExplorerInventoryHost with an explicit selection mode, preserving default analysis behavior and canonical inventory/reference validation. Selection mode does not mount Content Intelligence or grant file access. Hide inventory immediately during authentication revalidation.
 - Tests cover selection without analysis, forged reference rejection and auth revalidation. No composer attachment action, durable reference submission or runtime file admission is enabled by this slice. Exact-head CI and authenticated browser acceptance remain required.
+
+## KCON-770 / KUI-004B1: Composer agent discovery (2026-11-24, SOURCE_CANDIDATE)
+
+- Move the existing read-only agent catalog from provider diagnostics to a lazy composer disclosure. Preserve authenticated scope, dashboard navigation callback, native draft and run authority; no new execution API, attachment admission or capability grant. Malformed catalog records fail closed; closed panels discard stale responses.
+- Proof candidate: existing controlled-chat and provider tests verify lazy discovery, malformed data rejection, preserved draft and no inference. Exact-head CI and authenticated browser acceptance remain required.

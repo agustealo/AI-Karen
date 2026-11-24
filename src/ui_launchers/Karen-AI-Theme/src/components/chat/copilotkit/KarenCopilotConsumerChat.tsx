@@ -356,7 +356,6 @@ export function KarenCopilotConsumerChat({
               <KarenComposerRuntimeCatalog
                 selection={modelRequest}
                 onSelectionChange={handleModelRequest}
-                onOpenAgents={onOpenAgents}
                 onOpenProviders={onOpenProviderSettings}
               />
             </fieldset>
@@ -377,6 +376,7 @@ export function KarenCopilotConsumerChat({
         preferredProvider={modelRequest?.provider ?? null}
         preferredModel={modelRequest?.model ?? null}
         workspaceRunId={workspaceRunId}
+        onOpenAgents={strictInitialSession ? undefined : onOpenAgents}
         onBusyChange={handleBusyChange}
         onStartNewConversation={strictInitialSession
           ? undefined : () => performNavigation(createNewSession)}

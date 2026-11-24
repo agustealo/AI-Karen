@@ -212,6 +212,33 @@ describe("CK-07E4: SDK-native view with explicitly controlled inference", () => 
     expect(sdk.agent.addMessage).not.toHaveBeenCalled();
   });
 
+  it("discovers agents only on demand without submitting or losing the draft", async () => {
+    sdk.get.mockResolvedValue({ agents: [{ agent_id: "agent-one", name: "Research agent", lifecycle_state: "active", healthy: true }] });
+    const navigate = vi.fn();
+    render(<KarenCopilotControlledChat conversationId={THREAD} onOpenAgents={navigate} />);
+    expect(sdk.get).not.toHaveBeenCalled();
+    act(() => input().onChange("Keep this draft"));
+    fireEvent.click(screen.getByRole("button", { name: "Discover agents" }));
+    expect(await screen.findByText("Research agent")).toBeTruthy();
+    expect(screen.getByText("Registered and healthy; eligibility unverified")).toBeTruthy();
+    expect(sdk.get).toHaveBeenCalledWith("/api/agent-runtime/catalog");
+    fireEvent.click(screen.getByRole("button", { name: "Discover agents" }));
+    expect(screen.queryByText("Research agent")).toBeNull();
+    expect(input().value).toBe("Keep this draft");
+    expect(navigate).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed agent evidence without displaying an executable option", async () => {
+    sdk.get.mockResolvedValue({ agents: [{ agent_id: "agent-one", name: "Unverified agent", lifecycle_state: "active", healthy: "true" }] });
+    render(<KarenCopilotControlledChat conversationId={THREAD} onOpenAgents={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Discover agents" }));
+    expect(await screen.findByText("Agent catalog unavailable.")).toBeTruthy();
+    expect(screen.queryByText("Unverified agent")).toBeNull();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+  });
+
   it("keeps an unsent native draft controlled and never starts inference while typing", () => {
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
     expect(input().value).toBe("");

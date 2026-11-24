@@ -48,12 +48,10 @@ function selectableModels(provider: RuntimeProviderCatalogProvider | undefined):
 export function KarenComposerRuntimeCatalog({
   selection,
   onSelectionChange,
-  onOpenAgents,
   onOpenProviders,
 }: {
   selection: ComposerModelRequest;
   onSelectionChange: (selection: ComposerModelRequest) => void;
-  onOpenAgents?: () => void;
   onOpenProviders?: () => void;
 }) {
   const [catalog, setCatalog] = useState<RuntimeProviderCatalogResponse | null>(null);
@@ -61,13 +59,6 @@ export function KarenComposerRuntimeCatalog({
   const [isLoading, setIsLoading] = useState(true);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [browsedProvider, setBrowsedProvider] = useState("");
-  const [agents, setAgents] = useState<Array<{
-    agent_id: string;
-    name: string;
-    lifecycle_state: string;
-    healthy: boolean;
-  }>>([]);
-  const [agentCatalogError, setAgentCatalogError] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
@@ -105,27 +96,6 @@ export function KarenComposerRuntimeCatalog({
       onSelectionChange(null);
     }
   }, [catalog, selection, onSelectionChange]);
-
-  useEffect(() => {
-    if (!showAdvanced) return;
-    let cancelled = false;
-    setAgentCatalogError(false);
-    apiClient.get<{ agents: Array<{
-      agent_id: string;
-      name: string;
-      lifecycle_state: string;
-      healthy: boolean;
-    }> }>("/api/agent-runtime/catalog")
-      .then((data) => {
-        if (cancelled) return;
-        if (!data || !Array.isArray(data.agents)) throw new Error("Invalid agent catalog");
-        setAgents(data.agents.filter(
-          (agent) => typeof agent.agent_id === "string" && typeof agent.name === "string",
-        ));
-      })
-      .catch(() => { if (!cancelled) setAgentCatalogError(true); });
-    return () => { cancelled = true; };
-  }, [showAdvanced]);
 
   // The conversation picker offers executable choices only. Keep other
   // authorized providers visible in the diagnostics and Settings panels.
@@ -271,13 +241,13 @@ export function KarenComposerRuntimeCatalog({
           className="rounded-lg border border-border/60 px-3 py-2"
         >
           <summary className="cursor-pointer text-xs font-medium focus-visible:outline-2 focus-visible:outline-ring">
-            Advanced provider and agent details
+            Advanced provider details
           </summary>
           {showAdvanced && (
             <div className="mt-3 space-y-3">
               <p className="text-xs text-muted-foreground">
-                Provider availability and agent registration are reported by the backend.
-                They do not grant execution access.
+                Provider availability is reported by the backend.
+                It does not grant execution access.
               </p>
               {inspectableProviders.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No providers were returned for this user.</p>
@@ -313,34 +283,6 @@ export function KarenComposerRuntimeCatalog({
                   ))}
                 </ul>
               )}
-              <section aria-label="Registered agent discovery" className="border-t border-border/60 pt-3">
-                <h4 className="text-sm font-medium">Registered agents</h4>
-                <p className="text-xs text-muted-foreground">
-                  Discovery only. Catalog health does not grant execution access.
-                  CORTEX and RuntimePolicy decide eligibility per request.
-                </p>
-                {onOpenAgents && (
-                  <button type="button" onClick={onOpenAgents}
-                    className="min-h-11 rounded-lg border border-input px-3 text-xs font-medium hover:bg-muted">
-                    Open Agents workspace
-                  </button>
-                )}
-                {agentCatalogError ? (
-                  <p role="status" className="text-xs text-muted-foreground">Agent catalog unavailable.</p>
-                ) : (
-                  <ul className="mt-2 space-y-1 text-xs">
-                    {agents.map((agent) => (
-                      <li key={agent.agent_id} className="flex justify-between gap-2 rounded border border-border/50 px-2 py-1.5">
-                        <span>{agent.name}</span>
-                        <span className="text-muted-foreground">
-                          {agent.lifecycle_state === "active" && agent.healthy === true
-                            ? "Registered and healthy; eligibility unverified" : "Not ready"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
             </div>
           )}
         </details>

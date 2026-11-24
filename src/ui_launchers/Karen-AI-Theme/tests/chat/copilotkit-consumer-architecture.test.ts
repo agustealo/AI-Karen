@@ -15,6 +15,7 @@ const verified = read("src/components/chat/copilotkit/KarenCopilotVerifiedHistor
 const rail = read("src/components/chat/copilotkit/KarenCopilotVerifiedRail.tsx");
 const session = read("src/components/chat/SessionProvider.tsx");
 const catalog = read("src/components/chat/KarenComposerRuntimeCatalog.tsx");
+const agentDiscovery = read("src/components/chat/KarenComposerAgentDiscovery.tsx");
 const pkg = JSON.parse(read("package.json"));
 const liveBrowser = read("e2e/copilotkit-consumer-boot.spec.ts");
 const nativePreview = read("src/app/acceptance/copilotkit/[conversationId]/page.tsx");
@@ -29,10 +30,9 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(consumer).toContain("Model preferences");
     expect(consumer).not.toContain("Karen runtime controls model execution and saved history");
     expect(catalog).toContain("Automatic lets Karen choose an available model.");
-    expect(catalog).toContain("Advanced provider and agent details");
-    expect(catalog).toContain("if (!showAdvanced) return;");
+    expect(catalog).toContain("Advanced provider details");
     expect(catalog).toContain("{showAdvanced && (");
-    expect(catalog).toContain("Advanced provider and agent details");
+    expect(catalog).toContain("Advanced provider details");
     expect(catalog).toContain('aria-label="Requested model provider"');
     expect(catalog).toContain('aria-label="Requested model"');
   });
@@ -269,9 +269,11 @@ describe("canonical CopilotKit chat ownership", () => {
   it("retains canonical agent workspace handoff and model discovery", () => {
     expect(dashboard).toContain("function AgentWorkspaceView");
     expect(dashboard).toContain("setWorkspaceRunId(runId); openChat()");
-    expect(catalog).toContain('"/api/agent-runtime/catalog"');
-    expect(catalog).toContain("Discovery only.");
-    expect(catalog).not.toContain("executeAgent(");
+    expect(catalog).not.toContain('"/api/agent-runtime/catalog"');
+    expect(agentDiscovery).toContain('"/api/agent-runtime/catalog"');
+    expect(agentDiscovery).toContain("Discovery only.");
+    expect(agentDiscovery).not.toContain("executeAgent(");
+    expect(controller).toContain("<KarenComposerAgentDiscovery");
   });
 
   it("rejects assistant-ui packages after renderer retirement", () => {
