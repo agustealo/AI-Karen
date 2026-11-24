@@ -456,3 +456,43 @@ async def test_cloud_fallback_denied_by_role_uses_only_authorized_local_engines(
     assert visited == ["local", "alternate"]
     assert meter.model_calls == 2
     assert {"engine_id": "cloud", "reason": "external_admin_permission_required"} in result.metadata["skipped_engines"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admin_required", [False, True])
+async def test_private_evidence_local_failure_never_attempts_cloud(admin_required):
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call() is True
+    task = _task(meter)
+    task.local_only = True
+
+    async def authorize():
+        pytest.fail("Private evidence must not request external approval")
+
+    task.authorize_external_engine_attempt = authorize
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError):
+            await ExpressionGateway(_settings(admin_required=admin_required)).generate(task)
+    assert visited == ["local"]
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_private_evidence_eligible_fallback_uses_original_budget():
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call() is True
+    task = _task(meter)
+    task.local_only = True
+    visited: list[str] = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        result = await ExpressionGateway(_settings(extra_engine=True)).generate(task)
+    assert visited == ["local", "alternate"]
+    assert meter.model_calls == 2
+    assert {"engine_id": "cloud", "reason": "private_evidence_local_only"} in result.metadata["skipped_engines"]
