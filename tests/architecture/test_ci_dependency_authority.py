@@ -116,3 +116,20 @@ def test_agent_burn_has_single_medusa_core_ci_owner() -> None:
 def test_cognitive_benchmark_policy_proof_has_one_execution() -> None:
     workflow = _workflow_text(".github/workflows/cognitive-proof-ci.yml")
     assert workflow.count("pytest tests/benchmarks/cognitive/test_proof_gates.py") == 1
+
+
+def test_dev_fast_frontend_preserves_required_merge_gate() -> None:
+    fast = _workflow_text(".github/workflows/dev-fast.yml")
+    gate = _workflow_text(".github/workflows/main-quality-gate.yml")
+    assert "frontend_changed" in fast
+    assert "needs: dev-fast" in fast
+    assert "needs.dev-fast.outputs.frontend_changed == 'true'" in fast
+    assert 'node-version: "22"' in fast
+    assert "npm ci --no-audit --no-fund" in fast
+    assert "npm run ci:forbid-mocks" in fast
+    assert "npm run typecheck" in fast
+    assert "npx --no-install vitest run" in fast
+    assert "npm run build" not in fast
+    assert "npm run build" in gate
+    assert "Publish fail-closed merge decision" in gate
+    assert "ci:merge-gate" in gate
