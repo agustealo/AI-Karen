@@ -359,6 +359,7 @@ class RuntimeDecisionPipeline:
             roles=list(ctx.roles or []),
             permissions=list(ctx.permissions or []),
             action=cognitive.intent or "general_assist",
+            attachment_references=[dict(item) for item in request.attachment_references],
             requested_capabilities=list(dict.fromkeys([
                 *cognitive.required_capabilities,
                 *(["data:read"] if request.attachment_references else []),
@@ -506,6 +507,10 @@ class RuntimeDecisionPipeline:
                 "allowed_agents": list(
                     policy.runtime_constraints.get("allowed_agents") or []
                 ),
+                "attachment_references": [
+                    dict(item) for item in
+                    (policy.runtime_constraints.get("attachment_references") or [])
+                ],
             },
         )
 
