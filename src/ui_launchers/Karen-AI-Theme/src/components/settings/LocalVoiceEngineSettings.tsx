@@ -11,6 +11,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription }
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { claimVoiceOutput, markVoiceOutputSpeaking } from "@/components/chat/KarenBrowserSpeechPlayback";
 
 const BROWSER = "_browser_speech_";
 const PREVIEW_TEXT = "Hello, I am Karen. This is a local voice preview.";
@@ -42,8 +43,12 @@ export default function LocalVoiceEngineSettings({ engineFilter }: { engineFilte
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const releaseVoiceOutputRef = useRef<(() => void) | null>(null);
 
   const releasePreviewResources = useCallback(() => {
+    const releaseVoiceOutput = releaseVoiceOutputRef.current;
+    releaseVoiceOutputRef.current = null;
+    releaseVoiceOutput?.();
     // This component owns only its own synthesis request, WAV element and URL.
     // Clear references before teardown so late events cannot retire a new preview.
     const controller = abortRef.current;
@@ -149,6 +154,7 @@ export default function LocalVoiceEngineSettings({ engineFilter }: { engineFilte
     setError(null);
     const controller = new AbortController();
     abortRef.current = controller;
+    releaseVoiceOutputRef.current = claimVoiceOutput(stop, "preparing");
     setPreviewing(true);
     try {
       const blob = await apiClient.synthesizeLocalVoice(
@@ -170,6 +176,7 @@ export default function LocalVoiceEngineSettings({ engineFilter }: { engineFilte
         stop();
       };
       await audio.play();
+      if (!controller.signal.aborted) markVoiceOutputSpeaking(stop);
     } catch {
       if (!controller.signal.aborted) {
         setError("Karen could not complete the local voice preview. Verify the engine and try again.");
