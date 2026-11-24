@@ -914,9 +914,20 @@ class DirectCapabilityExecutor:
         # scope. Other catalogs remain their own owners. A read is not a
         # plugin/automation execution grant or evidence of delivery.
         principal = request.context.require_authenticated_user()
+        route_names = sorted({
+            str(route["required_capability"])
+            for route in CAPABILITY_ROUTES.values()
+            if isinstance(route.get("required_capability"), str)
+        })
         snapshot: Dict[str, Any] = {
             "version": 1,
             "source": "authenticated_runtime_observation",
+            "routed_actions": {
+                "status": "registered_not_execution_verified",
+                "count": len(route_names),
+                "names": route_names[:24],
+                "truncated": len(route_names) > 24,
+            },
             "core": {
                 "status": "registered",
                 "count": len(capability_names),
@@ -944,56 +955,64 @@ class DirectCapabilityExecutor:
             "voice": {"status": "requires_engine_health_check"},
         }
 
-        try:
-            # PluginService already owns manifest validation, tenant-specific
-            # configuration readiness and role projection. Never execute or
-            # enable an extension while answering a catalog question.
-            observed = await asyncio.wait_for(
-                get_plugin_service().inspect_for_conversation(
-                    tenant_id=str(principal.tenant_id),
-                    caller_roles=list(principal.roles or []),
-                    limit=16,
-                ),
-                timeout=2.0,
-            )
-            if (
-                not isinstance(observed, dict)
-                or observed.get("catalog_source") != "plugin_kernel"
-                or observed.get("mutation_performed") is not False
-                or not isinstance(observed.get("matches"), list)
-            ):
-                raise ValueError("Untrusted plugin catalog observation")
-            visible_plugins = []
-            for entry in observed["matches"][:16]:
+        if (
+            "plugin.inspect" in set(plan.allowed_capabilities)
+            and await ActionExecutionGate.authorize(plan, "plugin.inspect")
+        ):
+            try:
+                # PluginService already owns manifest validation, tenant-specific
+                # configuration readiness and role projection. Never execute or
+                # enable an extension while answering a catalog question.
+                observed = await asyncio.wait_for(
+                    get_plugin_service().inspect_for_conversation(
+                        tenant_id=str(principal.tenant_id),
+                        caller_roles=list(principal.roles or []),
+                        limit=16,
+                    ),
+                    timeout=2.0,
+                )
                 if (
-                    not isinstance(entry, dict)
-                    or entry.get("registered") is not True
-                    or entry.get("role_eligible") is not True
+                    not isinstance(observed, dict)
+                    or observed.get("catalog_source") != "plugin_kernel"
+                    or observed.get("mutation_performed") is not False
+                    or not isinstance(observed.get("matches"), list)
                 ):
-                    continue
-                name = str(entry.get("display_name") or "")
-                if not (
-                    1 <= len(name) <= 80
-                    and all(char.isprintable() for char in name)
-                ):
-                    continue
-                visible_plugins.append({
-                    "name": name,
-                    "configuration_ready": entry.get("readiness") == "ready",
-                })
-            snapshot["plugins"] = {
-                "status": "observed",
-                "visible_entries": visible_plugins,
-                "truncated": observed.get("truncated") is True,
-                "execution_verified": False,
-            }
-        except Exception as exc:
-            logger.warning(
-                "runtime.capability_plugin_observation_unavailable",
-                extra={
-                    "correlation_id": request.context.correlation_id,
-                    "error_type": type(exc).__name__,
-                },
+                    raise ValueError("Untrusted plugin catalog observation")
+                visible_plugins = []
+                for entry in observed["matches"][:16]:
+                    if (
+                        not isinstance(entry, dict)
+                        or entry.get("registered") is not True
+                        or entry.get("role_eligible") is not True
+                    ):
+                        continue
+                    name = str(entry.get("display_name") or "")
+                    if not (
+                        1 <= len(name) <= 80
+                        and all(char.isprintable() for char in name)
+                    ):
+                        continue
+                    visible_plugins.append({
+                        "name": name,
+                        "configuration_ready": entry.get("readiness") == "ready",
+                    })
+                snapshot["plugins"] = {
+                    "status": "observed",
+                    "visible_entries": visible_plugins,
+                    "truncated": observed.get("truncated") is True,
+                    "execution_verified": False,
+                }
+            except Exception as exc:
+                logger.warning(
+                    "runtime.capability_plugin_observation_unavailable",
+                    extra={
+                        "correlation_id": request.context.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+        else:
+            snapshot["plugins"]["status"] = (
+                "requires_separate_plugin_inspection_authorization"
             )
 
         try:
@@ -1054,6 +1073,8 @@ class DirectCapabilityExecutor:
             f"{summary(enabled_for_request)}. "
             "A specific action must pass its own runtime policy, tool gate, "
             "credentials and service readiness before execution.\n\n"
+            f"Registered action routes ({len(route_names)}): "
+            f"{summary(route_names)}. Route registration does not grant an action.\n\n"
             "Plugin catalog for your role: "
             + (
                 ", ".join(
@@ -1064,6 +1085,9 @@ class DirectCapabilityExecutor:
                 )[:650]
                 or "no validated, role-eligible entries in the inspected page"
                 if snapshot["plugins"]["status"] == "observed"
+                else "requires separate plugin inspection" if
+                snapshot["plugins"]["status"] ==
+                "requires_separate_plugin_inspection_authorization"
                 else "currently unverified"
             )
             + ". Configuration readiness is not permission or verified plugin execution.\n\n"
