@@ -7,6 +7,7 @@ dedicated PostgreSQL terminal CAS proof or whole-deployment fencing.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -510,3 +511,74 @@ async def test_uploaded_plugin_never_uses_bundled_first_enable_exemption(
         await kernel.observe_lifecycle_for_finalization(
             "kernel-terminal", operation_id=str(uuid.uuid4())
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_bundled_gui_upgrade_preserves_activation_and_rejects_old_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    """A changed GUI declaration must not reuse an earlier lifecycle approval."""
+    from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+
+    monkeypatch.setattr(PluginKernel, "_is_builtin_root", lambda self: True)
+    _create_plugin(tmp_path, explicit_disabled=not enabled)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    if enabled:
+        assert await service.enable_plugin("kernel-terminal")
+
+    state = "enabled" if enabled else "disabled"
+    before = await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=str(uuid.uuid4())
+    )
+    assert before.observed_state == state
+    stale = _approval_scope(
+        action="disable" if enabled else "enable",
+        checksum=before.manifest_checksum,
+        expected_state=state,
+    )
+    package = tmp_path / "kernel-terminal"
+    manifest_path = package / "plugin_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["capabilities"] = {"provides_ui": True, "prompt_first": True}
+    manifest["ui"] = {"source_path": "ui", "entry_file": "PluginPage.tsx"}
+    (package / "ui").mkdir()
+    (package / "ui/PluginPage.tsx").write_text(
+        "export default function PluginPage() { return null; }", encoding="utf-8"
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    expected_checksum = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert expected_checksum != before.manifest_checksum
+
+    with pytest.raises(RuntimeError, match="manifest drifted"):
+        await kernel.observe_lifecycle_for_finalization(
+            "kernel-terminal", operation_id=str(uuid.uuid4())
+        )
+
+    await kernel.refresh()
+    refreshed = await kernel.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=str(uuid.uuid4())
+    )
+    assert refreshed.observed_state == state
+    assert refreshed.manifest_checksum == expected_checksum
+    with pytest.raises(RuntimeError, match="Kernel state or manifest changed"):
+        await kernel.transition_prepared_lifecycle(
+            stale, operation_id=str(uuid.uuid4())
+        )
+
+    restarted = PluginKernel(tmp_path)
+    await restarted.initialize()
+    recovered = await restarted.observe_lifecycle_for_finalization(
+        "kernel-terminal", operation_id=str(uuid.uuid4())
+    )
+    assert recovered.observed_state == state
+    assert recovered.manifest_checksum == expected_checksum
+    with pytest.raises(RuntimeError, match="Kernel state or manifest changed"):
+        await restarted.transition_prepared_lifecycle(
+            stale, operation_id=str(uuid.uuid4())
+        )
+    assert (package / kernel.MANUAL_ENABLED_MARKER).is_file() is enabled
+    assert (package / ".karen-manual-disabled").is_file() is (not enabled)
