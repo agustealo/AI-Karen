@@ -172,9 +172,8 @@ class PluginService:
         rejects missing data-read entitlement rather than accepting a plugin
         identifier as a grant.
         """
-        from importlib import import_module
-
         from ai_karen_engine.database.factory import get_database_client
+        from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
         from ai_karen_engine.extensions.file_explorer_inventory import (
             FileExplorerInventoryHost,
         )
@@ -239,12 +238,8 @@ class PluginService:
             session_factory=database.get_async_session,
         ).create_artifact_store()
 
-        # Resolve the adapter from the installed canonical plugin package.
-        # Do not create a second source implementation or filesystem reader.
-        artifact_source = import_module(
-            "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
-        )
-        source = artifact_source.ArtifactSourceAdapter(repository)
+        # Shared metadata adapter; the File Explorer host still owns admission.
+        source = ArtifactSourceAdapter(repository)
         context = ExtensionExecutionContext(
             request_id=request_id,
             correlation_id=correlation_id,
