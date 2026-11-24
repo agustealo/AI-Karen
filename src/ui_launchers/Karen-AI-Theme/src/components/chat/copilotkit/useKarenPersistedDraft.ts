@@ -384,7 +384,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       return false;
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
-      busyRef.current = false;
+      if (generationRef.current === generation) busyRef.current = false;
     }
   }, [commitDraftWrite, announceRevision]);
 
@@ -396,6 +396,7 @@ export function useKarenPersistedDraft(conversationId: string) {
         attachmentsRef.current.length > 0 || !submittedText.trim()) {
       return false;
     }
+    const generation = generationRef.current;
     // CopilotKit or controlled inputs may clear their internal value to ""
     // synchronously upon submit dispatch. Restore textRef to the authoritative
     // submitted text so the CAS save-and-clear invariant holds.
@@ -412,7 +413,8 @@ export function useKarenPersistedDraft(conversationId: string) {
       const ok = await pending;
       if (!ok) return false;
     }
-    if (!activeRef.current) return false;
+    if (!activeRef.current || generationRef.current !== generation ||
+        attachmentsRef.current.length > 0) return false;
     if (textRef.current.trim() !== submittedText.trim()) {
       if (textRef.current === "") {
         textRef.current = submittedText;
@@ -425,7 +427,8 @@ export function useKarenPersistedDraft(conversationId: string) {
       const ok = await startSave();
       if (!ok) return false;
     }
-    if (!activeRef.current || busyRef.current || attachmentsRef.current.length > 0) {
+    if (!activeRef.current || generationRef.current !== generation ||
+        busyRef.current || attachmentsRef.current.length > 0) {
       return false;
     }
     // If startSave succeeded, but an optimistic clear arrived while startSave
