@@ -169,6 +169,12 @@ class ConversationRepository(Repository):
         """Atomically CAS one owned draft; never append it to the transcript."""
         return RepositoryResult(success=False, error="composer_draft_not_supported")
 
+    async def get_composer_draft_with_attachments(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Read owned draft references, without conferring content access."""
+        return RepositoryResult(success=False, error="composer_attachment_not_supported")
+
     async def put_composer_draft_with_attachments(
         self, conversation_id: str, tenant_id: str, *, user_id: str,
         content: str, expected_revision: int,
