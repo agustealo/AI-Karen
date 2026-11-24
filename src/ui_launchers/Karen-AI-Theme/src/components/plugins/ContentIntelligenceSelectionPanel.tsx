@@ -14,6 +14,7 @@ import { apiClient } from '@/lib/api';
 export interface AnalyzableSource {
   source_id: string;
   revision: string;
+  name?: string;
 }
 
 interface AnalyzedDocument {
@@ -153,6 +154,53 @@ function validateSearch(raw: unknown, selected: AnalyzableSource[], query: strin
   return { operation: 'search', persisted: false, matches };
 }
 
+interface ComparisonResponse {
+  operation: 'compare';
+  persisted: false;
+  shared_terms: string[];
+  only_left: string[];
+  only_right: string[];
+  jaccard_similarity: number;
+}
+
+function validateComparison(raw: unknown, left: AnalyzableSource, right: AnalyzableSource): ComparisonResponse {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Invalid comparison response');
+  }
+  const result = raw as Record<string, unknown>;
+  if (result.operation !== 'compare' || result.persisted !== false ||
+      result.comparison_semantics !== 'lexical_not_semantic' ||
+      left.source_id === right.source_id ||
+      result.left_id !== left.source_id || result.right_id !== right.source_id ||
+      result.left_sha256 !== left.revision || result.right_sha256 !== right.revision ||
+      typeof result.jaccard_similarity !== 'number' || !Number.isFinite(result.jaccard_similarity) ||
+      result.jaccard_similarity < 0 || result.jaccard_similarity > 1) {
+    throw new Error('Invalid comparison response');
+  }
+  const seen = new Set<string>();
+  function readTerms(value: unknown): string[] {
+    if (!Array.isArray(value) || value.length > 100) {
+      throw new Error('Invalid comparison terms');
+    }
+    const terms: string[] = [];
+    for (const term of value) {
+      if (typeof term !== 'string' || !term || seen.has(term)) {
+        throw new Error('Invalid comparison terms');
+      }
+      seen.add(term);
+      terms.push(term);
+    }
+    return terms;
+  }
+  return {
+    operation: 'compare', persisted: false,
+    shared_terms: readTerms(result.shared_terms),
+    only_left: readTerms(result.only_left),
+    only_right: readTerms(result.only_right),
+    jaccard_similarity: result.jaccard_similarity,
+  };
+}
+
 export function ContentIntelligenceSelectionPanel({
   sources,
   onRefreshInventory,
@@ -161,9 +209,14 @@ export function ContentIntelligenceSelectionPanel({
   onRefreshInventory?: () => void;
 }) {
   const [status, setStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
-  const [result, setResult] = useState<AnalyzedResponse | SearchResponse | null>(null);
-  const [operation, setOperation] = useState<'analyze' | 'search'>('analyze');
+  const [result, setResult] = useState<AnalyzedResponse | SearchResponse | ComparisonResponse | null>(null);
+  const [operation, setOperation] = useState<'analyze' | 'search' | 'compare'>('analyze');
   const [query, setQuery] = useState('');
+  const [leftId, setLeftId] = useState('');
+  const [rightId, setRightId] = useState('');
+  const left = sources.find((source) => source.source_id === leftId);
+  const right = sources.find((source) => source.source_id === rightId);
+  const canCompare = Boolean(left && right && leftId !== rightId);
   const generation = useRef(0);
   const controller = useRef<AbortController | null>(null);
 
@@ -175,9 +228,11 @@ export function ContentIntelligenceSelectionPanel({
   async function analyze(): Promise<void> {
     const searchQuery = query.trim();
     if (status === 'pending' || sources.length < 1 || sources.length > 12 ||
-        (operation === 'search' && (!searchQuery || searchQuery.length > 512))) {
+        (operation === 'search' && (!searchQuery || searchQuery.length > 512)) ||
+        (operation === 'compare' && !canCompare)) {
       return;
     }
+    const selected = operation === 'compare' && left && right ? [left, right] : sources;
     controller.current?.abort();
     const signal = new AbortController();
     controller.current = signal;
@@ -187,15 +242,21 @@ export function ContentIntelligenceSelectionPanel({
     try {
       const response = await apiClient.post<unknown>(
         '/api/plugins/content-intelligence/owner-sources',
-        { operation, references: sources.map((ref) => ({
+        { operation, references: selected.map((ref) => ({
           source_id: ref.source_id, revision: ref.revision,
-        })), ...(operation === 'search' ? { query: searchQuery } : {}) },
+        })), ...(operation === 'search' ? { query: searchQuery } : {}),
+          ...(operation === 'compare' ? { left_id: leftId, right_id: rightId } : {}) },
         { signal: signal.signal },
       );
       if (signal.signal.aborted || generation.current !== execution) return;
-      setResult(operation === 'search'
-        ? validateSearch(response, sources, searchQuery)
-        : validateAnalysis(response, sources));
+      if (operation === 'compare') {
+        if (!left || !right) throw new Error('Missing comparison sources');
+        setResult(validateComparison(response, left, right));
+      } else {
+        setResult(operation === 'search'
+          ? validateSearch(response, selected, searchQuery)
+          : validateAnalysis(response, selected));
+      }
       setStatus('success');
     } catch {
       if (signal.signal.aborted || generation.current !== execution) return;
@@ -231,9 +292,10 @@ export function ContentIntelligenceSelectionPanel({
       <label className="flex flex-col gap-1 text-sm">
         Operation
         <select className="rounded border bg-background p-2" value={operation}
-          onChange={(event) => { resetResult(); setOperation(event.target.value === 'search' ? 'search' : 'analyze'); }}>
+          onChange={(event) => { resetResult(); setOperation(event.target.value === 'compare' ? 'compare' : event.target.value === 'search' ? 'search' : 'analyze'); }}>
           <option value="analyze">Analyze</option>
           <option value="search">Search documents</option>
+          <option value="compare">Compare documents</option>
         </select>
       </label>
       {operation === 'search' && <label className="flex flex-col gap-1 text-sm">
@@ -241,14 +303,38 @@ export function ContentIntelligenceSelectionPanel({
         <input className="rounded border bg-background p-2" value={query} maxLength={512}
           onChange={(event) => { resetResult(); setQuery(event.target.value); }} />
       </label>}
+      {operation === 'compare' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex flex-col gap-1 text-sm">
+            Left document
+            <select className="rounded border bg-background p-2" value={leftId}
+              onChange={(event) => { resetResult(); setLeftId(event.target.value); }}>
+              <option value="">Select a document</option>
+              {sources.map((source) => <option key={source.source_id} value={source.source_id}
+                disabled={source.source_id === rightId}>{source.name || source.source_id}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            Right document
+            <select className="rounded border bg-background p-2" value={rightId}
+              onChange={(event) => { resetResult(); setRightId(event.target.value); }}>
+              <option value="">Select a document</option>
+              {sources.map((source) => <option key={source.source_id} value={source.source_id}
+                disabled={source.source_id === leftId}>{source.name || source.source_id}</option>)}
+            </select>
+          </label>
+          {sources.length < 2 && <p className="text-xs text-muted-foreground">Select two distinct files in the inventory.</p>}
+        </div>
+      )}
       <button
         type="button"
         className="rounded border px-3 py-2 text-sm disabled:opacity-50"
         disabled={status === 'pending' || sources.length < 1 || sources.length > 12 ||
-          (operation === 'search' && !query.trim())}
+          (operation === 'search' && !query.trim()) || (operation === 'compare' && !canCompare)}
         onClick={() => { void analyze(); }}
       >
-        {operation === 'search' ? (status === 'pending' ? 'Searching authorized files…' : 'Search selected files')
+        {operation === 'compare' ? (status === 'pending' ? 'Comparing authorized files…' : 'Compare selected files')
+          : operation === 'search' ? (status === 'pending' ? 'Searching authorized files…' : 'Search selected files')
           : (status === 'pending' ? 'Analyzing authorized files…' : 'Analyze selected files')}
       </button>
       {sources.length > 12 && (
@@ -269,6 +355,27 @@ export function ContentIntelligenceSelectionPanel({
               Refresh inventory and reselect
             </button>
           )}
+        </div>
+      )}
+      {status === 'success' && result?.operation === 'compare' && (
+        <div role="status" aria-label="Verified comparison results" className="space-y-3">
+          <p className="text-xs text-muted-foreground">Lexical similarity only, not semantic agreement. No content was saved by this operation.</p>
+          <p className="font-medium break-words">{left?.name || leftId} versus {right?.name || rightId}</p>
+          <p>Lexical similarity: {Math.round(result.jaccard_similarity * 10000) / 100}%</p>
+          <progress className="w-full" aria-label="Lexical similarity" max={1} value={result.jaccard_similarity} />
+          <div className="grid gap-2 sm:grid-cols-3">
+            {[
+              { label: 'Only in left', terms: result.only_left },
+              { label: 'Shared terms', terms: result.shared_terms },
+              { label: 'Only in right', terms: result.only_right },
+            ].map(({ label, terms }) => (
+              <section key={label} className="rounded border p-3 text-sm break-words">
+                <h4 className="font-medium">{label}</h4>
+                <p>{terms.length ? terms.map((term) => term.length > 128 ? term.slice(0, 128) + '…' : term).join(', ') : 'No terms returned.'}</p>
+              </section>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">Up to 100 terms per category.</p>
         </div>
       )}
       {status === 'success' && result?.operation === 'search' && (

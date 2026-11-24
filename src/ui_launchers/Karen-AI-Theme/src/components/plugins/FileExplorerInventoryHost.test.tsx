@@ -73,6 +73,9 @@ function Consumer({ mode }: { mode?: 'analysis' | 'selection' } = {}) {
               }]);
             }
           }}>Select current</button>
+          <button type="button" onClick={() => props.onSelect(props.items.map((item) => ({
+            source_id: item.source_id, revision: item.revision, sha256: item.sha256, kind: item.kind,
+          })))}>Select all current</button>
           <button type="button" onClick={() => props.onNextPage(props.nextCursor || '')}>Next</button>
           <button type="button" onClick={() => props.onSelect([{
             source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file',
@@ -434,5 +437,65 @@ describe('Content Intelligence document search', () => {
     await act(async () => resolveSearch(searchResult()));
     expect(screen.queryByRole('status', { name: 'Verified search results' })).toBeNull();
     expect(mocks.post.mock.calls[0][2].signal.aborted).toBe(true);
+  });
+});
+
+describe('Content Intelligence document comparison', () => {
+  const rightSha = 'b'.repeat(64);
+  function compared() {
+    return {
+      operation: 'compare', persisted: false, comparison_semantics: 'lexical_not_semantic',
+      left_id: FILE_A, right_id: FILE_B, left_sha256: SHA, right_sha256: rightSha,
+      shared_terms: ['vendor'], only_left: ['deposit'], only_right: ['warranty'],
+      jaccard_similarity: 0.3333,
+    };
+  }
+
+  async function selectCompare() {
+    const page = response(FILE_A);
+    page.items.push({ ...response(FILE_B).items[0], revision: rightSha, sha256: rightSha });
+    mocks.get.mockResolvedValue(page);
+    render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    fireEvent.click(screen.getByText('Select all current'));
+    fireEvent.change(screen.getByLabelText('Operation'), { target: { value: 'compare' } });
+    fireEvent.change(screen.getByLabelText('Left document'), { target: { value: FILE_A } });
+    fireEvent.change(screen.getByLabelText('Right document'), { target: { value: FILE_B } });
+  }
+
+  it('submits only the two selected references and renders lexical results', async () => {
+    mocks.post.mockResolvedValue(compared());
+    await selectCompare();
+    fireEvent.click(screen.getByRole('button', { name: 'Compare selected files' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Verified comparison results' })).toBeTruthy());
+    expect(mocks.post.mock.calls[0][1]).toEqual({
+      operation: 'compare', left_id: FILE_A, right_id: FILE_B,
+      references: [{ source_id: FILE_A, revision: SHA }, { source_id: FILE_B, revision: rightSha }],
+    });
+    expect(screen.getByText('Lexical similarity: 33.33%')).toBeTruthy();
+    expect(screen.getByText('warranty')).toBeTruthy();
+  });
+
+  it.each([
+    { right_sha256: SHA }, { left_id: FILE_B }, { jaccard_similarity: 2 },
+    { comparison_semantics: 'semantic' }, { only_left: ['vendor'] },
+  ])('rejects invalid comparison evidence %j', async (patch) => {
+    mocks.post.mockResolvedValue({ ...compared(), ...patch });
+    await selectCompare();
+    fireEvent.click(screen.getByRole('button', { name: 'Compare selected files' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.queryByRole('status', { name: 'Verified comparison results' })).toBeNull();
+  });
+
+  it('cancels comparison when a source changes', async () => {
+    let resolveComparison!: (value: unknown) => void;
+    mocks.post.mockImplementation(() => new Promise((resolve) => { resolveComparison = resolve; }));
+    await selectCompare();
+    fireEvent.click(screen.getByRole('button', { name: 'Compare selected files' }));
+    fireEvent.change(screen.getByLabelText('Right document'), { target: { value: '' } });
+    await act(async () => resolveComparison(compared()));
+    expect(mocks.post.mock.calls[0][2].signal.aborted).toBe(true);
+    expect(screen.queryByRole('status', { name: 'Verified comparison results' })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Compare selected files' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
