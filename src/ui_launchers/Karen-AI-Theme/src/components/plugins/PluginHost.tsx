@@ -25,7 +25,7 @@ import {
   resolvePluginComponentAsync,
 } from '../../plugin_host/loader';
 import { PluginErrorBoundary } from '../../plugin_host/PluginErrorBoundary';
-import { setPluginMountState } from '../../plugin_host/registry';
+import { setPluginInstanceState } from '../../plugin_host/registry';
 
 export interface PluginHostProps {
   pluginId: string;
@@ -105,6 +105,7 @@ function PluginUnavailableState({
 }
 
 export function PluginHost({ pluginId, fallback, componentProps }: PluginHostProps) {
+  const [instance] = useState(() => Symbol('plugin-host'));
   const normalizedId = useMemo(
     () => normalizePluginId(cleanString(pluginId)),
     [pluginId],
@@ -129,7 +130,7 @@ export function PluginHost({ pluginId, fallback, componentProps }: PluginHostPro
       setPluginComponent(null);
 
       if (!normalizedId) {
-        setPluginMountState(pluginId, 'uninstalled');
+        setPluginInstanceState(pluginId, instance, 'uninstalled');
         setIsLoading(false);
         setResolutionFailed(true);
         return;
@@ -140,7 +141,7 @@ export function PluginHost({ pluginId, fallback, componentProps }: PluginHostPro
        * imports here, or the UI grows a second plugin registry by accident.
        */
       try {
-        setPluginMountState(pluginId, 'loading');
+        setPluginInstanceState(pluginId, instance, 'loading');
 
         const component = await resolvePluginComponentAsync(normalizedId);
 
@@ -150,11 +151,11 @@ export function PluginHost({ pluginId, fallback, componentProps }: PluginHostPro
 
         if (component) {
           setPluginComponent(component);
-          setPluginMountState(pluginId, 'loading');
+          setPluginInstanceState(pluginId, instance, 'loading');
         } else {
           setPluginComponent(null);
           setResolutionFailed(true);
-          setPluginMountState(pluginId, 'uninstalled');
+          setPluginInstanceState(pluginId, instance, 'uninstalled');
         }
       } catch (error) {
         if (cancelled) {
@@ -163,7 +164,7 @@ export function PluginHost({ pluginId, fallback, componentProps }: PluginHostPro
 
         setPluginComponent(null);
         setResolutionFailed(true);
-        setPluginMountState(pluginId, 'error');
+        setPluginInstanceState(pluginId, instance, 'error');
 
         if (process.env.NODE_ENV !== 'production') {
           console.warn(`Failed to resolve plugin ${normalizedId}:`, error);
@@ -179,8 +180,9 @@ export function PluginHost({ pluginId, fallback, componentProps }: PluginHostPro
 
     return () => {
       cancelled = true;
+      setPluginInstanceState(pluginId, instance, 'idle');
     };
-  }, [normalizedId, pluginId]);
+  }, [normalizedId, pluginId, instance]);
 
   if (isLoading) {
     return (
@@ -209,8 +211,11 @@ export function PluginHost({ pluginId, fallback, componentProps }: PluginHostPro
         />
       }
     >
-      <PluginErrorBoundary pluginId={pluginId}>
-        <PluginMountTracker pluginId={pluginId}>
+      <PluginErrorBoundary key={normalizedId} pluginId={pluginId}
+        onRenderError={() => setPluginInstanceState(pluginId, instance, 'error')}
+        onReload={() => setPluginInstanceState(pluginId, instance, 'loading')}>
+
+        <PluginMountTracker pluginId={pluginId} instance={instance}>
           {React.createElement(pluginComponent, componentProps ?? {})}
         </PluginMountTracker>
       </PluginErrorBoundary>
@@ -225,18 +230,19 @@ export function PluginHost({ pluginId, fallback, componentProps }: PluginHostPro
  */
 function PluginMountTracker({
   pluginId,
+  instance,
   children,
 }: {
   pluginId: string;
+  instance: symbol;
   children: React.ReactNode;
 }) {
   useEffect(() => {
-    setPluginMountState(pluginId, 'mounted');
+    setPluginInstanceState(pluginId, instance, 'mounted');
 
-    return () => {
-      setPluginMountState(pluginId, 'idle');
-    };
-  }, [pluginId]);
+    // Only the host releases this observation. Child cleanup must not
+    // resurrect it after host teardown or overwrite a boundary error.
+  }, [pluginId, instance]);
 
   return <>{children}</>;
 }

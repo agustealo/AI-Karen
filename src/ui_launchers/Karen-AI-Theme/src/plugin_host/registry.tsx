@@ -17,6 +17,7 @@ import React, {
   useEffect,
   useMemo,
   useRef,
+  useSyncExternalStore,
   type ReactNode,
 } from 'react';
 import { apiClient, ApiError } from '@/lib/api';
@@ -38,18 +39,50 @@ export type FrontendMountState = 'idle' | 'loading' | 'mounted' | 'error' | 'uni
  */
 export const mountStateRegistry = new Map<string, { state: FrontendMountState; errorMessage?: string }>();
 
+type MountObservation = { state: FrontendMountState; errorMessage?: string };
+const instanceStates = new Map<string, Map<symbol, MountObservation>>();
+const mountListeners = new Set<() => void>();
+const subscribeMountState = (listener: () => void) => {
+  mountListeners.add(listener);
+  return () => { mountListeners.delete(listener); };
+};
+const publishMountState = (pluginId: string, observation: MountObservation) => {
+  const previous = mountStateRegistry.get(pluginId);
+  if (previous?.state === observation.state && previous.errorMessage === observation.errorMessage) return;
+  mountStateRegistry.set(pluginId, observation);
+  mountListeners.forEach((listener) => listener());
+};
+
+/** Each host owns its own observation; releasing one cannot erase another. */
+export function setPluginInstanceState(pluginId: string, instance: symbol, state: FrontendMountState, errorMessage?: string): void {
+  const id = normalizePluginId(pluginId);
+  const instances = instanceStates.get(id) ?? new Map<symbol, MountObservation>();
+  if (state === 'idle') instances.delete(instance);
+  else instances.set(instance, { state, errorMessage });
+  if (instances.size) instanceStates.set(id, instances);
+  else instanceStates.delete(id);
+  // Report a failure even when another instance is mounted; do not hide it.
+  const observations = [...instances.values()];
+  const aggregate = (['error', 'mounted', 'loading', 'uninstalled'] as const)
+    .map((candidate) => observations.find((entry) => entry.state === candidate))
+    .find((entry) => entry !== undefined) ?? { state: 'idle' as const };
+  publishMountState(id, aggregate);
+}
+
 /**
  * Updates the frontend mount state for a plugin.
  * Call this from PluginHost and PluginErrorBoundary.
  *
  * Requirements: 9.3, 9.4
  */
+const legacyMountInstance = Symbol('legacy-mount-observation');
+
 export function setPluginMountState(
   pluginId: string,
   state: FrontendMountState,
   errorMessage?: string
 ): void {
-  mountStateRegistry.set(pluginId, { state, errorMessage });
+  setPluginInstanceState(pluginId, legacyMountInstance, state, errorMessage);
 }
 
 // ─── Backend catalog shape (raw API response) ─────────────────────────────────
@@ -439,7 +472,11 @@ export function usePluginHealth(pluginId: string) {
   const { user } = useAuth();
   
   const entry = getPlugin(pluginId);
-  const mount = mountStateRegistry.get(pluginId) || mountStateRegistry.get(normalizePluginId(pluginId));
+  const mount = useSyncExternalStore(
+    subscribeMountState,
+    () => mountStateRegistry.get(normalizePluginId(pluginId)),
+    () => undefined,
+  );
   
   const backendState = entry?.rawStatus || 'uninstalled';
   const frontendMountState = mount?.state || 'idle';
