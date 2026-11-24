@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Authenticated host for the single dynamically loaded File Explorer UI.
+ * Authenticated owner inventory host shared by governed document consumers.
  *
  * Only the canonical API authorizes inventory reads. This component receives
  * no storage credentials and cannot grant read access to selected references.
@@ -63,6 +63,13 @@ export interface FileExplorerInventoryProps extends Record<string, unknown> {
   onNextPage: (cursor: string) => void;
   pageKey: string;
 }
+
+export type InventoryConsumer = 'file-explorer' | 'content-intelligence';
+
+const INVENTORY_ENDPOINTS: Record<InventoryConsumer, string> = {
+  'file-explorer': '/api/plugins/file-explorer/inventory',
+  'content-intelligence': '/api/plugins/content-intelligence/inventory',
+};
 
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const MAX_PAGE_SIZE = 200;
@@ -145,10 +152,13 @@ function assertInventoryPage(data: unknown): InventoryPage {
 export function FileExplorerInventoryHost({
   children,
   mode = 'analysis',
+  consumer = 'file-explorer',
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
   /** Selection mode exposes metadata only; it never mounts the analysis workflow. */
   mode?: 'analysis' | 'selection';
+  /** Trusted UI composition selects a fixed endpoint; the server authorizes it. */
+  consumer?: InventoryConsumer;
 }) {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const principalKey = useMemo(() => {
@@ -156,12 +166,13 @@ export function FileExplorerInventoryHost({
       return '';
     }
     return [
+      consumer,
       user.tenant_id,
       user.user_id,
       [...(user.roles || [])].sort().join(','),
       [...(user.permissions || [])].sort().join(','),
     ].join('|');
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, user, consumer]);
 
   const [request, setRequest] = useState<PageRequest>({
     principalKey: '',
@@ -194,7 +205,7 @@ export function FileExplorerInventoryHost({
     setErrorState(null);
     setSelectedSourceIds([]);
 
-    const endpoint = '/api/plugins/file-explorer/inventory?limit=100' +
+    const endpoint = INVENTORY_ENDPOINTS[consumer] + '?limit=100' +
       (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
 
     void apiClient.get<unknown>(endpoint)
@@ -225,7 +236,7 @@ export function FileExplorerInventoryHost({
       cancelled = true;
       generationRef.current += 1;
     };
-  }, [principalKey, authLoading, request]);
+  }, [principalKey, authLoading, request, consumer]);
 
   const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
   const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
