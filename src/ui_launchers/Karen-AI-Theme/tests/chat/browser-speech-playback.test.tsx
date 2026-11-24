@@ -353,4 +353,21 @@ describe("canonical assistant speech playback", () => {
     act(() => releaseSecond());
     expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
   });
+
+  it("starting chat read aloud stops a previously claimed Voice Studio preview", async () => {
+    const stopPreview = vi.fn();
+    let releasePreview!: () => void;
+    act(() => { releasePreview = claimVoiceOutput(stopPreview, "speaking"); });
+    render(<>
+      <KarenBrowserSpeechPlayback message={{ content: "Chat takes the speaker" }} />
+      <PlaybackDock />
+    </>);
+    fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
+    expect(stopPreview).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(1));
+    act(() => releasePreview());
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("speaking");
+    fireEvent.click(screen.getByRole("button", { name: "Stop reading Karen's reply" }));
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
+  });
 });
