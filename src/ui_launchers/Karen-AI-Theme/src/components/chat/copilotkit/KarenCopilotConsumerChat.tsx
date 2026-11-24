@@ -18,9 +18,11 @@ import type { ComposerModelRequest } from "../KarenComposerRuntimeCatalog";
 
 export function KarenCopilotConsumerChat({
   onOpenAgents,
+  fileExplorerPluginId,
   onOpenProviderSettings,
 }: {
   onOpenAgents?: () => void;
+  fileExplorerPluginId?: string;
   onOpenProviderSettings?: () => void;
 }) {
   const {
@@ -377,6 +379,7 @@ export function KarenCopilotConsumerChat({
         preferredModel={modelRequest?.model ?? null}
         workspaceRunId={workspaceRunId}
         onOpenAgents={strictInitialSession ? undefined : onOpenAgents}
+        fileExplorerPluginId={strictInitialSession ? undefined : fileExplorerPluginId}
         onBusyChange={handleBusyChange}
         onStartNewConversation={strictInitialSession
           ? undefined : () => performNavigation(createNewSession)}

@@ -41,6 +41,10 @@ vi.mock("@copilotkit/react-core/v2", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/KarenComposerFileExplorer", () => ({
+  KarenComposerFileExplorer: ({ pluginId }: { pluginId: string }) => <div data-testid="composer-file-browser">{pluginId}</div>,
+}));
+
 vi.mock("@/lib/api", () => ({
   apiClient: { post: sdk.post, get: sdk.get },
 }));
@@ -999,5 +1003,22 @@ describe("KIS-UX-02A: search to canonical persisted composer draft", () => {
     act(() => window.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(false);
     expect(sdk.draftWrites).toHaveLength(0);
+  });
+});
+
+
+describe("KUI-004B2B composer file eligibility", () => {
+  it("removes the file browser on eligibility revocation without changing the draft or sending", () => {
+    const view = render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(screen.queryByTestId("composer-file-browser")).toBeNull();
+    act(() => input().onChange("Preserve this draft"));
+    view.rerender(<KarenCopilotControlledChat conversationId={THREAD} fileExplorerPluginId="file-explorer" />);
+    expect(screen.getByTestId("composer-file-browser").textContent).toBe("file-explorer");
+    expect(input().value).toBe("Preserve this draft");
+    view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+    expect(screen.queryByTestId("composer-file-browser")).toBeNull();
+    expect(input().value).toBe("Preserve this draft");
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
   });
 });

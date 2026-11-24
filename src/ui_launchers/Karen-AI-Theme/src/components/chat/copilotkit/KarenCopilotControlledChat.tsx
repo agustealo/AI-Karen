@@ -13,6 +13,7 @@ import { CopilotChatView, useCopilotKit } from "@copilotkit/react-core/v2";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { KarenCopilotVoiceDock } from "./KarenCopilotVoiceDock";
+import { KarenComposerFileExplorer } from "../KarenComposerFileExplorer";
 import { KarenComposerAgentDiscovery } from "../KarenComposerAgentDiscovery";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
@@ -62,11 +63,13 @@ export function KarenCopilotControlledChat({
   onBusyChange,
   personaControls,
   onOpenAgents,
+  fileExplorerPluginId,
 }: {
   conversationId: string;
   onBusyChange?: (busy: boolean) => void;
   personaControls?: ReactNode;
   onOpenAgents?: () => void;
+  fileExplorerPluginId?: string;
 }) {
   const { agent, isReady } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
@@ -497,6 +500,7 @@ export function KarenCopilotControlledChat({
         {draftStatus === "ready" && !draftSynced && <p role="status" className="px-3 pt-1 text-xs text-muted-foreground">
           Draft changes pending save…
         </p>}
+        {fileExplorerPluginId && <KarenComposerFileExplorer key={fileExplorerPluginId} pluginId={fileExplorerPluginId} />}
         {onOpenAgents && <KarenComposerAgentDiscovery onOpenAgents={onOpenAgents}
           disabled={draftStatus !== "ready" || !draftSynced || agent.isRunning || failedSubmission !== null} />}
         <KarenCopilotVoiceDock port={draftPort}
