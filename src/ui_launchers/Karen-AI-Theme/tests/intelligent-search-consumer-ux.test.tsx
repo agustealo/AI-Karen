@@ -73,6 +73,23 @@ describe('Intelligent Search human-first evidence presentation', () => {
     expect(screen.queryByText(/Main menu Related posts/)).toBeNull();
   });
 
+  it('never dumps raw markup from historical responses without readable_content', () => {
+    const legacy = response();
+    const rawOnly = {
+      ...history[0],
+      readable_content: undefined,
+      content: 'Historical facts about Jamaica.',
+      snippet: 'History of Jamaica.',
+    };
+    legacy.sources = [rawOnly];
+    render(<ResultsPanel response={legacy} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Read source' }));
+    expect(screen.getByText('Historical facts about Jamaica.')).toBeTruthy();
+    expect(screen.queryByText(/Main menu Related posts/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'View original extracted text' }));
+    expect(screen.getByText(/Main menu Related posts/)).toBeTruthy();
+  });
+
   it('prepares a user draft and never auto-submits untrusted source content', () => {
     const events: CustomEvent[] = [];
     const handler = (event: Event) => events.push(event as CustomEvent);

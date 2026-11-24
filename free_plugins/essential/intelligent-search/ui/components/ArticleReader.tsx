@@ -57,7 +57,7 @@ export function ArticleReader({ source }: ArticleReaderProps) {
   // React renders all content as text. No HTML is executed or trusted.
   const originalText = fetchedText || source.full_content || source.article_preview || '';
   const readableText = source.readable_content || source.content || source.snippet || '';
-  const documentText = showOriginal ? (originalText || (loadError ? readableText : '')) : (readableText || originalText);
+  const documentText = showOriginal ? (originalText || (loadError ? readableText : '')) : readableText;
   const hasArticle = Boolean(documentText);
   const complete = Boolean(fetchedText) || hasInlineComplete;
   const paragraphs = documentText.replace(/\r\n?/g, '\n').split(/\n\s*\n/).filter(Boolean);
