@@ -13,7 +13,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator
+from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator, Callable, Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from contextvars import ContextVar
@@ -883,6 +883,18 @@ class AuthService(BaseService):
         logger.info("Session created for user %s", user_id)
         return session
 
+    async def validate_session_with_witness(
+        self, session_token: str,
+    ) -> Tuple[Optional[UserAccount], Optional[Callable[[], Awaitable[Optional[UserAccount]]]]]:
+        """Issue an opaque, credential-free revalidator after durable authentication."""
+        witnesses: List[Callable[[], Awaitable[Optional[UserAccount]]]] = []
+        account = await self.validate_session(
+            session_token, strict_errors=True, _witness_sink=witnesses.append,
+        )
+        if account is None or len(witnesses) != 1:
+            return None, None
+        return account, witnesses[0]
+
     async def validate_session(
         self,
         session_token: str,
@@ -890,6 +902,7 @@ class AuthService(BaseService):
         user_agent: str = "",
         *,
         strict_errors: bool = False,
+        _witness_sink: Optional[Callable[[Callable[[], Awaitable[Optional[UserAccount]]]], None]] = None,
     ) -> Optional[UserAccount]:
         """Verify a signed access token against an active, tenant-owned DB session.
 
@@ -959,6 +972,20 @@ class AuthService(BaseService):
                 await db_session.flush()
                 user = self._build_user_account(auth_user)
                 self._user_cache[user.id] = user
+                if _witness_sink is not None:
+                    session_id = str(db_auth_session.session_token)
+                    owner_id = str(user_uuid)
+                    digest = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+
+                    async def revalidate() -> Optional[UserAccount]:
+                        return await self.revalidate_session_identity(
+                            session_id=session_id,
+                            user_id=owner_id,
+                            tenant_id=token_tenant_id,
+                            access_token_digest=digest,
+                        )
+
+                    _witness_sink(revalidate)
                 return user
         except Exception as exc:
             logger.error(
