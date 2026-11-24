@@ -368,7 +368,7 @@ def attachment_http():
     repo = AttachmentDraftRepo()
     gateway = ConversationRuntimeGateway(repo)
     app = FastAPI()
-    app.include_router(routes.router)
+    app.include_router(routes.router, prefix="/conversations")
     principal = {"user_id": USER, "tenant_id": TENANT}
     scope = {"tenant": TENANT}
     app.dependency_overrides[routes.get_conversation_runtime_gateway] = lambda: gateway
@@ -380,7 +380,7 @@ def attachment_http():
 
 def test_attachment_http_round_trip_legacy_conflict_and_explicit_removal(attachment_http):
     client, repo, _, _ = attachment_http
-    path = f"/{CONV}/draft"
+    path = f"/conversations/{CONV}/draft"
     assert client.get(path).json() == {"text": "", "revision": 0}
     assert client.get(path, params={"include_attachments": True}).json() == {
         "text": "", "revision": 0, "attachment_references": [],
@@ -417,7 +417,7 @@ def test_attachment_http_round_trip_legacy_conflict_and_explicit_removal(attachm
 ])
 def test_invalid_attachment_http_rejected_before_write(attachment_http, refs):
     client, repo, _, _ = attachment_http
-    response = client.put(f"/{CONV}/draft", json={
+    response = client.put(f"/conversations/{CONV}/draft", json={
         "text": "draft", "expected_revision": 0, "attachment_references": refs,
     })
     assert response.status_code == 422
@@ -427,7 +427,7 @@ def test_invalid_attachment_http_rejected_before_write(attachment_http, refs):
 
 def test_attachment_http_scope_denied_before_storage(attachment_http):
     client, repo, principal, scope = attachment_http
-    path = f"/{CONV}/draft"
+    path = f"/conversations/{CONV}/draft"
     payload = {"text": "draft", "expected_revision": 0, "attachment_references": [ATTACHMENT]}
     for user, tenant, status in ((OTHER, TENANT, 404), (USER, OTHER, 404), ("", TENANT, 401)):
         principal["user_id"] = user
@@ -440,7 +440,7 @@ def test_attachment_http_scope_denied_before_storage(attachment_http):
 def test_attachment_http_conflict_does_not_disclose_source_metadata(attachment_http):
     client, repo, _, _ = attachment_http
     repo.unavailable = True
-    response = client.put(f"/{CONV}/draft", json={
+    response = client.put(f"/conversations/{CONV}/draft", json={
         "text": "private draft", "expected_revision": 0, "attachment_references": [ATTACHMENT],
     })
     assert response.status_code == 409
