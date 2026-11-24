@@ -155,6 +155,59 @@ class PluginLifecycleLedger:
                 )
             return current
 
+    async def reconcile_manifest_observation(
+        self,
+        *,
+        observation: PluginLifecycleKernelObservation,
+        previous_checksum: str,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        """Host-only CAS primitive for an explicitly authorized, quiesced upgrade.
+
+        The caller must fence all old workers, verify package provenance and
+        obtain current kernel evidence while deployment mutation is excluded.
+        This primitive is not an upgrade authorization or an automatic drift
+        recovery path. It never changes activation or resolves a lifecycle claim.
+        """
+        if not isinstance(observation, PluginLifecycleKernelObservation):
+            raise TypeError("Trusted kernel observation required")
+        if (
+            not isinstance(previous_checksum, str)
+            or not _CHECKSUM.fullmatch(previous_checksum)
+            or previous_checksum == observation.manifest_checksum
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision < 2**63 - 1
+        ):
+            raise ValueError("Invalid manifest reconciliation precondition")
+        values = {
+            "installation_id": observation.installation_id,
+            "previous_checksum": previous_checksum,
+            "next_checksum": observation.manifest_checksum,
+            "expected_revision": expected_revision,
+            "observed_state": observation.observed_state,
+        }
+        async with async_transaction_scope() as session:
+            result = await session.execute(
+                text(
+                    "UPDATE public.extension_lifecycle_revisions "
+                    "SET manifest_checksum = :next_checksum, "
+                    "revision = revision + 1, updated_at = clock_timestamp() "
+                    "WHERE installation_id = :installation_id "
+                    "AND manifest_checksum = :previous_checksum "
+                    "AND revision = :expected_revision "
+                    "AND observed_state = :observed_state "
+                    "AND disposition = 'ready' AND active_operation_id IS NULL "
+                    "RETURNING *"
+                ),
+                values,
+            )
+            row = result.mappings().one_or_none()
+            if row is None:
+                raise PluginLifecycleRevisionConflict(
+                    "Plugin manifest reconciliation is stale or unresolved"
+                )
+            return _snapshot(row)
+
     async def read_observation(self, installation_id: str) -> dict[str, Any] | None:
         if not isinstance(installation_id, str) or not _PLUGIN_ID.fullmatch(installation_id):
             raise ValueError("Invalid plugin installation identifier")
