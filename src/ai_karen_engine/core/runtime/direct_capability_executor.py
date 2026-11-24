@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -67,6 +68,7 @@ class DirectCapabilityResult:
                 "extractedData",
                 "insights",
                 "required_capability",
+                "capability_snapshot",
                 "target",
                 "next_action",
                 "provider",
@@ -908,6 +910,129 @@ class DirectCapabilityExecutor:
                 error="runtime_registry_unavailable",
             )
 
+        # This observation uses the already-authorized runtime.inspect read
+        # scope. Other catalogs remain their own owners. A read is not a
+        # plugin/automation execution grant or evidence of delivery.
+        principal = request.context.require_authenticated_user()
+        snapshot: Dict[str, Any] = {
+            "version": 1,
+            "source": "authenticated_runtime_observation",
+            "core": {
+                "status": "registered",
+                "count": len(capability_names),
+                "names": capability_names[:16],
+                "truncated": len(capability_names) > 16,
+                "execution_verified": False,
+            },
+            "tools": {
+                "status": "registry_observed",
+                "marked_available": len(tool_names),
+                "names": tool_names[:16],
+                "truncated": len(tool_names) > 16,
+                "allowed_for_inspection": enabled_for_request[:16],
+                "execution_verified": False,
+            },
+            "plugins": {"status": "unverified", "execution_verified": False},
+            "automations": {
+                "status": "unverified",
+                "execution_verified": False,
+                "notification_delivery_verified": False,
+            },
+            "agents": {"status": "requires_task_specific_policy"},
+            "providers": {"status": "requires_verified_model_selection"},
+            "memory": {"status": "requires_scoped_persistence_proof"},
+            "voice": {"status": "requires_engine_health_check"},
+        }
+
+        try:
+            # PluginService already owns manifest validation, tenant-specific
+            # configuration readiness and role projection. Never execute or
+            # enable an extension while answering a catalog question.
+            observed = await asyncio.wait_for(
+                get_plugin_service().inspect_for_conversation(
+                    tenant_id=str(principal.tenant_id),
+                    caller_roles=list(principal.roles or []),
+                    limit=16,
+                ),
+                timeout=2.0,
+            )
+            if (
+                not isinstance(observed, dict)
+                or observed.get("catalog_source") != "plugin_kernel"
+                or observed.get("mutation_performed") is not False
+                or not isinstance(observed.get("matches"), list)
+            ):
+                raise ValueError("Untrusted plugin catalog observation")
+            visible_plugins = []
+            for entry in observed["matches"][:16]:
+                if (
+                    not isinstance(entry, dict)
+                    or entry.get("registered") is not True
+                    or entry.get("role_eligible") is not True
+                ):
+                    continue
+                name = str(entry.get("display_name") or "")
+                if not (
+                    1 <= len(name) <= 80
+                    and all(char.isprintable() for char in name)
+                ):
+                    continue
+                visible_plugins.append({
+                    "name": name,
+                    "configuration_ready": entry.get("readiness") == "ready",
+                })
+            snapshot["plugins"] = {
+                "status": "observed",
+                "visible_entries": visible_plugins,
+                "truncated": observed.get("truncated") is True,
+                "execution_verified": False,
+            }
+        except Exception as exc:
+            logger.warning(
+                "runtime.capability_plugin_observation_unavailable",
+                extra={
+                    "correlation_id": request.context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
+        try:
+            # SQLAutomationRepository enforces the authenticated tenant and
+            # creator scope. A stored schedule says nothing about worker
+            # execution, search-provider health or notification delivery.
+            from ai_karen_engine.services.automation.definitions import (
+                get_automation_definition_service,
+            )
+
+            owned = await asyncio.wait_for(
+                get_automation_definition_service().cron_summary(user=principal),
+                timeout=2.0,
+            )
+            if not isinstance(owned, dict):
+                raise ValueError("Invalid owned schedule summary")
+            total = owned.get("total_cron_jobs")
+            enabled = owned.get("enabled_cron_jobs")
+            if (
+                type(total) is not int or type(enabled) is not int
+                or not 0 <= enabled <= total
+            ):
+                raise ValueError("Invalid owned schedule counts")
+            snapshot["automations"] = {
+                "status": "stored_schedule_observed",
+                "saved_count": total,
+                "enabled_count": enabled,
+                "execution_verified": False,
+                "notification_delivery_verified": False,
+            }
+        except Exception as exc:
+            logger.warning(
+                "runtime.capability_automation_observation_unavailable",
+                extra={
+                    "correlation_id": request.context.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+
         def summary(names: List[str], *, max_names: int = 16) -> str:
             shown = ", ".join(names[:max_names])
             remainder = len(names) - max_names
@@ -929,16 +1054,40 @@ class DirectCapabilityExecutor:
             f"{summary(enabled_for_request)}. "
             "A specific action must pass its own runtime policy, tool gate, "
             "credentials and service readiness before execution.\n\n"
-            "Plugins, agents, provider models, personal memory and local voice "
-            "have separate governed registries or health checks. "
-            "This tool catalog does not establish their availability. "
-            "Ask to inspect plugins or choose an action to check its actual eligibility."
+            "Plugin catalog for your role: "
+            + (
+                ", ".join(
+                    entry["name"]
+                    + (" (configuration ready)" if entry["configuration_ready"]
+                       else " (setup or eligibility unverified)")
+                    for entry in snapshot["plugins"]["visible_entries"]
+                )[:650]
+                or "no validated, role-eligible entries in the inspected page"
+                if snapshot["plugins"]["status"] == "observed"
+                else "currently unverified"
+            )
+            + ". Configuration readiness is not permission or verified plugin execution.\n\n"
+            + (
+                f"Your stored schedules: {snapshot['automations']['saved_count']} "
+                f"total, {snapshot['automations']['enabled_count']} enabled. "
+                if snapshot["automations"]["status"] == "stored_schedule_observed"
+                else "Your stored schedules: currently unverified. "
+            )
+            + "This inspection did not create, run, or deliver a scheduled task.\n\n"
+            + "Agents require task-specific tenant/RBAC eligibility; provider "
+            "models require verified selection and health; memory requires "
+            "scoped persistence proof; local voice requires engine health. "
+            "None of those execution paths was verified by this inspection."
         )
         return DirectCapabilityResult(
             handled=True, text=text, success=True,
             source="runtime_registry_observation",
             source_id="runtime.inspect",
-            payload={"status": "observed", "required_capability": "runtime.inspect"},
+            payload={
+                "status": "observed",
+                "required_capability": "runtime.inspect",
+                "capability_snapshot": snapshot,
+            },
             latency_ms=(time.perf_counter() - started) * 1000.0,
         )
 
