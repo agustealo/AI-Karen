@@ -210,3 +210,50 @@ def test_streaming_uses_same_governed_credential_resolver_as_sync_transport() ->
     assert "personal_key if personal_key is not None else _resolve_api_key(endpoint)" in source
     assert source.count("provider_credential_unavailable") == 2
     assert "get_provider_config_manager()" in source
+
+
+def test_private_attachment_http_payload_preserves_complete_ordered_evidence(monkeypatch):
+    import hashlib
+    import json
+    from contextlib import contextmanager
+
+    from ai_karen_engine.core.model_runtime import provider_execution
+    from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
+
+    bodies = ["First source: café \\ path", "Second source: 日本語\nsecond line"]
+    documents = [
+        {"source_id": source, "revision": hashlib.sha256(body.encode()).hexdigest(),
+         "text": body}
+        for source, body in zip(
+            ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+             "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"], bodies,
+        )
+    ]
+    messages = PromptAssembler.build_verified_attachment_messages(
+        [{"role": "user", "content": "Compare both documents."}], documents,
+    )
+    seen = []
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+
+    class Response:
+        def read(self):
+            return json.dumps({
+                "model": "qwen3:4b",
+                "choices": [{"message": {"content": "Compared."}, "finish_reason": "stop"}],
+            }).encode()
+
+    @contextmanager
+    def capture(request, timeout):
+        assert request.full_url == "http://127.0.0.1:11434/v1/chat/completions"
+        seen.append(json.loads(request.data))
+        yield Response()
+
+    monkeypatch.setattr(provider_execution, "_open_provider_request", capture)
+    result = provider_execution._sync_openai_compatible_request(
+        _endpoint("ollama-local"), messages=messages, model="qwen3:4b",
+        max_tokens=64, temperature=0.1, local_only=True,
+    )
+    assert result.text == "Compared."
+    assert len(seen) == 1
+    assert seen[0]["messages"] == messages
+    assert seen[0]["stream"] is False
