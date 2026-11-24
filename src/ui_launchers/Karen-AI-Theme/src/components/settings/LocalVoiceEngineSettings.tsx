@@ -43,20 +43,31 @@ export default function LocalVoiceEngineSettings({ engineFilter }: { engineFilte
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
 
-  const stop = useCallback(() => {
-    abortRef.current?.abort();
+  const releasePreviewResources = useCallback(() => {
+    // This component owns only its own synthesis request, WAV element and URL.
+    // Clear references before teardown so late events cannot retire a new preview.
+    const controller = abortRef.current;
     abortRef.current = null;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
-      audioRef.current = null;
+    controller?.abort();
+
+    const audio = audioRef.current;
+    audioRef.current = null;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.src = "";
     }
-    if (objectUrlRef.current) {
-      URL.revokeObjectURL(objectUrlRef.current);
-      objectUrlRef.current = null;
-    }
-    setPreviewing(false);
+
+    const objectUrl = objectUrlRef.current;
+    objectUrlRef.current = null;
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
   }, []);
+
+  const stop = useCallback(() => {
+    releasePreviewResources();
+    setPreviewing(false);
+  }, [releasePreviewResources]);
 
   const refresh = useCallback(async (epoch: number) => {
     setStatus("loading");
@@ -97,18 +108,9 @@ export default function LocalVoiceEngineSettings({ engineFilter }: { engineFilte
     return () => {
       mountedRef.current = false;
       revisionRef.current += 1;
-      abortRef.current?.abort();
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-        audioRef.current = null;
-      }
-      if (objectUrlRef.current) {
-        URL.revokeObjectURL(objectUrlRef.current);
-        objectUrlRef.current = null;
-      }
+      releasePreviewResources();
     };
-  }, [refresh]);
+  }, [refresh, releasePreviewResources]);
 
   // Filtering is a presentation contract. Runtime still owns which
   // engines and voices actually exist and may execute.
