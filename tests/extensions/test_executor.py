@@ -541,6 +541,9 @@ def test_extension_runtime_authority_scope_and_copy_guard(monkeypatch):
         session_id=context.session_id, correlation_id=context.correlation_id,
         conversation_id=context.conversation_id,
     )
+    # ChatExecutionContext materializes the session's canonical conversation ID.
+    # Align the extension fixture to that ID without weakening the scope guard.
+    context = replace(context, conversation_id=runtime_context.conversation_id)
     # Isolate extension propagation from the separately tested RuntimePolicy issuer.
     monkeypatch.setattr(ChatExecutionContext, "is_runtime_model_plan_authorized",
                         lambda self, p, m: self is runtime_context and p is plan and m is meter)
@@ -555,6 +558,10 @@ def test_extension_runtime_authority_scope_and_copy_guard(monkeypatch):
         context.runtime_authority("different-plugin")
     with pytest.raises(PermissionError):
         replace(context, tenant_id="other").bind_runtime_authority(runtime_context, plan, meter, "echo")
+    with pytest.raises(PermissionError):
+        replace(context, conversation_id="different-conversation").bind_runtime_authority(
+            runtime_context, plan, meter, "echo"
+        )
 
 
 @pytest.mark.asyncio
