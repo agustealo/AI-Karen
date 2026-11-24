@@ -290,3 +290,87 @@ async def test_storage_unavailable_fails_closed_before_artifact_read(monkeypatch
     monkeypatch.setattr(repository_factory, "RepositoryFactory", forbidden_factory)
     with pytest.raises(RuntimeError, match="content_source_storage_unavailable"):
         await PluginService.analyze_content_owner_sources(_service(), **_args())
+
+
+def _inventory_args(**overrides):
+    args = _args()
+    args.pop("operation")
+    args.pop("references")
+    args.update(overrides)
+    return args
+
+
+@pytest.mark.asyncio
+async def test_content_inventory_independent_of_file_explorer(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    kernel = Kernel()
+
+    async def list_page(tenant_id, user_id, *, limit, cursor):
+        assert len(kernel.admissions) == 1
+        assert (tenant_id, user_id, limit, cursor) == (TENANT, OWNER, 10, None)
+        return SimpleNamespace(
+            success=True, data=[SimpleNamespace(
+                id=FILE, tenant_id=TENANT, user_id=OWNER, filename="notes.txt",
+                sha256=SHA, size_bytes=12, deleted_at=None,
+            )], metadata={"has_more": False, "next_cursor": None},
+        )
+
+    repo = SimpleNamespace(
+        list_owner_artifacts_page=list_page, get_metadata=AsyncMock(),
+    )
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repo))
+    page = await _service(kernel=kernel).list_content_owner_page(**_inventory_args(limit=10))
+    assert page["items"][0]["source_id"] == FILE
+    assert page["items"][0]["revision"] == SHA
+    assert page["inventory_semantics"] == "owner_metadata_page_not_live_acl"
+    assert kernel.admissions[0].plugin_id == "content-intelligence"
+    assert kernel.executions == []
+    repo.get_metadata.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["disabled", "policy", "foreign", "kernel", "permission"])
+async def test_content_inventory_denies_before_repository(monkeypatch, failure):
+    from ai_karen_engine.database import factory as database_factory
+
+    kernel = Kernel(status="disabled" if failure == "disabled" else "enabled")
+    if failure == "kernel":
+        kernel.admit = AsyncMock(return_value=SimpleNamespace(status="denied"))
+    policy = _policy(allowed=failure != "policy",
+                     tenant="33333333-3333-4333-8333-333333333333" if failure == "foreign" else TENANT)
+    def forbidden_database():
+        raise AssertionError("Denied inventory must not access repository")
+    monkeypatch.setattr(database_factory, "get_database_client", forbidden_database)
+    with pytest.raises(PermissionError):
+        await _service(kernel=kernel, policy=policy).list_content_owner_page(
+            **_inventory_args(permissions=[] if failure == "permission" else ["data:read"]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_content_inventory_ingress_delegates_authenticated_scope(monkeypatch):
+    rbac = SimpleNamespace(
+        has_permission=lambda *args: True,
+        get_user_permissions=lambda user: [ingress.Permission.DATA_READ],
+        audit_access_attempt=lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: rbac)
+    service = SimpleNamespace(list_content_owner_page=AsyncMock(return_value={
+        "items": [], "has_more": False, "next_cursor": None,
+        "inventory_semantics": "owner_metadata_page_not_live_acl",
+        "request_id": "request-1", "correlation_id": "correlation-1",
+    }))
+    result = await ingress.list_content_inventory(
+        request=_request(), limit=10, cursor=None,
+        current_user={"user_id": OWNER, "tenant_id": TENANT, "roles": ["user"],
+                      "permissions": ["data:read"]},
+        plugin_service=service,
+    )
+    assert result.items == []
+    assert service.list_content_owner_page.await_args.kwargs["user_id"] == OWNER
+    assert service.list_content_owner_page.await_args.kwargs["tenant_id"] == TENANT

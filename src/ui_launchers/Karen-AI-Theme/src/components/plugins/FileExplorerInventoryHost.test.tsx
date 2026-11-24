@@ -3,7 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FileExplorerInventoryHost } from './FileExplorerInventoryHost';
+import { FileExplorerInventoryHost, type InventoryConsumer } from './FileExplorerInventoryHost';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -50,9 +50,9 @@ function auth(userId = 'owner-one') {
   };
 }
 
-function Consumer({ mode, onAttach }: { mode?: 'analysis' | 'selection'; onAttach?: (refs: { source_id: string; revision: string }[]) => void } = {}) {
+function Consumer({ mode, consumer, onAttach }: { mode?: 'analysis' | 'selection'; consumer?: InventoryConsumer; onAttach?: (refs: { source_id: string; revision: string }[]) => void } = {}) {
   return (
-    <FileExplorerInventoryHost mode={mode} onAttach={onAttach}>
+    <FileExplorerInventoryHost mode={mode} consumer={consumer} onAttach={onAttach}>
       {(props) => (
         <section>
           <output data-testid="authorized">{String(props.authorized)}</output>
@@ -497,6 +497,61 @@ describe('Content Intelligence document comparison', () => {
     expect(mocks.post.mock.calls[0][2].signal.aborted).toBe(true);
     expect(screen.queryByRole('status', { name: 'Verified comparison results' })).toBeNull();
     expect((screen.getByRole('button', { name: 'Compare selected files' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+
+describe('Independent Content Intelligence inventory consumer', () => {
+  it('uses only the Content Intelligence endpoint and preserves pagination', async () => {
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'content-cursor'))
+      .mockResolvedValueOnce(response(FILE_B));
+    render(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Select A'));
+    expect(screen.getByRole('button', { name: 'Analyze selected files' })).toBeTruthy();
+    fireEvent.click(screen.getByText('Next'));
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('beta.txt'));
+    expect(mocks.get.mock.calls).toEqual([
+      ['/api/plugins/content-intelligence/inventory?limit=100'],
+      ['/api/plugins/content-intelligence/inventory?limit=100&cursor=content-cursor'],
+    ]);
+    expect(screen.getByTestId('selection').textContent).toBe('');
+  });
+
+  it('clears selection and cursor when switching consumers under the same principal', async () => {
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'explorer-cursor'))
+      .mockResolvedValueOnce(response(FILE_A, true, 'second-cursor'))
+      .mockResolvedValueOnce(response(FILE_B));
+    const view = render(<Consumer />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('alpha.txt'));
+    fireEvent.click(screen.getByText('Next'));
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    fireEvent.click(screen.getByText('Select A'));
+    const oldKey = screen.getByTestId('key').textContent;
+    view.rerender(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('beta.txt'));
+    expect(screen.getByTestId('selection').textContent).toBe('');
+    expect(screen.getByTestId('key').textContent).not.toBe(oldKey);
+    expect(mocks.get).toHaveBeenLastCalledWith('/api/plugins/content-intelligence/inventory?limit=100');
+  });
+
+  it('rejects a late response from the previous consumer', async () => {
+    let resolveOld!: (value: unknown) => void;
+    mocks.get.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce(response(FILE_B));
+    const view = render(<Consumer />);
+    view.rerender(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('page').textContent).toBe('beta.txt'));
+    await act(async () => resolveOld(response(FILE_A)));
+    expect(screen.getByTestId('page').textContent).toBe('beta.txt');
+  });
+
+  it('does not fall back to File Explorer after Content Intelligence denial', async () => {
+    mocks.get.mockRejectedValue(new Error('denied'));
+    render(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toContain('access was denied'));
+    expect(screen.getByTestId('authorized').textContent).toBe('false');
+    expect(mocks.get.mock.calls).toEqual([['/api/plugins/content-intelligence/inventory?limit=100']]);
   });
 });
 
