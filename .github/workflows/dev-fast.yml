@@ -107,22 +107,8 @@ jobs:
         run: npm run ci:forbid-mocks
       - name: Typecheck frontend
         run: npm run typecheck
-      - name: Run affected frontend tests
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            git fetch --no-tags origin "$BASE_REF"
-            base=$(git merge-base "origin/$BASE_REF" HEAD)
-            git diff --name-only -z "$base" HEAD -- . > /tmp/dev-fast-frontend-paths
-          else
-            git diff-tree --no-commit-id --name-only -r -z HEAD -- . > /tmp/dev-fast-frontend-paths
-          fi
-          # Static source-contract tests read files directly, so import-graph
-          # selection alone cannot prove that related tests were discovered.
-          # Run the existing full unit suite; omit the production build and
-          # backend burn here, not in the required Main Quality Gate.
-          npx --no-install vitest run
+      - name: Run frontend unit and source-contract tests
+        # Static architecture tests read source files directly; import-based
+        # selection alone would miss affected contracts. Production build and
+        # runtime burn remain in the required Main Quality Gate.
+        run: npx --no-install vitest run
