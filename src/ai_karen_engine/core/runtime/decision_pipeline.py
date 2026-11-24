@@ -359,7 +359,10 @@ class RuntimeDecisionPipeline:
             roles=list(ctx.roles or []),
             permissions=list(ctx.permissions or []),
             action=cognitive.intent or "general_assist",
-            requested_capabilities=list(cognitive.required_capabilities),
+            requested_capabilities=list(dict.fromkeys([
+                *cognitive.required_capabilities,
+                *(["data:read"] if request.attachment_references else []),
+            ])),
             forbidden_capabilities=list(cognitive.forbidden_capabilities),
             requested_reasoning_modes=list(cognitive.reasoning_modes),
             max_model_calls=cognitive.max_model_calls,
