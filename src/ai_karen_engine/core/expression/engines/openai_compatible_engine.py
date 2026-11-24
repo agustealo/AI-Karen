@@ -118,6 +118,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                         max_tokens=task.max_tokens,
                         temperature=task.temperature,
                         timeout_ms=task.timeout_ms,
+                        **({"local_only": True} if task.local_only else {}),
                 )) as provider_events:
                     async for part in provider_events:
                         if part.kind == "delta" and part.delta:
@@ -138,6 +139,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     model=model,
                     max_tokens=task.max_tokens,
                     temperature=task.temperature,
+                    **({"local_only": True} if task.local_only else {}),
                 )
             text = execution.text
             actual_provider = execution.provider_id
