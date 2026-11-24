@@ -28,7 +28,7 @@ export function ArticleReader({ source }: ArticleReaderProps) {
     setStoredArticle(null);
     setLoadError(false);
     setLoading(false);
-    if (!articleId || hasInlineComplete) return () => { current = false; };
+    if (!articleId || hasInlineComplete || source?.readable_content) return () => { current = false; };
     setLoading(true);
     IntelligentSearchApi.fetchArticle(articleId)
       .then(text => {
@@ -41,15 +41,15 @@ export function ArticleReader({ source }: ArticleReaderProps) {
         if (current) setLoading(false);
       });
     return () => { current = false; };
-  }, [articleId, hasInlineComplete]);
+  }, [articleId, hasInlineComplete, source?.readable_content]);
 
   if (!source) {
     return <p role="status" className="text-sm text-muted-foreground">Select a source to read.</p>;
   }
 
   const fetchedText = storedArticle?.id === articleId ? storedArticle.text : null;
-  const documentText = fetchedText || source.full_content || source.article_preview || source.content || source.snippet || '';
-  const hasArticle = Boolean(fetchedText || source.full_content || source.article_preview);
+  const documentText = source.readable_content || fetchedText || source.full_content || source.article_preview || source.content || source.snippet || '';
+  const hasArticle = Boolean(source.readable_content || fetchedText || source.full_content || source.article_preview);
   const complete = Boolean(fetchedText) || hasInlineComplete;
   const paragraphs = documentText.replace(/\r\n?/g, '\n').split(/\n\s*\n/).filter(Boolean);
 
@@ -61,6 +61,8 @@ export function ArticleReader({ source }: ArticleReaderProps) {
         <p role="status" className="text-xs text-muted-foreground">
           {loading
             ? 'Loading the saved full article…'
+            : source.readable_content
+              ? 'Readable excerpts from the fetched page. Open the original site for full context.'
             : complete
               ? 'Full article text available in this view.'
               : loadError
