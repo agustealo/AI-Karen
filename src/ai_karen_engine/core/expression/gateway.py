@@ -249,6 +249,19 @@ class ExpressionGateway:
                 )
                 continue
 
+            if task.local_only and (engine_id == "cloud" or cfg.type != "openai_compatible"):
+                skipped_engines.append(
+                    {"engine_id": engine_id, "reason": "private_evidence_local_only"}
+                )
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="private_evidence_local_only",
+                )
+                continue
+
             # A configured cloud engine is not an external-execution grant.
             # Enforce the separate policy before reserving a model call,
             # instantiating an engine, or transmitting user prompt context.
