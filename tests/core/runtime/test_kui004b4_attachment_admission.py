@@ -497,3 +497,32 @@ async def test_attachment_publication_rejects_substituted_text_with_authorized_r
         plan, meter, [{**selected(), "text": BODY}],
     )
     assert context.runtime_attachment_documents() == [{**selected(), "text": BODY}]
+
+
+@pytest.mark.asyncio
+async def test_cleared_selection_before_admission_cannot_bypass_issued_scope(monkeypatch):
+    request, plan, meter = await authority()
+    reader = BoundedReader({SOURCE: verified(request.context)})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    request.attachment_references.clear()
+    with pytest.raises(AttachmentAdmissionDenied, match="attachment_selection_changed"):
+        await runtime._admit_attachments(request, plan, meter)
+    assert reader.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["clear", "replace"])
+async def test_bound_scope_survives_mutable_selection_changes(monkeypatch, mutation):
+    request, plan, meter = await authority()
+    reader = BoundedReader({SOURCE: verified(request.context)})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    await runtime._admit_attachments(request, plan, meter)
+    assert request.context.has_runtime_attachment_scope()
+    if mutation == "clear":
+        request.attachment_references.clear()
+    else:
+        request.attachment_references[:] = [selected(SECOND)]
+    assert ChatRuntime._attachment_restriction_required(request)
+    with pytest.raises(AttachmentAdmissionDenied, match="attachment_admission_missing"):
+        ChatRuntime._prompt_messages_with_admitted_attachments(request)
+    assert request.context.runtime_attachment_documents() == [{**selected(), "text": BODY}]
