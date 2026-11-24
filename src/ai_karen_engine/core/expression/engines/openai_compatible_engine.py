@@ -62,6 +62,11 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         # remote URLs; require the original RuntimePolicy-bound approval before
         # sending either a streaming or non-streaming model request.
         if provider_endpoint_requires_external_permission(endpoint):
+            if task.local_only:
+                return self._failure_result(
+                    task, started, "private_evidence_local_only",
+                    provider=provider_id, requested_provider=requested_provider,
+                )
             try:
                 approved = (
                     await task.authorize_external_engine_attempt()
@@ -284,6 +289,8 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     continue
                 if not self._matches_engine_locality(endpoint, is_cloud):
                     continue
+                if task.local_only and provider_endpoint_requires_external_permission(endpoint):
+                    continue
                 resolve_capabilities = getattr(
                     registry, "effective_endpoint_capabilities", None,
                 )
@@ -306,6 +313,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             target
             for target in targets
             if self._matches_engine_locality(target, is_cloud)
+            and (not task.local_only or not provider_endpoint_requires_external_permission(target))
         ]
         return targets[0].provider_id if targets else None
 
