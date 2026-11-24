@@ -8,6 +8,10 @@ set -euo pipefail
 : "${RESTORE_DATABASE_URL:?RESTORE_DATABASE_URL is required}"
 : "${BACKUP_FILE:?BACKUP_FILE is required}"
 
+if [ -d "/usr/lib/postgresql/17/bin" ]; then
+  export PATH="/usr/lib/postgresql/17/bin:$PATH"
+fi
+
 if [[ "${CONFIRM_RESTORE:-}" != "I_UNDERSTAND_THIS_IS_DESTRUCTIVE" ]]; then
   echo "error: set CONFIRM_RESTORE=I_UNDERSTAND_THIS_IS_DESTRUCTIVE" >&2
   exit 2

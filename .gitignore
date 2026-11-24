@@ -206,3 +206,8 @@ core.*
 .fuse_hidden*
 # Playwright browser binaries (downloaded via `playwright install`)
 .playwright/
+
+# Local database backups
+backups/
+*.dump
+*.dump.sha256

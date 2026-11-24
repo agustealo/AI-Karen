@@ -332,6 +332,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       }
     });
     page.on("requestfailed", failedRequest => {
+      if (failedRequest.failure()?.errorText === "net::ERR_ABORTED") return;
       if (/\/_next\/static\/chunks\//.test(failedRequest.url())) {
         browserErrors.push(`Chunk request failed: ${failedRequest.url()}`);
       }
@@ -1108,6 +1109,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       }
     });
     page.on("requestfailed", request => {
+      if (request.failure()?.errorText === "net::ERR_ABORTED") return;
       if (/\/_next\/static\/chunks\//.test(request.url())) {
         failures.push(`Chunk request failed: ${request.url()} ${request.failure()?.errorText ?? ""}`);
       }

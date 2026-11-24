@@ -7,6 +7,10 @@ set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL is required}"
 
+if [ -d "/usr/lib/postgresql/17/bin" ]; then
+  export PATH="/usr/lib/postgresql/17/bin:$PATH"
+fi
+
 if ! command -v pg_dump >/dev/null 2>&1; then
   echo "error: pg_dump is required" >&2
   exit 2
