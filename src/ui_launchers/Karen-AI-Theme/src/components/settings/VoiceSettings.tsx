@@ -19,7 +19,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { readPreferredBrowserVoiceURI, persistPreferredBrowserVoiceURI } from "@/lib/browser-voice-preference";
 import LocalVoiceEngineSettings from "@/components/settings/LocalVoiceEngineSettings";
-import { stopAssistantPlayback } from "@/components/chat/KarenBrowserSpeechPlayback";
+import { claimVoiceOutput } from "@/components/chat/KarenBrowserSpeechPlayback";
 
 const DEFAULT_VOICE_SENTINEL = "_DEFAULT_VOICE_";
 const DISCOVERY_DELAYS_MS = [250, 1000, 3000] as const;
@@ -34,6 +34,7 @@ export default function VoiceSettings() {
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const releaseVoiceOutputRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     setSelectedVoiceURI(readPreferredBrowserVoiceURI());
@@ -94,12 +95,14 @@ export default function VoiceSettings() {
     };
   }, [cycle]);
 
-  const releasePreview = useCallback(() => {
-    // speechSynthesis is global to the tab. Never cancel audio owned by
-    // chat read-aloud when this settings panel has no active preview.
+  const releasePreview = useCallback((cancelSpeech = true) => {
+    // Completion releases ownership without canceling a successor's speech.
     const owned = previewRef.current !== null;
     previewRef.current = null;
-    if (owned && typeof window !== "undefined" && window.speechSynthesis) {
+    const releaseVoiceOutput = releaseVoiceOutputRef.current;
+    releaseVoiceOutputRef.current = null;
+    releaseVoiceOutput?.();
+    if (owned && cancelSpeech && typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
   }, []);
@@ -125,9 +128,7 @@ export default function VoiceSettings() {
       setPreviewError("No verified browser voice is available for playback.");
       return;
     }
-    // Retire chat playback through its canonical owner first; a raw
-    // speechSynthesis.cancel() would leave its active state unresolved.
-    stopAssistantPlayback();
+    // The tab-wide owner retires chat and local previews before speech.
     stopPreview();
     setPreviewError(null);
     const speech = new SpeechSynthesisUtterance("Hello, I am Karen. This is my voice preview.");
@@ -135,23 +136,24 @@ export default function VoiceSettings() {
     speech.lang = activeSelection.lang;
     speech.onend = () => {
       if (previewRef.current === speech) {
-        previewRef.current = null;
+        releasePreview(false);
         setPreviewing(false);
       }
     };
     speech.onerror = () => {
       if (previewRef.current === speech) {
-        previewRef.current = null;
+        releasePreview(false);
         setPreviewing(false);
         setPreviewError("This browser could not play the selected voice.");
       }
     };
     previewRef.current = speech;
+    releaseVoiceOutputRef.current = claimVoiceOutput(stopPreview, "speaking");
     setPreviewing(true);
     try {
       window.speechSynthesis.speak(speech);
     } catch {
-      previewRef.current = null;
+      releasePreview(false);
       setPreviewing(false);
       setPreviewError("This browser could not start speech playback.");
     }
