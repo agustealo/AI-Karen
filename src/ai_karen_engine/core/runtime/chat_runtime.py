@@ -201,6 +201,25 @@ class ChatRuntime:
             documents: list[dict[str, str]] = []
             used = 0
             async with asyncio.timeout(deadline):
+                from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+                principal = ctx.require_authenticated_user()
+                if not get_rbac_manager().has_permission(principal, Permission.DATA_READ):
+                    raise AttachmentAdmissionDenied("attachment_read_permission_denied")
+                snapshot = await self._freeze_persona_snapshot(request)
+                if snapshot.status not in {"none", "ready"} or (
+                    snapshot.memory_filter_required and not snapshot.persona_id
+                ):
+                    raise AttachmentAdmissionDenied("attachment_persona_scope_unavailable")
+                gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+                await gateway.ensure_conversation(
+                    ctx,
+                    first_user_message=self._extract_user_message(request.messages),
+                    persona_scope_id=(
+                        snapshot.persona_id if snapshot.memory_filter_required else None
+                    ),
+                )
+                await gateway.require_owned_conversation(ctx)
                 for reference in selected:
                     if not ctx.is_runtime_model_plan_authorized(plan, meter):
                         raise AttachmentAdmissionDenied("attachment_authority_changed")
