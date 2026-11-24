@@ -131,7 +131,18 @@ def runtime_with_reader(monkeypatch, reader):
         ChatRuntime, "_attachment_artifact_store",
         staticmethod(lambda: reader),
     )
-    return object.__new__(ChatRuntime)
+    runtime = object.__new__(ChatRuntime)
+    runtime._conversation_gateway = SimpleNamespace(
+        ensure_conversation=AsyncMock(return_value="conversation"),
+        require_owned_conversation=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        runtime, "_freeze_persona_snapshot",
+        AsyncMock(return_value=SimpleNamespace(
+            status="none", memory_filter_required=False, persona_id=None,
+        )),
+    )
+    return runtime
 
 
 @pytest.mark.asyncio
@@ -385,7 +396,9 @@ async def test_denied_attachment_stops_both_entrypoints_before_provider_or_fallb
     )
     monkeypatch.setattr(
         runtime, "_freeze_persona_snapshot",
-        AsyncMock(return_value=SimpleNamespace(status="none")),
+        AsyncMock(return_value=SimpleNamespace(
+            status="none", memory_filter_required=False, persona_id=None,
+        )),
     )
     monkeypatch.setattr(
         runtime, "_prepare_conversation_continuation", AsyncMock(),
@@ -436,3 +449,34 @@ async def test_selected_attachments_do_not_self_grant_read_permission():
     ))
     assert not decision.allowed
     assert "data:read" in decision.denied_capabilities
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [
+    "foreign_conversation", "unavailable_conversation", "missing_persona",
+    "inactive_principal", "revoked_read_permission",
+])
+async def test_conversation_and_principal_denial_precedes_artifact_read(monkeypatch, failure):
+    request, plan, meter = await authority()
+    reader = BoundedReader({SOURCE: verified(request.context)})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    if failure == "foreign_conversation":
+        runtime._conversation_gateway.ensure_conversation.side_effect = PermissionError(
+            "conversation_user_mismatch"
+        )
+    elif failure == "unavailable_conversation":
+        runtime._conversation_gateway.require_owned_conversation.side_effect = RuntimeError(
+            "conversation_lookup_failed"
+        )
+    elif failure == "missing_persona":
+        runtime._freeze_persona_snapshot.return_value = SimpleNamespace(
+            status="unavailable", memory_filter_required=False, persona_id=None,
+        )
+    elif failure == "inactive_principal":
+        request.context.authenticated_user.is_active = False
+    elif failure == "revoked_read_permission":
+        from ai_karen_engine.auth.rbac_middleware import get_rbac_manager
+        monkeypatch.setattr(get_rbac_manager(), "has_permission", lambda *_: False)
+    with pytest.raises(AttachmentAdmissionDenied):
+        await runtime._admit_attachments(request, plan, meter)
+    assert reader.calls == []
