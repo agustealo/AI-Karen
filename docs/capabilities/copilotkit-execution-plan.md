@@ -1195,3 +1195,9 @@ completion, content-size or presentation validation to silence the UI.
 
 - Existing plugin registry aggregates instance-scoped observations; PluginHost owns teardown and the existing render boundary reports failure/retry. Health hooks subscribe to updates. Errors take precedence over mounted state; no backend eligibility grant is inferred.
 - Regression candidates: two hosts mounting/unmounting, late resolution after teardown, reactive health and error recovery. DEV_FAST and Main Quality required; no composer File Explorer or deployed browser certification yet.
+
+## KCON-770 / KUI-004B2B.2: Composer file browser (2026-11-24, SOURCE_CANDIDATE)
+
+- Reuse the dashboard registry's verified role-aware UI eligibility for injected routes and the composer. Scope the eligibility snapshot by tenant, user, roles and permissions; hide it while loading or after failure. The backend remains the file authorization owner.
+- Lazy Browse files disclosure reuses PluginHost and FileExplorerInventoryHost selection mode. No content read, analysis, attachment transport, inference or draft mutation. Closing or losing eligibility unmounts selection. Strict acceptance preview remains unchanged.
+- Regression candidates cover role revocation, native draft continuity, lazy disclosure and selection-only labeling. DEV_FAST first, Plugin Ecosystem and Main Quality required. Browser and durable attachment acceptance remain outstanding.
