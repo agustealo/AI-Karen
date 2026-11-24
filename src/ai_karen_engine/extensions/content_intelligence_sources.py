@@ -53,12 +53,12 @@ class ContentSourceHost:
         self._store = store
         self._kernel = kernel
 
-    async def execute_owner_text(
-        self, *, context: ExtensionExecutionContext,
-        plan: AuthorizedExecutionPlan, operation: str,
-        references: list[dict[str, str]], query: str | None = None,
-        left_id: str | None = None, right_id: str | None = None,
-    ) -> dict[str, Any]:
+    @staticmethod
+    async def admit_owner_access(
+        *, kernel: Kernel, context: ExtensionExecutionContext,
+        plan: AuthorizedExecutionPlan,
+    ) -> None:
+        """Check scoped runtime and kernel admission before any source read."""
         if (
             not isinstance(context, ExtensionExecutionContext)
             or not isinstance(plan, AuthorizedExecutionPlan)
@@ -77,6 +77,31 @@ class ContentSourceHost:
             or context.resource_scope != {}
         ):
             raise PermissionError("content_source_authorization_required")
+        record = kernel.get_record(PLUGIN)
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "enabled"
+            or record.get("dependencies_resolved") is not True
+        ):
+            raise PermissionError("content_source_plugin_disabled")
+        # Admission uses the SAME executor gates but runs no plugin handler.
+        # Actual operation input schema is checked on final execution.
+        admission = await kernel.admit(ExtensionExecutionRequest(
+            plugin_id=PLUGIN,
+            capability="execute",
+            payload={},
+            context=context,
+            authorized_plan=plan,
+        ))
+        if getattr(admission, "status", None) != "admitted":
+            raise PermissionError("content_source_kernel_admission_denied")
+
+    async def execute_owner_text(
+        self, *, context: ExtensionExecutionContext,
+        plan: AuthorizedExecutionPlan, operation: str,
+        references: list[dict[str, str]], query: str | None = None,
+        left_id: str | None = None, right_id: str | None = None,
+    ) -> dict[str, Any]:
         if operation not in {"analyze", "search", "compare"}:
             raise ValueError("content_source_operation_invalid")
         if not isinstance(references, list) or not 1 <= len(references) <= 12:
@@ -103,24 +128,7 @@ class ContentSourceHost:
         elif left_id is not None or right_id is not None:
             raise ValueError("content_source_unused_selection")
 
-        record = self._kernel.get_record(PLUGIN)
-        if (
-            not isinstance(record, dict)
-            or record.get("status") != "enabled"
-            or record.get("dependencies_resolved") is not True
-        ):
-            raise PermissionError("content_source_plugin_disabled")
-        # Admission uses the SAME executor gates but runs no plugin handler.
-        # Actual operation input schema is checked on final execution.
-        admission = await self._kernel.admit(ExtensionExecutionRequest(
-            plugin_id=PLUGIN,
-            capability="execute",
-            payload={},
-            context=context,
-            authorized_plan=plan,
-        ))
-        if getattr(admission, "status", None) != "admitted":
-            raise PermissionError("content_source_kernel_admission_denied")
+        await self.admit_owner_access(kernel=self._kernel, context=context, plan=plan)
         documents: list[dict[str, str]] = []
         total_chars = 0
         for ref in references:
