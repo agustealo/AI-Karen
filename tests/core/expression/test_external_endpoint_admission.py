@@ -341,3 +341,33 @@ async def test_private_evidence_denies_remote_transport_even_with_admin_approval
     assert not task.stream_started
     if sink is not None:
         sink.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_private_evidence_rejects_destination_substitution_at_transport(monkeypatch, stream):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    endpoint = _endpoint("http://127.0.0.1:11434/v1", runtime=RuntimeEngine.OLLAMA)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+    assert not provider_endpoint_requires_external_permission(endpoint)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "https://remote.example/v1")
+    forbidden = AsyncMock(side_effect=AssertionError("Unexpected HTTP client"))
+    with (
+        patch.object(provider_execution, "_post_chat_completions",
+                     side_effect=AssertionError("Unexpected POST")) as post,
+        patch("httpx.AsyncClient", forbidden),
+    ):
+        kwargs = dict(messages=_task().messages, model="remote-model",
+                      max_tokens=128, temperature=0.1, local_only=True)
+        with pytest.raises(provider_execution.ProviderExecutionError,
+                           match="private_evidence_local_only"):
+            if stream:
+                async for _ in provider_execution.stream_provider_endpoint(
+                    endpoint, timeout_ms=1000, **kwargs,
+                ):
+                    pytest.fail("Unexpected provider stream")
+            else:
+                await provider_execution.execute_provider_endpoint(endpoint, **kwargs)
+        post.assert_not_called()
+        forbidden.assert_not_called()
