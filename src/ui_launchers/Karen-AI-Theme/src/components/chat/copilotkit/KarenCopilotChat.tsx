@@ -114,11 +114,8 @@ export function KarenCopilotChat({
             <div data-testid="karen-copilot-conversation-column"
               className="flex min-h-0 min-w-0 flex-1 flex-col">
               {modelControls}
-              <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} />
-              <div data-testid="karen-copilot-persona-footer"
-                className="sticky bottom-0 z-10 shrink-0 border-t border-border/60 bg-background/95 px-4 py-3 backdrop-blur">
-                <KarenPersonaSelector onStartNewConversation={onStartNewConversation} />
-              </div>
+              <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange}
+                personaControls={<KarenPersonaSelector onStartNewConversation={onStartNewConversation} />} />
             </div>
             <KarenCopilotVerifiedRail />
             <KarenCopilotPinnedDock />
