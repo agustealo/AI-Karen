@@ -200,6 +200,87 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 observed_state="enabled",
             )
 
+        # An explicitly authorized deployment host may advance a ready
+        # manifest observation without changing activation. These synthetic
+        # observations exercise only the database CAS, not package trust.
+        upgrade = _scope(
+            installation_id="manifest-upgrade", tenant=tenant_a, actor=actor_a,
+        )
+        await ledger.initialize_observation(
+            installation_id=upgrade.installation_id,
+            manifest_checksum=upgrade.manifest_checksum,
+            observed_state="enabled",
+        )
+        old_approval = await approve(upgrade)
+        evidence = PluginLifecycleKernelObservation(
+            operation_id=str(uuid.uuid4()),
+            installation_id=upgrade.installation_id,
+            manifest_checksum="b" * 64,
+            observed_state="enabled",
+        )
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            await ledger.reconcile_manifest_observation(
+                observation=replace(evidence, observed_state="disabled"),
+                previous_checksum=upgrade.manifest_checksum,
+                expected_revision=1,
+            )
+        attempts = await asyncio.gather(
+            *[
+                ledger.reconcile_manifest_observation(
+                    observation=evidence,
+                    previous_checksum=upgrade.manifest_checksum,
+                    expected_revision=1,
+                )
+                for _ in range(2)
+            ],
+            return_exceptions=True,
+        )
+        assert sum(isinstance(value, dict) for value in attempts) == 1
+        assert sum(
+            isinstance(value, PluginLifecycleRevisionConflict) for value in attempts
+        ) == 1
+        upgraded = await ledger.read_observation(upgrade.installation_id)
+        assert upgraded == {
+            "installation_id": upgrade.installation_id,
+            "manifest_checksum": evidence.manifest_checksum,
+            "observed_state": "enabled",
+            "revision": 2,
+            "disposition": "ready",
+            "active_operation_id": None,
+        }
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            await ledger.reserve_approved(
+                approval_id=old_approval, scope=upgrade,
+                request_id="old-manifest", correlation_id="old-manifest",
+            )
+        assert await raw.fetchval(
+            "SELECT status FROM public.runtime_approval_requests WHERE approval_id = $1",
+            uuid.UUID(old_approval),
+        ) == "approved"
+        fresh_scope = replace(
+            upgrade, manifest_checksum=evidence.manifest_checksum, expected_revision=2,
+        )
+        fresh_approval = await approve(fresh_scope)
+        fresh_claim = await ledger.reserve_approved(
+            approval_id=fresh_approval, scope=fresh_scope,
+            request_id="fresh-manifest", correlation_id="fresh-manifest",
+        )
+        assert fresh_claim["status"] == "prepared"
+        next_evidence = replace(evidence, manifest_checksum="c" * 64)
+        for status in ("prepared", "unknown"):
+            if status == "unknown":
+                await ledger.mark_unknown(
+                    operation_id=fresh_claim["operation_id"],
+                    tenant_id=str(tenant_a), actor_user_id=str(actor_a),
+                )
+            with pytest.raises(PluginLifecycleRevisionConflict):
+                await ledger.reconcile_manifest_observation(
+                    observation=next_evidence,
+                    previous_checksum=evidence.manifest_checksum,
+                    expected_revision=2,
+                )
+        assert (await ledger.read_observation(upgrade.installation_id))["revision"] == 2
+
         # For a global installation, two different tenants may both have
         # legitimate admin approvals, but only one revision claim may win.
         tenant_b_clock = _scope(
