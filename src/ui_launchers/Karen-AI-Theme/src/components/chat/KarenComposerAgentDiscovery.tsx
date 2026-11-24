@@ -5,7 +5,10 @@ import { Wrench } from "lucide-react";
 import { apiClient } from "@/lib/api";
 
 type Agent = { agent_id: string; name: string; lifecycle_state: string; healthy: boolean };
-type Discovery = { kind: "loading" | "unavailable" } | { kind: "ready"; agents: Agent[] };
+type Discovery =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "ready"; agents: Agent[] };
 
 function parseAgents(value: unknown): Agent[] {
   if (!value || typeof value !== "object" || !("agents" in value) || !Array.isArray(value.agents)) {
