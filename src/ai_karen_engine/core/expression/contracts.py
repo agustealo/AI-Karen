@@ -38,6 +38,8 @@ class ExpressionTask:
     # Tracked by the canonical gateway to prohibit switching models after a
     # partial response has already been made visible to the consumer.
     stream_started: bool = field(default=False, repr=False, compare=False)
+    # Host-only restriction for private evidence; never derived from client metadata.
+    local_only: bool = False
 
 @dataclass(slots=True)
 class ExpressionResult:
