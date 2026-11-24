@@ -41,6 +41,7 @@ export interface KarenCopilotChatProps {
   onBusyChange?: (busy: boolean) => void;
   /** Consumer-owned runtime preference controls, positioned alongside the response evidence rail. */
   modelControls?: ReactNode;
+  onOpenAgents?: () => void;
   /** Canonical SessionProvider creation, available only in the full consumer workspace. */
   onStartNewConversation?: () => Promise<void>;
 }
@@ -52,6 +53,7 @@ export function KarenCopilotChat({
   workspaceRunId = null,
   onBusyChange,
   modelControls,
+  onOpenAgents,
   onStartNewConversation,
 }: KarenCopilotChatProps) {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -114,7 +116,7 @@ export function KarenCopilotChat({
             <div data-testid="karen-copilot-conversation-column"
               className="flex min-h-0 min-w-0 flex-1 flex-col">
               {modelControls}
-              <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange}
+              <KarenCopilotControlledChat key={conversationId} conversationId={conversationId} onBusyChange={onBusyChange} onOpenAgents={onOpenAgents}
                 personaControls={<KarenPersonaSelector onStartNewConversation={onStartNewConversation} />} />
             </div>
             <KarenCopilotVerifiedRail />
