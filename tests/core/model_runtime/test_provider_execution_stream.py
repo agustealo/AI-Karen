@@ -364,3 +364,48 @@ async def test_environment_proxy_variables_never_route_the_model_stream(monkeypa
     assert len(seen) == 1
     assert seen[0].startswith("http://")
     assert "unapproved-relay.example" not in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_private_attachment_sse_payload_preserves_complete_ordered_evidence(monkeypatch):
+    import hashlib
+
+    from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
+
+    bodies = ["First source: café \\ path", "Second source: 日本語\nsecond line"]
+    documents = [
+        {"source_id": source, "revision": hashlib.sha256(body.encode()).hexdigest(),
+         "text": body}
+        for source, body in zip(
+            ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+             "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"], bodies,
+        )
+    ]
+    messages = PromptAssembler.build_verified_attachment_messages(
+        [{"role": "user", "content": "Compare both documents."}], documents,
+    )
+    seen = []
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "http://127.0.0.1:11434/v1/chat/completions"
+        seen.append(json.loads(request.content))
+        return httpx.Response(
+            200, text=_chunk("Compared.") + _chunk(None, finish="stop") + "data: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    _transport_client(monkeypatch, respond)
+    events = [
+        event async for event in stream_provider_endpoint(
+            _endpoint(), messages=messages, model="smollm2:135m",
+            max_tokens=64, temperature=0.1, timeout_ms=5000, local_only=True,
+        )
+    ]
+    assert [event.kind for event in events] == ["delta", "complete"]
+    assert events[-1].result is not None
+    assert events[-1].result.text == "Compared."
+    assert len(seen) == 1
+    assert seen[0]["messages"] == messages
+    assert seen[0]["stream"] is True
