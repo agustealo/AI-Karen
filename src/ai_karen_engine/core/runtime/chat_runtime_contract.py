@@ -272,6 +272,14 @@ class ChatExecutionContext:
         )
 
 
+    def require_runtime_attachment_read_permission(self) -> None:
+        """Recheck the authenticated principal through the canonical RBAC owner."""
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+        principal = self.require_authenticated_user()
+        if not get_rbac_manager().has_permission(principal, Permission.DATA_READ):
+            raise PermissionError("runtime_attachment_read_permission_denied")
+
     def bind_runtime_attachment_scope(
         self, plan: Any, meter: Any, references: list[dict[str, str]],
     ) -> None:
@@ -280,7 +288,7 @@ class ChatExecutionContext:
             validate_draft_attachment_references,
         )
 
-        self.require_authenticated_user()
+        self.require_runtime_attachment_read_permission()
         selected = validate_draft_attachment_references(references)
         root = self.original_runtime_model_plan(meter)
         if (
@@ -311,7 +319,7 @@ class ChatExecutionContext:
         self, plan: Any, meter: Any, documents: list[dict[str, str]],
     ) -> None:
         """Publish verified document content atomically after every source passes."""
-        self.require_authenticated_user()
+        self.require_runtime_attachment_read_permission()
         current = self.__dict__.get("_runtime_attachment_scope")
         if (
             current is None
@@ -340,7 +348,7 @@ class ChatExecutionContext:
 
     def runtime_attachment_documents(self) -> list[dict[str, str]]:
         """Release content only while the original policy plan/meter remain valid."""
-        self.require_authenticated_user()
+        self.require_runtime_attachment_read_permission()
         current = self.__dict__.get("_runtime_attachment_scope")
         documents = self.__dict__.get("_runtime_attachment_documents")
         if current is None:
