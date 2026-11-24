@@ -18,7 +18,7 @@ type ChatInjectItem = Partial<SearchSourceItem & SearchResultItem> & {
  * Enhanced function to send rich content to the main Karen chat
  */
 const sendToChat = (item: ChatInjectItem | undefined) => {
-  if (!item) return;
+  if (!item) return false;
   // ChatRuntime performs the answer generation and citation checks.
   // This is a bounded user request, never a forged assistant answer.
   const url = typeof item.url === 'string' && (item.url.startsWith('https://') || item.url.startsWith('http://'))
@@ -38,6 +38,7 @@ const sendToChat = (item: ChatInjectItem | undefined) => {
   ].filter(Boolean).join('\\n\\n');
 
   const event = new CustomEvent('karen:inject-message', { 
+    cancelable: true,
     detail: { 
       content,
       role: 'user',
@@ -46,6 +47,7 @@ const sendToChat = (item: ChatInjectItem | undefined) => {
     } 
   });
   window.dispatchEvent(event);
+  return event.defaultPrevented;
 };
 
 /**
@@ -69,6 +71,7 @@ export function ResultsPanel({ response }: PanelProps) {
   const sources = response.sources || [];
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   // One canonical source card per URL. Ranked passages are supporting
   // evidence, not separate articles or independent citations.
   const distinctSources = useMemo(() => {
@@ -97,9 +100,12 @@ export function ResultsPanel({ response }: PanelProps) {
       query ? 'Question: ' + query : 'Explain the selected research topic.',
       ...leads,
     ].join('\n');
-    window.dispatchEvent(new CustomEvent('karen:inject-message', {
+    const event = new CustomEvent('karen:inject-message', {
+      cancelable: true,
       detail: { content, role: 'user', autoSubmit: false },
-    }));
+    });
+    window.dispatchEvent(event);
+    setHandoffError(event.defaultPrevented ? null : 'Karen chat is not ready to accept a draft. Open the conversation and retry.');
   };
 
   return (
@@ -122,6 +128,7 @@ export function ResultsPanel({ response }: PanelProps) {
             Ask Karen to explain
           </button>
         </div>
+        {handoffError && <p role="alert" className="text-sm text-destructive">{handoffError}</p>}
         <p className="text-xs text-muted-foreground" role="status">
           {fetched > 0 ? (fetched + (fetched === 1 ? ' page fetched' : ' pages fetched')) : 'Discovery links only'}
           {' · '}This opens a draft in chat. Karen verifies sources after you submit.
@@ -164,7 +171,7 @@ export function ResultsPanel({ response }: PanelProps) {
                 >
                   Open website <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
                 </a>
-                <button type="button" onClick={() => sendToChat(source)}
+                <button type="button" onClick={() => setHandoffError(sendToChat(source) ? null : 'Karen chat is not ready to accept a draft. Open the conversation and retry.')}
                   className="min-h-10 text-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
                   Ask about this source
                 </button>
@@ -197,6 +204,7 @@ export function SourcesPanel({ response }: PanelProps) {
   const initialActiveSourceIndex = useMemo(() => getMostRelevantSourceIndex(sources), [sources]);
   const [activeSourceIndex, setActiveSourceIndex] = useState(initialActiveSourceIndex);
   const [sourceViewMode, setSourceViewMode] = useState<ViewMode>('snippet');
+  const [handoffError, setHandoffError] = useState<string | null>(null);
 
   const featuredSource = useMemo(
     () => sources[Math.min(activeSourceIndex, Math.max(0, sources.length - 1))],
@@ -292,9 +300,10 @@ export function SourcesPanel({ response }: PanelProps) {
              </div>
 
              <div className="p-6 pt-0 mt-auto flex gap-3">
-               <button onClick={() => sendToChat(featuredSource)} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary text-primary-foreground text-xs font-bold uppercase tracking-wider shadow-lg hover:scale-105 active:scale-95 transition-all">
+               <button onClick={() => setHandoffError(sendToChat(featuredSource) ? null : 'Karen chat is not ready to accept a draft. Open the conversation and retry.')} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary text-primary-foreground text-xs font-bold uppercase tracking-wider shadow-lg hover:scale-105 active:scale-95 transition-all">
                   <Send className="h-3.5 w-3.5" /> Ask Karen about this source
                </button>
+               {handoffError && <p role="alert" className="text-sm text-destructive">{handoffError}</p>}
                {featuredSource?.url && (
                   <a href={featuredSource.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-border/60 hover:bg-muted text-xs font-bold uppercase tracking-wider text-muted-foreground transition-all">
                      <ExternalLink className="h-3.5 w-3.5" /> Visit Original

@@ -127,6 +127,37 @@ export function KarenCopilotControlledChat({
     return () => { mounted.current = false; };
   }, [conversationId]);
 
+  // Source plugins may prepare a user draft, but cannot submit a message or
+  // authorize evidence. The canonical conversation draft hook owns CAS writes.
+  useEffect(() => {
+    const onExternalDraft = (event: Event) => {
+      if (!(event instanceof CustomEvent) || !event.cancelable || event.defaultPrevented) return;
+      const detail: unknown = event.detail;
+      if (!detail || typeof detail !== "object" || Array.isArray(detail)) return;
+      const request = detail as Record<string, unknown>;
+      if (request.role !== "user" || request.autoSubmit !== false ||
+          typeof request.content !== "string") return;
+      const incoming = request.content.trim();
+      if (!incoming || !isReady || draftStatus !== "ready" ||
+          agent.isRunning || agent.threadId !== conversationId ||
+          submitPending.current || failedSubmission !== null) return;
+      const existing = readDraftText();
+      const next = existing.trim() ? existing + "\n\n" + incoming : incoming;
+      if (next.length > MAX_INPUT_CHARS || new TextEncoder().encode(next).length > 262144) {
+        setError("Search handoff exceeds the supported draft length.");
+        return;
+      }
+      onDraftChange(next);
+      // This acknowledges only a locally prepared draft. Saving and model
+      // execution remain independently confirmed by the canonical chat flow.
+      event.preventDefault();
+      window.dispatchEvent(new Event("karen:chat-draft-prepared"));
+    };
+    window.addEventListener("karen:inject-message", onExternalDraft);
+    return () => window.removeEventListener("karen:inject-message", onExternalDraft);
+  }, [agent.isRunning, agent.threadId, conversationId, draftStatus, failedSubmission,
+    isReady, onDraftChange, readDraftText]);
+
   useEffect(() => {
     if (!isReady || typeof agent.subscribe !== "function") return;
     activeRunId.current = null;

@@ -152,6 +152,17 @@ function DashboardWorkspace() {
   const karenLauncherRef = useRef<HTMLButtonElement | null>(null);
   const karenPanelRef = useRef<HTMLDivElement | null>(null);
 
+  // Navigation follows the mounted canonical chat controller accepting a
+  // reviewable draft; a plugin dispatch alone cannot assert a successful save.
+  useEffect(() => {
+    const showPreparedDraft = () => {
+      setKarenPanelOpen(false);
+      setActiveMainView("chat");
+    };
+    window.addEventListener("karen:chat-draft-prepared", showPreparedDraft);
+    return () => window.removeEventListener("karen:chat-draft-prepared", showPreparedDraft);
+  }, []);
+
   useEffect(() => {
     if (!karenPanelOpen || activeMainView === "chat") return;
     karenPanelRef.current?.focus();
