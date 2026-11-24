@@ -330,6 +330,6 @@ export function derivePluginRoutes(plugins: PluginCatalogEntry[]): PluginRoutes 
  * const { sidebarEntries, widgetEntries } = usePluginRoutes();
  */
 export function usePluginRoutes(): PluginRoutes {
-  const { plugins } = usePluginRegistry();
-  return useMemo(() => derivePluginRoutes(plugins), [plugins]);
+  const { getPluginsWithUI } = usePluginRegistry();
+  return useMemo(() => derivePluginRoutes(getPluginsWithUI()), [getPluginsWithUI]);
 }
