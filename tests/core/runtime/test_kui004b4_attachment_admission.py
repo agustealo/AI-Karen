@@ -526,3 +526,91 @@ async def test_bound_scope_survives_mutable_selection_changes(monkeypatch, mutat
     with pytest.raises(AttachmentAdmissionDenied, match="attachment_admission_missing"):
         ChatRuntime._prompt_messages_with_admitted_attachments(request)
     assert request.context.runtime_attachment_documents() == [{**selected(), "text": BODY}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["scope", "publication", "retrieval"])
+async def test_attachment_read_permission_revocation_at_context_boundaries(monkeypatch, boundary):
+    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+    request, plan, meter = await authority()
+    context = request.context
+    manager = get_rbac_manager()
+    original = manager.has_permission
+    revoked = False
+
+    def check(principal, permission):
+        if revoked and permission == Permission.DATA_READ:
+            return False
+        return original(principal, permission)
+
+    monkeypatch.setattr(manager, "has_permission", check)
+    documents = [{**selected(), "text": BODY}]
+    if boundary == "scope":
+        revoked = True
+        with pytest.raises(PermissionError, match="runtime_attachment_read_permission_denied"):
+            context.bind_runtime_attachment_scope(plan, meter, request.attachment_references)
+        assert not context.has_runtime_attachment_scope()
+        return
+
+    context.bind_runtime_attachment_scope(plan, meter, request.attachment_references)
+    if boundary == "publication":
+        revoked = True
+        with pytest.raises(PermissionError, match="runtime_attachment_read_permission_denied"):
+            context.bind_runtime_attachment_documents(plan, meter, documents)
+        assert context.has_runtime_attachment_scope()
+        revoked = False
+        with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
+            context.runtime_attachment_documents()
+        return
+
+    context.bind_runtime_attachment_documents(plan, meter, documents)
+    assert context.runtime_attachment_documents() == documents
+    revoked = True
+    assert ChatRuntime._attachment_restriction_required(request)
+    with pytest.raises(PermissionError, match="runtime_attachment_read_permission_denied"):
+        context.runtime_attachment_documents()
+    with pytest.raises(PermissionError, match="runtime_attachment_read_permission_denied"):
+        ChatRuntime._prompt_messages_with_admitted_attachments(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_count", [1, 2])
+async def test_attachment_permission_revoked_during_read_prevents_publication(monkeypatch, source_count):
+    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+    references = [selected(), selected(SECOND)][:source_count]
+    request, plan, meter = await authority(references=references)
+    manager = get_rbac_manager()
+    original = manager.has_permission
+    revoked = False
+
+    def check(principal, permission):
+        if revoked and permission == Permission.DATA_READ:
+            return False
+        return original(principal, permission)
+
+    monkeypatch.setattr(manager, "has_permission", check)
+
+    class RevokingReader(BoundedReader):
+        async def read_owner_active_text_bounded(self, *args, **kwargs):
+            nonlocal revoked
+            result = await super().read_owner_active_text_bounded(*args, **kwargs)
+            revoked = True
+            return result
+
+    reader = RevokingReader({
+        SOURCE: verified(request.context),
+        SECOND: verified(request.context, source_id=SECOND),
+    })
+    runtime = runtime_with_reader(monkeypatch, reader)
+    with pytest.raises(AttachmentAdmissionDenied):
+        await runtime._admit_attachments(request, plan, meter)
+    assert len(reader.calls) == 1
+    assert reader.calls[0][0] == SOURCE
+    assert ChatRuntime._attachment_restriction_required(request)
+    with pytest.raises(PermissionError, match="runtime_attachment_read_permission_denied"):
+        request.context.runtime_attachment_documents()
+    revoked = False
+    with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
+        request.context.runtime_attachment_documents()
