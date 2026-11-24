@@ -323,6 +323,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
   const { user, isLoading: authLoading } = useAuth();
   const generation = useRef(0);
   const identity = user ? `${user.tenant_id}:${user.user_id}:${[...(user.roles || []), ...(user.permissions || [])].sort().join(',')}` : null;
+  const [verifiedIdentity, setVerifiedIdentity] = useState<string | null>(null);
   const [state, setState] = useState<PluginRegistryState>({
     plugins: [],
     loading: true,
@@ -331,6 +332,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
 
   const fetchCatalog = useCallback(async () => {
     const requestGeneration = ++generation.current;
+    setVerifiedIdentity(null);
     if (!identity || authLoading) {
       setState({ plugins: [], loading: false, error: null });
       return;
@@ -368,6 +370,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
       if (requestGeneration !== generation.current) return;
       const normalised = raw.map(normaliseEntry);
       setState({ plugins: normalised, loading: false, error: null });
+      setVerifiedIdentity(identity);
       console.log(`[PluginRegistry] Loaded ${normalised.length} plugins from backend.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load plugin catalog';
@@ -383,6 +386,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
 
   const getPluginsWithUI = useCallback(() => {
     const userRoles = user?.roles || [];
+    if (authLoading || !identity || verifiedIdentity !== identity || state.loading || state.error) return [];
     return state.plugins.filter((p) => {
       // Must be enabled, have UI, and pass prompt-first validation
       if (!p.enabled || !p.has_gui || !p.promptFirstValid) return false;
@@ -391,7 +395,7 @@ export function PluginRegistryProvider({ children }: { children: ReactNode }) {
       if (p.allowedRoles.length === 0) return false;
       return p.allowedRoles.some((role) => userRoles.includes(role));
     });
-  }, [state.plugins, user?.permissions]);
+  }, [state, user?.roles, authLoading, identity, verifiedIdentity]);
 
   const getPlugin = useCallback(
     (pluginId: string) =>
