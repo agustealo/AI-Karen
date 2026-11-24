@@ -1,6 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LocalVoiceEngineSettings from "@/components/settings/LocalVoiceEngineSettings";
+import {
+  claimVoiceOutput, stopAssistantPlayback, useAssistantPlaybackPhase,
+} from "@/components/chat/KarenBrowserSpeechPlayback";
 
 const api = vi.hoisted(() => ({
   getVoiceEngineCatalog: vi.fn(),
@@ -452,5 +455,38 @@ describe("governed local engine voice settings", () => {
     expect(outputs[0].pause).toHaveBeenCalledTimes(1);
     expect(revoke).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
+  });
+
+  it("retire chat output and lets global Stop abort a local synthesis preview", async () => {
+    api.getVoiceSelection.mockResolvedValue({
+      voice: { engine_id: "pocket-tts", voice_id: "alba" }, available: true,
+    });
+    let finishSynthesis!: (blob: Blob) => void;
+    api.synthesizeLocalVoice.mockImplementation(() => new Promise<Blob>((resolve) => {
+      finishSynthesis = resolve;
+    }));
+    const create = vi.fn(() => "blob:unwanted");
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: create });
+
+    const retireChat = vi.fn();
+    let releaseChat!: () => void;
+    act(() => { releaseChat = claimVoiceOutput(retireChat, "speaking"); });
+    const Phase = () => <span data-testid="shared-voice-phase">{useAssistantPlaybackPhase()}</span>;
+    const view = render(<><LocalVoiceEngineSettings /><Phase /></>);
+
+    await screen.findByText(/Model: kyutai\/pocket-tts/);
+    fireEvent.click(screen.getByRole("button", { name: "Preview local voice" }));
+    await waitFor(() => expect(api.synthesizeLocalVoice).toHaveBeenCalledTimes(1));
+    expect(retireChat).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("shared-voice-phase").textContent).toBe("preparing");
+
+    const signal = api.synthesizeLocalVoice.mock.calls[0][3] as AbortSignal;
+    act(() => stopAssistantPlayback());
+    expect(signal.aborted).toBe(true);
+    expect(screen.getByTestId("shared-voice-phase").textContent).toBe("idle");
+    await act(async () => finishSynthesis(new Blob([new Uint8Array(44)], { type: "audio/wav" })));
+    expect(create).not.toHaveBeenCalled();
+    act(() => releaseChat());
+    view.unmount();
   });
 });
