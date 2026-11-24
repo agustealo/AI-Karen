@@ -22,8 +22,8 @@ const TARGET = "/api/conversations/" + CONV + "/draft";
 
 const ATTACHMENT = { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision: "a".repeat(64) };
 
-function Surface() {
-  const draft = useKarenPersistedDraft(CONV);
+function Surface({ conversationId = CONV }: { conversationId?: string } = {}) {
+  const draft = useKarenPersistedDraft(conversationId);
   const [clearConfirmed, setClearConfirmed] = React.useState<boolean | null>(null);
   return <div>
     <span data-testid="attachments">{JSON.stringify(draft.attachments)}</span>
@@ -579,5 +579,50 @@ describe("Attachment-aware draft persistence", () => {
     expect(screen.getByTestId("draft-synced").textContent).toBe("false");
     expect(screen.getByTestId("attachments").textContent).toBe(JSON.stringify([ATTACHMENT]));
     expect(backend.put).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Attachment mutation concurrency", () => {
+  it("drains a removal during an in-flight attachment save under the next confirmed revision", async () => {
+    let finish!: (receipt: unknown) => void;
+    backend.put.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Attach file" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(1), { timeout: 4000 });
+    expect(backend.put.mock.calls[0][1]).toEqual({
+      text: "Persisted earlier", expected_revision: 4, attachment_references: [ATTACHMENT],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove files" }));
+    await act(async () => finish({ text: "Persisted earlier", revision: 5, attachment_references: [ATTACHMENT] }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(backend.put.mock.calls[1][1]).toEqual({
+      text: "Persisted earlier", expected_revision: 5, attachment_references: [],
+    });
+    await waitFor(() => expect(screen.getByTestId("draft-synced").textContent).toBe("true"));
+    expect(screen.getByTestId("attachments").textContent).toBe("[]");
+  });
+
+  it("does not apply a late attachment save receipt to a newly opened conversation", async () => {
+    const other = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    let finish!: (receipt: unknown) => void;
+    backend.get.mockResolvedValueOnce({ text: "Original", revision: 4, attachment_references: [] })
+      .mockResolvedValueOnce({ text: "Other conversation", revision: 8, attachment_references: [] });
+    backend.put.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = render(<Surface />);
+    await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Attach file" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(1), { timeout: 4000 });
+    view.rerender(<Surface conversationId={other} />);
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("Other conversation"));
+    await act(async () => finish({ text: "Original", revision: 5, attachment_references: [ATTACHMENT] }));
+    expect(screen.getByTestId("attachments").textContent).toBe("[]");
+    expect(screen.getByTestId("draft-synced").textContent).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Attach file" }));
+    await waitFor(() => expect(backend.put).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(backend.put.mock.calls[1][0]).toBe("/api/conversations/" + other + "/draft");
+    expect(backend.put.mock.calls[1][1]).toEqual({
+      text: "Other conversation", expected_revision: 8, attachment_references: [ATTACHMENT],
+    });
   });
 });
