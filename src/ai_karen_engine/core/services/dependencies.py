@@ -58,7 +58,7 @@ async def get_user_context(request: Request) -> UserData:
 
         try:
             user_dict = await get_real_user(request)
-            return _require_identity_scope(UserData.from_dict(user_dict))
+            return _require_identity_scope(UserData.ensure(user_dict))
         except HTTPException:
             raise
         except Exception as auth_err:
