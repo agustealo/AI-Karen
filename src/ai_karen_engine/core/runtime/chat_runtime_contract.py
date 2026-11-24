@@ -270,6 +270,76 @@ class ChatExecutionContext:
             )
         )
 
+
+    def bind_runtime_attachment_scope(
+        self, plan: Any, meter: Any, references: list[dict[str, str]],
+    ) -> None:
+        """Bind selected source revisions to the original, non-copyable grant."""
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            validate_draft_attachment_references,
+        )
+
+        self.require_authenticated_user()
+        selected = validate_draft_attachment_references(references)
+        root = self.original_runtime_model_plan(meter)
+        if (
+            not selected or root is None or root is not plan
+            or not self.is_runtime_model_plan_authorized(plan, meter)
+            or "data:read" not in root.allowed_capabilities
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        scope = tuple((item["source_id"], item["revision"]) for item in selected)
+        current = self.__dict__.get("_runtime_attachment_scope")
+        if current is not None and (
+            current[0] is not plan or current[1] is not meter or current[2] != scope
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        self.__dict__["_runtime_attachment_scope"] = (plan, meter, scope)
+
+    def bind_runtime_attachment_documents(
+        self, plan: Any, meter: Any, documents: list[dict[str, str]],
+    ) -> None:
+        """Publish verified document content atomically after every source passes."""
+        current = self.__dict__.get("_runtime_attachment_scope")
+        if (
+            current is None
+            or current[0] is not plan or current[1] is not meter
+            or not self.is_runtime_model_plan_authorized(plan, meter)
+            or len(documents) != len(current[2])
+            or any(
+                not isinstance(item, dict)
+                or item.get("source_id") != source_id
+                or item.get("revision") != revision
+                or not isinstance(item.get("text"), str)
+                for item, (source_id, revision) in zip(documents, current[2])
+            )
+            or "_runtime_attachment_documents" in self.__dict__
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        self.__dict__["_runtime_attachment_documents"] = tuple(
+            (item["source_id"], item["revision"], item["text"])
+            for item in documents
+        )
+
+    def runtime_attachment_documents(self) -> list[dict[str, str]]:
+        """Release content only while the original policy plan/meter remain valid."""
+        current = self.__dict__.get("_runtime_attachment_scope")
+        documents = self.__dict__.get("_runtime_attachment_documents")
+        if current is None:
+            return []
+        plan, meter, scope = current
+        if (
+            documents is None
+            or not self.is_runtime_model_plan_authorized(plan, meter)
+            or tuple((source_id, revision) for source_id, revision, _ in documents)
+            != scope
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        return [
+            {"source_id": source_id, "revision": revision, "text": text}
+            for source_id, revision, text in documents
+        ]
+
     def require_authenticated_user(self) -> "UserData":
         """Require the ingress principal and matching user and tenant scope."""
         from ai_karen_engine.auth.models import UserData
@@ -351,6 +421,8 @@ class ChatExecutionRequest:
     max_tokens: Optional[int] = None
     stream: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Untrusted selection, not permission or stored document content.
+    attachment_references: List[Dict[str, str]] = field(default_factory=list)
     # Minted by runtime admission only; never copied from SDK metadata or prompt.
     runtime_run_lease: Optional["ChatRunLease"] = field(
         default=None, repr=False, compare=False,
