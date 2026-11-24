@@ -44,6 +44,7 @@ on:
       - 'tests/services/test_search_article_document_service.py'
       - 'tests/services/test_search_crawl_execution_contract.py'
       - 'tests/services/test_search_readable_evidence_contract.py'
+      - 'tests/services/test_search_chat_injection_contract.py'
       - 'tests/services/test_search_evidence_summary_contract.py'
       - 'tests/services/test_search_consumer_readiness_contract.py'
       - 'tests/services/test_search_ui_empty_evidence_contract.py'
@@ -107,6 +108,7 @@ on:
       - 'tests/services/test_search_article_document_service.py'
       - 'tests/services/test_search_crawl_execution_contract.py'
       - 'tests/services/test_search_readable_evidence_contract.py'
+      - 'tests/services/test_search_chat_injection_contract.py'
       - 'tests/services/test_search_evidence_summary_contract.py'
       - 'tests/services/test_search_consumer_readiness_contract.py'
       - 'tests/services/test_search_ui_empty_evidence_contract.py'
@@ -285,6 +287,7 @@ jobs:
             tests/services/test_search_plugin_option_contract.py \
             tests/services/test_search_crawl_execution_contract.py \
             tests/services/test_search_readable_evidence_contract.py \
+            tests/services/test_search_chat_injection_contract.py \
             tests/services/test_search_evidence_summary_contract.py \
             tests/services/test_search_consumer_readiness_contract.py \
             tests/services/test_search_ui_empty_evidence_contract.py \
