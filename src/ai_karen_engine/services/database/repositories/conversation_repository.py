@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import uuid
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -66,6 +68,33 @@ def canonical_message_digest(message: Message) -> str:
         separators=(",", ":"), allow_nan=False,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_draft_attachment_references(value: object) -> list[dict[str, str]]:
+    """Validate a bounded, ordered set of canonical metadata references."""
+    if not isinstance(value, list) or len(value) > 12:
+        raise ValueError("composer_attachment_invalid")
+    seen: set[str] = set()
+    references: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"source_id", "revision"}:
+            raise ValueError("composer_attachment_invalid")
+        source_id, revision = item["source_id"], item["revision"]
+        if (
+            not isinstance(source_id, str)
+            or not isinstance(revision, str)
+            or not re.fullmatch(r"[a-f0-9]{64}", revision)
+        ):
+            raise ValueError("composer_attachment_invalid")
+        try:
+            canonical_id = str(uuid.UUID(source_id))
+        except ValueError:
+            raise ValueError("composer_attachment_invalid") from None
+        if source_id != canonical_id or source_id in seen:
+            raise ValueError("composer_attachment_invalid")
+        seen.add(source_id)
+        references.append({"source_id": source_id, "revision": revision})
+    return references
 
 
 @dataclass
@@ -139,6 +168,14 @@ class ConversationRepository(Repository):
     ) -> RepositoryResult[Dict[str, Any]]:
         """Atomically CAS one owned draft; never append it to the transcript."""
         return RepositoryResult(success=False, error="composer_draft_not_supported")
+
+    async def put_composer_draft_with_attachments(
+        self, conversation_id: str, tenant_id: str, *, user_id: str,
+        content: str, expected_revision: int,
+        attachment_references: list[dict[str, str]],
+    ) -> RepositoryResult[Dict[str, Any]]:
+        """Atomically replace text and references; unsupported stores deny."""
+        return RepositoryResult(success=False, error="composer_attachment_not_supported")
 
     @abstractmethod
     async def add_message(self, message: Message) -> RepositoryResult[str]:
