@@ -322,7 +322,7 @@ function normaliseEntry(raw: BackendPluginEntry): PluginCatalogEntry {
 export function PluginRegistryProvider({ children }: { children: ReactNode }) {
   const { user, isLoading: authLoading } = useAuth();
   const generation = useRef(0);
-  const identity = user ? `${user.tenant_id}:${user.user_id}:${[...(user.roles || []), ...(user.permissions || [])].sort().join(',')}` : null;
+  const identity = user?.tenant_id && user?.user_id ? JSON.stringify([user.tenant_id, user.user_id, [...(user.roles || [])].sort(), [...(user.permissions || [])].sort()]) : null;
   const [verifiedIdentity, setVerifiedIdentity] = useState<string | null>(null);
   const [state, setState] = useState<PluginRegistryState>({
     plugins: [],
