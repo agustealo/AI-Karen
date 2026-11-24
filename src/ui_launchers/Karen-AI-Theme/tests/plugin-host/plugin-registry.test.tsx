@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
-import { PluginRegistryProvider, usePluginRegistry, usePluginHealth, setPluginMountState } from '../../src/plugin_host/registry';
+import { PluginRegistryProvider, usePluginRegistry, usePluginHealth, setPluginMountState, setPluginInstanceState } from '../../src/plugin_host/registry';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
 
@@ -85,15 +85,45 @@ describe('Plugin Registry', () => {
   });
 
   it('should update plugin health status', () => {
-    const { result, rerender } = renderHook(() => usePluginHealth('weather-query'), {
+    const { result } = renderHook(() => usePluginHealth('weather-query'), {
       wrapper: ({ children }) => React.createElement(PluginRegistryProvider, null, children)
     });
 
     act(() => {
       setPluginMountState('weather-query', 'mounted');
     });
-    rerender();
-
     expect(result.current.frontendMountState).toBe('mounted');
+    act(() => setPluginMountState('weather-query', 'idle'));
+  });
+});
+
+describe('Concurrent plugin lifecycle observations', () => {
+  it('retains another mount, reports errors and reacts without manual rerender', () => {
+    const id = 'file-explorer';
+    const dashboard = Symbol('dashboard');
+    const composer = Symbol('composer');
+    const { result } = renderHook(() => usePluginHealth(id), {
+      wrapper: ({ children }) => React.createElement(PluginRegistryProvider, null, children),
+    });
+    try {
+      act(() => setPluginInstanceState(id, dashboard, 'mounted'));
+      act(() => setPluginInstanceState(id, composer, 'loading'));
+      expect(result.current.frontendMountState).toBe('mounted');
+      act(() => setPluginInstanceState(id, composer, 'error', 'Render failed'));
+      expect(result.current.frontendMountState).toBe('error');
+      expect(result.current.errorMessage).toBe('Render failed');
+      act(() => setPluginInstanceState(id, composer, 'mounted'));
+      expect(result.current.frontendMountState).toBe('mounted');
+      expect(result.current.errorMessage).toBeUndefined();
+      act(() => setPluginInstanceState(id, composer, 'idle'));
+      expect(result.current.frontendMountState).toBe('mounted');
+      act(() => setPluginInstanceState(id, dashboard, 'idle'));
+      expect(result.current.frontendMountState).toBe('idle');
+    } finally {
+      act(() => {
+        setPluginInstanceState(id, dashboard, 'idle');
+        setPluginInstanceState(id, composer, 'idle');
+      });
+    }
   });
 });
