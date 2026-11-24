@@ -92,7 +92,7 @@ export function ResultsWorkspace({ state, modeConfig }: ResultsWorkspaceProps) {
     </section>
   );
   if (searchFailure || failedExecution) return <div role="alert" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">Search could not be completed</h2><p className="text-muted-foreground">{failureMessage}</p></div>;
-  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">No sources found</h2><p className="text-muted-foreground">The search did not return usable evidence. Try a broader query or a different search mode.</p></div>;
+  if (!hasEvidence) return <div role="status" className="rounded-2xl border border-border/60 bg-card p-8 space-y-3"><h2 className="text-lg font-semibold">No sources found</h2><p className="text-muted-foreground">The search did not return usable evidence. No search evidence retrieved. Try a broader query or a different search mode.</p></div>;
 
   const renderTabContent = () => {
     switch (currentTab) {

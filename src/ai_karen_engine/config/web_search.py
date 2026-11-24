@@ -5,23 +5,33 @@ instance lists. Runtime search services consume these values but do not own
 them.
 """
 
+import os
 from typing import Any, Dict, List, Optional, Sequence
 
+_env_searxng = os.getenv("SEARXNG_URL")
 
-DEFAULT_SEARXNG_INSTANCES: List[str] = [
-    "https://searxng.site",
-    "https://searx.be",
-    "https://searxng.nicfab.eu",
-    "https://search.ononoki.org",
-    "https://priv.au",
-    "https://searx.work",
-    "https://searx.ctis.me",
-    "https://searx.sethforprivacy.com",
-    "https://searx.nakostu.me",
-    "https://duskrose.com",
-    "https://searx.prvcy.eu",
-    "https://search.disroot.org",
-]
+DEFAULT_SEARXNG_INSTANCES: List[str] = list(
+    dict.fromkeys(
+        [
+            *([_env_searxng] if _env_searxng else []),
+            "http://searxng:8080",
+            "http://127.0.0.1:8088",
+            "http://localhost:8088",
+            "https://searxng.site",
+            "https://searx.be",
+            "https://searxng.nicfab.eu",
+            "https://search.ononoki.org",
+            "https://priv.au",
+            "https://searx.work",
+            "https://searx.ctis.me",
+            "https://searx.sethforprivacy.com",
+            "https://searx.nakostu.me",
+            "https://duskrose.com",
+            "https://searx.prvcy.eu",
+            "https://search.disroot.org",
+        ]
+    )
+)
 
 
 # Bounded search aggregation defaults; operator settings may override these.
@@ -32,23 +42,23 @@ DEFAULT_AGGREGATION_CONFIG: Dict[str, int] = {
 
 
 DEFAULT_PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "searxng": {
+        "enabled": True,
+        "priority": 110,
+        "instances": DEFAULT_SEARXNG_INSTANCES,
+    },
     "duckduckgo": {
         "enabled": True,
         "priority": 100,
     },
-    "searxng": {
+    "brave_search_free": {
         "enabled": True,
         "priority": 95,
-        "instances": DEFAULT_SEARXNG_INSTANCES,
     },
     "brave_search": {
         "enabled": False,
         "priority": 92,
         "api_url": "https://api.search.brave.com/res/v1/web/search",
-    },
-    "brave_search_free": {
-        "enabled": True,
-        "priority": 91,
     },
     "tavily": {
         "enabled": False,
@@ -59,14 +69,14 @@ DEFAULT_PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
         "enabled": True,
         "priority": 88,
     },
-    "wikipedia": {
-        # Encyclopedia retrieval is opt-in, not a broad live-web fallback.
-        "enabled": False,
-        "priority": 85,
-    },
     "startpage": {
         "enabled": True,
         "priority": 87,
+    },
+    "wikipedia": {
+        # Encyclopedia retrieval is available for historical / encyclopedic queries.
+        "enabled": True,
+        "priority": 85,
     },
     "google_custom_search": {
         "enabled": False,

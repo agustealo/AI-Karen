@@ -8,6 +8,7 @@ Provider configurations are sourced from central defaults and caller settings.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from urllib.parse import quote_plus, urlsplit
@@ -84,6 +85,43 @@ class WebSearchClient:
         """
         Perform web search using the registry-selected provider.
         """
+        timeout_sec = float(kwargs.get("timeout_seconds") or kwargs.get("timeout") or 30.0)
+        if self.session is None:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=timeout_sec),
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+            ) as session:
+                self.session = session
+                try:
+                    return await self._execute_search(
+                        query,
+                        max_results=max_results,
+                        time_range=time_range,
+                        provider=provider,
+                        timeout_sec=timeout_sec,
+                        **kwargs,
+                    )
+                finally:
+                    self.session = None
+
+        return await self._execute_search(
+            query,
+            max_results=max_results,
+            time_range=time_range,
+            provider=provider,
+            timeout_sec=timeout_sec,
+            **kwargs,
+        )
+
+    async def _execute_search(
+        self,
+        query: str,
+        max_results: int = 5,
+        time_range: Optional[str] = None,
+        provider: Optional[str] = None,
+        timeout_sec: float = 30.0,
+        **kwargs: Any,
+    ) -> SearchResponse:
         if not query or not query.strip():
             return SearchResponse(
                 query=query,
@@ -101,15 +139,25 @@ class WebSearchClient:
                 error="No enabled search providers are configured.",
             )
 
+        deadline = time.monotonic() + timeout_sec
+
+        # Determine encyclopedic / historical eligibility
+        allow_encyclopedic = bool(kwargs.get("allow_encyclopedic", False))
+        if not allow_encyclopedic:
+            try:
+                from ai_karen_engine.services.search.search_query_planner import SearchQueryPlanner
+                allow_encyclopedic = SearchQueryPlanner.is_historical_or_encyclopedic(query)
+            except Exception:
+                allow_encyclopedic = False
+
         # The registry owns eligibility and order. Search transports may fail
         # independently; never mistake one failed endpoint for an unavailable
         # web.search capability.
         candidates = [selected]
         if provider is None:
             # Wikipedia is an encyclopedia, not a general-web search engine.
-            # Allow it only when the caller explicitly requests that provider.
-            # Do not silently turn exhausted live-web transports into an
-            # encyclopedia-only result that looks like current web evidence.
+            # Allow it as a fallback/complementary provider when the query has
+            # historical/encyclopedic intent or caller allowed encyclopedic sources.
             candidates = [candidate for candidate in candidates if candidate != "wikipedia"]
             candidates.extend(
                 candidate
@@ -120,6 +168,16 @@ class WebSearchClient:
                 and self.registry.get_descriptor(candidate).health
                 not in {"unhealthy", "degraded"}
             )
+            if allow_encyclopedic:
+                wiki_desc = self.registry.get_descriptor("wikipedia")
+                if (
+                    self.registry.is_enabled("wikipedia")
+                    and wiki_desc is not None
+                    and wiki_desc.health not in {"unhealthy", "degraded"}
+                    and "wikipedia" not in candidates
+                ):
+                    candidates.append("wikipedia")
+
             if not candidates:
                 return SearchResponse(
                     query=query, results=[], provider="none",
@@ -147,14 +205,25 @@ class WebSearchClient:
         hosts: set[str] = set()
         contributing: list[str] = []
         for candidate in candidates:
+            if time.monotonic() >= deadline:
+                errors.append("search_budget_exhausted")
+                break
             try:
                 response = await self._search_with_provider(
-                    candidate, query, max_results, time_range, **kwargs
+                    candidate, query, max_results, time_range, deadline=deadline, **kwargs
                 )
+                if response.results:
+                    if hasattr(self.registry, "set_health"):
+                        self.registry.set_health(candidate, "healthy")
+                elif response.error and any(code in response.error for code in ("401", "403", "429")):
+                    if hasattr(self.registry, "set_health"):
+                        self.registry.set_health(candidate, "degraded")
             except Exception as exc:
                 logger.warning(
                     "Search provider %s failed: %s", candidate, type(exc).__name__
                 )
+                if hasattr(self.registry, "set_health"):
+                    self.registry.set_health(candidate, "degraded")
                 errors.append(f"{candidate}:{type(exc).__name__}")
                 continue
             if not response.results:
@@ -305,21 +374,27 @@ class WebSearchClient:
         query: str,
         max_results: int,
         time_range: Optional[str] = None,
+        deadline: Optional[float] = None,
         **kwargs: Any,
     ) -> SearchResponse:
         config = self.registry.get_config("searxng")
         instances = config.get("instances") or []
         last_error = "All instances failed"
 
-        for instance_url in instances[:3]:
+        for instance_url in instances[:4]:
+            if deadline and time.monotonic() >= deadline:
+                break
             try:
+                remaining = max(0.5, (deadline - time.monotonic())) if deadline else 4.0
+                timeout_val = min(3.0, remaining)
+                timeout = aiohttp.ClientTimeout(total=timeout_val)
                 url = f"{instance_url.rstrip('/')}/search"
                 params = {"q": query, "format": "json", "safesearch": 1, "categories": "general"}
                 if time_range:
                     time_map = {"d": "day", "w": "week", "m": "month", "y": "year"}
                     params["time_range"] = time_map.get(time_range.lower(), time_range)
 
-                async with self.session.get(url, params=params, timeout=10) as response:
+                async with self.session.get(url, params=params, timeout=timeout) as response:
                     if response.status != 200:
                         last_error = f"HTTP {response.status} from {instance_url}"
                         continue

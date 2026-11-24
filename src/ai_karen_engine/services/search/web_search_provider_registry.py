@@ -127,7 +127,7 @@ class WebSearchProviderRegistry:
             "searxng": WebSearchProviderDescriptor(
                 provider_id="searxng",
                 capabilities=("web.search",),
-                locality="external",
+                locality="local",
                 requires_api_key=False,
                 supports_time_filter=True,
                 supports_structured_results=True,

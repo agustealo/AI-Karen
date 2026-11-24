@@ -1,0 +1,24 @@
+use_default_settings: true
+general:
+  debug: false
+  instance_name: "Karen Local SearXNG"
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "karen_local_searxng_secret_key_change_me_if_public"
+  limiter: false
+  image_proxy: false
+outgoing:
+  request_timeout: 4.0
+  max_request_timeout: 6.0
+  pool_connections: 50
+  pool_maxsize: 10
+  enable_http2: true
+enabled_plugins:
+  - 'Hash plugin'

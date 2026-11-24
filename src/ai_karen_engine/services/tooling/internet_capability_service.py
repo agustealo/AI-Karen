@@ -476,9 +476,10 @@ class InternetCapabilityService:
                     warnings=warnings,
                     execution_context=execution_context,
                     search_providers=search_providers,
-                discovered_sources=discovered_sources,
-                crawl_attempts=crawl_attempts,
-                crawl_elapsed_ms=crawl_elapsed_ms,
+                    discovered_sources=discovered_sources,
+                    crawl_attempts=crawl_attempts,
+                    crawl_elapsed_ms=crawl_elapsed_ms,
+                    status="no_results",
                 )
 
             crawl_started = time.perf_counter()
@@ -879,15 +880,35 @@ class InternetCapabilityService:
         if status != "permission_denied":
             for discovered in discovered_sources:
                 if discovered["url"] not in fetched_urls:
+                    snippet_text = str(discovered.get("snippet") or "")
                     sources.append({
                         "id": f"source_{len(sources)}",
                         **discovered,
                         "domain": urlparse(discovered["url"]).netloc,
-                        "content": "",
-                        "full_content": "",
+                        "content": snippet_text,
+                        "full_content": snippet_text,
+                        "markdown": snippet_text,
                     })
                     fetched_urls.add(discovered["url"])
         results = self._build_results(processed_chunks)
+        if not results and sources:
+            # When crawl yields no chunks, preserve discovered search snippets as evidence cards
+            results = self._build_results([
+                {
+                    "chunk_id": f"chunk_snippet_{idx}",
+                    "content": s.get("snippet") or s.get("title") or "",
+                    "url": s.get("url") or "",
+                    "score": 0.5,
+                    "metadata": {
+                        "evidence_level": s.get("evidence_level", "search_snippet"),
+                        "provider": s.get("search_provider", "unknown"),
+                    },
+                }
+                for idx, s in enumerate(sources)
+                if s.get("snippet") or s.get("title")
+            ])
+        if not sources and not results and status == "ok":
+            status = "no_results"
         # Read-only provenance projection over this already-authorized response.
         # Never treat the resulting graph as persisted memory or inferred claims.
         from ai_karen_engine.services.search.evidence_graph_projection import (
@@ -1599,6 +1620,7 @@ class InternetCapabilityService:
             max_inline_chars = 32000
             article_complete = len(document) <= max_inline_chars
             article_body = document[:max_inline_chars]
+            bounded_markdown = article_body if article_complete else None
             content_hash = hashlib.sha256(document.encode()).hexdigest()
 
             sources.append(
@@ -1612,8 +1634,8 @@ class InternetCapabilityService:
                     "domain": urlparse(url).netloc,
                     "snippet": self._summarize_text(preview_source, 220),
                     "content": self._summarize_text(preview_source, 1000),
-                    "full_content": article_body if article_complete else None,
-                    "markdown": article_body if article_complete else None,
+                    "full_content": bounded_markdown,
+                    "markdown": bounded_markdown,
                     "article_preview": article_body if not article_complete else None,
                     "article_complete": article_complete,
                     "article_char_count": len(document),

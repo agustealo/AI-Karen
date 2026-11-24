@@ -11,12 +11,20 @@ interface SearchHeaderProps {
 export function SearchHeader({ modeConfig, state }: SearchHeaderProps) {
   const sourceCount = state.response?.sources?.length ?? 0;
   const resultCount = state.response?.results?.length ?? 0;
+  const hasResults = sourceCount > 0 || resultCount > 0;
+  const responseStatus = state.response?.status;
   const status = state.isLoading
     ? 'Executing live crawl'
-    : state.error
+    : state.error || responseStatus === 'error'
       ? 'Search failed'
       : state.response
-        ? state.isResultsStale ? 'Previous results · update needed' : 'Live response ready'
+        ? state.isResultsStale
+          ? 'Previous results · update needed'
+          : hasResults
+            ? 'Live response ready'
+            : responseStatus === 'unavailable'
+              ? 'Search unavailable'
+              : 'No sources found'
         : 'Awaiting query';
 
   return (
