@@ -5881,7 +5881,7 @@ class ChatRuntime:
                    else {}),
             },
             token_budget=decision.token_budget,
-            messages=self._prompt_messages_with_admitted_attachments(request),
+            messages=ChatRuntime._prompt_messages_with_admitted_attachments(request),
         )
 
         assembly_started = time.perf_counter()
