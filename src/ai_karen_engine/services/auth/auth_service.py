@@ -969,6 +969,64 @@ class AuthService(BaseService):
                 raise RuntimeError("Session verification unavailable") from exc
             return None
 
+    async def revalidate_session_identity(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        tenant_id: str,
+        access_token_digest: str,
+    ) -> Optional[UserAccount]:
+        """Revalidate an already authenticated session without exporting credentials.
+
+        The caller must hold an ingress-issued execution witness. A session ID
+        alone is not an authentication grant. Rotation invalidates its digest.
+        """
+        if not self._initialized:
+            await self.initialize()
+        try:
+            session_uuid = uuid.UUID(session_id)
+            user_uuid = uuid.UUID(user_id)
+            if not tenant_id or tenant_id == "default":
+                return None
+            if len(access_token_digest) != 64:
+                return None
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+        try:
+            async with self._session_scope() as db_session:
+                result = await db_session.execute(
+                    select(AuthSession).where(
+                        AuthSession.session_token == session_uuid,
+                        AuthSession.user_id == user_uuid,
+                        AuthSession.is_active,
+                    )
+                )
+                row = result.scalar_one_or_none()
+                if row is None or not row.access_token:
+                    return None
+                token = row.access_token
+                digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                if not secrets.compare_digest(digest, access_token_digest):
+                    return None
+            # Reuse the canonical token, expiry, durable session and account
+            # checks. A rotation between these reads invalidates the old token.
+            account = await self.validate_session(token, strict_errors=True)
+            if (
+                account is None
+                or str(account.id) != user_id
+                or str(account.tenant_id) != tenant_id
+            ):
+                return None
+            return account
+        except Exception as exc:
+            logger.error(
+                "Durable session identity revalidation failed: %s",
+                type(exc).__name__,
+            )
+            raise RuntimeError("Session verification unavailable") from exc
+
     async def list_sessions(
         self,
         user_id: Optional[str] = None,
