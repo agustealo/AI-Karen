@@ -310,3 +310,162 @@ def test_postgres_draft_failure_classification_uses_only_sqlstate(
 
     error = SensitiveDatabaseError("PRIVATE DRAFT, SQL and connection tokens")
     assert _composer_draft_failure_class(error) == reason
+
+
+SOURCE = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+ATTACHMENT = {"source_id": SOURCE, "revision": "a" * 64}
+
+
+class AttachmentDraftRepo(OwnedDraftRepo):
+    """Controlled storage adapter; real PostgreSQL proof belongs to B3.1."""
+
+    def __init__(self):
+        super().__init__()
+        self.refs = []
+        self.unavailable = False
+
+    async def get_composer_draft(self, conversation_id, tenant_id, *, user_id):
+        if self.refs:
+            return RepositoryResult(success=False, error="composer_attachment_client_required")
+        return await super().get_composer_draft(conversation_id, tenant_id, user_id=user_id)
+
+    async def get_composer_draft_with_attachments(self, conversation_id, tenant_id, *, user_id):
+        self.calls.append(("attachment_read", tenant_id, user_id))
+        return RepositoryResult(success=True, data={
+            "text": self.text, "revision": self.revision, "attachment_references": self.refs,
+        })
+
+    async def put_composer_draft(self, conversation_id, tenant_id, *, user_id, content, expected_revision):
+        if self.refs:
+            return RepositoryResult(success=False, error="composer_draft_revision_conflict")
+        return await super().put_composer_draft(
+            conversation_id, tenant_id, user_id=user_id,
+            content=content, expected_revision=expected_revision,
+        )
+
+    async def put_composer_draft_with_attachments(
+        self, conversation_id, tenant_id, *, user_id, content,
+        expected_revision, attachment_references,
+    ):
+        self.calls.append(("attachment_write", tenant_id, user_id))
+        if self.unavailable:
+            return RepositoryResult(success=False, error="composer_attachment_unavailable")
+        if expected_revision != self.revision:
+            return RepositoryResult(success=False, error="composer_draft_revision_conflict")
+        self.text = content
+        self.refs = attachment_references
+        self.revision += 1
+        return RepositoryResult(success=True, data={
+            "text": self.text, "revision": self.revision, "attachment_references": self.refs,
+        })
+
+
+@pytest.fixture
+def attachment_http():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    repo = AttachmentDraftRepo()
+    gateway = ConversationRuntimeGateway(repo)
+    app = FastAPI()
+    app.include_router(routes.router)
+    principal = {"user_id": USER, "tenant_id": TENANT}
+    scope = {"tenant": TENANT}
+    app.dependency_overrides[routes.get_conversation_runtime_gateway] = lambda: gateway
+    app.dependency_overrides[routes.get_current_tenant_id] = lambda: scope["tenant"]
+    app.dependency_overrides[routes.bypass_user_context_func] = lambda: principal
+    with TestClient(app) as client:
+        yield client, repo, principal, scope
+
+
+def test_attachment_http_round_trip_legacy_conflict_and_explicit_removal(attachment_http):
+    client, repo, _, _ = attachment_http
+    path = f"/{CONV}/draft"
+    assert client.get(path).json() == {"text": "", "revision": 0}
+    assert client.get(path, params={"include_attachments": True}).json() == {
+        "text": "", "revision": 0, "attachment_references": [],
+    }
+    payload = {"text": "private draft", "expected_revision": 0, "attachment_references": [ATTACHMENT]}
+    saved = client.put(path, json=payload)
+    assert saved.status_code == 200
+    assert saved.headers["cache-control"] == "private, no-store"
+    assert saved.json() == {
+        "text": "private draft", "revision": 1, "attachment_references": [ATTACHMENT],
+    }
+    read = client.get(path, params={"include_attachments": True})
+    assert read.json() == saved.json()
+    assert read.headers["cache-control"] == "private, no-store"
+    assert client.get(path).status_code == 409
+    assert client.put(path, json={"text": "legacy", "expected_revision": 1}).status_code == 409
+    assert client.put(path, json=payload).status_code == 409
+    assert client.put(path, json={
+        "text": "legacy null", "expected_revision": 1, "attachment_references": None,
+    }).status_code == 409
+    assert repo.revision == 1 and repo.refs == [ATTACHMENT]
+    cleared = client.put(path, json={
+        "text": "cleared", "expected_revision": 1, "attachment_references": [],
+    })
+    assert cleared.json() == {"text": "cleared", "revision": 2, "attachment_references": []}
+    assert client.get(path).json() == {"text": "cleared", "revision": 2}
+
+
+@pytest.mark.parametrize("refs", [
+    [ATTACHMENT, ATTACHMENT], [ATTACHMENT] * 13,
+    [{"source_id": SOURCE, "revision": "bad"}],
+    [{"source_id": "bad", "revision": "a" * 64}],
+    [{**ATTACHMENT, "storage_uri": "private"}],
+])
+def test_invalid_attachment_http_rejected_before_write(attachment_http, refs):
+    client, repo, _, _ = attachment_http
+    response = client.put(f"/{CONV}/draft", json={
+        "text": "draft", "expected_revision": 0, "attachment_references": refs,
+    })
+    assert response.status_code == 422
+    assert not any(call[0] == "attachment_write" for call in repo.calls)
+    assert repo.revision == 0
+
+
+def test_attachment_http_scope_denied_before_storage(attachment_http):
+    client, repo, principal, scope = attachment_http
+    path = f"/{CONV}/draft"
+    payload = {"text": "draft", "expected_revision": 0, "attachment_references": [ATTACHMENT]}
+    for user, tenant, status in ((OTHER, TENANT, 404), (USER, OTHER, 404), ("", TENANT, 401)):
+        principal["user_id"] = user
+        scope["tenant"] = tenant
+        assert client.get(path, params={"include_attachments": True}).status_code == status
+        assert client.put(path, json=payload).status_code == status
+    assert not any(call[0].startswith("attachment_") for call in repo.calls)
+
+
+def test_attachment_http_conflict_does_not_disclose_source_metadata(attachment_http):
+    client, repo, _, _ = attachment_http
+    repo.unavailable = True
+    response = client.put(f"/{CONV}/draft", json={
+        "text": "private draft", "expected_revision": 0, "attachment_references": [ATTACHMENT],
+    })
+    assert response.status_code == 409
+    assert SOURCE not in response.text and ATTACHMENT["revision"] not in response.text
+    assert "private draft" not in response.text
+    assert repo.revision == 0
+
+
+@pytest.mark.asyncio
+async def test_attachment_gateway_logs_only_correlated_draft_metadata(monkeypatch):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as module
+
+    events = []
+    monkeypatch.setattr(module.logger, "info", lambda name, *, extra: events.append((name, extra)))
+    gateway = ConversationRuntimeGateway(AttachmentDraftRepo())
+    ctx = context()
+    await gateway.write_composer_draft(
+        ctx, text="private draft", expected_revision=0, attachment_references=[ATTACHMENT],
+    )
+    await gateway.read_composer_draft(ctx, include_attachments=True)
+    assert [name for name, _ in events] == [
+        "conversation_draft_write_completed", "conversation_draft_read_completed",
+    ]
+    for _, fields in events:
+        assert fields["correlation_id"] == ctx.correlation_id
+        assert fields["tenant_id"] == TENANT and fields["user_id"] == USER
+        assert SOURCE not in str(fields) and ATTACHMENT["revision"] not in str(fields)
+        assert "private draft" not in str(fields)
