@@ -2,8 +2,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  claimVoiceOutput,
   extractAssistantSpeech,
   KarenBrowserSpeechPlayback,
+  markVoiceOutputSpeaking,
   stopAssistantPlayback,
   useAssistantPlaybackPhase,
 } from "@/components/chat/KarenBrowserSpeechPlayback";
@@ -328,5 +330,27 @@ describe("canonical assistant speech playback", () => {
     fireEvent.click(screen.getByRole("button", { name: "Read Karen's reply aloud" }));
     await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/could not prepare speech/i));
     expect(speak).not.toHaveBeenCalled();
+  });
+
+  it("keeps one tab-wide speech owner and ignores stale releases", () => {
+    render(<PlaybackDock />);
+    const retireFirst = vi.fn();
+    const retireSecond = vi.fn();
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    act(() => { releaseFirst = claimVoiceOutput(retireFirst, "speaking"); });
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("speaking");
+    act(() => { releaseSecond = claimVoiceOutput(retireSecond, "preparing"); });
+    expect(retireFirst).toHaveBeenCalledTimes(1);
+
+    act(() => releaseFirst());
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("preparing");
+    act(() => markVoiceOutputSpeaking(retireSecond));
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("speaking");
+
+    act(() => stopAssistantPlayback());
+    expect(retireSecond).toHaveBeenCalledTimes(1);
+    act(() => releaseSecond());
+    expect(screen.getByTestId("active-speech-phase").textContent).toBe("idle");
   });
 });
