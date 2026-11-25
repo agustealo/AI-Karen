@@ -1152,6 +1152,7 @@ def _owned_worker_fixture(monkeypatch, native, worker):
         )
         endpoint = replace(
             endpoint, provider_id="builtin_transformers", base_url=None,
+            builtin=True, tenant_scoped=False,
             endpoint_type=ProviderEndpointType.BUILTIN_TRANSFORMERS,
             protocol=EndpointProtocol.NATIVE, runtime_engine=RuntimeEngine.TRANSFORMERS,
         )
@@ -1220,7 +1221,12 @@ async def test_governed_native_worker_owned_across_repeated_cancellation(
     admission = _scope(calls=1)
     task = asyncio.create_task(invoke(admission))
     try:
-        await asyncio.wait_for(entered.wait(), timeout=2)
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+        except TimeoutError:
+            if task.done():
+                await task  # expose the original pre-worker failure
+            raise
         assert observed == ["original"]
         task.cancel()
         await asyncio.sleep(0)
@@ -1265,7 +1271,12 @@ async def test_expired_native_worker_result_never_becomes_success(monkeypatch, n
     monkeypatch.setattr(manager, "_record_provider_result", observations)
     task = asyncio.create_task(invoke(admission))
     try:
-        await asyncio.wait_for(entered.wait(), timeout=2)
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+        except TimeoutError:
+            if task.done():
+                await task  # expose the original pre-worker failure
+            raise
         admission.meter._start_ms -= 61000
     finally:
         release.set()
@@ -1297,7 +1308,12 @@ async def test_native_embedding_timeout_waits_for_worker_retirement(monkeypatch)
     admission = _scope(calls=1, max_duration_ms=500)
     task = asyncio.create_task(invoke(admission))
     try:
-        await asyncio.wait_for(entered.wait(), timeout=2)
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+        except TimeoutError:
+            if task.done():
+                await task  # expose the original pre-worker failure
+            raise
         await asyncio.sleep(0.6)
         assert not task.done()
         assert not retired.is_set()
@@ -1335,7 +1351,12 @@ async def test_native_admission_propagates_caller_cancellation_to_worker_checkpo
 
     task = asyncio.create_task(admission.run_admitted_blocking(worker))
     try:
-        await asyncio.wait_for(entered.wait(), timeout=2)
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+        except TimeoutError:
+            if task.done():
+                await task  # expose the original pre-worker failure
+            raise
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=2)
@@ -1345,3 +1366,38 @@ async def test_native_admission_propagates_caller_cancellation_to_worker_checkpo
         release.set()
         await asyncio.gather(task, return_exceptions=True)
     assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_native_reservation_is_local_without_relaxing_http_classification():
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+    from ai_karen_engine.core.model_runtime.provider_execution import (
+        provider_endpoint_requires_external_permission,
+    )
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS
+                    if item.provider_id == "builtin_transformers")
+    admission = _scope(calls=1)
+    assert provider_endpoint_requires_external_permission(endpoint) is True
+    await admission.reserve_native_generation(endpoint, model="model-a")
+    assert admission.meter.model_calls == 1
+    assert admission.meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"base_url": "https://remote.example/v1"},
+    {"provider_id": "unregistered-native"},
+    {"builtin": False},
+    {"enabled": False},
+])
+async def test_native_reservation_rejects_mislabeled_endpoint(changes):
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS
+                    if item.provider_id == "builtin_transformers")
+    admission = _scope(calls=1)
+    with pytest.raises(PermissionError, match="native_endpoint_not_eligible"):
+        await admission.reserve_native_generation(replace(endpoint, **changes), model="model-a")
+    assert admission.meter.model_calls == 0
+    assert admission.meter.external_requests == 0

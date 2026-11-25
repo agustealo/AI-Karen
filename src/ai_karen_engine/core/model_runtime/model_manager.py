@@ -370,9 +370,17 @@ class ModelManager:
                     raise ProviderNotAvailable("governed_model_stream_unsupported")
                 if {"required_model", "before_generate"} & kwargs.keys():
                     raise ProviderNotAvailable("governed_model_execution_options_unsupported")
-                await execution_admission.reserve_transport(endpoint, model=selection.model)
+                target = selection.model
+                if target in (None, "", "auto"):
+                    from ai_karen_engine.config.config_manager import get_default_model
+
+                    target = get_default_model("builtin_transformers")
+                if not isinstance(target, str) or not target.strip() or target.strip().lower() == "auto":
+                    raise ProviderNotAvailable("native_authorized_model_unavailable")
+                # Check policy against the concrete target, not an auto alias.
+                await execution_admission.reserve_native_generation(endpoint, model=target)
                 return await self._execute_admitted_native(
-                    selection, execution_admission, prompt=prompt,
+                    selection, execution_admission, prompt=prompt, target=target,
                     return_receipt=return_receipt, breaker=breaker, options=kwargs,
                 )
             await execution_admission.reserve_transport(endpoint, model=selection.model)
@@ -504,6 +512,7 @@ class ModelManager:
         admission: GovernedToolModelAdmission,
         *,
         prompt: str,
+        target: str,
         return_receipt: bool,
         breaker: CircuitBreaker,
         options: Dict[str, Any],
@@ -521,13 +530,6 @@ class ModelManager:
                     raise ProviderNotAvailable("model_execution_provenance_unsupported")
 
                 def generate_selected(checkpoint: Callable[[], None]) -> tuple[str, str]:
-                    target = selection.model
-                    if target in (None, "", "auto"):
-                        from ai_karen_engine.config.config_manager import get_default_model
-
-                        target = get_default_model("builtin_transformers")
-                    if not isinstance(target, str) or not target.strip() or target.strip().lower() == "auto":
-                        raise ProviderNotAvailable("native_authorized_model_unavailable")
                     checkpoint()
                     text, observed = provider.generate_text_with_model(
                         prompt, required_model=target, before_generate=checkpoint, **options,

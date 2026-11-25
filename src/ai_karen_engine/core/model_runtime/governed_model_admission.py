@@ -17,9 +17,12 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
-from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
+from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint, ProviderEndpointType
 from ai_karen_engine.core.model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
+)
+from ai_karen_engine.core.model_runtime.runtime_engine import (
+    EndpointKind, EndpointProtocol, Locality, RuntimeEngine,
 )
 
 
@@ -239,6 +242,37 @@ class GovernedToolModelAdmission:
                 if not worker.cancelled():
                     worker.exception()  # observe a late failure without logging payloads
                 raise
+
+    async def reserve_native_generation(self, endpoint: ProviderEndpoint, *, model: str) -> None:
+        """Admit only the canonical in-process Transformers endpoint.
+
+        Native execution has no HTTP destination. Do not relax the HTTP
+        classifier for an absent URL, or allow a mislabeled remote endpoint
+        to borrow this local reservation path.
+        """
+        self._require_scope()
+        if (
+            not isinstance(endpoint, ProviderEndpoint)
+            or endpoint.provider_id != "builtin_transformers"
+            or endpoint.endpoint_type is not ProviderEndpointType.BUILTIN_TRANSFORMERS
+            or endpoint.protocol is not EndpointProtocol.NATIVE
+            or endpoint.runtime_engine is not RuntimeEngine.TRANSFORMERS
+            or endpoint.kind is not EndpointKind.LOCAL_ENDPOINT
+            or endpoint.locality is not Locality.LOCAL
+            or endpoint.builtin is not True
+            or endpoint.enabled is not True
+            or endpoint.base_url is not None
+        ):
+            raise PermissionError("governed_native_endpoint_not_eligible")
+        if (
+            not isinstance(model, str)
+            or not model.strip()
+            or model.strip().lower() == "auto"
+        ):
+            raise PermissionError("governed_model_identity_not_authorized")
+        self._require_constraints(endpoint, model, external=False)
+        if not await self.meter.reserve_model_execution(external=False):
+            raise RuntimeError("governed_model_execution_budget_exhausted")
 
     async def reserve_local_embedding(self, *, model: str) -> None:
         """Charge a real local embedding attempt, never a synthetic fallback."""
