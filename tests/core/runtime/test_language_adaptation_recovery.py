@@ -396,3 +396,95 @@ class TestChatRuntimeHistoryContinuation:
             assert request.messages[0]["content"] == "Wa a gwaan?"
             assert request.messages[1]["content"] == "Wah gwaan!"
             assert request.messages[2]["content"] == "Translate?"
+
+    @pytest.mark.asyncio
+    async def test_lang_22_cortex_prevents_reasoning_misroute_on_short_dialect_turns(self):
+        """Uncalibrated ML 'complex' labels on short greetings/dialects must not escalate to ExecutionTopology.REASONING."""
+        from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+        from ai_karen_engine.core.runtime.execution_decision import ExecutionTopology
+
+        fake_analysis = MagicMock()
+        fake_analysis.intent = "creative_assistance"
+        fake_analysis.intent_confidence = 0.62
+        fake_analysis.task_complexity = "complex"
+        fake_analysis.topics = []
+        fake_analysis.memory_relevance = 0.0
+        fake_analysis.topology_signals = {
+            "multiple_actions": False,
+            "dependency_chain": False,
+            "external_lookup": False,
+            "code_execution": False,
+            "filesystem_operation": False,
+            "parallelizable": False,
+            "requires_followup": True,
+        }
+        fake_analysis.risk_signals = {"categories": [], "score": 0.0}
+        fake_analysis.capability_hints = {}
+        fake_analysis.reasoning_modes = None
+        fake_analysis.interpretation = None
+
+        decider = CortexExecutionDecider(force_graph=False)
+        decider._intelligence = MagicMock()
+        decider._intelligence.analyze = AsyncMock(return_value=fake_analysis)
+
+        ctx = ExecutionContext(
+            request_id="req-1",
+            correlation_id="corr-1",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            session_id="session-1",
+            conversation_id="conv-1",
+        )
+
+        for utterance in [
+            "Wa a gwaan?",
+            "Huh?",
+            "It's Jamaican",
+            "Sak pase?",
+            "you gonna tell me how mi fi chat mi own language?",
+        ]:
+            decision = await decider.decide(
+                ChatExecutionRequest(
+                    context=ctx,
+                    messages=[{"role": "user", "content": utterance}],
+                    metadata={},
+                )
+            )
+            assert decision.topology == ExecutionTopology.DIRECT, f"Expected DIRECT for {utterance!r}, got {decision.topology}"
+            assert decision.reasoning_modes == []
+
+        # Genuine analytical prompt with complex classification still escalates cleanly.
+        analytical = await decider.decide(
+            ChatExecutionRequest(
+                context=ctx,
+                messages=[{"role": "user", "content": "Compare and analyze the tradeoffs of microservices vs monoliths."}],
+                metadata={},
+            )
+        )
+        assert analytical.topology == ExecutionTopology.REASONING
+        assert "verification" in analytical.reasoning_modes
+
+    def test_lang_23_topology_signals_use_word_boundaries(self):
+        """Substring collisions like 'afternoon' ('after'), 'concept' ('once'), 'profile' ('file'), 'brunch' ('run') must not trigger graph/tool signals."""
+        from ai_karen_engine.core.intelligence.intelligence_runtime import IntelligenceRuntime
+        from ai_karen_engine.core.intelligence.contracts import IntelligenceAnalysisResult
+
+        rt = IntelligenceRuntime.__new__(IntelligenceRuntime)
+        dummy = IntelligenceAnalysisResult(intent="general_assist", intent_confidence=0.9)
+
+        signals = rt._assess_topology_signals(
+            "Oye, qué pasa? Can you help me plan my afternoon brunch profile concept?",
+            dummy,
+        )
+        assert signals["dependency_chain"] is False
+        assert signals["code_execution"] is False
+        assert signals["filesystem_operation"] is False
+
+        # Genuine standalone words still trigger
+        real_signals = rt._assess_topology_signals(
+            "Run the build after you save the file.",
+            dummy,
+        )
+        assert real_signals["dependency_chain"] is True
+        assert real_signals["code_execution"] is True
+        assert real_signals["filesystem_operation"] is True

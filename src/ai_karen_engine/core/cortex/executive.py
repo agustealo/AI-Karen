@@ -22,6 +22,31 @@ logger = logging.getLogger(__name__)
 
 _FORCE_GRAPH_ENV = "KARI_RUNTIME_FORCE_GRAPH"
 _SOFT_REASONING_MAX_MODEL_CALLS = 30
+_ANALYTICAL_REASONING_CUES = (
+    "analyze",
+    "analyse",
+    "compare",
+    "contrast",
+    "evaluate",
+    "prove",
+    "verify",
+    "debug",
+    "diagnose",
+    "architect",
+    "tradeoff",
+    "trade-off",
+    "calculate",
+    "solve",
+    "derive",
+    "explain why",
+    "step by step",
+    "step-by-step",
+    "strategy",
+    "critique",
+    "audit",
+    "optimize",
+    "refactor",
+)
 
 
 class CortexExecutionDecider:
@@ -367,7 +392,7 @@ class CortexExecutionDecider:
             intent_value = analysis.intent or "general_assist"
             confidence = analysis.intent_confidence or 0.0
 
-            topology = self._infer_topology_from_analysis(analysis)
+            topology = self._infer_topology_from_analysis(analysis, user_text=text)
             capabilities = self._infer_capabilities_from_analysis(analysis)
             memory_policy = self._infer_memory_policy_from_analysis(analysis)
             # Consume the canonical Intelligence interpretation as an evidence
@@ -645,7 +670,42 @@ class CortexExecutionDecider:
             "risk_categories": [],
         }
 
-    def _infer_topology_from_analysis(self, analysis: Any) -> Dict[str, Any]:
+    @staticmethod
+    def _is_short_conversational_turn(
+        user_text: str,
+        topology_signals: Dict[str, Any],
+        raw_reasoning_modes: Any,
+    ) -> bool:
+        """Guard against uncalibrated ML 'complex' labels escalating short
+        greetings, dialect turns, or clarifications into deep reasoning."""
+        stripped = (user_text or "").strip()
+        if not stripped or "\n" in stripped:
+            return False
+        if raw_reasoning_modes:
+            return False
+        if any(
+            bool(topology_signals.get(flag))
+            for flag in (
+                "multiple_actions",
+                "dependency_chain",
+                "external_lookup",
+                "code_execution",
+                "filesystem_operation",
+                "parallelizable",
+            )
+        ):
+            return False
+        words = stripped.split()
+        if len(words) > 12:
+            return False
+        lower = stripped.lower()
+        if any(cue in lower for cue in _ANALYTICAL_REASONING_CUES):
+            return False
+        return True
+
+    def _infer_topology_from_analysis(
+        self, analysis: Any, *, user_text: str = ""
+    ) -> Dict[str, Any]:
         topology: Dict[str, Any] = {
             "tool_requirements": [],
             "plugin_candidates": [],
@@ -662,6 +722,7 @@ class CortexExecutionDecider:
         topology_signals = getattr(analysis, "topology_signals", {}) or {}
         capability_hints = getattr(analysis, "capability_hints", {}) or {}
         task_complexity = getattr(analysis, "task_complexity", "simple")
+        raw_reasoning_modes = getattr(analysis, "reasoning_modes", None)
 
         if topology_signals.get("external_lookup"):
             topology["tool_requirements"].append("search")
@@ -681,8 +742,12 @@ class CortexExecutionDecider:
             topology["requires_parallel_execution"] = True
 
         # Complexity may increase reasoning budget, but it is not by itself a
-        # workflow/graph semantic. This preserves LangGraph for real workflows.
-        if task_complexity == "complex":
+        # workflow/graph semantic. Also prevent uncalibrated complexity scores
+        # on short conversational turns (greetings, dialects, clarifications)
+        # from escalating into deep reasoning with no reasoning artifacts.
+        if task_complexity == "complex" and not self._is_short_conversational_turn(
+            user_text, topology_signals, raw_reasoning_modes
+        ):
             topology["reasoning_depth"] = "deep"
             topology["max_steps"] = max(topology["max_steps"], 20)
             topology["max_model_calls"] = max(topology["max_model_calls"], 20)

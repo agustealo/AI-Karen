@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -529,18 +530,17 @@ class IntelligenceRuntime:
             "multiple_actions": any(
                 keyword in lower for keyword in [" and then ", "followed by", "next,"]
             ),
-            "dependency_chain": any(
-                keyword in lower for keyword in ["after", "before", "once", "depending on"]
+            "dependency_chain": bool(
+                re.search(r"\b(?:after|before|once|depending on)\b", lower)
             ),
-            "external_lookup": any(
-                keyword in lower for keyword in ["search", "look up", "find", "research"]
+            "external_lookup": bool(
+                re.search(r"\b(?:search|look up|find|research)\b", lower)
             ),
-            "code_execution": any(
-                keyword in lower for keyword in ["run", "execute", "compile", "build"]
+            "code_execution": bool(
+                re.search(r"\b(?:run|execute|compile|build)\b", lower)
             ),
-            "filesystem_operation": any(
-                keyword in lower
-                for keyword in ["file", "folder", "directory", "save", "write"]
+            "filesystem_operation": bool(
+                re.search(r"\b(?:file|folder|directory|save|write)\b", lower)
             ),
             "parallelizable": any(
                 keyword in lower
