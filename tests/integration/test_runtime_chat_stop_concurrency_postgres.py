@@ -113,6 +113,11 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             / "supabase/migrations/20261124010000_73_composer_draft_attachment_references.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(attachment_migration)
+        active_run_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261125010000_74_runtime_chat_single_active_run.sql"
+        ).read_text()
+        await raw.execute(active_run_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)",
             uuid.UUID(tenant_a), uuid.UUID(tenant_b),
@@ -165,6 +170,47 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
                 "conversation_id": thread,
                 "transport_run_id": run_id,
             }
+
+        # Two distinct run IDs on independent connections must not both
+        # acquire execution authority. Identical run IDs remain permanently
+        # fenced even after the winner has reached a terminal state.
+        admissions = await asyncio.gather(
+            worker_a.admit(
+                **identity(run_id="tab-a"),
+                request_id="tab-request-a", correlation_id="tab-trace-a",
+            ),
+            worker_b.admit(
+                **identity(run_id="tab-b"),
+                request_id="tab-request-b", correlation_id="tab-trace-b",
+            ),
+        )
+        winners = [item for item in admissions if item is not None]
+        assert len(winners) == 1
+        winner = winners[0]
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs "
+            "WHERE tenant_id=$1 AND user_id=$2 AND conversation_id=$3 "
+            "AND status IN ('running', 'cancelling')",
+            uuid.UUID(tenant_a), uuid.UUID(user_a), uuid.UUID(thread),
+        ) == 1
+        assert await worker_b.admit(
+            **identity(run_id="tab-third"),
+            request_id="third", correlation_id="third",
+        ) is None
+        assert await worker_a.request_cancel(
+            **identity(run_id=winner.transport_run_id),
+        ) == "cancelling"
+        assert await worker_b.admit(
+            **identity(run_id="tab-while-cancelling"),
+            request_id="while-cancelling", correlation_id="while-cancelling",
+        ) is None
+        assert await worker_a.finish(
+            winner, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
+        )
+        assert await worker_b.admit(
+            **identity(run_id=winner.transport_run_id),
+            request_id="repeat", correlation_id="repeat",
+        ) is None
 
         lease = await worker_a.admit(
             **identity(), request_id="request-a", correlation_id="trace-a",

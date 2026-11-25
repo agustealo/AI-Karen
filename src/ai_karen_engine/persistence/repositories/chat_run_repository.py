@@ -84,8 +84,9 @@ class SqlChatRunRepository:
         execution = str(uuid.uuid4())
         token = str(uuid.uuid4())
         async with async_transaction_scope(tenant, user_id=user) as session:
-            # Only reconcile this authenticated user's expired leases. No
-            # globally sweeping, unscoped mutation from a consumer request.
+            # Reconcile expired leases only in the requested conversation.
+            # The partial unique index serializes active admissions across
+            # workers even when callers choose different transport IDs.
             await session.execute(
                 text(
                     """
@@ -96,11 +97,12 @@ class SqlChatRunRepository:
                         updated_at = NOW()
                     WHERE tenant_id = CAST(:tenant AS uuid)
                       AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
                       AND status IN ('running', 'cancelling')
                       AND lease_expires_at <= NOW()
                     """
                 ),
-                {"tenant": tenant, "owner": user},
+                {"tenant": tenant, "owner": user, "conversation": conversation},
             )
             result = await session.execute(
                 text(
@@ -117,9 +119,9 @@ class SqlChatRunRepository:
                         'running', CAST(:token AS uuid),
                         NOW() + make_interval(secs => :ttl)
                     )
-                    ON CONFLICT (
-                        tenant_id, user_id, conversation_id, transport_run_id
-                    ) DO NOTHING
+                    -- Both a previously admitted transport ID and a live
+                    -- conversation execution must prevent another admission.
+                    ON CONFLICT DO NOTHING
                     RETURNING execution_id
                     """
                 ),

@@ -60,8 +60,9 @@ async def test_admit_only_in_authenticated_rls_transaction(
     assert lease.tenant_id == TENANT
     assert lease.conversation_id == THREAD
     assert lease.transport_run_id == "client-1"
-    assert "ON CONFLICT" in transaction.sql[1]
-    assert "DO NOTHING" in transaction.sql[1]
+    assert "conversation_id = CAST(:conversation AS uuid)" in transaction.sql[0]
+    assert transaction.parameters[0]["conversation"] == THREAD
+    assert "ON CONFLICT DO NOTHING" in transaction.sql[1]
     assert "RETURNING execution_id" in transaction.sql[1]
     assert transaction.parameters[1]["owner"] == OWNER
     assert transaction.parameters[1]["tenant"] == TENANT
