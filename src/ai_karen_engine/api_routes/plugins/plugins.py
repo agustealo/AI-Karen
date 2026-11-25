@@ -148,6 +148,12 @@ class FileExplorerCreateFolderRequest(BaseModel):
     parent_folder_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
 
 
+class FileExplorerRenameFolderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=256)
+    expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
 class FileExplorerCreateFolderResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     folder: FileExplorerFolderResponse
@@ -627,6 +633,42 @@ async def create_file_explorer_folder(
     except Exception:
         logger.warning("file_explorer_folder_create_unavailable", extra=meta)
         raise HTTPException(status_code=503, detail="Folder creation not confirmed; refresh before retrying") from None
+
+
+@router.patch("/file-explorer/folders/{folder_id}", response_model=FileExplorerCreateFolderResponse)
+async def rename_file_explorer_folder(
+    folder_id: UUID,
+    payload: FileExplorerRenameFolderRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerCreateFolderResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_folder_rename", Permission.DATA_WRITE,
+    )
+    try:
+        revision = int(payload.expected_revision)
+        if not 1 <= revision <= 9223372036854775806:
+            raise ValueError("file_explorer_folder_revision_invalid")
+        result = await plugin_service.rename_file_explorer_folder(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            folder_id=str(folder_id), name=payload.name, expected_revision=revision,
+        )
+        return FileExplorerCreateFolderResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Folder rename denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Folder unavailable or revision conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Folder request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_folder_rename_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="Folder rename not confirmed; refresh before retrying") from None
 
 
 @router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)

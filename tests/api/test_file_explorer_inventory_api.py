@@ -412,3 +412,67 @@ async def test_folder_creation_requires_bound_write_plan_and_kernel(monkeypatch)
     with pytest.raises(PermissionError):
         await service.create_file_explorer_folder(**args, name="Different")
     assert len(kernel.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_folder_rename_binds_source_name_and_revision(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "data:write"])
+    args.pop("limit")
+    args.pop("cursor")
+    scope = {"operation": "file_explorer.folder.rename", "folder_id": FILE,
+             "name": "Renamed", "expected_revision": 7}
+    policy.evaluate.return_value = PolicyDecision(
+        decision_id="rename-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read", "data:write",
+                              "file_explorer.folder.rename"],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    repository = Repository()
+    calls = []
+
+    async def rename(tenant_id, user_id, folder_id, *, name, expected_revision):
+        calls.append((tenant_id, user_id, folder_id, name, expected_revision))
+        assert len(kernel.calls) == len(calls)
+        if len(calls) > 1:
+            return SimpleNamespace(success=False, error="artifact_folder_conflict_or_unavailable")
+        return SimpleNamespace(success=True, data=SimpleNamespace(
+            folder_id=FILE, parent_folder_id=None, name=name, revision=8,
+        ))
+
+    repository.rename_owner_folder = rename
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.rename_file_explorer_folder(
+        **args, folder_id=FILE, name="Renamed", expected_revision=7,
+    )
+    assert result["folder"]["revision"] == "8"
+    assert calls == [(TENANT, OWNER, FILE, "Renamed", 7)]
+    with pytest.raises(PermissionError):
+        await service.rename_file_explorer_folder(
+            **args, folder_id=FILE, name="Renamed", expected_revision=8,
+        )
+    assert len(calls) == 1
+    with pytest.raises(FileExplorerFolderConflict):
+        await service.rename_file_explorer_folder(
+            **args, folder_id=FILE, name="Renamed", expected_revision=7,
+        )
+
+
+def test_rename_revision_requires_lossless_decimal_string():
+    from pydantic import ValidationError
+    assert ingress.FileExplorerRenameFolderRequest(
+        name="Renamed", expected_revision="9223372036854775806",
+    ).expected_revision == "9223372036854775806"
+    for invalid in (1, True, "0", "-1", "1.0", "01"):
+        with pytest.raises(ValidationError):
+            ingress.FileExplorerRenameFolderRequest(name="Renamed", expected_revision=invalid)

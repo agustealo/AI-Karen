@@ -156,13 +156,15 @@ class PluginService:
     async def _prepare_file_explorer(
         self, *, user_id: str, tenant_id: str, roles: List[str],
         permissions: List[str], request_id: str, correlation_id: str,
-        create_folder: bool = False, resource_scope: Optional[Dict[str, Any]] = None,
+        mutation: Optional[str] = None, resource_scope: Optional[Dict[str, Any]] = None,
     ):
         """Shared fresh policy admission for the trusted Explorer host."""
-        required_permissions = ["data:read", "data:write"] if create_folder else ["data:read"]
+        if mutation not in (None, "file_explorer.folder.create", "file_explorer.folder.rename"):
+            raise ValueError("file_explorer_operation_invalid")
+        required_permissions = ["data:read", "data:write"] if mutation else ["data:read"]
         capabilities = ["file-explorer", *required_permissions]
-        if create_folder:
-            capabilities.append("file_explorer.folder.create")
+        if mutation:
+            capabilities.append(mutation)
         from ai_karen_engine.database.factory import get_database_client
         from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
         from ai_karen_engine.extensions.file_explorer_inventory import (
@@ -254,12 +256,30 @@ class PluginService:
         """Explicit user-initiated host mutation; plugin remains read-only."""
         host, context, plan = await self._prepare_file_explorer(
             user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
-            request_id=request_id, correlation_id=correlation_id, create_folder=True,
+            request_id=request_id, correlation_id=correlation_id, mutation="file_explorer.folder.create",
             resource_scope={"operation": "file_explorer.folder.create",
                             "name": name, "parent_folder_id": parent_folder_id},
         )
         return await host.create_owner_folder(
             context=context, plan=plan, name=name, parent_folder_id=parent_folder_id,
+        )
+
+    async def rename_file_explorer_folder(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        folder_id: str, name: str, expected_revision: int,
+    ) -> Dict[str, Any]:
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id,
+            mutation="file_explorer.folder.rename",
+            resource_scope={"operation": "file_explorer.folder.rename",
+                            "folder_id": folder_id, "name": name,
+                            "expected_revision": expected_revision},
+        )
+        return await host.rename_owner_folder(
+            context=context, plan=plan, folder_id=folder_id,
+            name=name, expected_revision=expected_revision,
         )
 
     async def list_file_explorer_owner_page(

@@ -31,6 +31,9 @@ class ArtifactRepository(Protocol):
     async def create_owner_folder(self, tenant_id: str, user_id: str, *,
                                   name: str, parent_folder_id: str | None) -> Any: ...
 
+    async def rename_owner_folder(self, tenant_id: str, user_id: str, folder_id: str, *,
+                                  name: str, expected_revision: int) -> Any: ...
+
     async def owner_hierarchy_available(self, tenant_id: str, user_id: str) -> Any: ...
 
     async def list_owner_folders(self, tenant_id: str, user_id: str, **kwargs: Any) -> Any: ...
@@ -258,18 +261,39 @@ class ArtifactSourceAdapter:
             _uuid(tenant_id, "tenant_id"), _uuid(user_id, "user_id"),
             name=name, parent_folder_id=parent_folder_id,
         )
-        if not result.success:
-            if result.error == "artifact_folder_conflict_or_unavailable":
-                raise FileExplorerFolderConflict()
-            if result.error == "artifact_hierarchy_invalid":
-                raise ValueError("file_explorer_folder_invalid")
-            raise RuntimeError("file_explorer_folder_create_unavailable")
-        folder = result.data
+        folder = self._require_folder_mutation_result(result)
         if (folder is None or folder.name != name or folder.parent_folder_id != parent_folder_id
             or type(folder.revision) is not int or folder.revision != 1):
             raise RuntimeError("file_explorer_folder_create_result_invalid")
         return {"folder_id": _uuid(folder.folder_id, "folder_id"),
                 "parent_folder_id": folder.parent_folder_id,
+                "name": folder.name, "revision": str(folder.revision)}
+
+    @staticmethod
+    def _require_folder_mutation_result(result: Any) -> Any:
+        if not result.success:
+            if result.error == "artifact_folder_conflict_or_unavailable":
+                raise FileExplorerFolderConflict()
+            if result.error == "artifact_hierarchy_invalid":
+                raise ValueError("file_explorer_folder_invalid")
+            raise RuntimeError("file_explorer_folder_mutation_unavailable")
+        return result.data
+
+    async def rename_owner_folder(
+        self, *, tenant_id: str, user_id: str, folder_id: str,
+        name: str, expected_revision: int,
+    ) -> dict[str, Any]:
+        result = await self._repository.rename_owner_folder(
+            _uuid(tenant_id, "tenant_id"), _uuid(user_id, "user_id"),
+            _uuid(folder_id, "folder_id"), name=name, expected_revision=expected_revision,
+        )
+        folder = self._require_folder_mutation_result(result)
+        if (folder is None or folder.folder_id != folder_id or folder.name != name
+            or type(folder.revision) is not int
+            or folder.revision not in (expected_revision, expected_revision + 1)
+            or not 1 <= folder.revision <= 9223372036854775806):
+            raise RuntimeError("file_explorer_folder_rename_result_invalid")
+        return {"folder_id": folder_id, "parent_folder_id": folder.parent_folder_id,
                 "name": folder.name, "revision": str(folder.revision)}
 
     async def revalidate_owner_reference(
