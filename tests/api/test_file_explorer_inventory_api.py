@@ -252,3 +252,33 @@ def test_content_request_schema_enforces_canonical_selection_ceiling():
     assert len(ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs).references) == MAX_CONTENT_SOURCE_REFERENCES
     with pytest.raises(ValidationError):
         ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs + refs[:1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", ["file-explorer", "content-intelligence"])
+async def test_inventory_route_forwards_search_only_after_rbac(monkeypatch, consumer):
+    from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
+
+    audit = []
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: True,
+        audit_access_attempt=lambda *args, **kwargs: audit.append(kwargs),
+    ))
+    page = dict(items=[], has_more=False, next_cursor=None,
+                inventory_semantics="owner_metadata_page_not_live_acl",
+                request_id="request-1", correlation_id="corr-1")
+    if consumer == "content-intelligence":
+        page["max_selection"] = MAX_CONTENT_SOURCE_REFERENCES
+    method = AsyncMock(return_value=page)
+    service = SimpleNamespace(list_file_explorer_owner_page=method, list_content_owner_page=method)
+    route = ingress.list_file_explorer_inventory if consumer == "file-explorer" else ingress.list_content_inventory
+    request = Request({"type": "http", "method": "GET", "path": f"/api/plugins/{consumer}/inventory", "headers": []})
+    await route(request=request, limit=10, cursor="bound-cursor", search="report_%",
+                current_user={"user_id": OWNER, "tenant_id": TENANT, "roles": ["user"], "permissions": ["data:read"]},
+                plugin_service=service)
+    assert audit and audit[0]["granted"] is True
+    assert method.await_args.kwargs["search"] == "report_%"
+    assert method.await_args.kwargs["cursor"] == "bound-cursor"
+    assert method.await_args.kwargs["tenant_id"] == TENANT
+    assert method.await_args.kwargs["user_id"] == OWNER
+    assert "search" not in audit[0]["additional_context"]

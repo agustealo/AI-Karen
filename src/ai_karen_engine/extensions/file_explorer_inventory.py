@@ -26,7 +26,8 @@ _RESERVED_SCOPE = frozenset({"file_explorer_grant", "file_explorer_entries"})
 
 class OwnerInventorySource(Protocol):
     async def list_owner_sources_page(
-        self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None
+        self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None,
+        search: str | None = None
     ) -> dict[str, Any]: ...
 
     async def revalidate_owner_reference(
@@ -179,6 +180,7 @@ class FileExplorerInventoryHost:
         plan: AuthorizedExecutionPlan,
         limit: int = 100,
         cursor: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]:
         self._authorize_owner(context=context, plan=plan)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
@@ -193,6 +195,7 @@ class FileExplorerInventoryHost:
             user_id=context.user_id,
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         if not isinstance(page, dict):
             raise RuntimeError("file_explorer_source_page_invalid")

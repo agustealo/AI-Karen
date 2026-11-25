@@ -22,6 +22,7 @@ class ArtifactRepository(Protocol):
         *,
         limit: int = 100,
         cursor: str | None = None,
+        search: str | None = None,
     ) -> Any: ...
 
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> Any: ...
@@ -90,6 +91,7 @@ class ArtifactSourceAdapter:
         user_id: str,
         limit: int = 100,
         cursor: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]:
         """Return an owner-authorized metadata page, never an implicit grant."""
         tenant_id = _uuid(tenant_id, "tenant_id")
@@ -97,9 +99,16 @@ class ArtifactSourceAdapter:
         if type(limit) is not int or not 1 <= limit <= MAX_OWNER_ARTIFACTS:
             raise ValueError("file_explorer_page_limit_invalid")
         response = await self._repository.list_owner_artifacts_page(
-            tenant_id, user_id, limit=limit, cursor=cursor
+            tenant_id, user_id, limit=limit, cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         if not getattr(response, "success", False):
+            error = getattr(response, "error", "")
+            if isinstance(error, str) and error in {
+                "artifact_owner_page_invalid: artifact_owner_search_invalid",
+                "artifact_owner_page_invalid: artifact_owner_cursor_invalid",
+            }:
+                raise ValueError("file_explorer_search_or_cursor_invalid")
             raise RuntimeError("file_explorer_artifact_list_unavailable")
         artifacts = getattr(response, "data", None)
         metadata = getattr(response, "metadata", None)
