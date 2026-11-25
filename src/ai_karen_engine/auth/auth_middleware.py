@@ -435,7 +435,7 @@ class SecureAuthMiddleware:
             witness = None
             if _witness_sink is not None:
                 account, witness = await auth_service.validate_session_with_witness(token)
-                if account is not None and witness is None:
+                if account is not None and not auth_service.is_issued_session_witness(witness):
                     raise RuntimeError("Session witness unavailable")
             else:
                 account = await auth_service.validate_session(token, strict_errors=True)
@@ -505,7 +505,7 @@ class SecureAuthMiddleware:
                 result.get("http_status", 401),
             )
         if issue_witness:
-            if len(witnesses) != 1 or not callable(witnesses[0]):
+            if len(witnesses) != 1 or witnesses[0] is None:
                 raise AuthenticationError("Session witness unavailable", 503)
             return self._get_user_from_payload(result["payload"], witness=witnesses[0])
         return self._get_user_from_payload(result["payload"])

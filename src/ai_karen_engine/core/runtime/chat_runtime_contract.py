@@ -290,7 +290,7 @@ class ChatExecutionContext:
         grant = vars(principal).get("_runtime_session_witness")
         if (
             not isinstance(grant, tuple) or len(grant) != 2
-            or grant[0] is not principal or not callable(grant[1])
+            or grant[0] is not principal or grant[1] is None
         ):
             raise PermissionError("runtime_attachment_session_required")
         binding = self.__dict__.get("_runtime_attachment_session_binding")
@@ -298,7 +298,10 @@ class ChatExecutionContext:
             self.__dict__["_runtime_attachment_session_binding"] = (self, principal, grant)
         elif binding[0] is not self or binding[1] is not principal or binding[2] is not grant:
             raise PermissionError("runtime_attachment_session_binding_invalid")
-        account = await grant[1]()
+        from ai_karen_engine.services.auth.auth_service import get_auth_service
+
+        issuer = await get_auth_service()
+        account = await issuer.revalidate_issued_session_witness(grant[1])
         if (
             account is None
             or str(account.id) != str(self.user_id)

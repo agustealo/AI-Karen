@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import secrets
 import uuid
 from copy import copy
 from dataclasses import replace
@@ -13,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.services.auth.auth_service import AuthService, get_auth_service
 from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 from ai_karen_engine.core.runtime.chat_runtime import (
     AttachmentAdmissionDenied,
@@ -78,6 +80,21 @@ def selected(source_id=SOURCE, digest=DIGEST):
     return {"source_id": source_id, "revision": digest}
 
 
+
+@pytest.fixture(autouse=True)
+def controlled_session_witness_issuer(monkeypatch):
+    """Exercise actual AuthService signatures with controlled durable readback."""
+    from ai_karen_engine.services.auth import auth_service
+
+    issuer = object.__new__(AuthService)
+    issuer._runtime_witness_key = secrets.token_bytes(32)
+    issuer.revalidate_session_identity = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        auth_service, "get_auth_service", AsyncMock(return_value=issuer),
+    )
+    return issuer
+
+
 async def authority(*, grant=True, bind=True, references=None):
     selected_refs = [selected()] if references is None else [
         dict(item) for item in references
@@ -96,10 +113,17 @@ async def authority(*, grant=True, bind=True, references=None):
         ),
     )
     principal = context.authenticated_user
-    witness = AsyncMock(return_value=SimpleNamespace(
+    issuer = await get_auth_service()
+    issuer.revalidate_session_identity.return_value = SimpleNamespace(
         id=user_id, tenant_id=tenant_id, status="active", is_verified=True,
         roles=["admin"] if grant else [],
-    ))
+    )
+    witness = issuer._issue_session_witness(
+        session_id=str(uuid.uuid4()), user_id=user_id, tenant_id=tenant_id,
+        access_token_digest="a" * 64,
+    )
+    assert issuer.is_issued_session_witness(witness)
+    assert not callable(witness)
     principal._runtime_session_witness = (principal, witness)
     policy = RuntimePolicyEnforcer()
     decision = await policy.evaluate(PolicyEvaluationRequest(
@@ -627,19 +651,57 @@ async def test_attachment_permission_revoked_during_read_prevents_publication(mo
 async def test_durable_session_denies_before_private_read(monkeypatch, attack):
     request, plan, meter = await authority()
     principal = request.context.authenticated_user
-    witness = vars(principal)["_runtime_session_witness"][1]
+    issuer = await get_auth_service()
+    revalidator = issuer.revalidate_session_identity
     if attack == "missing":
         del principal._runtime_session_witness
     elif attack == "revoked":
-        witness.return_value = None
+        revalidator.return_value = None
     elif attack == "copied_principal":
         request.context.authenticated_user = copy(principal)
     elif attack == "locked":
-        witness.return_value.status = "locked"
+        revalidator.return_value.status = "locked"
     else:
-        witness.return_value.roles = []
+        revalidator.return_value.roles = []
     reader = BoundedReader({SOURCE: verified(request.context)})
     runtime = runtime_with_reader(monkeypatch, reader)
     with pytest.raises(AttachmentAdmissionDenied):
         await runtime._admit_attachments(request, plan, meter)
     assert reader.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "attack",
+    ["fabricated_callable", "tampered_mac", "tampered_identity", "foreign_issuer"],
+)
+async def test_fabricated_internal_witness_cannot_read_private_documents(
+    monkeypatch, attack,
+):
+    request, plan, meter = await authority()
+    principal = request.context.authenticated_user
+    original = vars(principal)["_runtime_session_witness"][1]
+    issuer = await get_auth_service()
+    hostile = AsyncMock(return_value=issuer.revalidate_session_identity.return_value)
+    if attack == "fabricated_callable":
+        forged = hostile
+    elif attack == "tampered_mac":
+        forged = replace(original, mac="0" * 64)
+    elif attack == "tampered_identity":
+        forged = replace(original, tenant_id=str(uuid.uuid4()))
+    else:
+        competing_issuer = object.__new__(AuthService)
+        competing_issuer._runtime_witness_key = secrets.token_bytes(32)
+        forged = competing_issuer._issue_session_witness(
+            session_id=original.session_id, user_id=original.user_id,
+            tenant_id=original.tenant_id,
+            access_token_digest=original.access_token_digest,
+        )
+    principal._runtime_session_witness = (principal, forged)
+    reader = BoundedReader({SOURCE: verified(request.context)})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    with pytest.raises(AttachmentAdmissionDenied):
+        await runtime._admit_attachments(request, plan, meter)
+    assert reader.calls == []
+    issuer.revalidate_session_identity.assert_not_awaited()
+    hostile.assert_not_awaited()

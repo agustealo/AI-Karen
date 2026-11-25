@@ -7,13 +7,15 @@ user management, session management, and token validation.
 
 import asyncio
 import hashlib
+import hmac
+import json
 import os
 import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator, Callable, Awaitable
+from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from contextvars import ContextVar
@@ -100,6 +102,16 @@ class Session:
     is_active: bool = True
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _IssuedSessionWitness:
+    """Issuer-sealed, non-executable session authority."""
+
+    session_id: str
+    user_id: str
+    tenant_id: str
+    access_token_digest: str
+    mac: str
+
 
 class AuthService(BaseService):
     """Canonical authentication service.
@@ -123,6 +135,7 @@ class AuthService(BaseService):
         # Bounded runtime caches (optimization only; database is the authority)
         self._active_sessions: Dict[str, Session] = {}
         self._user_cache: Dict[str, UserAccount] = {}
+        self._runtime_witness_key = secrets.token_bytes(32)
 
         logger.debug(
             "AuthService initialized with environment=%s, jwt_algorithm=%s",
@@ -883,15 +896,73 @@ class AuthService(BaseService):
         logger.info("Session created for user %s", user_id)
         return session
 
+
+    def _sign_session_witness(
+        self, session_id: str, user_id: str, tenant_id: str,
+        access_token_digest: str,
+    ) -> str:
+        """Bind canonical session identity and token to this service instance."""
+        key = self.__dict__.get("_runtime_witness_key")
+        if not isinstance(key, bytes) or len(key) < 32:
+            raise RuntimeError("Session witness issuer unavailable")
+        payload = json.dumps(
+            ["chat-session-witness-v1", session_id, user_id, tenant_id,
+             access_token_digest],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+    def _issue_session_witness(
+        self, *, session_id: str, user_id: str, tenant_id: str,
+        access_token_digest: str,
+    ) -> _IssuedSessionWitness:
+        """Only canonical successful session validation may invoke issuance."""
+        return _IssuedSessionWitness(
+            session_id=session_id, user_id=user_id, tenant_id=tenant_id,
+            access_token_digest=access_token_digest,
+            mac=self._sign_session_witness(
+                session_id, user_id, tenant_id, access_token_digest,
+            ),
+        )
+
+    def is_issued_session_witness(self, witness: object) -> bool:
+        """Reject arbitrary callbacks and tampered or foreign-issued proofs."""
+        if type(witness) is not _IssuedSessionWitness:
+            return False
+        if not isinstance(witness.mac, str) or len(witness.mac) != 64:
+            return False
+        try:
+            expected = self._sign_session_witness(
+                witness.session_id, witness.user_id, witness.tenant_id,
+                witness.access_token_digest,
+            )
+            return secrets.compare_digest(expected, witness.mac)
+        except (TypeError, ValueError, RuntimeError):
+            return False
+
+    async def revalidate_issued_session_witness(
+        self, witness: object,
+    ) -> Optional[UserAccount]:
+        """Recheck database authority only after a valid issuer signature."""
+        if not self.is_issued_session_witness(witness):
+            return None
+        return await self.revalidate_session_identity(
+            session_id=witness.session_id, user_id=witness.user_id,
+            tenant_id=witness.tenant_id,
+            access_token_digest=witness.access_token_digest,
+        )
+
     async def validate_session_with_witness(
         self, session_token: str,
-    ) -> Tuple[Optional[UserAccount], Optional[Callable[[], Awaitable[Optional[UserAccount]]]]]:
-        """Issue an opaque, credential-free revalidator after durable authentication."""
-        witnesses: List[Callable[[], Awaitable[Optional[UserAccount]]]] = []
+    ) -> Tuple[Optional[UserAccount], Optional[_IssuedSessionWitness]]:
+        """Return durable account truth and opaque issuer-authenticated proof."""
+        witnesses: List[_IssuedSessionWitness] = []
         account = await self.validate_session(
             session_token, strict_errors=True, _witness_sink=witnesses.append,
         )
         if account is None or len(witnesses) != 1:
+            return None, None
+        if not self.is_issued_session_witness(witnesses[0]):
             return None, None
         return account, witnesses[0]
 
@@ -902,7 +973,7 @@ class AuthService(BaseService):
         user_agent: str = "",
         *,
         strict_errors: bool = False,
-        _witness_sink: Optional[Callable[[Callable[[], Awaitable[Optional[UserAccount]]]], None]] = None,
+        _witness_sink: Optional[Callable[[_IssuedSessionWitness], None]] = None,
     ) -> Optional[UserAccount]:
         """Verify a signed access token against an active, tenant-owned DB session.
 
@@ -976,19 +1047,14 @@ class AuthService(BaseService):
                 user = self._build_user_account(auth_user)
                 self._user_cache[user.id] = user
                 if _witness_sink is not None:
-                    session_id = str(db_auth_session.session_token)
-                    owner_id = str(user_uuid)
-                    digest = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
-
-                    async def revalidate() -> Optional[UserAccount]:
-                        return await self.revalidate_session_identity(
-                            session_id=session_id,
-                            user_id=owner_id,
-                            tenant_id=token_tenant_id,
-                            access_token_digest=digest,
-                        )
-
-                    _witness_sink(revalidate)
+                    _witness_sink(self._issue_session_witness(
+                        session_id=str(db_auth_session.session_token),
+                        user_id=str(user_uuid),
+                        tenant_id=token_tenant_id,
+                        access_token_digest=hashlib.sha256(
+                            session_token.encode("utf-8")
+                        ).hexdigest(),
+                    ))
                 return user
         except Exception as exc:
             logger.error(
