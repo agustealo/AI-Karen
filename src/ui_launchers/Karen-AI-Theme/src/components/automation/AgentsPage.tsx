@@ -88,7 +88,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
   const [pendingApprovalDecision, setPendingApprovalDecision] = useState<{ approvalId: string; decision: "approved" | "rejected" } | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
-  const [isLoadingRuns, setIsLoadingRuns] = useState(false);
+  const [isLoadingRuns, setIsLoadingRuns] = useState(true);
+  const [isLoadingApprovals, setIsLoadingApprovals] = useState(true);
   const [catalogError, setCatalogError] = useState("");
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
@@ -182,6 +183,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
       setRuns([]);
       setHasActiveRunPolling(false);
       setRunsError("");
+      setIsLoadingRuns(false);
       return Promise.resolve();
     }
 
@@ -249,8 +251,11 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const loadApprovals = useCallback(async () => {
     if (!isAuthenticated) {
       setApprovals([]);
+      setApprovalsError("");
+      setIsLoadingApprovals(false);
       return;
     }
+    setIsLoadingApprovals(true);
     try {
       const records = await apiClient.get<RuntimeApproval[]>("/api/approvals/");
       setApprovals(records);
@@ -258,6 +263,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     } catch (error) {
       setApprovals([]);
       setApprovalsError(error instanceof Error ? error.message : "Could not load approval requests.");
+    } finally {
+      setIsLoadingApprovals(false);
     }
   }, [isAuthenticated]);
 
@@ -393,7 +400,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             </div>
             <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)]">
               <div className="space-y-2" aria-label="Execution list">
-                {isLoadingRuns ? <p className="text-sm text-muted-foreground">Loading verified work…</p> :
+                {isLoadingRuns ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
                   visibleRuns.length ? visibleRuns.map((run) => (
                     <button type="button" key={run.run_id}
                       className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
@@ -402,7 +409,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                       <span className="block text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span>
                       <span className="text-xs text-muted-foreground">{run.status} · {formatTimestamp(run.started_at)}</span>
                     </button>
-                  )) : <p className="rounded-lg border p-4 text-sm text-muted-foreground">No verified executions match this view.</p>}
+                  )) : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
               </div>
               <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
                 {runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
@@ -451,8 +458,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         <h3 className="text-lg font-semibold">Needs your review</h3>
         <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
         {approvalsError && <p role="alert" className="text-sm text-destructive">{approvalsError}</p>}
-        {approvals.length === 0 && !approvalsError ? (
-          <p className="rounded-lg border p-4 text-sm text-muted-foreground">No actionable approval requests are available.</p>
+        {!isAuthenticated ? <p className="text-sm text-muted-foreground">Sign in to review authorized approval requests.</p> : isLoadingApprovals ? <p role="status" className="text-sm text-muted-foreground">Loading approval requests…</p> : approvalsError ? <p className="text-sm text-muted-foreground">Approval requests are unavailable. Refresh runtime to try again.</p> : approvals.length === 0 ? (
+          <p className="rounded-lg border p-4 text-sm text-muted-foreground">You’re all caught up. No actionable approval requests are available. Karen will show requests here when human review is required.</p>
         ) : approvals.map((approval) => (
           <div key={approval.approval_id} className="rounded-lg border p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -619,19 +626,19 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Total visible runs</CardDescription>
-                  <CardTitle>{runs.length}</CardTitle>
+                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : runs.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Active runs</CardDescription>
-                  <CardTitle>{activeRuns.length}</CardTitle>
+                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : activeRuns.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Registered specialists</CardDescription>
-                  <CardTitle>{catalog?.total ?? 0}</CardTitle>
+                  <CardTitle>{isLoadingCatalog ? "Loading" : catalogError || !catalog ? "Unavailable" : catalog.total}</CardTitle>
                 </CardHeader>
               </Card>
             </div>
@@ -643,6 +650,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                   Loading Medusa run history…
                 </CardContent>
               </Card>
+            ) : runsError ? (
+              <p className="text-sm text-muted-foreground">Run history is unavailable. Refresh runtime to try again.</p>
             ) : runs.length ? (
               <div className="space-y-3">
                 {runs.map((run) => (
