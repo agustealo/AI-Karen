@@ -145,10 +145,18 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [pendingApprovalDecision, setPendingApprovalDecision] = useState<{ approvalId: string; decision: "approved" | "rejected" } | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [isLoadingRuns, setIsLoadingRuns] = useState(true);
+  const [runsGeneratedAt, setRunsGeneratedAt] = useState<string | null>(null);
+  const [isRevalidatingRun, setIsRevalidatingRun] = useState(false);
   const [isLoadingApprovals, setIsLoadingApprovals] = useState(true);
   const [catalogError, setCatalogError] = useState("");
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [cancellationError, setCancellationError] = useState("");
+  const [cancellationUncertain, setCancellationUncertain] = useState(false);
+  const cancellationUncertainRef = useRef(false);
+  const cancellationRevision = useRef(0);
+  const [approvalDecisionError, setApprovalDecisionError] = useState("");
+  const [approvalDecisionUncertain, setApprovalDecisionUncertain] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const cancellationInFlightRef = useRef(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -183,11 +191,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   useEffect(() => {
     if (!selectedRunId || !isAuthenticated) {
       setVerifiedRun(null);
+      setIsRevalidatingRun(false);
       setRunDetailError("");
       return;
     }
     let active = true;
-    setVerifiedRun(null);
+    setIsRevalidatingRun(true);
+    setVerifiedRun((previous) => previous?.run_id === selectedRunId ? previous : null);
     setRunDetailError("");
     // Even an ID from the list is treated as an untrusted lookup key.
     apiClient.get<unknown>(isAdmin
@@ -198,8 +208,11 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         if (active) setVerifiedRun(record);
       })
       .catch((error: unknown) => {
-        if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
-      });
+        if (active) {
+          setVerifiedRun(null);
+          setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
+        }
+      }).finally(() => { if (active) setIsRevalidatingRun(false); });
     return () => { active = false; };
   }, [selectedRunId, isAuthenticated, isAdmin, runListRevision]);
   const visibleRuns = runs.filter((run) => {
@@ -248,6 +261,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     }
     if (!isAuthenticated) {
       setRuns([]);
+      setRunsGeneratedAt(null);
       setHasActiveRunPolling(false);
       setRunsError("");
       setIsLoadingRuns(false);
@@ -259,19 +273,29 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       try {
         do {
           runListRefreshQueuedRef.current = false;
-          setRunsError("");
           try {
+            const readCancellationRevision = cancellationRevision.current;
             const response = await apiClient.get<unknown>(
               isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
             );
             if (!workspaceLive.current) return;
             if (!isAgentRunsResponse(response)) throw new Error("Execution history response does not match the runtime contract.");
             setRuns(response.runs);
+            setRunsGeneratedAt(response.generated_at);
+            setRunsError("");
+            if (!cancellationInFlightRef.current && readCancellationRevision === cancellationRevision.current) {
+              cancellationUncertainRef.current = false;
+              setCancellationUncertain(false);
+              setCancellationError("");
+            }
+            setSelectedRunId((previous) => response.runs.some((run) => run.run_id === previous) ? previous : null);
             setHasActiveRunPolling(response.runs.some((run) =>
               ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
             ));
             setRunListRevision((revision) => revision + 1);
           } catch (error) {
+            if (!workspaceLive.current) return;
+            setRunsGeneratedAt(null);
             setRuns([]);
             setSelectedRunId(null);
             setVerifiedRun(null);
@@ -321,43 +345,57 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     }
   }, [isAuthenticated, isAdmin]);
 
-  const loadApprovals = useCallback(async () => {
-    if (!workspaceLive.current) return;
+  const loadApprovals = useCallback(async (afterDecision = false) => {
+    if (!workspaceLive.current || (approvalDecisionInFlightRef.current && !afterDecision)) return;
     const revision = ++approvalReadRevision.current;
     if (!isAuthenticated) {
       setApprovals([]);
       setApprovalsError("");
+      setApprovalDecisionUncertain(false);
       setIsLoadingApprovals(false);
       return;
     }
     setIsLoadingApprovals(true);
     try {
       const records = await apiClient.get<unknown>("/api/approvals/");
-      if (revision !== approvalReadRevision.current) return;
+      if (!workspaceLive.current || revision !== approvalReadRevision.current) return;
       if (!Array.isArray(records) || !records.every(isRuntimeApproval) || new Set(records.map((record) => record.approval_id)).size !== records.length) throw new Error("Approval response does not match the runtime contract.");
       setApprovals(records);
       setApprovalsError("");
+      setApprovalDecisionUncertain(false);
+      setApprovalDecisionError("");
     } catch (error) {
-      if (revision !== approvalReadRevision.current) return;
+      if (!workspaceLive.current || revision !== approvalReadRevision.current) return;
       setApprovals([]);
       setApprovalsError(error instanceof Error ? error.message : "Could not load approval requests.");
     } finally {
-      if (revision === approvalReadRevision.current) setIsLoadingApprovals(false);
+      if (workspaceLive.current && revision === approvalReadRevision.current) setIsLoadingApprovals(false);
     }
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const discover = () => {
+      if (document.visibilityState === "visible" && !approvalDecisionInFlightRef.current) void loadApprovals();
+    };
+    const timer = window.setInterval(discover, 60000);
+    document.addEventListener("visibilitychange", discover);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", discover); };
+  }, [isAuthenticated, loadApprovals]);
+
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
-    if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError) return;
+    if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError || approvalDecisionUncertain) return;
     const approval = approvals.find((item) => item.approval_id === approvalId);
-    if (!approval || Date.parse(approval.expires_at) <= Date.now()) {
-      setApprovalsError("This approval is unavailable or expired. Refresh the list before deciding.");
+    if (!approval || approval.status !== "pending" || Date.parse(approval.expires_at) <= Date.now()) {
+      setApprovalDecisionError("This approval is unavailable or expired. Refresh the list before deciding.");
       setPendingApprovalDecision(null);
       return;
     }
     approvalDecisionInFlightRef.current = true;
+    approvalReadRevision.current += 1;
     setDecidingApprovalId(approvalId);
     setPendingApprovalDecision(null);
-    setApprovalsError("");
+    setApprovalDecisionError("");
     try {
       const result = await apiClient.post<unknown>(
         `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
@@ -370,14 +408,16 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
           ? `Decision recorded: ${decision}. Karen must still revalidate and resume the original request.`
           : `Approval status: ${result.status}. No action has been executed by this decision.`,
       );
-      await loadApprovals();
+      await loadApprovals(true);
     } catch (error) {
-      setApprovalsError(error instanceof Error ? error.message : "Approval decision was not recorded.");
+      if (!workspaceLive.current) return;
+      setApprovalDecisionUncertain(true);
+      setApprovalDecisionError("Decision outcome could not be verified. Refresh before attempting another decision.");
     } finally {
       approvalDecisionInFlightRef.current = false;
       setDecidingApprovalId(null);
     }
-  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, isAuthenticated]);
+  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, approvalDecisionUncertain, isAuthenticated]);
 
   const refresh = useCallback(async () => {
     setActionMessage("");
@@ -391,12 +431,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
 
   const cancelRun = useCallback(
     async (runId: string) => {
-      if (!workspaceLive.current || !isAdmin || cancellationInFlightRef.current) return;
+      if (!workspaceLive.current || !isAdmin || cancellationInFlightRef.current || cancellationUncertainRef.current || isLoadingRuns || runsError || !runs.some((run) => run.run_id === runId && run.cancellable === true)) return;
       cancellationInFlightRef.current = true;
+      cancellationRevision.current += 1;
 
       setCancellingRunId(runId);
       setActionMessage("");
-      setRunsError("");
+      setCancellationError("");
       try {
         const response = await apiClient.post<unknown>(
           `/api/admin/agents/runs/${encodeURIComponent(runId)}/cancel`,
@@ -408,17 +449,17 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         );
         await loadRuns(true);
       } catch (error) {
-        setRunsError(
-          error instanceof Error
-            ? error.message
-            : `Failed to cancel Medusa run ${runId}.`,
-        );
+        if (!workspaceLive.current) return;
+        cancellationRevision.current += 1;
+        cancellationUncertainRef.current = true;
+        setCancellationUncertain(true);
+        setCancellationError("Cancellation outcome could not be verified. Refresh to inspect current execution status.");
       } finally {
         cancellationInFlightRef.current = false;
         setCancellingRunId(null);
       }
     },
-    [isAdmin, loadRuns],
+    [isAdmin, loadRuns, isLoadingRuns, runsError, runs],
   );
 
   if (isAuthLoading) {
@@ -471,7 +512,9 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         </div>
         {isAuthenticated ? (
           <>
+            {cancellationError && <p role="alert" className="text-sm text-destructive">{cancellationError}</p>}
             {runsError && <p role="alert" className="rounded-lg border border-destructive/50 p-3 text-sm text-destructive">Run status refresh failed: {runsError}</p>}
+            {runsGeneratedAt && <p className="text-xs text-muted-foreground" role="status">Execution snapshot: {formatTimestamp(runsGeneratedAt)}{isLoadingRuns ? " · Refreshing…" : ""}</p>}
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
               {(["all", "active", "completed", "failed"] as const).map((filter) => (
                 <Button key={filter} type="button" size="sm"
@@ -484,7 +527,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             </div>
             <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)]">
               <div className="space-y-2" aria-label="Execution list">
-                {isLoadingRuns ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
+                {isLoadingRuns && !runsGeneratedAt && !runsError ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
                   visibleRuns.length ? visibleRuns.map((run) => (
                     <button type="button" key={run.run_id}
                       className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
@@ -496,12 +539,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                   )) : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
               </div>
               <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
-                {runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
+                {runsError ? <p className="text-sm text-muted-foreground">Execution details unavailable until history is verified.</p> : runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h4 className="font-semibold">Execution details</h4>
                       <Badge variant={statusVariant(selectedRun.status)}>{selectedRun.status}</Badge>
                     </div>
+                    {(isRevalidatingRun || isLoadingRuns) && <p role="status" className="mt-2 text-xs text-muted-foreground">Revalidating execution status…</p>}
                     <p className="mt-2 text-sm text-muted-foreground">Started {formatTimestamp(selectedRun.started_at)}</p>
                     {selectedRun.completed_at && <p className="mt-1 text-sm text-muted-foreground">Ended {formatTimestamp(selectedRun.completed_at)}</p>}
                     <p className="mt-2 text-sm text-muted-foreground">{selectedRun.status.toLowerCase() === "completed" ? "Execution completed. A saved artifact is not implied by this status." : selectedRun.status.toLowerCase() === "cancelling" ? "Cancellation requested, awaiting confirmed terminal status." : "This status comes from the Medusa run ledger, not a simulated progress estimate."}</p>
@@ -515,14 +559,14 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                       </dl>
                     </details>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {!isAdmin && onDiscussRun && <Button type="button" size="sm" onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
-                      {!isAdmin && <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>}
+                      {!isAdmin && onDiscussRun && <Button type="button" size="sm" disabled={isRevalidatingRun || isLoadingRuns} onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
+                      {!isAdmin && <Button type="button" size="sm" variant="outline" disabled={isRevalidatingRun || isLoadingRuns} onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>}
                       {onAskKaren && <Button type="button" size="sm" variant="outline" onClick={onAskKaren}>Open Karen</Button>}
                     </div>
                     {contextMessage && <p role="status" className="mt-2 text-sm">{contextMessage}</p>}
                     {isAdmin && selectedRun.cancellable && (
                       <Button className="mt-4" variant="destructive" size="sm"
-                        disabled={cancellingRunId === selectedRun.run_id}
+                        disabled={isRevalidatingRun || isLoadingRuns || cancellationUncertain || cancellingRunId !== null}
                         onClick={() => void cancelRun(selectedRun.run_id)}>
                         <CircleStop className="mr-2 h-4 w-4" /> Request cancellation
                       </Button>
@@ -541,6 +585,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       <section aria-label="Needs your review" className="space-y-3" data-testid="agent-runtime-approvals">
         <h3 className="text-lg font-semibold">Needs your review</h3>
         <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
+        {approvalDecisionError && <p role="alert" className="text-sm text-destructive">{approvalDecisionError}</p>}
         {approvalsError && <p role="alert" className="text-sm text-destructive">{approvalsError}</p>}
         {!isAuthenticated ? <p className="text-sm text-muted-foreground">Sign in to review authorized approval requests.</p> : isLoadingApprovals ? <p role="status" className="text-sm text-muted-foreground">Loading approval requests…</p> : approvalsError ? <p className="text-sm text-muted-foreground">Approval requests are unavailable. Refresh runtime to try again.</p> : approvals.length === 0 ? (
           <p className="rounded-lg border p-4 text-sm text-muted-foreground">You’re all caught up. No actionable approval requests are available. Karen will show requests here when human review is required.</p>
@@ -559,9 +604,9 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             <div className="flex flex-wrap gap-2">
               {approval.conversation_id && onOpenConversation && <Button size="sm" variant="outline" onClick={() => void onOpenConversation(approval.conversation_id!)}>Open original conversation</Button>}
               {onAskKaren && <Button size="sm" variant="outline" onClick={onAskKaren}>Open Karen chat</Button>}
-              <Button size="sm" disabled={decidingApprovalId !== null}
+              <Button size="sm" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                 onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "approved" })}>Review approval</Button>
-              <Button size="sm" variant="outline" disabled={decidingApprovalId !== null}
+              <Button size="sm" variant="outline" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                 onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "rejected" })}>Review rejection</Button>
             </div>
             {pendingApprovalDecision?.approvalId === approval.approval_id && (
@@ -570,11 +615,11 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                 <p className="text-sm">Request: {approval.intent}. Risk: {approval.risk_level}. Expires: {formatTimestamp(approval.expires_at)}.</p>
                 <p className="text-xs text-muted-foreground">This records your decision only. Karen must separately revalidate authorization and execution state.</p>
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" disabled={decidingApprovalId !== null}
+                  <Button type="button" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                     onClick={() => void decideApproval(approval.approval_id, pendingApprovalDecision.decision)}>
                     Confirm {pendingApprovalDecision.decision === "approved" ? "approval" : "rejection"}
                   </Button>
-                  <Button type="button" variant="outline" disabled={decidingApprovalId !== null}
+                  <Button type="button" variant="outline" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                     onClick={() => setPendingApprovalDecision(null)}>Back</Button>
                 </div>
               </section>
@@ -710,13 +755,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Total visible runs</CardDescription>
-                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : runs.length}</CardTitle>
+                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : runs.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Active runs</CardDescription>
-                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : activeRuns.length}</CardTitle>
+                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : activeRuns.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
@@ -727,7 +772,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
               </Card>
             </div>
 
-            {isLoadingRuns ? (
+            {isLoadingRuns && !runsGeneratedAt && !runsError ? (
               <Card>
                 <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
                   <RefreshCw className="h-4 w-4 animate-spin" />
@@ -802,7 +847,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                           type="button"
                           variant="destructive"
                           size="sm"
-                          disabled={cancellingRunId === run.run_id}
+                          disabled={isLoadingRuns || cancellationUncertain || cancellingRunId !== null}
                           onClick={() => void cancelRun(run.run_id)}
                         >
                           <CircleStop className="mr-2 h-4 w-4" />
