@@ -7,6 +7,7 @@ reserve another call. The original Runtime meter owns every reservation.
 
 from __future__ import annotations
 
+import asyncio
 import traceback
 from unittest.mock import patch
 
@@ -547,3 +548,105 @@ async def test_private_evidence_revoked_between_engine_attempts():
             await ExpressionGateway(_settings(extra_engine=True)).generate(task)
     assert visited == ["local"]
     assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_original_deadline_denies_initial_engine():
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_duration_ms=0))
+    task = _task(meter)
+    task.remaining_execution_ms = meter.remaining_duration_ms
+    visited = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError, match="execution_budget_exhausted_duration"):
+            await ExpressionGateway(_settings()).generate(task)
+    assert visited == []
+    assert meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returns_success", [False, True])
+async def test_expired_meter_after_initial_engine_never_falls_back_or_accepts_result(
+    returns_success,
+):
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2, max_duration_ms=10000))
+    assert await meter.consume_model_call()
+    task = _task(meter)
+    task.remaining_execution_ms = meter.remaining_duration_ms
+    visited = []
+
+    class ExpiringEngine(_FakeEngine):
+        async def generate(self, task):
+            self.visited.append(self.engine_id)
+            # Advance only the test meter's original elapsed time, not the
+            # event-loop clock; no sleeps or scheduler-dependent assertions.
+            meter._start_ms -= 11000
+            if returns_success:
+                return _verified(task, self.engine_id)
+            raise RuntimeError("primary failed after deadline")
+
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: ExpiringEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError, match="execution_budget_exhausted_duration"):
+            await ExpressionGateway(_settings()).generate(task)
+    assert visited == ["local"]
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("swallows_cancellation", [False, True])
+async def test_shared_gateway_deadline_rejects_blocked_or_late_engine(swallows_cancellation):
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2, max_duration_ms=10000))
+    assert await meter.consume_model_call()
+    task = _task(meter)
+    task.timeout_ms = 50
+    task.remaining_execution_ms = meter.remaining_duration_ms
+    visited = []
+    closed = asyncio.Event()
+
+    class SlowEngine(_FakeEngine):
+        async def generate(self, task):
+            self.visited.append(self.engine_id)
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if swallows_cancellation:
+                    return _verified(task, self.engine_id)
+                raise
+            finally:
+                closed.set()
+
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: SlowEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError, match="execution_budget_exhausted_duration"):
+            await asyncio.wait_for(ExpressionGateway(_settings()).generate(task), timeout=2)
+    assert visited == ["local"]
+    assert closed.is_set()
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remaining", [None, True, float("nan"), float("inf"), -1])
+async def test_invalid_deadline_authority_fails_closed(remaining):
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call()
+    task = _task(meter)
+
+    async def invalid():
+        return remaining
+
+    task.remaining_execution_ms = invalid
+    visited = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(EngineUnavailableError, match="execution_budget_exhausted_duration"):
+            await ExpressionGateway(_settings()).generate(task)
+    assert visited == []

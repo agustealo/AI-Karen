@@ -4853,6 +4853,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "surface_layout_plan"},
             reserve_additional_model_call=meter.consume_model_call,
+            remaining_execution_ms=lambda: meter.remaining_duration_ms(),
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
@@ -5065,6 +5066,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "grounded_search", "evidence_count": len(sources)},
             reserve_additional_model_call=meter.consume_model_call,
+            remaining_execution_ms=lambda: meter.remaining_duration_ms(),
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
@@ -5276,6 +5278,7 @@ class ChatRuntime:
             local_only=ChatRuntime._attachment_restriction_required(request),
             authorize_private_evidence_attempt=authorize_private_evidence,
             reserve_additional_model_call=meter.consume_model_call,
+            remaining_execution_ms=lambda: meter.remaining_duration_ms(),
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
 

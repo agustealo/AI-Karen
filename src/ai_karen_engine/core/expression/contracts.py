@@ -1,8 +1,9 @@
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
 
-from .errors import PrivateEvidenceAuthorizationError
+from .errors import ExecutionDeadlineExceeded, PrivateEvidenceAuthorizationError
 
 @dataclass(slots=True)
 class ExpressionTask:
@@ -46,6 +47,29 @@ class ExpressionTask:
     authorize_private_evidence_attempt: Callable[[], Awaitable[bool]] | None = field(
         default=None, repr=False, compare=False,
     )
+
+    # Trusted runtime meter callback, never supplied by client metadata.
+    remaining_execution_ms: Callable[[], Awaitable[float]] | None = field(
+        default=None, repr=False, compare=False,
+    )
+
+    async def require_remaining_execution_ms(self) -> float:
+        """Read the original execution deadline without renewing its budget."""
+        if self.remaining_execution_ms is None:
+            raise ExecutionDeadlineExceeded("execution_deadline_authority_unavailable")
+        try:
+            remaining = await self.remaining_execution_ms()
+            if (
+                type(remaining) not in (int, float)
+                or not math.isfinite(remaining)
+                or remaining <= 0
+            ):
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+        except ExecutionDeadlineExceeded:
+            raise
+        except Exception:
+            raise ExecutionDeadlineExceeded("execution_deadline_authority_unavailable") from None
+        return float(remaining)
 
     async def require_private_evidence_authorization(self) -> None:
         if not self.local_only:

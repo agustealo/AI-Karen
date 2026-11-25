@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -7,7 +8,9 @@ from typing import Any
 
 from .circuit_breakers import ExpressionCircuitBreakers
 from .contracts import ExpressionResult, ExpressionTask
-from .errors import EngineUnavailableError, PrivateEvidenceAuthorizationError
+from .errors import (
+    EngineUnavailableError, ExecutionDeadlineExceeded, PrivateEvidenceAuthorizationError,
+)
 from .observability import emit_expression_event
 from .registry import get_engine
 from ai_karen_engine.core.errors.response_validation import validate_response_text
@@ -148,6 +151,35 @@ class ExpressionGateway:
             )
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
+        if task.remaining_execution_ms is None:
+            # Existing non-runtime expression consumers retain their contract.
+            return await self._generate(task)
+        if type(task.timeout_ms) is not int or task.timeout_ms <= 0:
+            raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+
+        # One scope covers authorization, every attempt, fallback and result
+        # validation. Rescheduling may only shorten the original task cap.
+        loop = asyncio.get_running_loop()
+        task_deadline = loop.time() + task.timeout_ms / 1000
+        scope = asyncio.timeout_at(task_deadline)
+        try:
+            async with scope:
+                remaining = await task.require_remaining_execution_ms()
+                deadline = min(task_deadline, loop.time() + remaining / 1000)
+                scope.reschedule(deadline)
+                result = await self._generate(task)
+                await task.require_remaining_execution_ms()
+                # An engine may catch cancellation and return late. Never
+                # convert such a result into a verified model response.
+                if scope.expired() or loop.time() >= deadline:
+                    raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+                return result
+        except TimeoutError:
+            if scope.expired():
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration") from None
+            raise
+
+    async def _generate(self, task: ExpressionTask) -> ExpressionResult:
         active_engine = (
             "local" if self.settings.active_engine == "builtin" else self.settings.active_engine
         )
@@ -233,6 +265,8 @@ class ExpressionGateway:
         attempted_model_engines = 0
 
         for level, engine_id in enumerate(sequence):
+            if task.remaining_execution_ms is not None:
+                await task.require_remaining_execution_ms()
             cfg = self.settings.engines.get(engine_id)
             logger.debug("Gateway evaluating configured engine %s", engine_id)
 
@@ -435,7 +469,11 @@ class ExpressionGateway:
             attempt_recorded = False
             attempt_outcome = "exception"
             try:
+                if task.remaining_execution_ms is not None:
+                    await task.require_remaining_execution_ms()
                 result = await engine.generate(task)
+                if task.remaining_execution_ms is not None:
+                    await task.require_remaining_execution_ms()
                 # Generated text can contain private user facts or tool evidence.
                 # Keep payloads out of runtime logs, even at DEBUG level.
 
@@ -546,6 +584,9 @@ class ExpressionGateway:
                 last_error = reason
             except PrivateEvidenceAuthorizationError:
                 attempt_outcome = "authorization_denied"
+                raise
+            except ExecutionDeadlineExceeded:
+                attempt_outcome = "deadline_exhausted"
                 raise
             except Exception as exc:
                 self.circuits.mark_failure(f"expression.engine.{engine_id}")
