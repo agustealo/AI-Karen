@@ -255,6 +255,49 @@ class PluginService:
         )
         return FileExplorerInventoryHost(kernel=kernel, source=source), context, plan
 
+    async def get_file_explorer_capabilities(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Report preflight eligibility, never a reusable authorization grant."""
+        from ai_karen_engine.auth.rbac_middleware import FILE_EXPLORER_MUTATION_PERMISSIONS
+
+        actor = dict(user_id=user_id, tenant_id=tenant_id, roles=roles,
+                     permissions=permissions, request_id=request_id,
+                     correlation_id=correlation_id)
+        host, context, plan = await self._prepare_file_explorer(**actor)
+        browse = await host.probe_owner_capability(context=context, plan=plan)
+        operations = {}
+        for operation, permission in FILE_EXPLORER_MUTATION_PERMISSIONS.items():
+            if permission.value not in permissions:
+                operations[operation] = "denied"
+            elif not browse:
+                operations[operation] = "unavailable"
+            else:
+                try:
+                    mutation_host, mutation_context, mutation_plan = await self._prepare_file_explorer(
+                        **actor, mutation=operation,
+                        resource_scope={"operation": operation, "availability_only": True},
+                    )
+                    admitted = await mutation_host.probe_owner_capability(
+                        context=mutation_context, plan=mutation_plan, operation=operation,
+                    )
+                    operations[operation] = "available" if admitted else "unavailable"
+                except PermissionError:
+                    operations[operation] = "denied"
+                except Exception:
+                    logger.warning("file_explorer_capability_probe_failed", extra={
+                        "request_id": request_id, "correlation_id": correlation_id,
+                        "tenant_id": tenant_id, "user_id": user_id, "operation": operation,
+                    })
+                    operations[operation] = "unavailable"
+        return {
+            "browse": "available" if browse else "unavailable",
+            "operations": operations,
+            "semantics": "preflight_not_resource_authorization",
+            "request_id": request_id, "correlation_id": correlation_id,
+        }
+
     async def create_file_explorer_folder(
         self, *, user_id: str, tenant_id: str, roles: List[str],
         permissions: List[str], request_id: str, correlation_id: str,

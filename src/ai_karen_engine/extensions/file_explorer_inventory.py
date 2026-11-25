@@ -29,6 +29,10 @@ class OwnerInventorySource(Protocol):
         self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None
     ) -> dict[str, Any]: ...
 
+    async def owner_hierarchy_capability(
+        self, *, tenant_id: str, user_id: str, deletion: bool = False,
+    ) -> bool: ...
+
     async def list_owner_hierarchy(
         self, *, tenant_id: str, user_id: str, limit: int,
         parent_folder_id: str | None, after_folder_id: str | None,
@@ -181,6 +185,23 @@ class FileExplorerInventoryHost:
         })
         return {**page, "request_id": context.request_id,
                 "correlation_id": context.correlation_id}
+
+    async def probe_owner_capability(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        operation: str | None = None,
+    ) -> bool:
+        """Non-executable preflight; a real mutation still needs its exact scope."""
+        if operation is None:
+            self._authorize_owner(context=context, plan=plan)
+        else:
+            self._authorize_mutation(context=context, plan=plan, scope={
+                "operation": operation, "availability_only": True,
+            })
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        return await self._source.owner_hierarchy_capability(
+            tenant_id=context.tenant_id, user_id=context.user_id,
+            deletion=operation == "file_explorer.folder.delete",
+        )
 
     def _authorize_mutation(
         self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,

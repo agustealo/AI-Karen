@@ -151,6 +151,12 @@ class ArtifactStore(Repository):
         """Probe live backend capability, never an actor authorization grant."""
         return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
+    async def owner_folder_deletion_available(
+        self, tenant_id: str, user_id: str,
+    ) -> RepositoryResult[bool]:
+        """Probe empty-folder deletion support without mutating metadata."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
     async def list_owner_folders(
         self, tenant_id: str, user_id: str, *,
         parent_folder_id: Optional[str] = None,

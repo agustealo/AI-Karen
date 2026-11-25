@@ -426,3 +426,16 @@ def test_empty_folder_delete_uncertainty_is_not_success_or_retry():
     assert not result.success
     assert result.error == "artifact_folder_commit_uncertain"
     assert session.commits == 1 and len(session.calls) == 1
+
+
+def test_folder_deletion_capability_requires_explicit_database_proof():
+    for returned in (False, None, True):
+        session = _HierarchySession(scalar=returned)
+        result = _run(_hierarchy_store(session).owner_folder_deletion_available(TENANT, OWNER))
+        assert result.success is (returned is True)
+        assert session.commits == int(returned is True)
+        sql, _ = session.calls[0]
+        assert "transaction_isolation" in sql
+        assert "row_security_active('public.files'" in sql
+        assert "'DELETE'" in sql
+        assert "delete_empty_owned_artifact_folder" in sql

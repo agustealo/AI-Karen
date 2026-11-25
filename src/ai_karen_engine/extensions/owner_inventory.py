@@ -45,6 +45,8 @@ class ArtifactRepository(Protocol):
 
     async def owner_hierarchy_available(self, tenant_id: str, user_id: str) -> Any: ...
 
+    async def owner_folder_deletion_available(self, tenant_id: str, user_id: str) -> Any: ...
+
     async def list_owner_folders(self, tenant_id: str, user_id: str, **kwargs: Any) -> Any: ...
 
     async def resolve_owner_breadcrumbs(self, tenant_id: str, user_id: str, folder_id: str) -> Any: ...
@@ -194,6 +196,21 @@ class ArtifactSourceAdapter:
             raise RuntimeError("file_explorer_pagination_required")
         return page["items"]
 
+    async def owner_hierarchy_capability(
+        self, *, tenant_id: str, user_id: str, deletion: bool = False,
+    ) -> bool:
+        tenant_id = _uuid(tenant_id, "tenant_id")
+        user_id = _uuid(user_id, "user_id")
+        probe = getattr(
+            self._repository,
+            "owner_folder_deletion_available" if deletion else "owner_hierarchy_available",
+            None,
+        )
+        if not callable(probe):
+            return False
+        result = await probe(tenant_id, user_id)
+        return result.success is True and result.data is True
+
     async def list_owner_hierarchy(
         self, *, tenant_id: str, user_id: str, limit: int,
         parent_folder_id: str | None, after_folder_id: str | None,
@@ -202,13 +219,7 @@ class ArtifactSourceAdapter:
         """Project separate bounded folder and file pages for one location."""
         tenant_id = _uuid(tenant_id, "tenant_id")
         user_id = _uuid(user_id, "user_id")
-        probe = getattr(self._repository, "owner_hierarchy_available", None)
-        if not callable(probe):
-            return {"available": False, "folders": [], "breadcrumbs": [],
-                    "has_more": False, "next_folder_id": None,
-                    "files": [], "files_has_more": False, "next_file_cursor": None}
-        capability = await probe(tenant_id, user_id)
-        if not capability.success or capability.data is not True:
+        if not await self.owner_hierarchy_capability(tenant_id=tenant_id, user_id=user_id):
             return {"available": False, "folders": [], "breadcrumbs": [],
                     "has_more": False, "next_folder_id": None,
                     "files": [], "files_has_more": False, "next_file_cursor": None}

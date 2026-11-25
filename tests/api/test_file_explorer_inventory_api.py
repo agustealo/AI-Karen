@@ -660,3 +660,61 @@ async def test_broad_data_grant_cannot_create_owner_folder():
         await service.create_file_explorer_folder(**args, name="Reports")
     policy.evaluate.assert_not_awaited()
     assert kernel.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_grant,delete_support", [(False, True), (True, False), (True, True)])
+async def test_capability_preflight_uses_real_policy_and_distinct_delete_proof(
+    monkeypatch, delete_grant, delete_support,
+):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+
+    service, kernel, _ = _service()
+    service._policy_enforcer = RuntimePolicyEnforcer()
+    repository = Repository()
+    repository.owner_hierarchy_available = AsyncMock(return_value=SimpleNamespace(success=True, data=True))
+    repository.owner_folder_deletion_available = AsyncMock(
+        return_value=SimpleNamespace(success=delete_support, data=delete_support),
+    )
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    permissions = ["data:read", "file_explorer:organize_own"]
+    if delete_grant:
+        permissions.append("file_explorer:delete_empty_own")
+    args = _args(permissions=permissions)
+    args.pop("limit")
+    args.pop("cursor")
+    result = await service.get_file_explorer_capabilities(**args)
+    assert result["browse"] == "available"
+    assert result["semantics"] == "preflight_not_resource_authorization"
+    expected = "denied" if not delete_grant else ("available" if delete_support else "unavailable")
+    assert result["operations"]["file_explorer.folder.delete"] == expected
+    assert all(result["operations"][operation] == "available" for operation in (
+        "file_explorer.folder.create", "file_explorer.folder.rename",
+        "file_explorer.folder.move", "file_explorer.artifact.move",
+    ))
+    assert repository.owner_folder_deletion_available.await_count == int(delete_grant)
+    assert repository.calls == []
+    assert len(kernel.calls) == 5 + int(delete_grant)
+
+
+@pytest.mark.asyncio
+async def test_capability_route_denial_precedes_service(monkeypatch):
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(get_file_explorer_capabilities=AsyncMock())
+    request = Request({"type": "http", "method": "GET",
+                       "path": "/api/plugins/file-explorer/capabilities", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.get_file_explorer_capabilities(
+            request=request, current_user={"user_id": OWNER, "tenant_id": TENANT},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    service.get_file_explorer_capabilities.assert_not_awaited()

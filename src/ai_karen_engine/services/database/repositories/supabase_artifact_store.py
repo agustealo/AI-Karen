@@ -114,6 +114,32 @@ class SupabaseArtifactStore(ArtifactStore):
             logger.warning("Artifact hierarchy capability unavailable")
             return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
+    @instrument_repository(operation="owner_folder_deletion_available", repository="SupabaseArtifactStore")
+    async def owner_folder_deletion_available(
+        self, tenant_id: str, user_id: str,
+    ) -> RepositoryResult[bool]:
+        if (not tenant_id or not user_id
+            or not self._valid_folder_ids(tenant_id, user_id)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
+                proof = await session.execute(text("""
+                    SELECT
+                        current_setting('transaction_isolation') = 'read committed'
+                        AND NOT row_security_active('public.files'::regclass)
+                        AND has_table_privilege('public.artifact_folders', 'DELETE')
+                        AND COALESCE(has_function_privilege(
+                            to_regprocedure('public.delete_empty_owned_artifact_folder(uuid,uuid,uuid,bigint)'),
+                            'EXECUTE'
+                        ), FALSE)
+                """), {})
+                if proof.scalar_one_or_none() is not True:
+                    raise RuntimeError("artifact_folder_delete_unavailable")
+            return RepositoryResult(success=True, data=True)
+        except Exception:
+            logger.warning("Artifact folder deletion capability unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
     def _bucket(self):
         """Reuse the initialized platform Storage client, never recreate credentials."""
         storage = getattr(self._storage, "storage", None)

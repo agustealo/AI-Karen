@@ -136,6 +136,15 @@ class FileExplorerInventoryResponse(BaseModel):
     correlation_id: str
 
 
+class FileExplorerCapabilitiesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    browse: Literal["available", "unavailable"]
+    operations: Dict[str, Literal["available", "denied", "unavailable"]]
+    semantics: Literal["preflight_not_resource_authorization"]
+    request_id: str
+    correlation_id: str
+
+
 class FileExplorerFolderResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     folder_id: UUID
@@ -596,6 +605,30 @@ async def list_file_explorer_inventory(
         raise HTTPException(
             status_code=503, detail="File inventory is unavailable"
         ) from None
+
+
+@router.get("/file-explorer/capabilities", response_model=FileExplorerCapabilitiesResponse)
+async def get_file_explorer_capabilities(
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerCapabilitiesResponse:
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_capabilities",
+    )
+    try:
+        result = await plugin_service.get_file_explorer_capabilities(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+        )
+        return FileExplorerCapabilitiesResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="File Explorer access denied") from None
+    except Exception:
+        logger.warning("file_explorer_capabilities_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="File Explorer capabilities unavailable") from None
 
 
 @router.get("/file-explorer/hierarchy", response_model=FileExplorerHierarchyResponse)
