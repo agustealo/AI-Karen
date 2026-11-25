@@ -275,23 +275,7 @@ class SqlChatRunRepository:
                       AND r.terminal_at IS NOT NULL
                       AND r.user_message_id = CAST(:user_message AS uuid)
                       AND r.assistant_message_id = CAST(:assistant_message AS uuid)
-                      AND r.assistant_message_digest ~ '^[0-9a-f]{64}                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
-                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
-                    LIMIT 1
-                """),
-                {
-                    **self._scope(lease),
-                    "transport_run_id": lease.transport_run_id,
-                    "request_id": lease.request_id,
-                    "correlation_id": lease.correlation_id,
-                    "user_message": user_message,
-                    "assistant_message": assistant_message,
-                    "expected_digest": expected_assistant_digest,
-                },
-            )
-            return result.scalar_one_or_none() is not None
-
-
+                      AND r.assistant_message_digest ~ '^[0-9a-f]{64}$'
                       AND (CAST(:expected_digest AS text) IS NULL
                            OR r.assistant_message_digest = CAST(:expected_digest AS text))
                       AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
@@ -305,6 +289,7 @@ class SqlChatRunRepository:
                     "correlation_id": lease.correlation_id,
                     "user_message": user_message,
                     "assistant_message": assistant_message,
+                    "expected_digest": expected_assistant_digest,
                 },
             )
             return result.scalar_one_or_none() is not None
