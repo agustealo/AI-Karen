@@ -620,12 +620,16 @@ async def test_shared_gateway_deadline_rejects_blocked_or_late_engine(swallows_c
             finally:
                 closed.set()
 
-    with patch(
-        "ai_karen_engine.core.expression.gateway.get_engine",
-        side_effect=lambda engine_id, _: SlowEngine(engine_id, visited),
+    with (
+        patch(
+            "ai_karen_engine.core.expression.gateway.get_engine",
+            side_effect=lambda engine_id, _: SlowEngine(engine_id, visited),
+        ),
+        patch.object(ExpressionGateway, "_observe_verified_model_success") as observe,
     ):
         with pytest.raises(EngineUnavailableError, match="execution_budget_exhausted_duration"):
             await asyncio.wait_for(ExpressionGateway(_settings()).generate(task), timeout=2)
+        observe.assert_not_called()
     assert visited == ["local"]
     assert closed.is_set()
     assert meter.model_calls == 1

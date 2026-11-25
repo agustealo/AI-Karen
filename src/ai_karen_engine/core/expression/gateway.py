@@ -164,10 +164,11 @@ class ExpressionGateway:
         scope = asyncio.timeout_at(task_deadline)
         try:
             async with scope:
+                sampled_at = loop.time()
                 remaining = await task.require_remaining_execution_ms()
-                deadline = min(task_deadline, loop.time() + remaining / 1000)
+                deadline = min(task_deadline, sampled_at + remaining / 1000)
                 scope.reschedule(deadline)
-                result = await self._generate(task)
+                result = await self._generate(task, deadline=deadline)
                 await task.require_remaining_execution_ms()
                 # An engine may catch cancellation and return late. Never
                 # convert such a result into a verified model response.
@@ -179,7 +180,19 @@ class ExpressionGateway:
                 raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration") from None
             raise
 
-    async def _generate(self, task: ExpressionTask) -> ExpressionResult:
+    async def _generate(
+        self, task: ExpressionTask, *, deadline: float | None = None,
+    ) -> ExpressionResult:
+        async def require_deadline() -> None:
+            if deadline is None:
+                return
+            loop = asyncio.get_running_loop()
+            if loop.time() >= deadline:
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+            await task.require_remaining_execution_ms()
+            if loop.time() >= deadline:
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+
         active_engine = (
             "local" if self.settings.active_engine == "builtin" else self.settings.active_engine
         )
@@ -265,8 +278,7 @@ class ExpressionGateway:
         attempted_model_engines = 0
 
         for level, engine_id in enumerate(sequence):
-            if task.remaining_execution_ms is not None:
-                await task.require_remaining_execution_ms()
+            await require_deadline()
             cfg = self.settings.engines.get(engine_id)
             logger.debug("Gateway evaluating configured engine %s", engine_id)
 
@@ -469,11 +481,9 @@ class ExpressionGateway:
             attempt_recorded = False
             attempt_outcome = "exception"
             try:
-                if task.remaining_execution_ms is not None:
-                    await task.require_remaining_execution_ms()
+                await require_deadline()
                 result = await engine.generate(task)
-                if task.remaining_execution_ms is not None:
-                    await task.require_remaining_execution_ms()
+                await require_deadline()
                 # Generated text can contain private user facts or tool evidence.
                 # Keep payloads out of runtime logs, even at DEBUG level.
 
@@ -518,6 +528,9 @@ class ExpressionGateway:
                     if (result.metadata or {}).get("output_truncated") is True:
                         result.degraded = True
                         result.degradation_reason = "output_token_limit"
+                    # Never record a verified success after the shared cap,
+                    # including an engine that swallowed deadline cancellation.
+                    await require_deadline()
                     self.circuits.mark_success(f"expression.engine.{engine_id}")
                     # Only observed, validated model execution may advance the
                     # canonical health catalog. Do not mark the selected alias
