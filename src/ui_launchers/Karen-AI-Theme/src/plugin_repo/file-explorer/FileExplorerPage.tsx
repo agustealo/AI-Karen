@@ -35,11 +35,28 @@ export type ExplorerMutation =
   | { action: 'rename'; sourceId: string; expectedRevision: string; name: string }
   | { action: 'move'; sourceId: string; expectedRevision: string; destinationId: string | null }
   | { action: 'delete'; sourceId: string; expectedRevision: string };
+export interface ExplorerDestinationBrowser {
+  sourceId: string;
+  expectedRevision: string;
+  parentId: string | null;
+  breadcrumbs: { folder_id: string; name: string }[];
+  folders: { folder_id: string; name: string }[];
+  loading: boolean;
+  error: string | null;
+  canConfirm: boolean;
+  hasMore: boolean;
+  onNavigate: (folderId: string | null) => void;
+  onNext: () => void;
+  onCancel: () => void;
+}
+
 export interface ExplorerManagement {
   capabilities: Partial<Record<ExplorerOperation, ExplorerCapability>>;
   busy: boolean;
   message: string | null;
   onMutate: (mutation: ExplorerMutation) => void;
+  onBrowseDestination?: (sourceId: string, expectedRevision: string) => void;
+  destination?: ExplorerDestinationBrowser;
 }
 
 export interface FileExplorerProps {
@@ -118,13 +135,17 @@ function FileExplorerView({
   const [filter, setFilter] = useState('');
   const [edit, setEdit] = useState<{ action: ExplorerMutation['action']; item?: ExplorerItem } | null>(null);
   const [name, setName] = useState('');
-  const [destination, setDestination] = useState('root');
+  const destination = management?.destination;
   const busy = management?.busy === true;
   const can = (operation: ExplorerOperation) => management?.capabilities[operation] === 'available';
   function openEditor(action: ExplorerMutation['action'], item?: ExplorerItem) {
     if (busy) return;
     setName(action === 'rename' ? item?.name ?? '' : '');
-    setDestination('root');
+    if (action === 'move' && item?.organization_revision) {
+      management?.onBrowseDestination?.(item.source_id, item.organization_revision);
+    } else {
+      destination?.onCancel();
+    }
     setEdit({ action, item });
   }
   function submitEdit(event: React.FormEvent) {
@@ -140,7 +161,9 @@ function FileExplorerView({
       } else if (edit.action === 'delete' && can('file_explorer.folder.delete')) {
         management.onMutate({ action: 'delete', ...evidence });
       } else if (edit.action === 'move' && can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')) {
-        management.onMutate({ action: 'move', ...evidence, destinationId: destination === 'root' ? null : destination });
+        if (!destination?.canConfirm || destination.sourceId !== item.source_id ||
+            destination.expectedRevision !== item.organization_revision) return;
+        management.onMutate({ action: 'move', ...evidence, destinationId: destination.parentId });
       }
     }
     setEdit(null);
@@ -259,13 +282,29 @@ function FileExplorerView({
     {edit && management && <form aria-label="Confirm organization change" onSubmit={submitEdit} className="flex flex-col gap-3 rounded-lg border p-3">
       <h3 className="font-medium">{edit.action === 'create' ? 'Create folder' : edit.action === 'rename' ? 'Rename folder' : edit.action === 'move' ? 'Move ' + (edit.item?.name ?? '') : 'Delete empty folder'}</h3>
       {(edit.action === 'create' || edit.action === 'rename') && <label className="flex flex-col gap-1 text-sm">Folder name<input autoFocus required maxLength={256} value={name} onChange={event => setName(event.target.value)} className="rounded border bg-background p-2" /></label>}
-      {edit.action === 'move' && <label className="flex flex-col gap-1 text-sm">Destination<select value={destination} onChange={event => setDestination(event.target.value)} className="rounded border bg-background p-2">
-        <option value="root">Root</option>
-        {hierarchy?.breadcrumbs.filter(crumb => crumb.folder_id !== edit.item?.source_id).map(crumb => <option key={crumb.folder_id} value={crumb.folder_id}>{crumb.name}</option>)}
-        {entries.filter(item => item.kind === 'folder' && item.source_id !== edit.item?.source_id).map(item => <option key={item.source_id} value={item.source_id}>{item.name}</option>)}
-      </select></label>}
+      {edit.action === 'move' && <section aria-label="Move destination browser" className="flex flex-col gap-2 rounded border p-2">
+        <p className="text-sm">Choose a destination folder for {edit.item?.name}.</p>
+        <nav aria-label="Destination location" className="flex flex-wrap gap-2">
+          <button type="button" disabled={!destination || busy} onClick={() => destination?.onNavigate(null)} className="rounded border px-2 py-1">Destination root</button>
+          {destination?.breadcrumbs.map(crumb => <button type="button" key={crumb.folder_id}
+            onClick={() => destination.onNavigate(crumb.folder_id)} disabled={busy}
+            aria-current={crumb.folder_id === destination.parentId ? 'location' : undefined}
+            className="rounded border px-2 py-1">{crumb.name}</button>)}
+        </nav>
+        {destination?.loading && <p role="status">Loading destination folders…</p>}
+        {destination?.error && <p role="alert">{destination.error} Return to destination root to retry.</p>}
+        {destination && !destination.loading && !destination.error && <ul aria-label="Destination folders" className="flex flex-col gap-1">
+          {destination.folders.map(folder => <li key={folder.folder_id}>
+            <button type="button" className="rounded border px-2 py-1 text-left" disabled={busy}
+              onClick={() => destination.onNavigate(folder.folder_id)} aria-label={'Browse destination ' + folder.name}>{folder.name}</button>
+          </li>)}
+          {destination.folders.length === 0 && <li className="text-sm text-muted-foreground">No eligible subfolders on this page.</li>}
+        </ul>}
+        {destination?.hasMore && <button type="button" disabled={destination.loading || busy} onClick={destination.onNext} className="rounded border px-2 py-1">Next destination folder page</button>}
+        <p className="text-sm">Selected destination: {destination?.canConfirm ? destination.breadcrumbs[destination.breadcrumbs.length - 1]?.name ?? 'Root' : 'Not verified'}</p>
+      </section>}
       {edit.action === 'delete' && <p className="text-sm">Delete {edit.item?.name}? Only empty folders can be deleted, including no archived files. File contents will not be deleted.</p>}
-      <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={() => setEdit(null)} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
+      <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy || (edit.action === 'move' && !destination?.canConfirm)} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={() => { destination?.onCancel(); setEdit(null); }} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
     </form>}
     <nav aria-label="Folder location" className="flex flex-wrap items-center gap-2 text-sm">
       <button type="button" disabled={busy} className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>

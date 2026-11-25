@@ -759,6 +759,58 @@ describe('Explorer management preflight and mutation receipts', () => {
     expect(mocks.patch).toHaveBeenCalledTimes(1);
   });
 
+  it('browses nested destinations without replacing the source revision', async () => {
+    const child = '66666666-6666-4666-8666-666666666666';
+    const source = { ...inventory.folders[0] };
+    const destinationFolder = { folder_id: child, parent_folder_id: null, name: 'Archive', revision: '1' };
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(
+      path.endsWith('/capabilities') ? capabilities() :
+      path.includes('parent_folder_id=' + child) ? { ...inventory, folders: [], breadcrumbs: [destinationFolder] } :
+      { ...inventory, folders: [source, destinationFolder] },
+    ));
+    mocks.post.mockResolvedValue({ ...evidence, kind: 'folder', source_id: folder,
+      parent_folder_id: child, organization_revision: '8' });
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.move']).toBe('available'));
+    await act(async () => latest.management?.onBrowseDestination?.(folder, '7'));
+    await waitFor(() => expect(latest.management?.destination?.canConfirm).toBe(true));
+    expect(latest.management?.destination?.folders.map(entry => entry.folder_id)).toEqual([child]);
+    await act(async () => latest.management?.destination?.onNavigate(child));
+    await waitFor(() => expect(latest.management?.destination?.parentId).toBe(child));
+    await waitFor(() => expect(latest.management?.destination?.canConfirm).toBe(true));
+    expect(latest.items.find(item => item.source_id === folder)?.organization_revision).toBe('7');
+    await act(async () => latest.management?.onMutate({ action: 'move', sourceId: folder,
+      expectedRevision: '7', destinationId: null }));
+    expect(mocks.post).not.toHaveBeenCalled();
+    await act(async () => latest.management?.onMutate({ action: 'move', sourceId: folder,
+      expectedRevision: '7', destinationId: child }));
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post).toHaveBeenCalledWith('/api/plugins/file-explorer/move/folder/' + folder,
+      { destination_id: child, expected_revision: '7' });
+  });
+
+  it('does not accept a destination response after cancellation', async () => {
+    let latest!: FileExplorerInventoryProps;
+    let resolveDestination!: (data: unknown) => void;
+    mocks.get.mockResolvedValueOnce(inventory).mockResolvedValueOnce(capabilities())
+      .mockImplementationOnce(() => new Promise(resolve => { resolveDestination = resolve; }));
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.move']).toBe('available'));
+    await act(async () => latest.management?.onBrowseDestination?.(folder, '7'));
+    const pending = latest.management?.destination;
+    expect(pending?.loading).toBe(true);
+    await act(async () => pending?.onCancel());
+    await act(async () => resolveDestination(inventory));
+    expect(latest.management?.destination).toBeUndefined();
+    await act(async () => latest.management?.onMutate({ action: 'move', sourceId: folder, expectedRevision: '7', destinationId: null }));
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('sends explicit delete revision and confirms only matching evidence', async () => {
     mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
     mocks.delete.mockResolvedValue({ ...evidence, folder_id: folder, deleted: true });

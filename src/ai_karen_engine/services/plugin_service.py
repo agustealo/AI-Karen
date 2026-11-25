@@ -262,10 +262,10 @@ class PluginService:
         """Report preflight eligibility, never a reusable authorization grant."""
         from ai_karen_engine.auth.rbac_middleware import FILE_EXPLORER_MUTATION_PERMISSIONS
 
-        actor = dict(user_id=user_id, tenant_id=tenant_id, roles=roles,
-                     permissions=permissions, request_id=request_id,
-                     correlation_id=correlation_id)
-        host, context, plan = await self._prepare_file_explorer(**actor)
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles,
+            permissions=permissions, request_id=request_id, correlation_id=correlation_id,
+        )
         browse = await host.probe_owner_capability(context=context, plan=plan)
         operations = {}
         for operation, permission in FILE_EXPLORER_MUTATION_PERMISSIONS.items():
@@ -276,7 +276,9 @@ class PluginService:
             else:
                 try:
                     mutation_host, mutation_context, mutation_plan = await self._prepare_file_explorer(
-                        **actor, mutation=operation,
+                        user_id=user_id, tenant_id=tenant_id, roles=roles,
+                        permissions=permissions, request_id=request_id,
+                        correlation_id=correlation_id, mutation=operation,
                         resource_scope={"operation": operation, "availability_only": True},
                     )
                     admitted = await mutation_host.probe_owner_capability(

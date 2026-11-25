@@ -12,7 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
 import { ContentIntelligenceSelectionPanel } from './ContentIntelligenceSelectionPanel';
-import type { ExplorerCapability, ExplorerManagement, ExplorerMutation, ExplorerOperation } from '@/plugin_repo/file-explorer/FileExplorerPage';
+import type { ExplorerCapability, ExplorerDestinationBrowser, ExplorerManagement, ExplorerMutation, ExplorerOperation } from '@/plugin_repo/file-explorer/FileExplorerPage';
 
 interface ExplorerItem {
   source_id: string;
@@ -54,6 +54,17 @@ interface ScopedPage extends InventoryPage {
   hierarchy?: HierarchyLocation;
   principalKey: string;
   generation: number;
+}
+
+interface DestinationRequest {
+  generation: number;
+  sourceId: string;
+  expectedRevision: string;
+  kind: ExplorerItem['kind'];
+  parentId: string | null;
+  cursor: string | null;
+  page: ReturnType<typeof assertHierarchyPage> | null;
+  error: string | null;
 }
 
 interface PageRequest {
@@ -324,6 +335,8 @@ export function FileExplorerInventoryHost({
   const [capability, setCapability] = useState<{ generation: number; operations: ExplorerManagement['capabilities'] } | null>(null);
   const [mutationState, setMutationState] = useState<{ principalKey: string; message: string | null; busy: boolean } | null>(null);
   const mutationRef = useRef<{ generation: number; principalKey: string } | null>(null);
+  const destinationRef = useRef<DestinationRequest | null>(null);
+  const [destinationState, setDestinationState] = useState<DestinationRequest | null>(null);
 
   // Revoke event closures at the committed identity/mode boundary, before
   // passive fetch effects run. Retained plugin callbacks are untrusted.
@@ -331,11 +344,14 @@ export function FileExplorerInventoryHost({
     return () => {
       generationRef.current += 1;
       mutationRef.current = null;
+      destinationRef.current = null;
     };
   }, [principalKey, authLoading]);
 
   useEffect(() => {
     // The source is authenticated API truth, never browser-supplied inventory.
+    destinationRef.current = null;
+    setDestinationState(null);
     if (!principalKey || authLoading) {
       mutationRef.current = null;
       setMutationState(null);
@@ -513,6 +529,74 @@ export function FileExplorerInventoryHost({
       afterFolderId: folderId, generation: value.generation + 1 }));
   }, [principalKey, currentPage, loading, currentError]);
 
+  const loadDestination = useCallback((next: DestinationRequest) => {
+    if (generationRef.current !== next.generation || mutationRef.current) return;
+    destinationRef.current = next;
+    setDestinationState(next);
+    const endpoint = '/api/plugins/file-explorer/hierarchy?limit=100' +
+      (next.parentId ? '&parent_folder_id=' + encodeURIComponent(next.parentId) : '') +
+      (next.cursor ? '&after_folder_id=' + encodeURIComponent(next.cursor) : '');
+    void apiClient.get<unknown>(endpoint).then(data => {
+      if (destinationRef.current !== next || generationRef.current !== next.generation) return;
+      const page = assertHierarchyPage(data, next.parentId, next.cursor, null);
+      if (next.kind === 'folder' && page.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === next.sourceId)) {
+        throw new Error('Invalid descendant destination');
+      }
+      const verified = { ...next, page };
+      destinationRef.current = verified;
+      setDestinationState(verified);
+    }).catch(() => {
+      if (destinationRef.current !== next || generationRef.current !== next.generation) return;
+      const failed = { ...next, error: 'Destination unavailable or access denied.' };
+      destinationRef.current = failed;
+      setDestinationState(failed);
+    });
+  }, []);
+
+  const onBrowseDestination = useCallback((sourceId: string, expectedRevision: string) => {
+    if (!managementEnabled || !currentPage?.hierarchy || loading || currentError ||
+        generationRef.current !== currentPage.generation || capability?.generation !== currentPage.generation ||
+        mutationRef.current) return;
+    const item = currentPage.items.find(entry => entry.source_id === sourceId);
+    if (!item || !validRevision(item.organization_revision) || item.organization_revision !== expectedRevision ||
+        capability.operations[item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move'] !== 'available') return;
+    loadDestination({ generation: currentPage.generation, sourceId, expectedRevision, kind: item.kind,
+      parentId: null, cursor: null, page: null, error: null });
+  }, [managementEnabled, currentPage, loading, currentError, capability, loadDestination]);
+
+  const activeDestination = managementEnabled && currentPage && destinationState?.generation === currentPage.generation
+    ? destinationState : null;
+  const destination: ExplorerDestinationBrowser | undefined = activeDestination ? {
+    sourceId: activeDestination.sourceId, expectedRevision: activeDestination.expectedRevision,
+    parentId: activeDestination.parentId,
+    breadcrumbs: activeDestination.page?.hierarchy.breadcrumbs ?? [],
+    folders: activeDestination.page?.items.filter(item => item.kind === 'folder' &&
+      !(activeDestination.kind === 'folder' && item.source_id === activeDestination.sourceId))
+      .map(item => ({ folder_id: item.source_id, name: item.name })) ?? [],
+    loading: !activeDestination.page && !activeDestination.error,
+    error: activeDestination.error,
+    canConfirm: Boolean(activeDestination.page && !activeDestination.error),
+    hasMore: activeDestination.page?.hierarchy.hasMoreFolders ?? false,
+    onNavigate: folderId => {
+      if (destinationRef.current !== activeDestination || generationRef.current !== activeDestination.generation) return;
+      if (folderId !== null && (!activeDestination.page ||
+          (activeDestination.kind === 'folder' && folderId === activeDestination.sourceId) ||
+          !(activeDestination.page.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === folderId) ||
+            activeDestination.page.items.some(item => item.kind === 'folder' && item.source_id === folderId)))) return;
+      loadDestination({ ...activeDestination, parentId: folderId, cursor: null, page: null, error: null });
+    },
+    onNext: () => {
+      if (destinationRef.current !== activeDestination || generationRef.current !== activeDestination.generation ||
+          !activeDestination.page?.hierarchy.hasMoreFolders || !activeDestination.page.hierarchy.nextFolderId) return;
+      loadDestination({ ...activeDestination, cursor: activeDestination.page.hierarchy.nextFolderId, page: null, error: null });
+    },
+    onCancel: () => {
+      if (destinationRef.current !== activeDestination || generationRef.current !== activeDestination.generation) return;
+      destinationRef.current = null;
+      setDestinationState(null);
+    },
+  } : undefined;
+
   const onMutate = useCallback(async (mutation: ExplorerMutation) => {
     if (!managementEnabled || !currentPage?.hierarchy || loading || currentError ||
         generationRef.current !== currentPage.generation ||
@@ -535,11 +619,14 @@ export function FileExplorerInventoryHost({
       : mutation.action === 'rename' ? 'file_explorer.folder.rename' : 'file_explorer.folder.delete';
     if (capability.operations[operation] !== 'available') return;
     const location = currentPage.hierarchy;
-    if (mutation.action === 'move' && mutation.destinationId !== null &&
-        (mutation.destinationId === item?.source_id || !(
-          location.breadcrumbs.some(crumb => crumb.folder_id === mutation.destinationId) ||
-          currentPage.items.some(entry => entry.kind === 'folder' && entry.source_id === mutation.destinationId)
-        ))) return;
+    if (mutation.action === 'move') {
+      const proof = destinationRef.current;
+      if (!proof?.page || proof.error || proof.generation !== currentPage.generation ||
+          proof.sourceId !== mutation.sourceId || proof.expectedRevision !== mutation.expectedRevision ||
+          proof.kind !== item?.kind || proof.parentId !== mutation.destinationId) return;
+    }
+    destinationRef.current = null;
+    setDestinationState(null);
     const token = { generation: currentPage.generation, principalKey };
     mutationRef.current = token;
     setSelectedSourceIds([]);
@@ -599,7 +686,7 @@ export function FileExplorerInventoryHost({
       capabilities: capability?.generation === currentPage.generation ? capability.operations : {},
       busy: mutationState?.principalKey === principalKey && mutationState.busy,
       message: mutationState?.principalKey === principalKey ? mutationState.message : null,
-      onMutate,
+      onMutate, onBrowseDestination, destination,
     } : undefined,
   };
 
