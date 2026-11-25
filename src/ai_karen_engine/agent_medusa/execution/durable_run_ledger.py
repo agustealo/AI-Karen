@@ -103,7 +103,12 @@ class DurableRunLedger(Protocol):
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None: ...
 
     async def read_transitions(
-        self, *, run_id: str, tenant_id: str, user_id: str, limit: int = 100,
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 100,
     ) -> dict[str, Any] | None: ...
 
     async def list_runs(
@@ -508,7 +513,12 @@ class PostgresDurableRunLedger:
             ) from exc
 
     async def read_transitions(
-        self, *, run_id: str, tenant_id: str, user_id: str, limit: int = 100,
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 100,
     ) -> dict[str, Any] | None:
         """Return owner-scoped lifecycle evidence, excluding internal metadata.
 
