@@ -684,6 +684,8 @@ export function FileExplorerInventoryHost({
     hierarchy: currentPage?.hierarchy ? { ...currentPage.hierarchy, onNavigate, onNextFolders } : undefined,
     management: managementEnabled && currentPage?.hierarchy ? {
       capabilities: capability?.generation === currentPage.generation ? capability.operations : {},
+      capabilityStatus: capability?.generation !== currentPage.generation ? 'checking' :
+        Object.keys(capability.operations).length === OPERATIONS.length ? 'ready' : 'unavailable',
       busy: mutationState?.principalKey === principalKey && mutationState.busy,
       message: mutationState?.principalKey === principalKey ? mutationState.message : null,
       onMutate, onBrowseDestination, destination,

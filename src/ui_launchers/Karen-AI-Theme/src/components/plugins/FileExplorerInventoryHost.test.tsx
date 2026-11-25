@@ -3,6 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SharedFileExplorer, type ExplorerManagement } from '@/plugin_repo/file-explorer/FileExplorerPage';
 import { FileExplorerInventoryHost, type InventoryConsumer, type FileExplorerInventoryProps } from './FileExplorerInventoryHost';
 
 import { ContentIntelligenceWorkspace } from './ContentIntelligenceWorkspace';
@@ -820,5 +821,55 @@ describe('Explorer management preflight and mutation receipts', () => {
     await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('confirmed'));
     expect(mocks.delete).toHaveBeenCalledWith('/api/plugins/file-explorer/folders/' + folder,
       { expected_revision: '7' });
+  });
+});
+
+
+describe('shared Explorer accessible organization controls', () => {
+  const folder = { source_id: '55555555-5555-4555-8555-555555555555', parent_id: null,
+    kind: 'folder' as const, name: 'Reports', revision: '7', organization_revision: '7',
+    sha256: null, size_bytes: 0 };
+  const hierarchy = { parentId: null, breadcrumbs: [], hasMoreFolders: false, nextFolderId: null };
+  function management(onMutate = vi.fn()): ExplorerManagement {
+    return { busy: false, message: null, capabilityStatus: 'ready', onMutate,
+      capabilities: { 'file_explorer.folder.create': 'available',
+        'file_explorer.folder.rename': 'available', 'file_explorer.folder.delete': 'denied' } };
+  }
+  it('focuses the editor and restores focus on Escape without submitting', () => {
+    const controls = management();
+    render(<SharedFileExplorer authorized items={[folder]} hierarchy={hierarchy} management={controls} />);
+    const rename = screen.getByRole('button', { name: 'Rename Reports' });
+    fireEvent.click(rename);
+    const input = screen.getByLabelText('Folder name');
+    expect(document.activeElement).toBe(input);
+    expect((screen.getByRole('button', { name: 'Root', exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByLabelText('Folder name')).toBeNull();
+    expect(document.activeElement).toBe(rename);
+    expect(controls.onMutate).not.toHaveBeenCalled();
+  });
+  it('announces denial and rejects an invalid name before submission', () => {
+    const controls = management();
+    render(<SharedFileExplorer authorized items={[folder]} hierarchy={hierarchy} management={controls} />);
+    expect(screen.getByText(/Delete empty folder: permission denied/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Delete Reports' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+    const input = screen.getByLabelText('Folder name');
+    fireEvent.change(input, { target: { value: '   ' } });
+    const confirm = screen.getByRole('button', { name: 'Confirm create' });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(screen.getByRole('form', { name: 'Confirm organization change' }));
+    expect(controls.onMutate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Folder name')).toBeTruthy();
+  });
+  it('moves focus to the authorized content after an explicit page transition', () => {
+    const navigate = vi.fn();
+    const view = render(<SharedFileExplorer authorized items={[folder]} pageKey="principal:1"
+      hierarchy={{...hierarchy, onNavigate: navigate}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open folder Reports' }));
+    expect(navigate).toHaveBeenCalledWith(folder.source_id);
+    view.rerender(<SharedFileExplorer authorized items={[]} pageKey="principal:2"
+      hierarchy={{...hierarchy, parentId: folder.source_id}} />);
+    expect(document.activeElement).toBe(screen.getByLabelText('File Explorer content'));
   });
 });

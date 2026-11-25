@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 /**
  * Reusable, controlled File Explorer extension UI.
@@ -52,6 +52,7 @@ export interface ExplorerDestinationBrowser {
 
 export interface ExplorerManagement {
   capabilities: Partial<Record<ExplorerOperation, ExplorerCapability>>;
+  capabilityStatus?: 'checking' | 'ready' | 'unavailable';
   busy: boolean;
   message: string | null;
   onMutate: (mutation: ExplorerMutation) => void;
@@ -129,7 +130,8 @@ function FileExplorerView({
   onNextPage,
   hierarchy,
   management,
-}: FileExplorerProps) {
+  onPageTransition,
+}: FileExplorerProps & { onPageTransition?: () => void }) {
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
@@ -137,9 +139,32 @@ function FileExplorerView({
   const [name, setName] = useState('');
   const destination = management?.destination;
   const busy = management?.busy === true;
+  const editing = edit !== null;
+  const headingId = useId();
+  const capabilityId = useId();
+  const editorRef = useRef<HTMLFormElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+  const restoreFocus = useRef(false);
+  const destinationHeadingRef = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    if (edit) {
+      if (edit.action === 'create' || edit.action === 'rename') nameRef.current?.focus();
+      else editorRef.current?.focus();
+    } else if (restoreFocus.current) {
+      restoreFocus.current = false;
+      if (openerRef.current?.isConnected && !openerRef.current.disabled) openerRef.current.focus();
+    }
+  }, [edit]);
+  function closeEditor() {
+    destination?.onCancel();
+    restoreFocus.current = true;
+    setEdit(null);
+  }
   const can = (operation: ExplorerOperation) => management?.capabilities[operation] === 'available';
-  function openEditor(action: ExplorerMutation['action'], item?: ExplorerItem) {
-    if (busy) return;
+  function openEditor(trigger: HTMLButtonElement, action: ExplorerMutation['action'], item?: ExplorerItem) {
+    if (busy || editing) return;
+    openerRef.current = trigger;
     setName(action === 'rename' ? item?.name ?? '' : '');
     if (action === 'move' && item?.organization_revision) {
       management?.onBrowseDestination?.(item.source_id, item.organization_revision);
@@ -148,9 +173,21 @@ function FileExplorerView({
     }
     setEdit({ action, item });
   }
+  const editOperation: ExplorerOperation | null = !edit ? null :
+    edit.action === 'create' ? 'file_explorer.folder.create' :
+    edit.action === 'rename' ? 'file_explorer.folder.rename' :
+    edit.action === 'delete' ? 'file_explorer.folder.delete' :
+    edit.item?.kind === 'file' ? 'file_explorer.artifact.move' : 'file_explorer.folder.move';
+  const validName = Boolean(name.trim()) && name === name.trim() &&
+    name.length <= 256 && !/[\x00-\x1f\x7f-\x9f]/.test(name);
+  const canSubmit = Boolean(edit && editOperation && can(editOperation) && !busy &&
+    ((edit.action === 'create' || edit.action === 'rename') ? validName :
+      edit.action === 'move' ? destination?.canConfirm && destination.sourceId === edit.item?.source_id &&
+        destination.expectedRevision === edit.item?.organization_revision : true));
   function submitEdit(event: React.FormEvent) {
     event.preventDefault();
-    if (!edit || !management || busy) return;
+    if (!edit || !management || !canSubmit) return;
+    onPageTransition?.();
     const item = edit.item;
     if (edit.action === 'create' && can('file_explorer.folder.create') && name.trim()) {
       management.onMutate({ action: 'create', name: name.trim() });
@@ -181,16 +218,18 @@ function FileExplorerView({
   }
 
   function refresh() {
-    if (busy) return;
+    if (busy || editing) return;
     clearSelections();
+    onPageTransition?.();
     onRefresh?.();
   }
 
   function nextPage() {
-    if (!busy && !loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
+    if (!busy && !editing && !loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
       clearSelections();
       setParentId(null);
       setFilter('');
+      onPageTransition?.();
       onNextPage?.(nextCursor);
     }
   }
@@ -225,15 +264,15 @@ function FileExplorerView({
   const selectionSet = new Set(selected);
 
   function navigate(id: string | null) {
-    if (busy) return;
+    if (busy || editing) return;
     clearSelections();
     setFilter('');
-    if (hierarchy) hierarchy.onNavigate?.(id);
+    if (hierarchy) { onPageTransition?.(); hierarchy.onNavigate?.(id); }
     else setParentId(id);
   }
 
   function select(item: ExplorerItem) {
-    if (busy || (hierarchy && item.kind !== 'file')) return;
+    if (busy || editing || (hierarchy && item.kind !== 'file')) return;
     const next = multiSelect
       ? (selectionSet.has(item.source_id)
         ? selected.filter((id) => id !== item.source_id)
@@ -272,18 +311,33 @@ function FileExplorerView({
           References only. File access is checked again by the consuming service.
         </p>
       </div>
-      {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
+      {onRefresh && <button type="button" disabled={busy || editing} className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
     {management && <div className="flex flex-wrap items-center gap-2">
-      <button type="button" disabled={busy || !can('file_explorer.folder.create')} className="rounded border px-3 py-2 text-sm disabled:opacity-50" onClick={() => openEditor('create')}>New folder</button>
+      <button type="button" aria-describedby={capabilityId} disabled={busy || editing || !can('file_explorer.folder.create')} className="rounded border px-3 py-2 text-sm disabled:opacity-50" onClick={event => openEditor(event.currentTarget, 'create')}>New folder</button>
+      <p id={capabilityId} role="status" className="w-full text-xs text-muted-foreground">
+        {management.capabilityStatus === 'checking' ? 'Checking organization permissions…' :
+          management.capabilityStatus === 'unavailable' ? 'Organization controls unavailable. Refresh to recheck.' :
+          ([
+            ['file_explorer.folder.create', 'Create folder'],
+            ['file_explorer.folder.rename', 'Rename folder'],
+            ['file_explorer.folder.move', 'Move folder'],
+            ['file_explorer.artifact.move', 'Move file'],
+            ['file_explorer.folder.delete', 'Delete empty folder'],
+          ] as [ExplorerOperation, string][]).filter(([operation]) => !can(operation)).map(([operation, label]) =>
+            label + ': ' + (management.capabilities[operation] === 'denied' ? 'permission denied' : 'unavailable')).join(' · ') ||
+          'Organization controls available. Each change is checked again.'}
+      </p>
       {management.message && <p role="status" className="text-sm">{management.message}</p>}
       {busy && <p role="status" className="text-sm">Saving organization change…</p>}
     </div>}
-    {edit && management && <form aria-label="Confirm organization change" onSubmit={submitEdit} className="flex flex-col gap-3 rounded-lg border p-3">
-      <h3 className="font-medium">{edit.action === 'create' ? 'Create folder' : edit.action === 'rename' ? 'Rename folder' : edit.action === 'move' ? 'Move ' + (edit.item?.name ?? '') : 'Delete empty folder'}</h3>
-      {(edit.action === 'create' || edit.action === 'rename') && <label className="flex flex-col gap-1 text-sm">Folder name<input autoFocus required maxLength={256} value={name} onChange={event => setName(event.target.value)} className="rounded border bg-background p-2" /></label>}
+    {edit && management && <form ref={editorRef} tabIndex={-1} aria-label="Confirm organization change" aria-describedby={headingId}
+      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeEditor(); } }}
+      onSubmit={submitEdit} className="flex flex-col gap-3 rounded-lg border p-3">
+      <h3 id={headingId} className="font-medium">{edit.action === 'create' ? 'Create folder' : edit.action === 'rename' ? 'Rename folder' : edit.action === 'move' ? 'Move ' + (edit.item?.name ?? '') : 'Delete empty folder'}</h3>
+      {(edit.action === 'create' || edit.action === 'rename') && <label className="flex flex-col gap-1 text-sm">Folder name<input ref={nameRef} required maxLength={256} value={name} onChange={event => setName(event.target.value)} className="rounded border bg-background p-2" /></label>}
       {edit.action === 'move' && <section aria-label="Move destination browser" className="flex flex-col gap-2 rounded border p-2">
-        <p className="text-sm">Choose a destination folder for {edit.item?.name}.</p>
+        <p ref={destinationHeadingRef} tabIndex={-1} className="text-sm">Choose a destination folder for {edit.item?.name}.</p>
         <nav aria-label="Destination location" className="flex flex-wrap gap-2">
           <button type="button" disabled={!destination || busy} onClick={() => destination?.onNavigate(null)} className="rounded border px-2 py-1">Destination root</button>
           {destination?.breadcrumbs.map(crumb => <button type="button" key={crumb.folder_id}
@@ -296,21 +350,21 @@ function FileExplorerView({
         {destination && !destination.loading && !destination.error && <ul aria-label="Destination folders" className="flex flex-col gap-1">
           {destination.folders.map(folder => <li key={folder.folder_id}>
             <button type="button" className="rounded border px-2 py-1 text-left" disabled={busy}
-              onClick={() => destination.onNavigate(folder.folder_id)} aria-label={'Browse destination ' + folder.name}>{folder.name}</button>
+              onClick={() => { destinationHeadingRef.current?.focus(); destination.onNavigate(folder.folder_id); }} aria-label={'Browse destination ' + folder.name}>{folder.name}</button>
           </li>)}
           {destination.folders.length === 0 && <li className="text-sm text-muted-foreground">No eligible subfolders on this page.</li>}
         </ul>}
-        {destination?.hasMore && <button type="button" disabled={destination.loading || busy} onClick={destination.onNext} className="rounded border px-2 py-1">Next destination folder page</button>}
-        <p className="text-sm">Selected destination: {destination?.canConfirm ? destination.breadcrumbs[destination.breadcrumbs.length - 1]?.name ?? 'Root' : 'Not verified'}</p>
+        {destination?.hasMore && <button type="button" disabled={destination.loading || busy} onClick={() => { destinationHeadingRef.current?.focus(); destination.onNext(); }} className="rounded border px-2 py-1">Next destination folder page</button>}
+        <p role="status" className="text-sm">Selected destination: {destination?.canConfirm ? destination.breadcrumbs[destination.breadcrumbs.length - 1]?.name ?? 'Root' : 'Not verified'}</p>
       </section>}
       {edit.action === 'delete' && <p className="text-sm">Delete {edit.item?.name}? Only empty folders can be deleted, including no archived files. File contents will not be deleted.</p>}
-      <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy || (edit.action === 'move' && !destination?.canConfirm)} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={() => { destination?.onCancel(); setEdit(null); }} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
+      <div className="flex flex-wrap gap-2"><button type="submit" disabled={!canSubmit} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={closeEditor} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
     </form>}
     <nav aria-label="Folder location" className="flex flex-wrap items-center gap-2 text-sm">
-      <button type="button" disabled={busy} className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
+      <button type="button" disabled={busy || editing} className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
       {hierarchy?.breadcrumbs.map(crumb => <React.Fragment key={crumb.folder_id}>
         <span aria-hidden="true">/</span>
-        <button type="button" className="min-w-0 truncate rounded border px-2 py-1" onClick={() => navigate(crumb.folder_id)}
+        <button type="button" className="min-w-0 truncate rounded border px-2 py-1" disabled={busy || editing} onClick={() => navigate(crumb.folder_id)}
           aria-current={crumb.folder_id === hierarchy.parentId ? 'location' : undefined}>{crumb.name}</button>
       </React.Fragment>)}
       {!hierarchy && folder && <>
@@ -324,7 +378,7 @@ function FileExplorerView({
     </nav>
     <label className="flex flex-col gap-1 text-sm">
       Filter current folder
-      <input className="rounded border bg-background px-3 py-2" type="search" value={filter}
+      <input className="rounded border bg-background px-3 py-2" type="search" disabled={busy || editing} value={filter}
         onChange={(event) => setFilter(event.target.value)} placeholder="Find files or folders…" />
     </label>
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
@@ -333,29 +387,29 @@ function FileExplorerView({
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className="flex min-w-0 flex-wrap items-center gap-2 rounded border p-2">
           {(!hierarchy || item.kind === 'file') && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={busy || loading || Boolean(error)}
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={busy || editing || loading || Boolean(error)}
             onChange={() => select(item)} />}
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
-                onClick={() => navigate(item.source_id)} aria-label={'Open folder ' + item.name}>
+                disabled={busy || editing} onClick={() => navigate(item.source_id)} aria-label={'Open folder ' + item.name}>
                 📁 {item.name}</button>
             : <div className="min-w-0 flex-1">
                 <p className="truncate text-sm" title={item.name}>📄 {item.name}</p>
                 <p className="text-xs text-muted-foreground">{prettyBytes(item.size_bytes)}</p>
               </div>}
           {management && hierarchy && item.organization_revision && <div className="flex flex-wrap gap-1 text-xs">
-            {item.kind === 'folder' && <button type="button" disabled={busy || !can('file_explorer.folder.rename')} onClick={() => openEditor('rename', item)} aria-label={'Rename ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Rename</button>}
-            <button type="button" disabled={busy || !can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')} onClick={() => openEditor('move', item)} aria-label={'Move ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Move</button>
-            {item.kind === 'folder' && <button type="button" disabled={busy || !can('file_explorer.folder.delete')} onClick={() => openEditor('delete', item)} aria-label={'Delete ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Delete</button>}
+            {item.kind === 'folder' && <button type="button" disabled={busy || editing || !can('file_explorer.folder.rename')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'rename', item)} aria-label={'Rename ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Rename</button>}
+            <button type="button" disabled={busy || editing || !can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'move', item)} aria-label={'Move ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Move</button>
+            {item.kind === 'folder' && <button type="button" disabled={busy || editing || !can('file_explorer.folder.delete')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'delete', item)} aria-label={'Delete ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Delete</button>}
           </div>}
         </li>)}
       </ul>}
     <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
       <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
       {hierarchy?.hasMoreFolders && hierarchy.nextFolderId && <button type="button" className="rounded border px-3 py-2 text-sm"
-        disabled={busy || loading || Boolean(error)} onClick={() => { if (!busy) { clearSelections(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); } }}>Next folder page</button>}
+        disabled={busy || editing || loading || Boolean(error)} onClick={() => { if (!busy && !editing) { clearSelections(); onPageTransition?.(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); } }}>Next folder page</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
-        disabled={loading || Boolean(error) || !pageEvidenceValid || busy} onClick={nextPage}>{hierarchy ? 'Next file page' : 'Next page'}</button>}
+        disabled={loading || Boolean(error) || !pageEvidenceValid || busy || editing} onClick={nextPage}>{hierarchy ? 'Next file page' : 'Next page'}</button>}
     </footer>
   </section>;
 }
@@ -363,7 +417,23 @@ function FileExplorerView({
 export function SharedFileExplorer(props: FileExplorerProps) {
   // A new host-issued page identity resets local folder/filter/selection state.
   // Authorization and stale-response rejection remain host responsibilities.
-  return <FileExplorerView key={props.pageKey ?? 'initial'} {...props} />;
+  const region = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<{ key: string; scope: string } | null>(null);
+  const key = props.pageKey ?? 'initial';
+  const scope = key.slice(0, key.lastIndexOf(':'));
+  useLayoutEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending) return;
+    if (pending.scope !== scope) { pendingFocus.current = null; return; }
+    if (key !== pending.key && (props.authorized || props.error)) {
+      pendingFocus.current = null;
+      region.current?.focus();
+    }
+  }, [key, scope, props.authorized, props.error]);
+  return <div ref={region} tabIndex={-1} aria-label="File Explorer content" className="min-w-0 max-w-full">
+    <FileExplorerView key={props.pageKey ?? 'initial'} {...props}
+      onPageTransition={() => { pendingFocus.current = { key, scope }; }} />
+  </div>;
 }
 
 export default function FileExplorerPage(props: FileExplorerProps) {
