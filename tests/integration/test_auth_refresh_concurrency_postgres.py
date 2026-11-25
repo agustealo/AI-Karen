@@ -173,6 +173,9 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
     ] + [
         ("persistence", target, "rls")
         for target in ("transcript", "memory", "memory_replay")
+    ] + [
+        ("ack_loss", target, "rls")
+        for target in ("transcript", "memory")
     ],
 )
 async def test_private_session_fence_serializes_revocation(winner, target, invalidation, monkeypatch):
@@ -503,6 +506,91 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
                 return await vault.persist(entry, context=vault_context)
             except NeuroVaultAuthorizationError as exc:
                 return exc
+
+        if winner == "ack_loss":
+            # A real PostgreSQL commit must precede the injected exception.
+            # This simulates a lost application-level receipt, not a broken
+            # wire-level COMMIT acknowledgment or a rollback before COMMIT.
+            acknowledgment_lost = False
+
+            @asynccontextmanager
+            async def lost_transcript_receipt():
+                nonlocal acknowledgment_lost
+                async with persistence_factory() as db:
+                    yield db
+                    assert not db.in_transaction()
+                if not acknowledgment_lost:
+                    acknowledgment_lost = True
+                    raise ConnectionError("synthetic post-commit receipt loss")
+
+            @asynccontextmanager
+            async def lost_memory_receipt():
+                nonlocal acknowledgment_lost
+                async with persistence_factory() as db:
+                    original_commit = db.commit
+
+                    async def commit_then_lose_receipt():
+                        nonlocal acknowledgment_lost
+                        await original_commit()
+                        if not acknowledgment_lost:
+                            acknowledgment_lost = True
+                            raise ConnectionError("synthetic post-commit receipt loss")
+
+                    monkeypatch.setattr(db, "commit", commit_then_lose_receipt)
+                    yield db
+
+            if target == "transcript":
+                repo = PostgresConversationRepository(session_factory=lost_transcript_receipt)
+                first_receipt = await persist()
+                assert first_receipt.success is False
+                assert first_receipt.error == "completed_turn_write_failed"
+            else:
+                vault = PostgresNeuroVault(session_factory=lost_memory_receipt)
+                with pytest.raises(ConnectionError, match="synthetic post-commit receipt loss"):
+                    await persist()
+            assert acknowledgment_lost
+
+            async def durable_rows():
+                async with factory() as db:
+                    if target == "transcript":
+                        return tuple((await db.execute(text(
+                            "SELECT message_id, role, content FROM messages "
+                            "WHERE conversation_id = :cid ORDER BY role"
+                        ), {"cid": conversation})).all())
+                    events = (await db.execute(select(MemoryEvent.event_id).where(
+                        MemoryEvent.tenant_id == tenant, MemoryEvent.user_id == user,
+                    ))).scalars().all()
+                    assertions = (await db.execute(select(
+                        MemoryAssertion.assertion_id, MemoryAssertion.event_id,
+                    ).where(
+                        MemoryAssertion.tenant_id == tenant, MemoryAssertion.user_id == user,
+                    ))).all()
+                    assert len(events) == len(assertions) == 1
+                    assert assertions[0].event_id == events[0]
+                    return tuple(assertions)
+
+            committed = await durable_rows()
+            assert len(committed) == (2 if target == "transcript" else 1)
+            retry = await persist()
+            if target == "transcript":
+                assert retry.success and retry.data == 0
+                assert retry.metadata["idempotent_replay"] is True
+            else:
+                assert retry.persisted and retry.metadata["idempotent_replay"] is True
+                assert retry.memory_id == str(committed[0].assertion_id)
+                assert retry.metadata["event_id"] == str(committed[0].event_id)
+            assert await durable_rows() == committed
+
+            await revoke()
+            denied = await persist()
+            if target == "transcript":
+                assert denied.success is False
+                assert denied.error == "attachment_session_denied"
+            else:
+                assert isinstance(denied, NeuroVaultAuthorizationError)
+                assert str(denied) == "attachment_session_denied"
+            assert await durable_rows() == committed
+            return
 
         if target == "memory_replay":
             # Seed an authorized event before racing its exact retry.
