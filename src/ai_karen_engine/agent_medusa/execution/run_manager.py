@@ -553,6 +553,16 @@ class MedusaRunManager:
             raise RunNotFoundError(run_id)
         return durable
 
+    async def read_run_transitions(
+        self, *, run_id: str, tenant_id: str, user_id: str,
+    ) -> dict[str, Any] | None:
+        """Read durable history without treating live snapshots as transitions."""
+        if not self._settings.durable_run_ledger_enabled:
+            raise DurableRunLedgerUnavailable("medusa_durable_ledger_disabled")
+        return await self._durable_ledger.read_transitions(
+            run_id=run_id, tenant_id=tenant_id, user_id=user_id,
+        )
+
     async def list_runs(
         self,
         *,
