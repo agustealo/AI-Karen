@@ -119,3 +119,19 @@ describe("Agent Runtime truthful availability states", () => {
     expect(source).not.toContain("catalog?.total ?? 0");
   });
 });
+
+
+describe("Agent Runtime execution scope isolation", () => {
+  it("defaults administrators to personal work and requires explicit tenant selection", () => {
+    expect(source).toContain('useState<"personal" | "tenant">("personal")');
+    expect(source).toContain('const effectiveScope = canAdminister ? scope : "personal"');
+    expect(source).toContain('onClick={() => setScope("tenant")}');
+    expect(source).toContain('tenantScope && isAuthenticated');
+  });
+
+  it("remounts runtime state when identity or execution scope changes", () => {
+    expect(source).toContain('user?.tenant_id, user?.user_id');
+    expect(source).toContain('<ScopedAgentsPage key={identity}');
+    expect(source).toContain('<AgentRuntimeWorkspace key={effectiveScope}');
+  });
+});
