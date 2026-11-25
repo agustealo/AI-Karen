@@ -109,11 +109,17 @@ class AgentMedusaControlPlane:
         return await self._run_manager.get(run_id=run_id, tenant_id=tenant_id)
 
     async def read_run_transitions(
-        self, *, run_id: str, tenant_id: str, user_id: str,
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
     ) -> dict[str, Any] | None:
         """Delegate historical evidence retrieval to the canonical run manager."""
         return await self._run_manager.read_run_transitions(
-            run_id=run_id, tenant_id=tenant_id, user_id=user_id,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
 
     async def cancel_run(
