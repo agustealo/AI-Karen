@@ -124,3 +124,16 @@ page exists, and explicit search clearing. The protected workflow requires
 nested navigation instead of treating missing folders as a successful proof.
 Real authenticated deployment evidence is still required; source changes and
 skipped browser cases do not certify consumer readiness.
+
+
+## Search privacy boundary
+
+Inventory search and continuation parameters are request data, not telemetry.
+Both server logging setup paths install the existing logging owner's access
+filter to remove the entire query string before any Uvicorn handler formats
+the record. The older structured request middleware records only whether a
+query exists. The canonical synchronous and asynchronous PostgreSQL engines
+hide bound parameters in SQLAlchemy diagnostics. Request method, path, status,
+correlation and authorization audit context remain available. This is
+application-side protection; managed ingress, external tracing and database
+server logging policies still require deployment-specific verification.
