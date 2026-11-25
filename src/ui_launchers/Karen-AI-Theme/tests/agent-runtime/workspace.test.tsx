@@ -175,4 +175,146 @@ describe("runtime projection validation", () => {
     await act(async () => { decision.resolve({ ...approval, status: "approved" }); });
   });
 
+
+  it("preserves verified history and selected details while a background refresh is pending", async () => {
+    const nextHistory = deferred<unknown>();
+    const nextDetail = deferred<unknown>();
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    let detailReads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/agent-runtime/my-runs") return ++reads === 1 ? Promise.resolve(history([run])) : nextHistory.promise;
+        if (path.endsWith("/" + run.run_id)) return ++detailReads === 1 ? Promise.resolve(run) : nextDetail.promise;
+        return fallback(path);
+      });
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      await screen.findByRole("heading", { name: "Execution details" });
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(screen.getByRole("button", { name: /Execution run-1234/ })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Execution details" })).toBeTruthy();
+      expect(screen.getByText(/Execution snapshot:.*Refreshing/)).toBeTruthy();
+      await act(async () => { nextHistory.resolve(history([run])); });
+      expect(screen.getByRole("heading", { name: "Execution details" })).toBeTruthy();
+      expect(screen.getByText("Revalidating execution status…")).toBeTruthy();
+      expect((screen.getByRole("button", { name: "Copy verified context for Karen" }) as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { nextDetail.resolve({ ...run, status: "completed" }); });
+      expect(await screen.findByText("Execution completed. A saved artifact is not implied by this status.")).toBeTruthy();
+    } finally { visibility.mockRestore(); }
+  });
+
+  it("removes previously verified history and details when refresh fails", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/agent-runtime/my-runs") return ++reads === 1 ? Promise.resolve(history([run])) : Promise.reject(new Error("Access unavailable"));
+        if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+        return fallback(path);
+      });
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      await screen.findByRole("heading", { name: "Execution details" });
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await screen.findByText("Execution history is unavailable. Refresh runtime to try again.");
+      expect(screen.queryByRole("heading", { name: "Execution details" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Execution run-1234/ })).toBeNull();
+    } finally { visibility.mockRestore(); }
+  });
+
+
+  it("discovers approvals on visibility restoration even with empty run history", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+        ? Promise.resolve(++reads === 1 ? [] : [approval]) : fallback(path));
+      render(<AgentsPage />);
+      await screen.findByText(/You’re all caught up/);
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await screen.findByRole("button", { name: "Review approval" });
+      expect(reads).toBe(2);
+    } finally { visibility.mockRestore(); }
+  });
+
+  it("blocks uncertain approval retries until successful reconciliation", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const reconciliation = deferred<unknown>();
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+        ? (++reads === 1 ? Promise.resolve([approval]) : reconciliation.promise) : fallback(path));
+      mocks.post.mockRejectedValue(new Error("Response lost"));
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+      await screen.findByText("Decision outcome could not be verified. Refresh before attempting another decision.");
+      const review = screen.getByRole("button", { name: "Review approval" }) as HTMLButtonElement;
+      expect(review.disabled).toBe(true);
+      fireEvent.click(review);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await act(async () => { reconciliation.resolve([approval]); });
+      expect((await screen.findByRole("button", { name: "Review approval" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByText(/Decision outcome could not be verified/)).toBeNull();
+    } finally { visibility.mockRestore(); }
+  });
+
+  it("does not start an approval discovery read during a pending decision", async () => {
+    const decision = deferred<unknown>();
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+        ? Promise.resolve(++reads === 1 ? [approval] : []) : fallback(path));
+      mocks.post.mockReturnValue(decision.promise);
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+      await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+      expect(reads).toBe(1);
+      await act(async () => { decision.resolve({ ...approval, status: "approved" }); });
+      await screen.findByText(/You’re all caught up/);
+      expect(reads).toBe(2);
+    } finally { visibility.mockRestore(); }
+  });
+
+
+  it("preserves history and blocks cancellation retries until a verified refresh", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const cancellableRun = { ...run, cancellable: true };
+    const reconciliation = deferred<unknown>();
+    let tenantReads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/admin/agents/runs?include_terminal=true") return ++tenantReads === 1 ? Promise.resolve(history([cancellableRun])) : reconciliation.promise;
+        if (path.endsWith("/" + run.run_id)) return Promise.resolve(cancellableRun);
+        return fallback(path);
+      });
+      mocks.post.mockRejectedValue(new Error("Response lost"));
+      render(<AgentsPage />);
+      fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      const cancel = await screen.findByRole("button", { name: "Request cancellation" });
+      fireEvent.click(cancel);
+      await screen.findByText("Cancellation outcome could not be verified. Refresh to inspect current execution status.");
+      expect(screen.getByRole("button", { name: /Execution run-1234/ })).toBeTruthy();
+      expect((cancel as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(cancel);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect((cancel as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { reconciliation.resolve(history([cancellableRun])); });
+      await waitFor(() => expect((screen.getByRole("button", { name: "Request cancellation" }) as HTMLButtonElement).disabled).toBe(false));
+      expect(screen.queryByText(/Cancellation outcome could not be verified/)).toBeNull();
+    } finally { visibility.mockRestore(); }
+  });
+
 });
