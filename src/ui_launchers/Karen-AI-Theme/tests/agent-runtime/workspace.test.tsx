@@ -358,4 +358,70 @@ describe("runtime projection validation", () => {
     } finally { visibility.mockRestore(); }
   });
 
+
+  it("searches verified history locally and preserves selection outside the filters", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const completed = { run_id: "finished-987654", status: "completed" };
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/agent-runtime/my-runs") return Promise.resolve(history([run, completed]));
+      if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+      return fallback(path);
+    });
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByRole("heading", { name: "Execution details" });
+    const reads = mocks.get.mock.calls.length;
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search visible executions" }), { target: { value: "FINISHED" } });
+    expect(screen.queryByRole("button", { name: /Execution run-1234/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Execution finished/ })).toBeTruthy();
+    expect(screen.getByText(/Selected execution is outside current filters/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Execution details" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "In progress" }));
+    expect(screen.getByText("No visible executions match your search.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reset search" }));
+    expect(screen.getByRole("button", { name: /Execution run-1234/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(mocks.get.mock.calls.length).toBe(reads);
+  });
+
+  it("uses the canonical chat navigation for mission initiation", async () => {
+    const onAskKaren = vi.fn();
+    render(<AgentsPage onAskKaren={onAskKaren} />);
+    await screen.findByText("No verified executions match this view.");
+    fireEvent.click(screen.getByRole("button", { name: "Ask Karen" }));
+    expect(onAskKaren).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+
+  it("provides a single authorized cancellation surface and real navigation targets", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const adminRun = { ...run, cancellable: true, user_id: "owner-evidence", policy_decision_id: "policy-evidence" };
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/admin/agents/runs?include_terminal=true") return Promise.resolve(history([adminRun]));
+      if (path.endsWith("/" + run.run_id)) return Promise.resolve(adminRun);
+      return fallback(path);
+    });
+    render(<AgentsPage />);
+    await screen.findByText("No verified executions match this view.");
+    expect(screen.queryByText("Administrative execution diagnostics")).toBeNull();
+    for (const name of ["Mission history", "Approvals", "Specialists", "Diagnostics"]) {
+      const link = screen.getByRole("link", { name, exact: true });
+      const target = link.getAttribute("href");
+      expect(target?.startsWith("#")).toBe(true);
+      expect(document.getElementById(target!.slice(1))).not.toBeNull();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByRole("button", { name: "Request cancellation" });
+    expect(screen.getAllByRole("button", { name: "Request cancellation" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+    fireEvent.click(screen.getByText("Technical details"));
+    expect(screen.getByText("owner-evidence")).toBeTruthy();
+    expect(screen.getByText("policy-evidence")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "My work" }));
+    await screen.findByText("No verified executions match this view.");
+    expect(screen.queryByText("owner-evidence")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Request cancellation" })).toBeNull();
+  });
+
 });
