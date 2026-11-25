@@ -28,6 +28,7 @@ from fastapi import FastAPI
 
 from ai_karen_engine.api_routes.chat import runtime as chat_ingress
 from ai_karen_engine.auth import auth_middleware, auth_service
+from ai_karen_engine.services.auth.auth_service import AuthService as CoreAuthService
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatStreamChunk, ChatStreamEventType,
 )
@@ -45,7 +46,7 @@ async def test_canonical_chat_sse_over_signed_authenticated_http_socket(
     session_records: dict[str, SimpleNamespace] = {}
     verified_tokens: list[str] = []
 
-    class CanonicalSessionProbe(auth_service.AuthService):
+    class CanonicalSessionProbe(CoreAuthService):
         """Real AuthService witness sealing; only PostgreSQL readback is controlled."""
 
         def __init__(self):

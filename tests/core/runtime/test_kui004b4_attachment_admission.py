@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ai_karen_engine.auth.models import UserData
-from ai_karen_engine.services.auth.auth_service import AuthService, get_auth_service
+from ai_karen_engine.services.auth.auth_service import AuthService
+from ai_karen_engine.auth.auth_service import get_auth_service
 from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 from ai_karen_engine.core.runtime.chat_runtime import (
     AttachmentAdmissionDenied,
@@ -84,7 +85,7 @@ def selected(source_id=SOURCE, digest=DIGEST):
 @pytest.fixture(autouse=True)
 def controlled_session_witness_issuer(monkeypatch):
     """Exercise actual AuthService signatures with controlled durable readback."""
-    from ai_karen_engine.services.auth import auth_service
+    from ai_karen_engine.auth import auth_service
 
     issuer = object.__new__(AuthService)
     issuer._runtime_witness_key = secrets.token_bytes(32)
