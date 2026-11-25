@@ -476,3 +476,71 @@ def test_rename_revision_requires_lossless_decimal_string():
     for invalid in (1, True, "0", "-1", "1.0", "01"):
         with pytest.raises(ValidationError):
             ingress.FileExplorerRenameFolderRequest(name="Renamed", expected_revision=invalid)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["folder", "artifact"])
+async def test_move_binds_kind_source_destination_and_revision(monkeypatch, kind):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "data:write"])
+    args.pop("limit")
+    args.pop("cursor")
+    destination = "55555555-5555-4555-8555-555555555555"
+    operation = f"file_explorer.{kind}.move"
+    scope = {"operation": operation, "source_id": FILE,
+             "destination_id": destination, "expected_revision": 7}
+    policy.evaluate.return_value = PolicyDecision(
+        decision_id="move-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read", "data:write", operation],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    repository = Repository()
+    calls = []
+
+    async def move(tenant_id, user_id, source_id, **kwargs):
+        calls.append((tenant_id, user_id, source_id, kwargs))
+        assert len(kernel.calls) == len(calls)
+        if len(calls) > 1:
+            return SimpleNamespace(success=False, error="artifact_folder_conflict_or_unavailable")
+        return SimpleNamespace(success=True, data=8)
+
+    setattr(repository, f"move_owner_{kind}", move)
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.move_file_explorer_item(
+        **args, kind=kind, source_id=FILE, destination_id=destination, expected_revision=7,
+    )
+    assert result["organization_revision"] == "8"
+    assert result["parent_folder_id"] == destination
+    key = "parent_folder_id" if kind == "folder" else "folder_id"
+    assert calls == [(TENANT, OWNER, FILE, {key: destination, "expected_revision": 7})]
+    with pytest.raises(PermissionError):
+        await service.move_file_explorer_item(
+            **args, kind=kind, source_id=FILE, destination_id=None, expected_revision=7,
+        )
+    assert len(calls) == 1
+    with pytest.raises(FileExplorerFolderConflict):
+        await service.move_file_explorer_item(
+            **args, kind=kind, source_id=FILE, destination_id=destination, expected_revision=7,
+        )
+
+
+def test_move_requires_explicit_destination_and_lossless_revision():
+    from pydantic import ValidationError
+
+    assert ingress.FileExplorerMoveRequest(
+        destination_id=None, expected_revision="7",
+    ).destination_id is None
+    with pytest.raises(ValidationError):
+        ingress.FileExplorerMoveRequest(expected_revision="7")
+    with pytest.raises(ValidationError):
+        ingress.FileExplorerMoveRequest(destination_id=None, expected_revision=7)

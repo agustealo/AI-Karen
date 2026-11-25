@@ -45,6 +45,11 @@ class OwnerInventorySource(Protocol):
         name: str, expected_revision: int,
     ) -> dict[str, Any]: ...
 
+    async def move_owner_item(
+        self, *, tenant_id: str, user_id: str, kind: str, source_id: str,
+        destination_id: str | None, expected_revision: int,
+    ) -> str: ...
+
     async def revalidate_owner_reference(
         self, *, tenant_id: str, user_id: str, source_id: str,
         expected_revision: str,
@@ -258,6 +263,48 @@ class FileExplorerInventoryHost:
             "folder_id": folder_id, "status": "success",
         })
         return {"folder": folder, "request_id": context.request_id,
+                "correlation_id": context.correlation_id}
+
+    async def move_owner_item(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        kind: str, source_id: str, destination_id: str | None,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        if kind not in ("folder", "artifact"):
+            raise ValueError("file_explorer_move_kind_invalid")
+        operation = f"file_explorer.{kind}.move"
+        self._authorize_mutation(context=context, plan=plan, scope={
+            "operation": operation, "source_id": source_id,
+            "destination_id": destination_id, "expected_revision": expected_revision,
+        })
+        if (not _canonical_uuid(source_id)
+            or (destination_id is not None and not _canonical_uuid(destination_id))
+            or (kind == "folder" and destination_id == source_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            raise ValueError("file_explorer_move_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        evidence = {
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "policy_decision_id": context.policy_decision_id,
+            "operation": operation, "source_id": source_id,
+            "destination_id": destination_id,
+        }
+        try:
+            revision = await self._source.move_owner_item(
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                kind=kind, source_id=source_id, destination_id=destination_id,
+                expected_revision=expected_revision,
+            )
+        except Exception:
+            logger.warning("file_explorer_move_failed", extra=evidence)
+            raise
+        logger.info("file_explorer_move_committed", extra={
+            **evidence, "organization_revision": revision, "status": "success",
+        })
+        return {"kind": kind, "source_id": source_id, "parent_folder_id": destination_id,
+                "organization_revision": revision, "request_id": context.request_id,
                 "correlation_id": context.correlation_id}
 
     async def revalidate_owner_selection(

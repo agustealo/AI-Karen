@@ -154,6 +154,22 @@ class FileExplorerRenameFolderRequest(BaseModel):
     expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
 
 
+class FileExplorerMoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    destination_id: Optional[str] = Field(min_length=36, max_length=36)
+    expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerMoveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["folder", "artifact"]
+    source_id: UUID
+    parent_folder_id: Optional[UUID]
+    organization_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+    request_id: str
+    correlation_id: str
+
+
 class FileExplorerCreateFolderResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     folder: FileExplorerFolderResponse
@@ -669,6 +685,44 @@ async def rename_file_explorer_folder(
     except Exception:
         logger.warning("file_explorer_folder_rename_unavailable", extra=meta)
         raise HTTPException(status_code=503, detail="Folder rename not confirmed; refresh before retrying") from None
+
+
+@router.post("/file-explorer/move/{kind}/{source_id}", response_model=FileExplorerMoveResponse)
+async def move_file_explorer_item(
+    kind: Literal["folder", "artifact"],
+    source_id: UUID,
+    payload: FileExplorerMoveRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerMoveResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_item_move", Permission.DATA_WRITE,
+    )
+    try:
+        revision = int(payload.expected_revision)
+        if not 1 <= revision <= 9223372036854775806:
+            raise ValueError("file_explorer_move_revision_invalid")
+        result = await plugin_service.move_file_explorer_item(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            kind=kind, source_id=str(source_id), destination_id=payload.destination_id,
+            expected_revision=revision,
+        )
+        return FileExplorerMoveResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Move denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Source, destination or revision conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Move request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_move_unconfirmed", extra=meta)
+        raise HTTPException(status_code=503, detail="Move not confirmed; refresh before retrying") from None
 
 
 @router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)

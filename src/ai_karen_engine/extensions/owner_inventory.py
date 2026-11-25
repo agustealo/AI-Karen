@@ -34,6 +34,12 @@ class ArtifactRepository(Protocol):
     async def rename_owner_folder(self, tenant_id: str, user_id: str, folder_id: str, *,
                                   name: str, expected_revision: int) -> Any: ...
 
+    async def move_owner_folder(self, tenant_id: str, user_id: str, folder_id: str, *,
+                                parent_folder_id: str | None, expected_revision: int) -> Any: ...
+
+    async def move_owner_artifact(self, tenant_id: str, user_id: str, artifact_id: str, *,
+                                  folder_id: str | None, expected_revision: int) -> Any: ...
+
     async def owner_hierarchy_available(self, tenant_id: str, user_id: str) -> Any: ...
 
     async def list_owner_folders(self, tenant_id: str, user_id: str, **kwargs: Any) -> Any: ...
@@ -295,6 +301,34 @@ class ArtifactSourceAdapter:
             raise RuntimeError("file_explorer_folder_rename_result_invalid")
         return {"folder_id": folder_id, "parent_folder_id": folder.parent_folder_id,
                 "name": folder.name, "revision": str(folder.revision)}
+
+    async def move_owner_item(
+        self, *, tenant_id: str, user_id: str, kind: str, source_id: str,
+        destination_id: str | None, expected_revision: int,
+    ) -> str:
+        tenant_id = _uuid(tenant_id, "tenant_id")
+        user_id = _uuid(user_id, "user_id")
+        source_id = _uuid(source_id, "source_id")
+        if destination_id is not None:
+            destination_id = _uuid(destination_id, "destination_id")
+        if kind == "folder":
+            result = await self._repository.move_owner_folder(
+                tenant_id, user_id, source_id, parent_folder_id=destination_id,
+                expected_revision=expected_revision,
+            )
+        elif kind == "artifact":
+            result = await self._repository.move_owner_artifact(
+                tenant_id, user_id, source_id, folder_id=destination_id,
+                expected_revision=expected_revision,
+            )
+        else:
+            raise ValueError("file_explorer_move_kind_invalid")
+        revision = self._require_folder_mutation_result(result)
+        if (type(revision) is not int
+            or revision not in (expected_revision, expected_revision + 1)
+            or not 1 <= revision <= 9223372036854775806):
+            raise RuntimeError("file_explorer_move_result_invalid")
+        return str(revision)
 
     async def revalidate_owner_reference(
         self,

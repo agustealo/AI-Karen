@@ -159,7 +159,10 @@ class PluginService:
         mutation: Optional[str] = None, resource_scope: Optional[Dict[str, Any]] = None,
     ):
         """Shared fresh policy admission for the trusted Explorer host."""
-        if mutation not in (None, "file_explorer.folder.create", "file_explorer.folder.rename"):
+        if mutation not in (
+            None, "file_explorer.folder.create", "file_explorer.folder.rename",
+            "file_explorer.folder.move", "file_explorer.artifact.move",
+        ):
             raise ValueError("file_explorer_operation_invalid")
         required_permissions = ["data:read", "data:write"] if mutation else ["data:read"]
         capabilities = ["file-explorer", *required_permissions]
@@ -280,6 +283,28 @@ class PluginService:
         return await host.rename_owner_folder(
             context=context, plan=plan, folder_id=folder_id,
             name=name, expected_revision=expected_revision,
+        )
+
+    async def move_file_explorer_item(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        kind: str, source_id: str, destination_id: Optional[str],
+        expected_revision: int,
+    ) -> Dict[str, Any]:
+        if kind not in ("folder", "artifact"):
+            raise ValueError("file_explorer_move_kind_invalid")
+        operation = f"file_explorer.{kind}.move"
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id,
+            mutation=operation,
+            resource_scope={"operation": operation, "source_id": source_id,
+                            "destination_id": destination_id,
+                            "expected_revision": expected_revision},
+        )
+        return await host.move_owner_item(
+            context=context, plan=plan, kind=kind, source_id=source_id,
+            destination_id=destination_id, expected_revision=expected_revision,
         )
 
     async def list_file_explorer_owner_page(
