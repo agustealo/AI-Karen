@@ -37,6 +37,7 @@ from ai_karen_engine.extensions.contracts import (
     ExtensionExecutionRequest,
     ExtensionExecutionResult,
 )
+from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
     get_credential_vault_service,
@@ -356,7 +357,10 @@ class PluginService:
             "user_id": user_id, "tenant_id": tenant_id,
             "item_count": len(page["items"]), "status": "success",
         })
-        return {**page, "request_id": request_id, "correlation_id": correlation_id}
+        return {
+            **page, "request_id": request_id, "correlation_id": correlation_id,
+            "max_selection": MAX_CONTENT_SOURCE_REFERENCES,
+        }
 
     async def analyze_content_owner_sources(
         self,
@@ -383,7 +387,7 @@ class PluginService:
             RepositoryFactory,
         )
 
-        if not isinstance(references, list) or not 1 <= len(references) <= 12:
+        if not isinstance(references, list) or not 1 <= len(references) <= MAX_CONTENT_SOURCE_REFERENCES:
             raise ValueError("content_source_reference_count_invalid")
         kernel, decision, plan = await self._authorize_content_owner_access(
             user_id=user_id, tenant_id=tenant_id, roles=roles,

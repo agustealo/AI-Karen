@@ -223,3 +223,32 @@ async def test_route_rejects_synthetic_tenant_before_rbac(monkeypatch):
             plugin_service=SimpleNamespace(),
         )
     assert error.value.status_code == 401
+
+
+def test_content_inventory_requires_canonical_selection_ceiling():
+    from pydantic import ValidationError
+    from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
+
+    page = dict(items=[], has_more=False, next_cursor=None,
+                inventory_semantics="owner_metadata_page_not_live_acl",
+                request_id="request-1", correlation_id="corr-1")
+    with pytest.raises(ValidationError):
+        ingress.ContentInventoryResponse.model_validate(page)
+    for invalid in (True, "12", 0, MAX_CONTENT_SOURCE_REFERENCES + 1):
+        with pytest.raises(ValidationError):
+            ingress.ContentInventoryResponse.model_validate({**page, "max_selection": invalid})
+    result = ingress.ContentInventoryResponse.model_validate(
+        {**page, "max_selection": MAX_CONTENT_SOURCE_REFERENCES}
+    )
+    assert result.max_selection == MAX_CONTENT_SOURCE_REFERENCES
+    assert "max_selection" not in ingress.FileExplorerInventoryResponse.model_validate(page).model_dump()
+
+
+def test_content_request_schema_enforces_canonical_selection_ceiling():
+    from pydantic import ValidationError
+    from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
+
+    refs = [{"source_id": FILE, "revision": SHA}] * MAX_CONTENT_SOURCE_REFERENCES
+    assert len(ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs).references) == MAX_CONTENT_SOURCE_REFERENCES
+    with pytest.raises(ValidationError):
+        ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs + refs[:1])

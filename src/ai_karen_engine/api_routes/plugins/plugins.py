@@ -32,6 +32,7 @@ from ai_karen_engine.services.error_response_schemas import (
     create_service_error_response,
     get_http_status_for_error_code,
 )
+from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
@@ -134,6 +135,12 @@ class FileExplorerInventoryResponse(BaseModel):
     correlation_id: str
 
 
+class ContentInventoryResponse(FileExplorerInventoryResponse):
+    """Selection ceiling is metadata, not a content access grant."""
+
+    max_selection: int = Field(strict=True, ge=MAX_CONTENT_SOURCE_REFERENCES, le=MAX_CONTENT_SOURCE_REFERENCES)
+
+
 class ContentSourceReference(BaseModel):
     """A selection receipt is not a permission grant."""
 
@@ -145,7 +152,7 @@ class ContentSourceReference(BaseModel):
 class ContentOwnerSourcesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal["analyze", "search", "compare"]
-    references: List[ContentSourceReference] = Field(min_length=1, max_length=12)
+    references: List[ContentSourceReference] = Field(min_length=1, max_length=MAX_CONTENT_SOURCE_REFERENCES)
     query: Optional[str] = Field(default=None, min_length=1, max_length=512)
     left_id: Optional[UUID] = None
     right_id: Optional[UUID] = None
@@ -504,14 +511,14 @@ async def list_file_explorer_inventory(
         ) from None
 
 
-@router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)
+@router.get("/content-intelligence/inventory", response_model=ContentInventoryResponse)
 async def list_content_inventory(
     request: Request,
     limit: int = Query(100, ge=1, le=200),
     cursor: Optional[str] = Query(None, min_length=1, max_length=768),
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
-) -> FileExplorerInventoryResponse:
+) -> ContentInventoryResponse:
     """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
     user_id = str(current_user.get("user_id") or "").strip()
     tenant_id = str(current_user.get("tenant_id") or "").strip()
@@ -550,7 +557,7 @@ async def list_content_inventory(
             limit=limit,
             cursor=cursor,
         )
-        return FileExplorerInventoryResponse.model_validate(page)
+        return ContentInventoryResponse.model_validate(page)
     except PermissionError:
         raise HTTPException(status_code=403, detail="Content inventory access denied") from None
     except ValueError:
