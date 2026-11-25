@@ -77,3 +77,54 @@ def test_marker_manager_reuses_existing_vocab_without_model_mutation() -> None:
     assert marker.vocabulary_resized is False
     assert runtime.tokenizer.add_calls == 0
     assert runtime.model.resize_calls == []
+
+
+def test_marker_lookup_resize_and_verification_share_generation_lock():
+    runtime = FakeRuntime()
+    held = False
+    events = []
+
+    class Lock:
+        def __enter__(self):
+            nonlocal held
+            assert not held
+            held = True
+            events.append("lock")
+
+        def __exit__(self, *args):
+            nonlocal held
+            held = False
+            events.append("unlock")
+
+    lock = Lock()
+    runtime.generation_components = lambda: (runtime.model, runtime.tokenizer, lock)
+    convert = runtime.tokenizer.convert_tokens_to_ids
+    add = runtime.tokenizer.add_special_tokens
+    resize = runtime.model.resize_token_embeddings
+
+    def checked_convert(token):
+        assert held
+        events.append("lookup")
+        return convert(token)
+
+    def checked_add(payload):
+        assert held
+        events.append("add")
+        return add(payload)
+
+    def checked_resize(size):
+        assert held
+        events.append("resize")
+        return resize(size)
+
+    runtime.tokenizer.convert_tokens_to_ids = checked_convert
+    runtime.tokenizer.add_special_tokens = checked_add
+    runtime.model.resize_token_embeddings = checked_resize
+    manager = SoftReasoningTokenManager()
+    first = manager.ensure(runtime)
+    second = manager.ensure(runtime)
+    assert first.token_id == second.token_id
+    assert events == [
+        "lock", "lookup", "add", "lookup", "resize", "lookup", "unlock",
+        "lock", "lookup", "unlock",
+    ]

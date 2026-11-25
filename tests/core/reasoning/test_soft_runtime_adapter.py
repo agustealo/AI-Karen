@@ -157,3 +157,83 @@ def test_prompt_contract_rejects_invalid_occurrence() -> None:
             insertion_token_id=25,
             occurrence_from_end=0,
         )
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_guided_hook_install_and_cleanup_are_inside_generation_lock(monkeypatch, fails):
+    from types import SimpleNamespace
+
+    events = []
+    held = False
+
+    class GenerationLock:
+        def __enter__(self):
+            nonlocal held
+            assert not held
+            held = True
+            events.append("lock")
+
+        def __exit__(self, *args):
+            nonlocal held
+            assert events[-1] == "remove"
+            held = False
+            events.append("unlock")
+
+    class Layer:
+        weight = SimpleNamespace(shape=(128, 8), device="cpu")
+
+        def register_forward_hook(self, hook):
+            assert held
+            events.append("install")
+            self.hook = hook
+            return SimpleNamespace(remove=self.remove)
+
+        def remove(self):
+            assert held
+            events.append("remove")
+
+    layer = Layer()
+
+    class Model:
+        def get_input_embeddings(self):
+            return layer
+
+        def eval(self):
+            assert held
+
+        def generate(self, **kwargs):
+            assert held
+            events.append("generate")
+            if fails:
+                raise RuntimeError("injected generation failure")
+            # This case deliberately omits the embedding forward call. The
+            # adapter must reject the result, but only after removing its hook.
+            return object()
+
+    class Input:
+        shape = (1, 2)
+
+        def to(self, device):
+            assert held
+            return self
+
+    runtime = FakeResolvedRuntime([1, 25])
+    model = Model()
+    lock = GenerationLock()
+    monkeypatch.setattr(runtime, "generation_components", lambda: (model, runtime.tokenizer, lock))
+    adapter = TransformersSoftGenerationAdapter(
+        runtime, TransformersSoftReasoningConfig(insertion_token_id=25),
+    )
+    monkeypatch.setattr(adapter, "_torch", lambda: SimpleNamespace(no_grad=nullcontext))
+    monkeypatch.setattr(adapter, "_tokenize", lambda *a: {"input_ids": Input()})
+    monkeypatch.setattr(adapter, "_find_insertion_position", lambda _: 1)
+    monkeypatch.setattr(adapter, "_seed_scope", lambda *a: nullcontext())
+
+    with pytest.raises(GenerationFailed, match=(
+        "injected generation failure" if fails else "never exposed"
+    )):
+        adapter.generate_with_first_token_embedding(
+            "prepared prompt", [0.1] * 8, max_tokens=1, seed=1,
+        )
+    assert events == ["lock", "install", "generate", "remove", "unlock"]
+    assert held is False

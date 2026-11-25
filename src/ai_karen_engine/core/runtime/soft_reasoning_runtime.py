@@ -204,143 +204,149 @@ class TransformersSoftGenerationAdapter:
             raise ValueError("max_tokens must be positive")
 
         model, tokenizer, generation_lock = self._runtime.generation_components()
-        torch = self._torch()
-        encoded = self._tokenize(tokenizer, prompt)
-        input_ids = encoded["input_ids"]
-        attention_mask = encoded.get("attention_mask")
-        position = self._find_insertion_position(input_ids)
-        embedding_layer = model.get_input_embeddings()
-        hidden_size = self.capabilities().hidden_size
-        replacement_values = tuple(float(value) for value in first_token_embedding)
-        if len(replacement_values) != hidden_size:
-            raise ValueError(
-                "guided first-token embedding size does not match model hidden size: "
-                f"{len(replacement_values)} != {hidden_size}"
-            )
-
-        device = self._embedding_device(embedding_layer)
-        input_ids = input_ids.to(device)
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(device)
-
-        applied = False
-
-        def replace_initial_embedding(_module: Any, _inputs: Any, output: Any) -> Any:
-            nonlocal applied
-            if applied:
-                return output
-            if getattr(output, "ndim", 0) != 3 or int(output.shape[1]) <= position:
-                return output
-            replacement = torch.as_tensor(
-                replacement_values,
-                dtype=output.dtype,
-                device=output.device,
-            )
-            modified = output.clone()
-            modified[0, position, :] = replacement
-            applied = True
-            return modified
-
-        handle = embedding_layer.register_forward_hook(replace_initial_embedding)
-        try:
-            with generation_lock, torch.no_grad(), self._seed_scope(torch, seed, device):
-                model.eval()
-                generate_kwargs: dict[str, Any] = {
-                    "input_ids": input_ids,
-                    "max_new_tokens": int(max_tokens),
-                    "do_sample": False,
-                }
-                if self._config.collect_logprobs:
-                    generate_kwargs.update(
-                        {
-                            "return_dict_in_generate": True,
-                            "output_scores": True,
-                        }
-                    )
-                if attention_mask is not None:
-                    generate_kwargs["attention_mask"] = attention_mask
-                eos_token_id = getattr(tokenizer, "eos_token_id", None)
-                pad_token_id = getattr(tokenizer, "pad_token_id", None)
-                if pad_token_id is None:
-                    pad_token_id = eos_token_id
-                if pad_token_id is not None:
-                    generate_kwargs["pad_token_id"] = pad_token_id
-                if eos_token_id is not None:
-                    generate_kwargs["eos_token_id"] = eos_token_id
-
-                generated = model.generate(**generate_kwargs)
-        except Exception as exc:
-            raise GenerationFailed(
-                f"Transformers Soft Reasoning generation failed: {exc}"
-            ) from exc
-        finally:
-            handle.remove()
-
-        if not applied:
-            raise GenerationFailed(
-                "Transformers model never exposed the configured insertion position "
-                "during the initial embedding forward pass"
-            )
-
-        generated_ids = getattr(generated, "sequences", generated)
-        prompt_tokens = int(input_ids.shape[-1])
-        sequence = generated_ids[0]
-        new_tokens = sequence[prompt_tokens:]
-        token_count = int(new_tokens.shape[-1])
-        text = tokenizer.decode(
-            new_tokens,
-            skip_special_tokens=self._config.skip_special_tokens_on_decode,
-        ).strip()
-        finish_reason = "length" if token_count >= max_tokens else "stop"
-        base = self._runtime.runtime_capabilities()
-
-        token_log_probabilities: tuple[float, ...] = ()
-        if self._config.collect_logprobs:
-            token_log_probabilities = self._extract_token_log_probabilities(
-                torch=torch,
-                generated=generated,
-                new_tokens=new_tokens,
-            )
-            if len(token_log_probabilities) != token_count:
-                raise GenerationFailed(
-                    "Transformers runtime returned incomplete token log probabilities"
+        # The hook must never be installed or removed outside this lock.
+        # Keep the complete mutation and receipt lifecycle in one critical section.
+        with generation_lock:
+            torch = self._torch()
+            encoded = self._tokenize(tokenizer, prompt)
+            input_ids = encoded["input_ids"]
+            attention_mask = encoded.get("attention_mask")
+            position = self._find_insertion_position(input_ids)
+            embedding_layer = model.get_input_embeddings()
+            shape = getattr(getattr(embedding_layer, "weight", None), "shape", None)
+            if shape is None or len(shape) < 2 or int(shape[-1]) <= 0:
+                raise ProviderNotAvailable("Selected model exposes an invalid hidden size")
+            hidden_size = int(shape[-1])
+            replacement_values = tuple(float(value) for value in first_token_embedding)
+            if len(replacement_values) != hidden_size:
+                raise ValueError(
+                    "guided first-token embedding size does not match model hidden size: "
+                    f"{len(replacement_values)} != {hidden_size}"
                 )
 
-        sequence_log_probability = (
-            float(sum(token_log_probabilities))
-            if token_log_probabilities
-            else None
-        )
-        mean_token_log_probability = (
-            sequence_log_probability / float(token_count)
-            if sequence_log_probability is not None and token_count > 0
-            else None
-        )
-        first_token_probability = (
-            float(torch.exp(torch.tensor(token_log_probabilities[0])).item())
-            if token_log_probabilities
-            else None
-        )
+            device = self._embedding_device(embedding_layer)
+            input_ids = input_ids.to(device)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
 
-        return SoftGenerationOutput(
-            text=text,
-            token_count=token_count,
-            finish_reason=finish_reason,
-            model_id=base.model_id,
-            runtime_engine=self.runtime_engine,
-            token_log_probabilities=token_log_probabilities,
-            sequence_log_probability=sequence_log_probability,
-            mean_token_log_probability=mean_token_log_probability,
-            first_token_probability=first_token_probability,
-            metadata={
-                "insertion_token_id": self._config.insertion_token_id,
-                "insertion_position": position,
-                "occurrence_from_end": self._config.occurrence_from_end,
-                "reference_embedding_mode": self._config.reference_embedding_mode.value,
-                "seed": int(seed),
-                "generation_mode": "greedy",
-            },
-        )
+            applied = False
+
+            def replace_initial_embedding(_module: Any, _inputs: Any, output: Any) -> Any:
+                nonlocal applied
+                if applied:
+                    return output
+                if getattr(output, "ndim", 0) != 3 or int(output.shape[1]) <= position:
+                    return output
+                replacement = torch.as_tensor(
+                    replacement_values,
+                    dtype=output.dtype,
+                    device=output.device,
+                )
+                modified = output.clone()
+                modified[0, position, :] = replacement
+                applied = True
+                return modified
+
+            handle = embedding_layer.register_forward_hook(replace_initial_embedding)
+            try:
+                with torch.no_grad(), self._seed_scope(torch, seed, device):
+                    model.eval()
+                    generate_kwargs: dict[str, Any] = {
+                        "input_ids": input_ids,
+                        "max_new_tokens": int(max_tokens),
+                        "do_sample": False,
+                    }
+                    if self._config.collect_logprobs:
+                        generate_kwargs.update(
+                            {
+                                "return_dict_in_generate": True,
+                                "output_scores": True,
+                            }
+                        )
+                    if attention_mask is not None:
+                        generate_kwargs["attention_mask"] = attention_mask
+                    eos_token_id = getattr(tokenizer, "eos_token_id", None)
+                    pad_token_id = getattr(tokenizer, "pad_token_id", None)
+                    if pad_token_id is None:
+                        pad_token_id = eos_token_id
+                    if pad_token_id is not None:
+                        generate_kwargs["pad_token_id"] = pad_token_id
+                    if eos_token_id is not None:
+                        generate_kwargs["eos_token_id"] = eos_token_id
+
+                    generated = model.generate(**generate_kwargs)
+            except Exception as exc:
+                raise GenerationFailed(
+                    f"Transformers Soft Reasoning generation failed: {exc}"
+                ) from exc
+            finally:
+                handle.remove()
+
+            if not applied:
+                raise GenerationFailed(
+                    "Transformers model never exposed the configured insertion position "
+                    "during the initial embedding forward pass"
+                )
+
+            generated_ids = getattr(generated, "sequences", generated)
+            prompt_tokens = int(input_ids.shape[-1])
+            sequence = generated_ids[0]
+            new_tokens = sequence[prompt_tokens:]
+            token_count = int(new_tokens.shape[-1])
+            text = tokenizer.decode(
+                new_tokens,
+                skip_special_tokens=self._config.skip_special_tokens_on_decode,
+            ).strip()
+            finish_reason = "length" if token_count >= max_tokens else "stop"
+            base = self._runtime.runtime_capabilities()
+
+            token_log_probabilities: tuple[float, ...] = ()
+            if self._config.collect_logprobs:
+                token_log_probabilities = self._extract_token_log_probabilities(
+                    torch=torch,
+                    generated=generated,
+                    new_tokens=new_tokens,
+                )
+                if len(token_log_probabilities) != token_count:
+                    raise GenerationFailed(
+                        "Transformers runtime returned incomplete token log probabilities"
+                    )
+
+            sequence_log_probability = (
+                float(sum(token_log_probabilities))
+                if token_log_probabilities
+                else None
+            )
+            mean_token_log_probability = (
+                sequence_log_probability / float(token_count)
+                if sequence_log_probability is not None and token_count > 0
+                else None
+            )
+            first_token_probability = (
+                float(torch.exp(torch.tensor(token_log_probabilities[0])).item())
+                if token_log_probabilities
+                else None
+            )
+
+            return SoftGenerationOutput(
+                text=text,
+                token_count=token_count,
+                finish_reason=finish_reason,
+                model_id=base.model_id,
+                runtime_engine=self.runtime_engine,
+                token_log_probabilities=token_log_probabilities,
+                sequence_log_probability=sequence_log_probability,
+                mean_token_log_probability=mean_token_log_probability,
+                first_token_probability=first_token_probability,
+                metadata={
+                    "insertion_token_id": self._config.insertion_token_id,
+                    "insertion_position": position,
+                    "occurrence_from_end": self._config.occurrence_from_end,
+                    "reference_embedding_mode": self._config.reference_embedding_mode.value,
+                    "seed": int(seed),
+                    "generation_mode": "greedy",
+                },
+            )
 
     def validate_prompt_contract(self, prompt: str) -> int:
         _model, tokenizer, _lock = self._runtime.generation_components()
