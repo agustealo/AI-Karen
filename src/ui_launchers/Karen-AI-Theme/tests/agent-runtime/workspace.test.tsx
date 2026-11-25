@@ -113,4 +113,66 @@ describe("runtime projection validation", () => {
     expect(reads).toBe(2);
     expect(screen.queryByText(/Decision recorded:/)).toBeNull();
   });
+
+  it("discovers work after an initially empty history on visibility restoration", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    mocks.get.mockImplementation((path: string) => path === "/api/agent-runtime/my-runs"
+      ? Promise.resolve(history(++reads === 1 ? [] : [run])) : fallback(path));
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      render(<AgentsPage />);
+      await screen.findByText("No verified executions match this view.");
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await screen.findByRole("button", { name: /Execution run-1234/ });
+      expect(reads).toBe(2);
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it("does not write a delayed previous-account context to the clipboard", async () => {
+    const context = deferred<unknown>();
+    const fallback = mocks.get.getMockImplementation()!;
+    const original = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/agent-runtime/my-runs") return Promise.resolve(history(mocks.user.user_id === "user-A" ? [run] : []));
+        if (path.endsWith("/" + run.run_id + "/context")) return context.promise;
+        if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+        return fallback(path);
+      });
+      const view = render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "Copy verified context for Karen" }));
+      expect(mocks.get).toHaveBeenCalledWith("/api/agent-runtime/my-runs/" + run.run_id + "/context");
+      mocks.user = { tenant_id: "tenant-B", user_id: "user-B", roles: [] };
+      view.rerender(<AgentsPage />);
+      await screen.findByText("No verified executions match this view.");
+      await act(async () => { context.resolve({ resource_type: "medusa_run", ...run }); });
+      expect(writeText).not.toHaveBeenCalled();
+    } finally {
+      if (original) Object.defineProperty(navigator, "clipboard", original);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
+  it("does not submit a second approval while the first decision is unresolved", async () => {
+    const decision = deferred<unknown>();
+    const fallback = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string) => path === "/api/approvals/" ? Promise.resolve([approval]) : fallback(path));
+    mocks.post.mockReturnValue(decision.promise);
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+    const confirm = screen.getByRole("button", { name: "Confirm approval" });
+    act(() => {
+      confirm.click();
+      confirm.click();
+    });
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    await act(async () => { decision.resolve({ ...approval, status: "approved" }); });
+  });
+
 });
