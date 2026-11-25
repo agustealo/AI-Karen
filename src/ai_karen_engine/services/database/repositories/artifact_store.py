@@ -149,6 +149,26 @@ class ArtifactStore(Repository):
         """Bounded metadata only. Caller supplies authenticated actor identity."""
         return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
+    async def create_owner_folder(
+        self, tenant_id: str, user_id: str, *, name: str,
+        parent_folder_id: Optional[str] = None,
+    ) -> RepositoryResult[ArtifactFolder]:
+        """Create logical metadata for the authenticated owner."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def rename_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        name: str, expected_revision: int,
+    ) -> RepositoryResult[ArtifactFolder]:
+        """Rename with an expected revision, without changing identity."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def resolve_owner_breadcrumbs(
+        self, tenant_id: str, user_id: str, folder_id: str,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        """Return complete bounded root-to-folder ancestry, or fail closed."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
     async def move_owner_folder(
         self, tenant_id: str, user_id: str, folder_id: str, *,
         parent_folder_id: Optional[str], expected_revision: int,

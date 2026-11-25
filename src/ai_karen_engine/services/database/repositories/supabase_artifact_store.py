@@ -153,12 +153,7 @@ class SupabaseArtifactStore(ArtifactStore):
             if not rows or not rows[0]["valid"]:
                 return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
             folders = [
-                ArtifactFolder(
-                    folder_id=str(row["folder_id"]),
-                    parent_folder_id=str(row["parent_folder_id"]) if row["parent_folder_id"] else None,
-                    name=row["name"], revision=row["revision"],
-                    created_at=row["created_at"], updated_at=row["updated_at"],
-                )
+                self._row_to_folder(row)
                 for row in rows if row["folder_id"] is not None
             ]
             page = folders[:limit]
@@ -169,6 +164,123 @@ class SupabaseArtifactStore(ArtifactStore):
             })
         except Exception:
             logger.warning("Artifact folder listing unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @staticmethod
+    def _row_to_folder(row: Any) -> ArtifactFolder:
+        return ArtifactFolder(
+            folder_id=str(row["folder_id"]),
+            parent_folder_id=str(row["parent_folder_id"]) if row["parent_folder_id"] else None,
+            name=row["name"], revision=row["revision"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _valid_folder_name(name: str) -> bool:
+        return (
+            isinstance(name, str) and 1 <= len(name) <= 256
+            and name == name.strip()
+            and not any(ord(ch) < 32 or 127 <= ord(ch) <= 159
+                        or 0xD800 <= ord(ch) <= 0xDFFF for ch in name)
+        )
+
+    async def _write_folder_metadata(
+        self, statement: str, params: Dict[str, Any],
+    ) -> RepositoryResult[ArtifactFolder]:
+        """Shared transaction boundary for internal fixed create/rename SQL."""
+        commit_attempted = False
+        try:
+            async with await self._session() as session:
+                result = await session.execute(text(statement), params)
+                row = result.mappings().one_or_none()
+                if row is None:
+                    return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+                folder = self._row_to_folder(row)
+                commit_attempted = True
+                await session.commit()
+            return RepositoryResult(success=True, data=folder)
+        except Exception as exc:
+            if commit_attempted:
+                logger.warning("Artifact folder metadata commit outcome uncertain")
+                return RepositoryResult(success=False, error="artifact_folder_commit_uncertain")
+            code = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if code in {"23503", "23505", "23514", "40001", "40P01"}:
+                return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+            logger.warning("Artifact folder metadata mutation unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @instrument_repository(operation="create_owner_folder", repository="SupabaseArtifactStore")
+    async def create_owner_folder(
+        self, tenant_id: str, user_id: str, *, name: str,
+        parent_folder_id: Optional[str] = None,
+    ) -> RepositoryResult[ArtifactFolder]:
+        if (not tenant_id or not user_id
+            or not self._valid_folder_ids(tenant_id, user_id, parent_folder_id)
+            or not self._valid_folder_name(name)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._write_folder_metadata("""
+            INSERT INTO public.artifact_folders (tenant_id, owner_user_id, parent_folder_id, name)
+            VALUES (CAST(:tenant AS uuid), CAST(:owner AS uuid), CAST(:parent AS uuid), :name)
+            RETURNING folder_id, parent_folder_id, name, revision, created_at, updated_at
+        """, {"tenant": tenant_id, "owner": user_id, "parent": parent_folder_id, "name": name})
+
+    @instrument_repository(operation="rename_owner_folder", repository="SupabaseArtifactStore")
+    async def rename_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        name: str, expected_revision: int,
+    ) -> RepositoryResult[ArtifactFolder]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id)
+            or not self._valid_folder_name(name)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._write_folder_metadata("""
+            UPDATE public.artifact_folders SET name = :name
+            WHERE tenant_id = CAST(:tenant AS uuid)
+              AND owner_user_id = CAST(:owner AS uuid)
+              AND folder_id = CAST(:folder AS uuid)
+              AND revision = :revision
+            RETURNING folder_id, parent_folder_id, name, revision, created_at, updated_at
+        """, {"tenant": tenant_id, "owner": user_id, "folder": folder_id,
+              "name": name, "revision": expected_revision})
+
+    @instrument_repository(operation="resolve_owner_breadcrumbs", repository="SupabaseArtifactStore")
+    async def resolve_owner_breadcrumbs(
+        self, tenant_id: str, user_id: str, folder_id: str,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        try:
+            async with await self._session() as session:
+                result = await session.execute(text("""
+                    WITH RECURSIVE ancestry AS (
+                        SELECT folder_id, parent_folder_id, name, revision,
+                               created_at, updated_at, 1 AS depth, ARRAY[folder_id] AS visited
+                        FROM public.artifact_folders
+                        WHERE tenant_id = CAST(:tenant AS uuid)
+                          AND owner_user_id = CAST(:owner AS uuid)
+                          AND folder_id = CAST(:folder AS uuid)
+                        UNION ALL
+                        SELECT f.folder_id, f.parent_folder_id, f.name, f.revision,
+                               f.created_at, f.updated_at, a.depth + 1, a.visited || f.folder_id
+                        FROM public.artifact_folders f
+                        JOIN ancestry a ON f.folder_id = a.parent_folder_id
+                        WHERE f.tenant_id = CAST(:tenant AS uuid)
+                          AND f.owner_user_id = CAST(:owner AS uuid)
+                          AND a.depth < 64 AND NOT f.folder_id = ANY(a.visited)
+                    )
+                    SELECT folder_id, parent_folder_id, name, revision, created_at, updated_at
+                    FROM ancestry ORDER BY depth DESC
+                """), {"tenant": tenant_id, "owner": user_id, "folder": folder_id})
+                rows = result.mappings().all()
+            # Never return partial ancestry on cycle, missing parent, or depth cap.
+            if not rows or rows[0]["parent_folder_id"] is not None:
+                return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+            return RepositoryResult(success=True, data=[self._row_to_folder(row) for row in rows])
+        except Exception:
+            logger.warning("Artifact folder ancestry unavailable")
             return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
     @instrument_repository(operation="move_owner_folder", repository="SupabaseArtifactStore")
