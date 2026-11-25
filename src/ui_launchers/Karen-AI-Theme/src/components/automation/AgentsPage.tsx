@@ -145,6 +145,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [pendingApprovalDecision, setPendingApprovalDecision] = useState<{ approvalId: string; decision: "approved" | "rejected" } | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [isLoadingRuns, setIsLoadingRuns] = useState(true);
+  const [runsGeneratedAt, setRunsGeneratedAt] = useState<string | null>(null);
+  const [isRevalidatingRun, setIsRevalidatingRun] = useState(false);
   const [isLoadingApprovals, setIsLoadingApprovals] = useState(true);
   const [catalogError, setCatalogError] = useState("");
   const [runsError, setRunsError] = useState("");
@@ -183,11 +185,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   useEffect(() => {
     if (!selectedRunId || !isAuthenticated) {
       setVerifiedRun(null);
+      setIsRevalidatingRun(false);
       setRunDetailError("");
       return;
     }
     let active = true;
-    setVerifiedRun(null);
+    setIsRevalidatingRun(true);
+    setVerifiedRun((previous) => previous?.run_id === selectedRunId ? previous : null);
     setRunDetailError("");
     // Even an ID from the list is treated as an untrusted lookup key.
     apiClient.get<unknown>(isAdmin
@@ -198,8 +202,11 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         if (active) setVerifiedRun(record);
       })
       .catch((error: unknown) => {
-        if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
-      });
+        if (active) {
+          setVerifiedRun(null);
+          setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
+        }
+      }).finally(() => { if (active) setIsRevalidatingRun(false); });
     return () => { active = false; };
   }, [selectedRunId, isAuthenticated, isAdmin, runListRevision]);
   const visibleRuns = runs.filter((run) => {
@@ -248,6 +255,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     }
     if (!isAuthenticated) {
       setRuns([]);
+      setRunsGeneratedAt(null);
       setHasActiveRunPolling(false);
       setRunsError("");
       setIsLoadingRuns(false);
@@ -259,7 +267,6 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       try {
         do {
           runListRefreshQueuedRef.current = false;
-          setRunsError("");
           try {
             const response = await apiClient.get<unknown>(
               isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
@@ -267,11 +274,16 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             if (!workspaceLive.current) return;
             if (!isAgentRunsResponse(response)) throw new Error("Execution history response does not match the runtime contract.");
             setRuns(response.runs);
+            setRunsGeneratedAt(response.generated_at);
+            setRunsError("");
+            setSelectedRunId((previous) => response.runs.some((run) => run.run_id === previous) ? previous : null);
             setHasActiveRunPolling(response.runs.some((run) =>
               ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
             ));
             setRunListRevision((revision) => revision + 1);
           } catch (error) {
+            if (!workspaceLive.current) return;
+            setRunsGeneratedAt(null);
             setRuns([]);
             setSelectedRunId(null);
             setVerifiedRun(null);
@@ -472,6 +484,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         {isAuthenticated ? (
           <>
             {runsError && <p role="alert" className="rounded-lg border border-destructive/50 p-3 text-sm text-destructive">Run status refresh failed: {runsError}</p>}
+            {runsGeneratedAt && <p className="text-xs text-muted-foreground" role="status">Execution snapshot: {formatTimestamp(runsGeneratedAt)}{isLoadingRuns ? " · Refreshing…" : ""}</p>}
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
               {(["all", "active", "completed", "failed"] as const).map((filter) => (
                 <Button key={filter} type="button" size="sm"
@@ -484,7 +497,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             </div>
             <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)]">
               <div className="space-y-2" aria-label="Execution list">
-                {isLoadingRuns ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
+                {isLoadingRuns && !runsGeneratedAt && !runsError ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
                   visibleRuns.length ? visibleRuns.map((run) => (
                     <button type="button" key={run.run_id}
                       className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
@@ -496,12 +509,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                   )) : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
               </div>
               <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
-                {runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
+                {runsError ? <p className="text-sm text-muted-foreground">Execution details unavailable until history is verified.</p> : runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h4 className="font-semibold">Execution details</h4>
                       <Badge variant={statusVariant(selectedRun.status)}>{selectedRun.status}</Badge>
                     </div>
+                    {(isRevalidatingRun || isLoadingRuns) && <p role="status" className="mt-2 text-xs text-muted-foreground">Revalidating execution status…</p>}
                     <p className="mt-2 text-sm text-muted-foreground">Started {formatTimestamp(selectedRun.started_at)}</p>
                     {selectedRun.completed_at && <p className="mt-1 text-sm text-muted-foreground">Ended {formatTimestamp(selectedRun.completed_at)}</p>}
                     <p className="mt-2 text-sm text-muted-foreground">{selectedRun.status.toLowerCase() === "completed" ? "Execution completed. A saved artifact is not implied by this status." : selectedRun.status.toLowerCase() === "cancelling" ? "Cancellation requested, awaiting confirmed terminal status." : "This status comes from the Medusa run ledger, not a simulated progress estimate."}</p>
@@ -515,14 +529,14 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                       </dl>
                     </details>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {!isAdmin && onDiscussRun && <Button type="button" size="sm" onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
-                      {!isAdmin && <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>}
+                      {!isAdmin && onDiscussRun && <Button type="button" size="sm" disabled={isRevalidatingRun || isLoadingRuns} onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
+                      {!isAdmin && <Button type="button" size="sm" variant="outline" disabled={isRevalidatingRun || isLoadingRuns} onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>}
                       {onAskKaren && <Button type="button" size="sm" variant="outline" onClick={onAskKaren}>Open Karen</Button>}
                     </div>
                     {contextMessage && <p role="status" className="mt-2 text-sm">{contextMessage}</p>}
                     {isAdmin && selectedRun.cancellable && (
                       <Button className="mt-4" variant="destructive" size="sm"
-                        disabled={cancellingRunId === selectedRun.run_id}
+                        disabled={isRevalidatingRun || isLoadingRuns || cancellingRunId !== null}
                         onClick={() => void cancelRun(selectedRun.run_id)}>
                         <CircleStop className="mr-2 h-4 w-4" /> Request cancellation
                       </Button>
@@ -710,13 +724,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Total visible runs</CardDescription>
-                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : runs.length}</CardTitle>
+                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : runs.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Active runs</CardDescription>
-                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : activeRuns.length}</CardTitle>
+                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : activeRuns.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
@@ -727,7 +741,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
               </Card>
             </div>
 
-            {isLoadingRuns ? (
+            {isLoadingRuns && !runsGeneratedAt && !runsError ? (
               <Card>
                 <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
                   <RefreshCw className="h-4 w-4 animate-spin" />
@@ -802,7 +816,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                           type="button"
                           variant="destructive"
                           size="sm"
-                          disabled={cancellingRunId === run.run_id}
+                          disabled={isLoadingRuns || cancellingRunId !== null}
                           onClick={() => void cancelRun(run.run_id)}
                         >
                           <CircleStop className="mr-2 h-4 w-4" />
