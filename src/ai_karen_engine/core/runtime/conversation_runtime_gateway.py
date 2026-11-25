@@ -11,7 +11,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -1231,7 +1231,7 @@ async def read_owned_history_evidence(
     context: ChatExecutionContext,
     *,
     gateway: ConversationRuntimeGateway,
-    ledger: SqlChatRunRepository,
+    ledger_factory: Callable[[], SqlChatRunRepository],
     text_mode: bool,
     include_activity: bool,
 ) -> OwnedHistoryEvidence:
@@ -1258,6 +1258,8 @@ async def read_owned_history_evidence(
                 context, message_limit=501, db_session=session,
             )
             window_has_older = False
+        # Instantiate only after the canonical owner check succeeds.
+        ledger = ledger_factory()
         recovery_run = await ledger.read_recovery_run(**scope, db_session=session)
         attestations = await ledger.completed_replay_attestations(**scope, db_session=session)
         observed_activity = (

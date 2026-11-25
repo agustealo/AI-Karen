@@ -1354,7 +1354,7 @@ async def get_ag_ui_owned_history(
         evidence = await read_owned_history_evidence(
             context,
             gateway=get_conversation_runtime_gateway(),
-            ledger=SqlChatRunRepository(),
+            ledger_factory=SqlChatRunRepository,
             text_mode=text_mode,
             include_activity=getattr(features, "enable_ag_ui_event_journal", False),
         )

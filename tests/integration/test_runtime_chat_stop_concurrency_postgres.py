@@ -75,7 +75,7 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             );
             CREATE TABLE public.messages (
                 message_id uuid PRIMARY KEY,
-                conversation_id uuid NOT NULL REFERENCES public.conversations(conversation_id),
+                conversation_id uuid NOT NULL REFERENCES public.conversations(conversation_id) ON DELETE CASCADE,
                 role text NOT NULL,
                 content text NOT NULL,
                 message_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -813,6 +813,14 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         assert not (await conversations.get_composer_draft(
             draft_thread, tenant_a, user_id=user_a,
         )).success
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.messages WHERE conversation_id=$1",
+            uuid.UUID(draft_thread),
+        ) == 0
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs WHERE conversation_id=$1",
+            uuid.UUID(draft_thread),
+        ) == 0
 
         expired = await worker_a.admit(
             **identity(run_id="run-expired"),
