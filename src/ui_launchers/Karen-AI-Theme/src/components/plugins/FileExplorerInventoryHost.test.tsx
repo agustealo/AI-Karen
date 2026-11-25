@@ -3,7 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FileExplorerInventoryHost, type InventoryConsumer } from './FileExplorerInventoryHost';
+import { FileExplorerInventoryHost, type InventoryConsumer, type FileExplorerInventoryProps } from './FileExplorerInventoryHost';
 
 import { ContentIntelligenceWorkspace } from './ContentIntelligenceWorkspace';
 
@@ -751,5 +751,33 @@ describe('KEXP-003C authenticated selection capability', () => {
     fireEvent.click(screen.getByText('Select all current'));
     expect(screen.getByTestId('selection').textContent).toBe('');
     expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+  });
+});
+
+
+describe('KEXP-003E stale callback isolation', () => {
+  it('ignores previous-page selection, refresh and pagination callbacks', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'first-cursor'))
+      .mockResolvedValueOnce(response(FILE_B, true, 'second-cursor'));
+    render(<FileExplorerInventoryHost mode="selection">{props => {
+      latest = props;
+      return <output>{props.items.map(item => item.name).join(',')}</output>;
+    }}</FileExplorerInventoryHost>);
+    await screen.findByText('alpha.txt');
+    await waitFor(() => expect(latest.loading).toBe(false));
+    const stale = latest;
+    act(() => stale.onNextPage('first-cursor'));
+    await screen.findByText('beta.txt');
+    await waitFor(() => expect(latest.loading).toBe(false));
+    act(() => latest.onSelect([{ source_id: FILE_B, revision: SHA, sha256: SHA, kind: 'file' }]));
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    act(() => {
+      stale.onSelect([]);
+      stale.onRefresh();
+      stale.onNextPage('first-cursor');
+    });
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(2);
   });
 });

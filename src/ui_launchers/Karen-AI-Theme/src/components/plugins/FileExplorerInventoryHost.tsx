@@ -7,7 +7,7 @@
  * no storage credentials and cannot grant read access to selected references.
  * Requests made by an earlier principal or page generation never update state.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
@@ -203,6 +203,11 @@ export function FileExplorerInventoryHost({
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const generationRef = useRef(0);
+  const scopeRef = useRef({ principalKey, authLoading });
+  useLayoutEffect(() => {
+    scopeRef.current = { principalKey, authLoading };
+    return () => { scopeRef.current = { principalKey: '', authLoading: true }; };
+  }, [principalKey, authLoading]);
 
   useEffect(() => {
     // The source is authenticated API truth, never browser-supplied inventory.
@@ -260,7 +265,14 @@ export function FileExplorerInventoryHost({
   const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
   const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
 
+  const callbackGeneration = generationRef.current;
+  const isCurrentCallback = useCallback(() => !scopeRef.current.authLoading &&
+    scopeRef.current.principalKey === principalKey &&
+    generationRef.current === callbackGeneration,
+  [principalKey, callbackGeneration]);
+
   const onSelect = useCallback((references: ExplorerSelection[]) => {
+    if (!isCurrentCallback()) return;
     if (!currentPage || currentPage.generation !== generationRef.current || loading || currentError) {
       setSelectedSourceIds([]);
       return;
@@ -292,10 +304,11 @@ export function FileExplorerInventoryHost({
       accepted.push(item.source_id);
     }
     setSelectedSourceIds(accepted);
-  }, [currentPage, loading, currentError]);
+  }, [currentPage, loading, currentError, isCurrentCallback]);
 
   const onRefresh = useCallback(() => {
-    if (!principalKey) return;
+    if (!principalKey || !isCurrentCallback()) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
@@ -303,13 +316,15 @@ export function FileExplorerInventoryHost({
       cursor: null,
       generation: value.generation + 1,
     }));
-  }, [principalKey]);
+  }, [principalKey, isCurrentCallback]);
 
   const onNextPage = useCallback((cursor: string) => {
     if (
-      !principalKey || !currentPage || loading || currentError ||
+      !isCurrentCallback() || !principalKey || !currentPage ||
+      currentPage.generation !== generationRef.current || loading || currentError ||
       !currentPage.has_more || currentPage.next_cursor !== cursor
     ) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
@@ -317,7 +332,7 @@ export function FileExplorerInventoryHost({
       cursor,
       generation: value.generation + 1,
     }));
-  }, [principalKey, currentPage, loading, currentError]);
+  }, [principalKey, currentPage, loading, currentError, isCurrentCallback]);
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
@@ -364,7 +379,7 @@ export function FileExplorerInventoryHost({
       {mode === 'selection' && onAttach && selectedDraftSources.length > 0 && (
         <button type="button" className="m-2 min-h-11 rounded-lg border border-input px-3 text-sm"
           onClick={() => {
-            if (!currentPage || currentPage.generation !== generationRef.current) return;
+            if (!isCurrentCallback() || !currentPage || currentPage.generation !== generationRef.current) return;
             onAttach(selectedDraftSources);
           }}>
           Attach selected files ({selectedDraftSources.length})
