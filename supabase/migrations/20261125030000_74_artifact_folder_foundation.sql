@@ -26,18 +26,49 @@ CREATE TABLE public.artifact_folders (
 CREATE INDEX idx_artifact_folder_children
     ON public.artifact_folders (tenant_id, owner_user_id, parent_folder_id, name, folder_id);
 
--- Require an existing parent at INSERT time, rather than relying only on
--- statement-end FK checks (which permit cycles in multi-row INSERTs).
--- Parent changes are disabled until governed movement is implemented.
+-- Every folder mutation updates the same owner-scoped fence row. Unlike
+-- advisory locks alone, this forces a serialization failure under a stale
+-- repeatable-read snapshot. Fence rows have the same account lifecycle.
+CREATE TABLE public.artifact_folder_mutation_fences (
+    tenant_id UUID NOT NULL,
+    owner_user_id UUID NOT NULL,
+    generation BIGINT NOT NULL DEFAULT 1,
+    PRIMARY KEY (tenant_id, owner_user_id),
+    FOREIGN KEY (tenant_id, owner_user_id)
+        REFERENCES public.auth_users (tenant_id, user_id) ON DELETE CASCADE
+);
+ALTER TABLE public.artifact_folder_mutation_fences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.artifact_folder_mutation_fences FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON public.artifact_folder_mutation_fences FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE FUNCTION public.guard_artifact_folder_identity() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $$
+DECLARE
+    cycle_found BOOLEAN;
 BEGIN
     IF TG_OP = 'UPDATE' THEN
-        IF ROW(NEW.folder_id, NEW.tenant_id, NEW.owner_user_id, NEW.parent_folder_id)
-            IS DISTINCT FROM ROW(OLD.folder_id, OLD.tenant_id, OLD.owner_user_id, OLD.parent_folder_id) THEN
+        IF ROW(NEW.folder_id, NEW.tenant_id, NEW.owner_user_id, NEW.created_at)
+            IS DISTINCT FROM ROW(OLD.folder_id, OLD.tenant_id, OLD.owner_user_id, OLD.created_at) THEN
             RAISE EXCEPTION 'artifact_folder_identity_immutable' USING ERRCODE = '23514';
         END IF;
-    ELSIF NEW.parent_folder_id IS NOT NULL THEN
+        IF NEW.revision IS DISTINCT FROM OLD.revision THEN
+            RAISE EXCEPTION 'artifact_folder_revision_managed' USING ERRCODE = '23514';
+        END IF;
+        IF ROW(NEW.parent_folder_id, NEW.name) IS NOT DISTINCT FROM ROW(OLD.parent_folder_id, OLD.name) THEN
+            NEW.updated_at := OLD.updated_at;
+            RETURN NEW;
+        END IF;
+        NEW.revision := OLD.revision + 1;
+        NEW.updated_at := clock_timestamp();
+    ELSIF NEW.revision <> 1 THEN
+        RAISE EXCEPTION 'artifact_folder_initial_revision_invalid' USING ERRCODE = '23514';
+    END IF;
+
+    INSERT INTO public.artifact_folder_mutation_fences AS fence (tenant_id, owner_user_id)
+    VALUES (NEW.tenant_id, NEW.owner_user_id)
+    ON CONFLICT (tenant_id, owner_user_id) DO UPDATE SET generation = fence.generation + 1;
+
+    IF NEW.parent_folder_id IS NOT NULL THEN
         IF NOT EXISTS (
             SELECT 1 FROM public.artifact_folders AS p
             WHERE p.folder_id = NEW.parent_folder_id
@@ -45,6 +76,19 @@ BEGIN
               AND p.owner_user_id = NEW.owner_user_id
         ) THEN
             RAISE EXCEPTION 'artifact_folder_parent_unavailable' USING ERRCODE = '23503';
+        END IF;
+        WITH RECURSIVE ancestry(folder_id, parent_folder_id) AS (
+            SELECT f.folder_id, f.parent_folder_id FROM public.artifact_folders f
+            WHERE f.folder_id = NEW.parent_folder_id
+              AND f.tenant_id = NEW.tenant_id AND f.owner_user_id = NEW.owner_user_id
+            UNION
+            SELECT f.folder_id, f.parent_folder_id FROM public.artifact_folders f
+            JOIN ancestry a ON f.folder_id = a.parent_folder_id
+            WHERE f.tenant_id = NEW.tenant_id AND f.owner_user_id = NEW.owner_user_id
+        )
+        SELECT EXISTS (SELECT 1 FROM ancestry WHERE folder_id = NEW.folder_id) INTO cycle_found;
+        IF cycle_found THEN
+            RAISE EXCEPTION 'artifact_folder_cycle' USING ERRCODE = '23514';
         END IF;
     END IF;
     RETURN NEW;
@@ -61,6 +105,30 @@ REVOKE ALL ON public.artifact_folders FROM PUBLIC, anon, authenticated;
 -- until the governed repository and actor-scoped admission are implemented.
 COMMENT ON TABLE public.artifact_folders IS
     'Private logical folder metadata. No governed movement API activated.';
+-- Internal CAS contract. No public API grant. A null result represents a
+-- missing, foreign, or stale source without disclosing its existence.
+CREATE FUNCTION public.move_owned_artifact_folder(
+    p_tenant UUID, p_owner UUID, p_folder UUID, p_parent UUID, p_revision BIGINT
+) RETURNS BIGINT
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $$
+DECLARE
+    resulting_revision BIGINT;
+BEGIN
+    IF p_tenant IS NULL OR p_owner IS NULL OR p_folder IS NULL OR p_revision IS NULL OR p_revision < 1 THEN
+        RAISE EXCEPTION 'artifact_folder_move_invalid' USING ERRCODE = '22023';
+    END IF;
+    UPDATE public.artifact_folders
+    SET parent_folder_id = p_parent
+    WHERE tenant_id = p_tenant AND owner_user_id = p_owner
+      AND folder_id = p_folder AND revision = p_revision
+    RETURNING revision INTO resulting_revision;
+    RETURN resulting_revision;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.move_owned_artifact_folder(UUID, UUID, UUID, UUID, BIGINT)
+    FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON public.artifact_folders FROM service_role;
+
 -- Folder assignment is organization metadata, not a content revision.
 -- Existing rows remain at root. On folder deletion retain the artifact.
 ALTER TABLE public.files

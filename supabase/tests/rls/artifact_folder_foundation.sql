@@ -45,6 +45,39 @@ BEGIN
     END IF;
 END;
 $$;
+-- Exercise the internal CAS contract without exposing an API.
+DO $$
+DECLARE
+    tenant UUID := 'a0000000-0000-4000-8000-000000000001';
+    owner_id UUID := 'b0000000-0000-4000-8000-000000000001';
+    root_id UUID := 'c0000000-0000-4000-8000-000000000001';
+    child_id UUID := 'c0000000-0000-4000-8000-000000000002';
+BEGIN
+    IF public.move_owned_artifact_folder(tenant, owner_id, child_id, NULL, 1) IS DISTINCT FROM 2::bigint THEN
+        RAISE EXCEPTION 'root move did not advance revision';
+    END IF;
+    IF public.move_owned_artifact_folder(tenant, owner_id, child_id, root_id, 1) IS NOT NULL THEN
+        RAISE EXCEPTION 'stale revision accepted';
+    END IF;
+    IF public.move_owned_artifact_folder(tenant, owner_id, child_id, root_id, 2) IS DISTINCT FROM 3::bigint THEN
+        RAISE EXCEPTION 'valid reparent failed';
+    END IF;
+    IF public.move_owned_artifact_folder(tenant, owner_id, child_id, root_id, 3) IS DISTINCT FROM 3::bigint THEN
+        RAISE EXCEPTION 'no-op advanced revision';
+    END IF;
+    BEGIN
+        PERFORM public.move_owned_artifact_folder(tenant, owner_id, root_id, child_id, 1);
+        RAISE EXCEPTION 'descendant move accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    IF public.move_owned_artifact_folder(tenant, 'b0000000-0000-4000-8000-000000000002', child_id, NULL, 3) IS NOT NULL THEN
+        RAISE EXCEPTION 'foreign source disclosed';
+    END IF;
+    IF has_function_privilege('authenticated','public.move_owned_artifact_folder(uuid,uuid,uuid,uuid,bigint)','EXECUTE') THEN
+        RAISE EXCEPTION 'client movement privilege granted';
+    END IF;
+END;
+$$;
 -- Existing artifact identity and storage remain intact across organization changes.
 INSERT INTO public.files(file_id,tenant_id,owner_user_id,name,storage_uri,sha256,folder_id)
 VALUES ('folder-proof-file','a0000000-0000-4000-8000-000000000001','b0000000-0000-4000-8000-000000000001','proof.txt','fixture://proof',repeat('a',64),'c0000000-0000-4000-8000-000000000002'),
