@@ -13,6 +13,8 @@ import os
 import secrets
 import time
 import uuid
+import weakref
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator, Callable
@@ -102,7 +104,7 @@ class Session:
     is_active: bool = True
     metadata: Dict[str, Any] = field(default_factory=dict)
 
-@dataclass(frozen=True, slots=True, repr=False)
+@dataclass(frozen=True, repr=False, eq=False)
 class _IssuedSessionWitness:
     """Issuer-sealed, non-executable session authority."""
 
@@ -917,13 +919,56 @@ class AuthService(BaseService):
         access_token_digest: str,
     ) -> _IssuedSessionWitness:
         """Only canonical successful session validation may invoke issuance."""
-        return _IssuedSessionWitness(
+        witness = _IssuedSessionWitness(
             session_id=session_id, user_id=user_id, tenant_id=tenant_id,
             access_token_digest=access_token_digest,
             mac=self._sign_session_witness(
                 session_id, user_id, tenant_id, access_token_digest,
             ),
         )
+
+        with self._witness_binding_lock():
+            self._witness_bindings()[witness] = (None, None)
+        return witness
+
+    def _witness_binding_lock(self):
+        return self.__dict__.setdefault("_runtime_witness_binding_lock", threading.RLock())
+
+    def _witness_bindings(self):
+        return self.__dict__.setdefault("_runtime_witness_bindings", weakref.WeakKeyDictionary())
+
+    def bind_issued_session_principal(self, witness: object, principal: Any) -> bool:
+        """Register the original ingress principal exactly once."""
+        if not self.is_issued_session_witness(witness):
+            return False
+        if (str(principal.user_id) != witness.user_id
+                or str(principal.tenant_id) != witness.tenant_id):
+            return False
+        with self._witness_binding_lock():
+            bindings = self._witness_bindings()
+            entry = bindings.get(witness)
+            if entry is None:
+                return False
+            if entry[0] is not None:
+                return entry[0]() is principal
+            bindings[witness] = (weakref.ref(principal), None)
+            return True
+
+    def bind_issued_session_execution(
+        self, witness: object, principal: Any, context: Any,
+    ) -> bool:
+        """Claim one execution per ingress witness, without extending lifetimes."""
+        if not self.is_issued_session_witness(witness):
+            return False
+        with self._witness_binding_lock():
+            bindings = self._witness_bindings()
+            entry = bindings.get(witness)
+            if entry is None or entry[0] is None or entry[0]() is not principal:
+                return False
+            if entry[1] is not None:
+                return entry[1]() is context
+            bindings[witness] = (entry[0], weakref.ref(context))
+            return True
 
     def is_issued_session_witness(self, witness: object) -> bool:
         """Reject arbitrary callbacks and tampered or foreign-issued proofs."""

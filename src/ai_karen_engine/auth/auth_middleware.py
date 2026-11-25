@@ -507,7 +507,13 @@ class SecureAuthMiddleware:
         if issue_witness:
             if len(witnesses) != 1 or witnesses[0] is None:
                 raise AuthenticationError("Session witness unavailable", 503)
-            return self._get_user_from_payload(result["payload"], witness=witnesses[0])
+            principal = self._get_user_from_payload(result["payload"], witness=witnesses[0])
+            from ai_karen_engine.auth.auth_service import get_auth_service
+
+            issuer = await get_auth_service()
+            if not issuer.bind_issued_session_principal(witnesses[0], principal):
+                raise AuthenticationError("Session witness unavailable", 503)
+            return principal
         return self._get_user_from_payload(result["payload"])
 
     async def get_current_user(

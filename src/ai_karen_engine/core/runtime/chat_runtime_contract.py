@@ -301,6 +301,8 @@ class ChatExecutionContext:
         from ai_karen_engine.auth.auth_service import get_auth_service
 
         issuer = await get_auth_service()
+        if not issuer.bind_issued_session_execution(grant[1], principal, self):
+            raise PermissionError("runtime_attachment_session_binding_invalid")
         account = await issuer.revalidate_issued_session_witness(grant[1])
         if (
             account is None

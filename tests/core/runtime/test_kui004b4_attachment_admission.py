@@ -125,6 +125,7 @@ async def authority(*, grant=True, bind=True, references=None):
     )
     assert issuer.is_issued_session_witness(witness)
     assert not callable(witness)
+    assert issuer.bind_issued_session_principal(witness, principal)
     principal._runtime_session_witness = (principal, witness)
     policy = RuntimePolicyEnforcer()
     decision = await policy.evaluate(PolicyEvaluationRequest(
@@ -706,3 +707,31 @@ async def test_fabricated_internal_witness_cannot_read_private_documents(
     assert reader.calls == []
     issuer.revalidate_session_identity.assert_not_awaited()
     hostile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_genuine_witness_cannot_transfer_to_reconstructed_principal():
+    request, _, _ = await authority()
+    context = request.context
+    principal = context.authenticated_user
+    witness = vars(principal)["_runtime_session_witness"][1]
+    reconstructed = UserData.from_dict(dict(principal))
+    reconstructed._runtime_session_witness = (reconstructed, witness)
+    context.authenticated_user = reconstructed
+    issuer = await auth_service.get_auth_service()
+    with pytest.raises(PermissionError, match="runtime_attachment_session_binding_invalid"):
+        await context.revalidate_runtime_attachment_session()
+    issuer.revalidate_session_identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_genuine_witness_cannot_authorize_second_execution():
+    request, _, _ = await authority()
+    context = request.context
+    await context.revalidate_runtime_attachment_session()
+    await context.revalidate_runtime_attachment_session()
+    competing = replace(context)
+    with pytest.raises(PermissionError, match="runtime_attachment_session_binding_invalid"):
+        await competing.revalidate_runtime_attachment_session()
+    issuer = await auth_service.get_auth_service()
+    assert issuer.revalidate_session_identity.await_count == 2
