@@ -154,6 +154,19 @@ class FileExplorerRenameFolderRequest(BaseModel):
     expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
 
 
+class FileExplorerDeleteFolderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerDeleteFolderResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder_id: UUID
+    deleted: Literal[True]
+    request_id: str
+    correlation_id: str
+
+
 class FileExplorerMoveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     destination_id: Optional[str] = Field(min_length=36, max_length=36)
@@ -723,6 +736,42 @@ async def move_file_explorer_item(
     except Exception:
         logger.warning("file_explorer_move_unconfirmed", extra=meta)
         raise HTTPException(status_code=503, detail="Move not confirmed; refresh before retrying") from None
+
+
+@router.delete("/file-explorer/folders/{folder_id}", response_model=FileExplorerDeleteFolderResponse)
+async def delete_file_explorer_folder(
+    folder_id: UUID,
+    payload: FileExplorerDeleteFolderRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerDeleteFolderResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_folder_delete", Permission.DATA_DELETE,
+    )
+    try:
+        revision = int(payload.expected_revision)
+        if not 1 <= revision <= 9223372036854775806:
+            raise ValueError("file_explorer_folder_revision_invalid")
+        result = await plugin_service.delete_file_explorer_folder(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            folder_id=str(folder_id), expected_revision=revision,
+        )
+        return FileExplorerDeleteFolderResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Folder deletion denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Folder nonempty, unavailable or revision conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Folder deletion request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_folder_delete_unconfirmed", extra=meta)
+        raise HTTPException(status_code=503, detail="Folder deletion not confirmed; refresh before retrying") from None
 
 
 @router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)

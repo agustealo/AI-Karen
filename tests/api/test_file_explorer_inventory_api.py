@@ -544,3 +544,73 @@ def test_move_requires_explicit_destination_and_lossless_revision():
         ingress.FileExplorerMoveRequest(expected_revision="7")
     with pytest.raises(ValidationError):
         ingress.FileExplorerMoveRequest(destination_id=None, expected_revision=7)
+
+
+@pytest.mark.asyncio
+async def test_empty_folder_delete_requires_delete_permission_and_exact_revision(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "data:write"])
+    args.pop("limit")
+    args.pop("cursor")
+    with pytest.raises(PermissionError):
+        await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=7)
+    policy.evaluate.assert_not_awaited()
+    args["permissions"].append("data:delete")
+    scope = {"operation": "file_explorer.folder.delete", "folder_id": FILE,
+             "expected_revision": 7}
+    policy.evaluate.return_value = PolicyDecision(
+        decision_id="delete-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read", "data:write",
+                              "data:delete", "file_explorer.folder.delete"],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER, "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    repository = Repository()
+    repository.delete_empty_owner_folder = AsyncMock(return_value=SimpleNamespace(
+        success=True, data=True,
+    ))
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=7)
+    assert result["deleted"] is True
+    repository.delete_empty_owner_folder.assert_awaited_once_with(
+        TENANT, OWNER, FILE, expected_revision=7,
+    )
+    assert len(kernel.calls) == 1
+    with pytest.raises(PermissionError):
+        await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=8)
+    assert repository.delete_empty_owner_folder.await_count == 1
+    repository.delete_empty_owner_folder.return_value = SimpleNamespace(
+        success=False, error="artifact_folder_conflict_or_unavailable",
+    )
+    with pytest.raises(FileExplorerFolderConflict):
+        await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=7)
+
+
+@pytest.mark.asyncio
+async def test_folder_delete_route_denies_before_service(monkeypatch):
+    from uuid import UUID
+    seen = []
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda user, permission: seen.append(permission) or False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(delete_file_explorer_folder=AsyncMock())
+    request = Request({"type": "http", "method": "DELETE",
+                       "path": f"/api/plugins/file-explorer/folders/{FILE}", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.delete_file_explorer_folder(
+            folder_id=UUID(FILE), payload=ingress.FileExplorerDeleteFolderRequest(expected_revision="7"),
+            request=request, current_user={"user_id": OWNER, "tenant_id": TENANT},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    assert seen == [ingress.Permission.DATA_DELETE]
+    service.delete_file_explorer_folder.assert_not_awaited()

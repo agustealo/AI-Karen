@@ -40,6 +40,9 @@ class ArtifactRepository(Protocol):
     async def move_owner_artifact(self, tenant_id: str, user_id: str, artifact_id: str, *,
                                   folder_id: str | None, expected_revision: int) -> Any: ...
 
+    async def delete_empty_owner_folder(self, tenant_id: str, user_id: str, folder_id: str, *,
+                                        expected_revision: int) -> Any: ...
+
     async def owner_hierarchy_available(self, tenant_id: str, user_id: str) -> Any: ...
 
     async def list_owner_folders(self, tenant_id: str, user_id: str, **kwargs: Any) -> Any: ...
@@ -329,6 +332,18 @@ class ArtifactSourceAdapter:
             or not 1 <= revision <= 9223372036854775806):
             raise RuntimeError("file_explorer_move_result_invalid")
         return str(revision)
+
+    async def delete_empty_owner_folder(
+        self, *, tenant_id: str, user_id: str, folder_id: str,
+        expected_revision: int,
+    ) -> bool:
+        result = await self._repository.delete_empty_owner_folder(
+            _uuid(tenant_id, "tenant_id"), _uuid(user_id, "user_id"),
+            _uuid(folder_id, "folder_id"), expected_revision=expected_revision,
+        )
+        if self._require_folder_mutation_result(result) is not True:
+            raise RuntimeError("file_explorer_folder_delete_unconfirmed")
+        return True
 
     async def revalidate_owner_reference(
         self,

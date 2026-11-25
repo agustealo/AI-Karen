@@ -50,6 +50,11 @@ class OwnerInventorySource(Protocol):
         destination_id: str | None, expected_revision: int,
     ) -> str: ...
 
+    async def delete_empty_owner_folder(
+        self, *, tenant_id: str, user_id: str, folder_id: str,
+        expected_revision: int,
+    ) -> bool: ...
+
     async def revalidate_owner_reference(
         self, *, tenant_id: str, user_id: str, source_id: str,
         expected_revision: str,
@@ -182,12 +187,15 @@ class FileExplorerInventoryHost:
         scope: dict[str, Any],
     ) -> None:
         self._authorize_owner(context=context, plan=plan)
-        required = {"data:read", "data:write", scope["operation"]}
+        permissions = {"data:read", "data:write"}
+        if scope["operation"] == "file_explorer.folder.delete":
+            permissions.add("data:delete")
+        required = permissions | {scope["operation"]}
         if (not required.issubset(plan.allowed_capabilities)
             or not required.issubset(context.allowed_capabilities)
             or plan.approval_requirements
             or plan.resource_scope != scope
-            or not {"data:read", "data:write"}.issubset(context.audit_context.get("permissions", []))):
+            or not permissions.issubset(context.audit_context.get("permissions", []))):
             raise PermissionError("file_explorer_write_permission_required")
 
     @staticmethod
@@ -306,6 +314,38 @@ class FileExplorerInventoryHost:
         return {"kind": kind, "source_id": source_id, "parent_folder_id": destination_id,
                 "organization_revision": revision, "request_id": context.request_id,
                 "correlation_id": context.correlation_id}
+
+    async def delete_empty_owner_folder(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        folder_id: str, expected_revision: int,
+    ) -> dict[str, Any]:
+        self._authorize_mutation(context=context, plan=plan, scope={
+            "operation": "file_explorer.folder.delete", "folder_id": folder_id,
+            "expected_revision": expected_revision,
+        })
+        if (not _canonical_uuid(folder_id) or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            raise ValueError("file_explorer_folder_delete_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        evidence = {
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "policy_decision_id": context.policy_decision_id, "folder_id": folder_id,
+            "expected_revision": expected_revision,
+        }
+        try:
+            deleted = await self._source.delete_empty_owner_folder(
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                folder_id=folder_id, expected_revision=expected_revision,
+            )
+            if deleted is not True:
+                raise RuntimeError("file_explorer_folder_delete_unconfirmed")
+        except Exception:
+            logger.warning("file_explorer_folder_delete_failed", extra=evidence)
+            raise
+        logger.info("file_explorer_folder_deleted", extra={**evidence, "status": "success"})
+        return {"folder_id": folder_id, "deleted": True,
+                "request_id": context.request_id, "correlation_id": context.correlation_id}
 
     async def revalidate_owner_selection(
         self, *, context: ExtensionExecutionContext,
