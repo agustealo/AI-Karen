@@ -386,7 +386,11 @@ def test_http_chat_converts_runtime_errors_to_failure_status() -> None:
     rejection = source.index('if result.status == ChatExecutionStatus.ERROR:')
     success = source.index('return ChatResponse(', rejection)
     assert rejection < success
-    assert 'status_code=503' in source[rejection:success]
+    error_branch = source[rejection:success]
+    assert 'status_code=409 if uncertain else 503' in error_branch
+    assert 'CHAT_TRANSCRIPT_FINALITY_UNVERIFIED' in error_branch
+    assert '"requires_retry": not uncertain' in error_branch
+    assert 'return JSONResponse(' in error_branch
 
 
 @pytest.mark.parametrize(
