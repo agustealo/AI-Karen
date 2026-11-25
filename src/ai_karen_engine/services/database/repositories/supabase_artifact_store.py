@@ -540,8 +540,23 @@ class SupabaseArtifactStore(ArtifactStore):
             return RepositoryResult(success=False, error=str(exc))
 
     @staticmethod
+    def _normalize_owner_search(search: Optional[str]) -> str:
+        if search is None:
+            return ""
+        if not isinstance(search, str) or len(search) > 160 or any(
+            ord(char) < 32 or 127 <= ord(char) <= 159 or 0xD800 <= ord(char) <= 0xDFFF
+            for char in search
+        ):
+            raise ValueError("artifact_owner_search_invalid")
+        return search.strip()
+
+    @staticmethod
+    def _owner_search_digest(search: str) -> str:
+        return hashlib.sha256(search.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _decode_owner_cursor(
-        cursor: Optional[str], tenant_id: str, user_id: str
+        cursor: Optional[str], tenant_id: str, user_id: str, search: str = ""
     ) -> Optional[tuple[datetime, str]]:
         if cursor is None:
             return None
@@ -553,10 +568,15 @@ class SupabaseArtifactStore(ArtifactStore):
                 (cursor + padding).encode("ascii"), altchars=b"-_", validate=True
             )
             value = json.loads(raw)
+            fields = {"v", "tenant_id", "user_id", "created_at", "file_id"}
+            if search:
+                fields.add("query_sha256")
             if (
                 not isinstance(value, dict)
-                or set(value) != {"v", "tenant_id", "user_id", "created_at", "file_id"}
-                or value["v"] != 1
+                or set(value) != fields
+                or type(value["v"]) is not int
+                or value["v"] != (2 if search else 1)
+                or (search and value["query_sha256"] != SupabaseArtifactStore._owner_search_digest(search))
                 or value["tenant_id"] != tenant_id
                 or value["user_id"] != user_id
                 or not isinstance(value["created_at"], str)
@@ -574,15 +594,17 @@ class SupabaseArtifactStore(ArtifactStore):
 
     @staticmethod
     def _encode_owner_cursor(
-        artifact: Artifact, tenant_id: str, user_id: str
+        artifact: Artifact, tenant_id: str, user_id: str, search: str = ""
     ) -> str:
         payload = {
-            "v": 1,
+            "v": 2 if search else 1,
             "tenant_id": tenant_id,
             "user_id": user_id,
             "created_at": artifact.created_at.isoformat(),
             "file_id": artifact.id,
         }
+        if search:
+            payload["query_sha256"] = SupabaseArtifactStore._owner_search_digest(search)
         return base64.urlsafe_b64encode(
             json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         ).decode("ascii").rstrip("=")
@@ -595,6 +617,7 @@ class SupabaseArtifactStore(ArtifactStore):
         *,
         limit: int = 100,
         cursor: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """Stable, bounded owner-only metadata listing. No storage reads.
 
@@ -613,7 +636,8 @@ class SupabaseArtifactStore(ArtifactStore):
                 or not 1 <= limit <= 200
             ):
                 raise ValueError("artifact_owner_page_scope_invalid")
-            before = self._decode_owner_cursor(cursor, tenant, owner)
+            normalized_search = self._normalize_owner_search(search)
+            before = self._decode_owner_cursor(cursor, tenant, owner, normalized_search)
         except (ValueError, TypeError, AttributeError) as exc:
             return RepositoryResult(
                 success=False, error=f"artifact_owner_page_invalid: {exc}"
@@ -624,6 +648,12 @@ class SupabaseArtifactStore(ArtifactStore):
             "user_id": owner,
             "page_limit": limit + 1,
         }
+        search_clause = ""
+        if normalized_search:
+            # strpos treats wildcard characters literally; the search is a bind
+            # parameter, not SQL syntax. Apply filtering before keyset paging.
+            params["search"] = normalized_search
+            search_clause = "AND strpos(lower(name), lower(:search)) > 0"
         cursor_clause = ""
         if before is not None:
             params["before_created"] = before[0]
@@ -639,6 +669,7 @@ class SupabaseArtifactStore(ArtifactStore):
             WHERE tenant_id = :tenant_id
               AND owner_user_id = :user_id
               AND deleted_at IS NULL
+              {search_clause}
               {cursor_clause}
             ORDER BY created_at DESC, file_id DESC
             LIMIT :page_limit
@@ -650,7 +681,7 @@ class SupabaseArtifactStore(ArtifactStore):
             has_more = len(rows) > limit
             page = [self._row_to_artifact(row) for row in rows[:limit]]
             next_cursor = (
-                self._encode_owner_cursor(page[-1], tenant, owner)
+                self._encode_owner_cursor(page[-1], tenant, owner, normalized_search)
                 if has_more and page else None
             )
             return RepositoryResult(

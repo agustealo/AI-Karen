@@ -120,9 +120,11 @@ class ArtifactStore(Repository):
         *,
         limit: int = 100,
         cursor: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """List only one authenticated owner's active metadata using keyset paging.
 
+        Optional search is a bounded, literal, case-insensitive filename substring.
         The result's metadata carries has_more: bool and next_cursor: str | None.
         Cursors select a position, never confer access. No bytes or storage
         locations are exposed by the explorer projection.
