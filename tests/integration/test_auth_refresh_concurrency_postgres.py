@@ -198,7 +198,12 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
         PostgresConversationRepository,
     )
 
-    engine = create_async_engine(os.environ["AUTH_TEST_DATABASE_URL"], pool_pre_ping=True)
+    from sqlalchemy.engine import make_url
+
+    url = make_url(os.environ["AUTH_TEST_DATABASE_URL"])
+    assert url.database == "karen_auth_test", "requires disposable auth database"
+    assert url.host in {"127.0.0.1", "localhost"}, "requires local PostgreSQL"
+    engine = create_async_engine(url, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tables = [Tenant.__table__, AuthUser.__table__, AuthSession.__table__,
               AuthRefreshTokenHistory.__table__]
@@ -314,6 +319,61 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
                     metadata=dict(common), created_at=datetime.utcnow())
             for role in ("user", "assistant")
         ]
+
+        if invalidation == "rls":
+            from ai_karen_engine.persistence.postgres.transactions import (
+                apply_authenticated_transaction_context,
+            )
+
+            # A single checked-out physical connection must lose its role
+            # and transaction-local identity settings after commit.
+            async with engine.connect() as conn:
+                async with conn.begin():
+                    original_role, backend_pid = (await conn.execute(text(
+                        "SELECT current_user, pg_backend_pid()"
+                    ))).one()
+                    await conn.execute(text(f"SET LOCAL ROLE {actor_role}"))
+                    await apply_authenticated_transaction_context(
+                        conn, tenant_id=str(uuid.uuid4()), user_id=str(user),
+                    )
+                    assert (await conn.execute(text(
+                        "SELECT count(*) FROM auth_users WHERE user_id = :uid"
+                    ), {"uid": user})).scalar_one() == 0
+                async with conn.begin():
+                    reset = (await conn.execute(text(
+                        "SELECT current_user, pg_backend_pid(), "
+                        "NULLIF(current_setting('app.current_tenant_id', true), ''), "
+                        "NULLIF(current_setting('app.tenant_id', true), ''), "
+                        "NULLIF(current_setting('app.current_user_id', true), '')"
+                    ))).one()
+                    assert tuple(reset) == (original_role, backend_pid, None, None, None)
+
+            if target == "transcript":
+                # Retain the real execution witness but change the durable
+                # conversation owner. Tenant RLS alone does not enforce the
+                # same-tenant user boundary.
+                for foreign_tenant, foreign_user in (
+                    (uuid.uuid4(), user), (tenant, uuid.uuid4()),
+                ):
+                    async with factory.begin() as db:
+                        await db.execute(text(
+                            "UPDATE conversations SET tenant_id = :tid, user_id = :uid "
+                            "WHERE conversation_id = :cid"
+                        ), {"tid": foreign_tenant, "uid": foreign_user, "cid": conversation})
+                    try:
+                        denied = await repo.add_completed_turn(*pair, private_execution=context)
+                        assert denied.success is False
+                        assert denied.error == "conversation_not_found_or_tenant_mismatch"
+                        async with factory() as db:
+                            assert (await db.execute(text(
+                                "SELECT count(*) FROM messages WHERE conversation_id = :cid"
+                            ), {"cid": conversation})).scalar_one() == 0
+                    finally:
+                        async with factory.begin() as db:
+                            await db.execute(text(
+                                "UPDATE conversations SET tenant_id = :tid, user_id = :uid "
+                                "WHERE conversation_id = :cid"
+                            ), {"tid": tenant, "uid": user, "cid": conversation})
 
         locked = asyncio.Event()
         release = asyncio.Event()

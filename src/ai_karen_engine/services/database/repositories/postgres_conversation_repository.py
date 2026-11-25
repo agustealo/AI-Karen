@@ -938,6 +938,9 @@ class PostgresConversationRepository(ConversationRepository):
                 async with session.begin():
                     if private_execution is not None:
                         try:
+                            from ai_karen_engine.core.runtime.chat_runtime_contract import (
+                                ChatExecutionContext,
+                            )
                             if (
                                 type(private_execution) is not ChatExecutionContext
                                 or private_execution.tenant_id != user_message.tenant_id
