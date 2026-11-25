@@ -78,6 +78,8 @@ class HotStateWorker(ProjectionWorker):
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            if ok and event_data.get("project_episode_state") is True:
+                ok = await self._project_committed_episode(scope, event_data, assertion_data)
         except Exception as exc:
             logger.exception(
                 "memory.stm_projection.failed",
@@ -102,6 +104,58 @@ class HotStateWorker(ProjectionWorker):
                 },
             )
         return bool(ok)
+
+    async def _project_committed_episode(
+        self, scope: STMScope, event_data: dict[str, Any],
+        assertion_data: dict[str, Any] | None,
+    ) -> bool:
+        """Project only the admitted assertion, never the raw interaction."""
+        from ai_karen_engine.core.memory.episodic import EpisodeFrame
+
+        metadata = (event_data.get("payload") or {}).get("metadata") or {}
+        content = (assertion_data or {}).get("text")
+        if (
+            not isinstance(content, str) or not content.strip()
+            or not event_data.get("event_id")
+            or not event_data.get("source_type")
+            or not event_data.get("source_ref")
+            or (assertion_data or {}).get("event_id") != event_data.get("event_id")
+        ):
+            return False
+        try:
+            frame = EpisodeFrame.from_dict({
+                "episode_group_id": metadata["episode_group_id"],
+                "tenant_id": scope.tenant_id,
+                "user_id": scope.user_id,
+                "session_id": scope.session_id,
+                "started_at": metadata["episode_started_at"],
+                "updated_at": metadata["episode_updated_at"],
+                "goal_key": metadata.get("episode_goal_key"),
+                "project_key": metadata.get("episode_project_key"),
+                "last_text": content,
+                "turn_count": metadata["episode_turn_count"],
+            })
+        except (KeyError, TypeError, ValueError):
+            return False
+        # The recall router checks committed event identity, content and ACL.
+        # Do not write an untagged frame that can bypass source revocation.
+        prior = await self._stm.get_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE)
+        if prior:
+            try:
+                previous = EpisodeFrame.from_dict(prior)
+            except (KeyError, TypeError, ValueError):
+                previous = None
+            if previous is not None and previous.updated_at >= frame.updated_at:
+                return True
+        return await self._stm.put_slot(
+            scope=scope, slot=STMSlot.ACTIVE_EPISODE,
+            value={
+                **frame.to_dict(),
+                "event_id": event_data["event_id"],
+                "source_type": event_data["source_type"],
+                "source_ref": event_data["source_ref"],
+            },
+        )
 
     @classmethod
     def _build_hot_record(

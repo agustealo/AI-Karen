@@ -768,6 +768,7 @@ async def test_private_formation_mutation_boundary(mode, monkeypatch):
     else:
         assert result["persisted"] == 1
         assert len(projector.calls) == 1
+        assert projector.calls[0].get("project_episode_state", False) is (mode == "authorized")
         assert vault.calls[0][1].private_execution is (None if mode == "ordinary" else execution)
     if mode == "ordinary":
         episode_store.save.assert_awaited_once()

@@ -85,6 +85,7 @@ class DerivedProjector(Protocol):
         source_type: str,
         source_ref: str | None,
         metadata: dict[str, Any] | None = None,
+        project_episode_state: bool = False,
     ) -> dict[str, bool]: ...
 
 
@@ -300,6 +301,11 @@ class MemoryFormationService:
                         source_type=receipt.metadata.get("source_type", source_type),
                         source_ref=receipt.metadata.get("source_ref", source_ref),
                         metadata=merged_metadata,
+                        **({"project_episode_state": True} if (
+                            private_execution is not None
+                            and session_id
+                            and not receipt.metadata.get("idempotent_replay")
+                        ) else {}),
                     )
                 except Exception as exc:
                     projection_failures += 1
