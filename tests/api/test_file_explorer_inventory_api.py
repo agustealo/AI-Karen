@@ -718,3 +718,32 @@ async def test_capability_route_denial_precedes_service(monkeypatch):
         )
     assert error.value.status_code == 403
     service.get_file_explorer_capabilities.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_search_is_delegated_with_authenticated_folder_scope(monkeypatch):
+    from uuid import UUID
+
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: True,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(list_file_explorer_owner_page=AsyncMock(return_value={
+        "available": True, "folders": [], "breadcrumbs": [],
+        "has_more": False, "next_folder_id": None,
+        "files": [], "files_has_more": False, "next_file_cursor": None,
+        "request_id": "request", "correlation_id": "correlation",
+    }))
+    request = Request({"type": "http", "method": "GET",
+                       "path": "/api/plugins/file-explorer/hierarchy", "headers": []})
+    await ingress.list_file_explorer_hierarchy(
+        request=request, limit=10, parent_folder_id=UUID(FILE), file_cursor="bound",
+        search="report_%", current_user={"user_id": OWNER, "tenant_id": TENANT,
+                                         "roles": ["user"], "permissions": ["data:read"]},
+        plugin_service=service,
+    )
+    kwargs = service.list_file_explorer_owner_page.await_args.kwargs
+    assert kwargs["search"] == "report_%"
+    assert kwargs["parent_folder_id"] == FILE
+    assert kwargs["file_cursor"] == "bound"
+    assert kwargs["user_id"] == OWNER and kwargs["tenant_id"] == TENANT

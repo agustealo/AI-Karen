@@ -934,9 +934,31 @@ class SupabaseArtifactStore(ArtifactStore):
             return RepositoryResult(success=False, error=str(exc))
 
     @staticmethod
+    def _normalize_owner_search(search: Optional[str]) -> str:
+        if search is None:
+            return ""
+        if not isinstance(search, str) or len(search) > 160 or any(
+            ord(char) < 32 or 127 <= ord(char) <= 159 or 0xD800 <= ord(char) <= 0xDFFF
+            for char in search
+        ):
+            raise ValueError("artifact_owner_search_invalid")
+        return search.strip()
+
+    @staticmethod
+    def _owner_cursor_version(folder_scoped: bool, search: str) -> int:
+        # Preserve unfiltered v1 (flat) and v2 (folder). Searched pages
+        # have separate versions so no query cursor can cross scope.
+        return (3 if search else 1) + int(folder_scoped)
+
+    @staticmethod
+    def _owner_search_digest(search: str) -> str:
+        return hashlib.sha256(search.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _decode_owner_cursor(
         cursor: Optional[str], tenant_id: str, user_id: str,
         *, folder_scoped: bool = False, folder_id: Optional[str] = None,
+        search: str = "",
     ) -> Optional[tuple[datetime, str]]:
         if cursor is None:
             return None
@@ -951,11 +973,14 @@ class SupabaseArtifactStore(ArtifactStore):
             keys = {"v", "tenant_id", "user_id", "created_at", "file_id"}
             if folder_scoped:
                 keys.add("folder_id")
+            if search:
+                keys.add("query_sha256")
             if (
                 not isinstance(value, dict)
                 or set(value) != keys
                 or type(value["v"]) is not int
-                or value["v"] != (2 if folder_scoped else 1)
+                or value["v"] != SupabaseArtifactStore._owner_cursor_version(folder_scoped, search)
+                or (search and value["query_sha256"] != SupabaseArtifactStore._owner_search_digest(search))
                 or (folder_scoped and value["folder_id"] != folder_id)
                 or value["tenant_id"] != tenant_id
                 or value["user_id"] != user_id
@@ -976,9 +1001,10 @@ class SupabaseArtifactStore(ArtifactStore):
     def _encode_owner_cursor(
         artifact: Artifact, tenant_id: str, user_id: str,
         *, folder_scoped: bool = False, folder_id: Optional[str] = None,
+        search: str = "",
     ) -> str:
         payload = {
-            "v": 2 if folder_scoped else 1,
+            "v": SupabaseArtifactStore._owner_cursor_version(folder_scoped, search),
             "tenant_id": tenant_id,
             "user_id": user_id,
             "created_at": artifact.created_at.isoformat(),
@@ -986,6 +1012,8 @@ class SupabaseArtifactStore(ArtifactStore):
         }
         if folder_scoped:
             payload["folder_id"] = folder_id
+        if search:
+            payload["query_sha256"] = SupabaseArtifactStore._owner_search_digest(search)
         return base64.urlsafe_b64encode(
             json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         ).decode("ascii").rstrip("=")
@@ -1000,6 +1028,7 @@ class SupabaseArtifactStore(ArtifactStore):
         cursor: Optional[str] = None,
         folder_scoped: bool = False,
         folder_id: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """Stable, bounded owner-only metadata listing. No storage reads.
 
@@ -1021,8 +1050,10 @@ class SupabaseArtifactStore(ArtifactStore):
                 or not 1 <= limit <= 200
             ):
                 raise ValueError("artifact_owner_page_scope_invalid")
+            normalized_search = self._normalize_owner_search(search)
             before = self._decode_owner_cursor(
-                cursor, tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id
+                cursor, tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id,
+                search=normalized_search,
             )
         except (ValueError, TypeError, AttributeError) as exc:
             return RepositoryResult(
@@ -1042,6 +1073,12 @@ class SupabaseArtifactStore(ArtifactStore):
                 "AND (created_at < :before_created OR "
                 "(created_at = :before_created AND file_id < :before_id))"
             )
+        search_clause = ""
+        if normalized_search:
+            # strpos treats SQL wildcard characters literally. Filter before
+            # keyset paging, without changing ownership or active predicates.
+            params["search"] = normalized_search
+            search_clause = "AND strpos(lower(name), lower(:search)) > 0"
         folder_clause = ""
         if folder_scoped:
             params["folder_id"] = folder_id
@@ -1055,6 +1092,7 @@ class SupabaseArtifactStore(ArtifactStore):
               AND owner_user_id = :user_id
               AND deleted_at IS NULL
               {folder_clause}
+              {search_clause}
               {cursor_clause}
             ORDER BY created_at DESC, file_id DESC
             LIMIT :page_limit
@@ -1082,7 +1120,8 @@ class SupabaseArtifactStore(ArtifactStore):
             page = [self._row_to_artifact(row) for row in rows[:limit]]
             next_cursor = (
                 self._encode_owner_cursor(
-                    page[-1], tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id
+                    page[-1], tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id,
+                    search=normalized_search,
                 )
                 if has_more and page else None
             )

@@ -136,10 +136,12 @@ class ArtifactStore(Repository):
         cursor: Optional[str] = None,
         folder_scoped: bool = False,
         folder_id: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """List only one authenticated owner's active metadata using keyset paging.
 
         The result's metadata carries has_more: bool and next_cursor: str | None.
+        Search is a bounded literal case-insensitive filename substring.
         folder_scoped=False preserves flat inventory; True selects root (None)
         or one folder. Cursors select a position, never confer access. No bytes or storage
         locations are exposed by the explorer projection.

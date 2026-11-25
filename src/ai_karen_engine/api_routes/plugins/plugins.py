@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -570,6 +570,7 @@ async def list_file_explorer_inventory(
     cursor: Optional[str] = Query(None, min_length=1, max_length=768),
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
+    search: Annotated[Optional[str], Query(max_length=160)] = None,
 ) -> FileExplorerInventoryResponse:
     """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
     tenant_id, user_id, meta = _file_explorer_read_scope(
@@ -585,6 +586,7 @@ async def list_file_explorer_inventory(
             correlation_id=meta["correlation_id"],
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         return FileExplorerInventoryResponse.model_validate(page)
     except PermissionError:
@@ -640,6 +642,7 @@ async def list_file_explorer_hierarchy(
     file_cursor: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
+    search: Annotated[Optional[str], Query(max_length=160)] = None,
 ) -> FileExplorerHierarchyResponse:
     tenant_id, user_id, meta = _file_explorer_read_scope(
         request, current_user, "file_explorer_owner_hierarchy",
@@ -656,6 +659,7 @@ async def list_file_explorer_hierarchy(
             parent_folder_id=str(parent_folder_id) if parent_folder_id else None,
             after_folder_id=str(after_folder_id) if after_folder_id else None,
             file_cursor=file_cursor,
+            **({"search": search} if search is not None else {}),
         )
         return FileExplorerHierarchyResponse.model_validate(page)
     except PermissionError:
@@ -816,6 +820,7 @@ async def list_content_inventory(
     cursor: Optional[str] = Query(None, min_length=1, max_length=768),
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
+    search: Annotated[Optional[str], Query(max_length=160)] = None,
 ) -> FileExplorerInventoryResponse:
     """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
     user_id = str(current_user.get("user_id") or "").strip()
@@ -854,6 +859,7 @@ async def list_content_inventory(
             correlation_id=meta["correlation_id"],
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         return FileExplorerInventoryResponse.model_validate(page)
     except PermissionError:

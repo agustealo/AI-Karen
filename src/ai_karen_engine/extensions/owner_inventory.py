@@ -24,6 +24,7 @@ class ArtifactRepository(Protocol):
         cursor: str | None = None,
         folder_scoped: bool = False,
         folder_id: str | None = None,
+        search: str | None = None,
     ) -> Any: ...
 
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> Any: ...
@@ -121,6 +122,7 @@ class ArtifactSourceAdapter:
         cursor: str | None = None,
         folder_scoped: bool = False,
         folder_id: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]:
         """Return an owner-authorized metadata page, never an implicit grant."""
         tenant_id = _uuid(tenant_id, "tenant_id")
@@ -134,10 +136,18 @@ class ArtifactSourceAdapter:
         options: dict[str, Any] = {"limit": limit, "cursor": cursor}
         if folder_scoped:
             options.update(folder_scoped=True, folder_id=folder_id)
+        if search is not None:
+            options["search"] = search
         response = await self._repository.list_owner_artifacts_page(
             tenant_id, user_id, **options
         )
         if not getattr(response, "success", False):
+            error = getattr(response, "error", None)
+            if isinstance(error, str) and error in {
+                "artifact_owner_page_invalid: artifact_owner_search_invalid",
+                "artifact_owner_page_invalid: artifact_owner_cursor_invalid",
+            }:
+                raise ValueError("file_explorer_search_or_cursor_invalid")
             raise RuntimeError("file_explorer_artifact_list_unavailable")
         artifacts = getattr(response, "data", None)
         metadata = getattr(response, "metadata", None)
@@ -215,6 +225,7 @@ class ArtifactSourceAdapter:
         self, *, tenant_id: str, user_id: str, limit: int,
         parent_folder_id: str | None, after_folder_id: str | None,
         file_cursor: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]:
         """Project separate bounded folder and file pages for one location."""
         tenant_id = _uuid(tenant_id, "tenant_id")
@@ -262,6 +273,7 @@ class ArtifactSourceAdapter:
         file_page = await self.list_owner_sources_page(
             tenant_id=tenant_id, user_id=user_id, limit=limit, cursor=file_cursor,
             folder_scoped=True, folder_id=parent_folder_id,
+            **({"search": search} if search is not None else {}),
         )
         next_file_cursor = file_page["next_cursor"]
         if file_page["has_more"] and (

@@ -26,7 +26,8 @@ _RESERVED_SCOPE = frozenset({"file_explorer_grant", "file_explorer_entries"})
 
 class OwnerInventorySource(Protocol):
     async def list_owner_sources_page(
-        self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None
+        self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None,
+        search: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def owner_hierarchy_capability(
@@ -37,6 +38,7 @@ class OwnerInventorySource(Protocol):
         self, *, tenant_id: str, user_id: str, limit: int,
         parent_folder_id: str | None, after_folder_id: str | None,
         file_cursor: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def create_owner_folder(
@@ -161,6 +163,7 @@ class FileExplorerInventoryHost:
         self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
         limit: int, parent_folder_id: str | None, after_folder_id: str | None,
         file_cursor: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]:
         self._authorize_owner(context=context, plan=plan)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
@@ -177,6 +180,7 @@ class FileExplorerInventoryHost:
             tenant_id=context.tenant_id, user_id=context.user_id, limit=limit,
             parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
             file_cursor=file_cursor,
+            **({"search": search} if search is not None else {}),
         )
         logger.info("file_explorer_hierarchy_page", extra={
             "request_id": context.request_id, "correlation_id": context.correlation_id,
@@ -425,6 +429,7 @@ class FileExplorerInventoryHost:
         plan: AuthorizedExecutionPlan,
         limit: int = 100,
         cursor: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]:
         self._authorize_owner(context=context, plan=plan)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
@@ -439,6 +444,7 @@ class FileExplorerInventoryHost:
             user_id=context.user_id,
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         if not isinstance(page, dict):
             raise RuntimeError("file_explorer_source_page_invalid")

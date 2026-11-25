@@ -388,6 +388,7 @@ class PluginService:
         parent_folder_id: Optional[str] = None,
         after_folder_id: Optional[str] = None,
         file_cursor: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Authorize a fresh read through RuntimePolicy and the canonical kernel.
 
@@ -412,12 +413,14 @@ class PluginService:
                 context=context, plan=plan, limit=limit,
                 parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
                 file_cursor=file_cursor,
+                **({"search": search} if search is not None else {}),
             )
         return await host.list_owner_page(
             context=context,
             plan=plan,
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
 
     async def _authorize_content_owner_access(
@@ -471,6 +474,7 @@ class PluginService:
         self, *, user_id: str, tenant_id: str, roles: List[str],
         permissions: List[str], request_id: str, correlation_id: str,
         limit: int = 100, cursor: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Read metadata independently of File Explorer lifecycle state."""
         from ai_karen_engine.database.factory import get_database_client
@@ -507,6 +511,7 @@ class PluginService:
         ).create_artifact_store()
         page = await ArtifactSourceAdapter(repository).list_owner_sources_page(
             tenant_id=tenant_id, user_id=user_id, limit=limit, cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         logger.info("content_owner_inventory_page", extra={
             "request_id": request_id, "correlation_id": correlation_id,
