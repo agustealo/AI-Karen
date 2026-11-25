@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -18,7 +19,8 @@ describe("AgentsPage canonical Medusa boundary", () => {
   it("surfaces real run-level control instead of fake agent daemon controls", () => {
     expect(source).toContain('"/api/admin/agents/runs?include_terminal=true"');
     expect(source).toContain("/api/admin/agents/runs/");
-    expect(source).toContain("Cancel run");
+    expect(source).toContain("Request cancellation");
+    expect(source).not.toContain(">Cancel run<");
     expect(source).not.toContain("terminate");
     expect(source).not.toContain("Delete agent");
     expect(source).not.toContain("Create agent");
@@ -48,7 +50,8 @@ describe("Agent Runtime task-first UI contract", () => {
     expect(source).toContain("/api/agent-runtime/my-runs");
     expect(source).toContain("Only your verified Medusa runs appear here.");
     expect(source).toContain("Request cancellation");
-    expect(source).toContain("Cancellation requested for");
+    expect(source).toContain("Cancellation endpoint responded for");
+    expect(source).toContain("Cancellation outcome could not be verified.");
   });
 });
 
@@ -57,8 +60,8 @@ describe("Agent Runtime governed approvals", () => {
     expect(source).toContain('"/api/approvals/"');
     expect(source).toContain("/api/approvals/\u0024{encodeURIComponent(approvalId)}/decision");
     expect(source).toContain('data-testid="agent-runtime-approvals"');
-    expect(source).toContain("Approve");
-    expect(source).toContain("Reject");
+    expect(source).toContain("Review approval");
+    expect(source).toContain("Review rejection");
     expect(source).toContain("A decision alone does not execute an action.");
     expect(source).toContain("Karen must still revalidate and resume the original request.");
   });
@@ -100,5 +103,38 @@ describe("Agent Runtime discovery contract", () => {
     expect(source).not.toContain("{agent.description}");
     expect(source).not.toContain("{agent.version}");
     expect(source).toContain("not exposed by this discovery endpoint");
+  });
+});
+
+
+describe("Agent Runtime truthful availability states", () => {
+  it("distinguishes initial loading and retrieval errors from empty execution history", () => {
+    expect(source).toContain("const [isLoadingRuns, setIsLoadingRuns] = useState(true)");
+    expect(source).toContain("Execution history is unavailable. Refresh runtime to try again.");
+    expect(source).toContain("No work is currently in progress.");
+    expect(source).toContain("No completed executions are recorded.");
+  });
+
+  it("does not present unavailable metrics as zero or an unverified approval inbox as empty", () => {
+    expect(source).toContain("const [isLoadingApprovals, setIsLoadingApprovals] = useState(true)");
+    expect(source).toContain("Loading approval requests…");
+    expect(source).toContain("Approval requests are unavailable. Refresh runtime to try again.");
+    expect(source).not.toContain("catalog?.total ?? 0");
+  });
+});
+
+
+describe("Agent Runtime execution scope isolation", () => {
+  it("defaults administrators to personal work and requires explicit tenant selection", () => {
+    expect(source).toContain('useState<"personal" | "tenant">("personal")');
+    expect(source).toContain('const effectiveScope = canAdminister ? scope : "personal"');
+    expect(source).toContain('onClick={() => setScope("tenant")}');
+    expect(source).toContain('tenantScope && isAuthenticated');
+  });
+
+  it("remounts runtime state when identity or execution scope changes", () => {
+    expect(source).toContain('user?.tenant_id, user?.user_id');
+    expect(source).toContain('<ScopedAgentsPage key={identity}');
+    expect(source).toContain('<AgentRuntimeWorkspace key={effectiveScope}');
   });
 });
