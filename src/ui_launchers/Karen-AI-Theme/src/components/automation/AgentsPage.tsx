@@ -152,6 +152,9 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [cancellationError, setCancellationError] = useState("");
+  const [cancellationUncertain, setCancellationUncertain] = useState(false);
+  const cancellationUncertainRef = useRef(false);
+  const cancellationRevision = useRef(0);
   const [approvalDecisionError, setApprovalDecisionError] = useState("");
   const [approvalDecisionUncertain, setApprovalDecisionUncertain] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
@@ -271,6 +274,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         do {
           runListRefreshQueuedRef.current = false;
           try {
+            const readCancellationRevision = cancellationRevision.current;
             const response = await apiClient.get<unknown>(
               isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
             );
@@ -279,6 +283,11 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             setRuns(response.runs);
             setRunsGeneratedAt(response.generated_at);
             setRunsError("");
+            if (!cancellationInFlightRef.current && readCancellationRevision === cancellationRevision.current) {
+              cancellationUncertainRef.current = false;
+              setCancellationUncertain(false);
+              setCancellationError("");
+            }
             setSelectedRunId((previous) => response.runs.some((run) => run.run_id === previous) ? previous : null);
             setHasActiveRunPolling(response.runs.some((run) =>
               ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
@@ -336,8 +345,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     }
   }, [isAuthenticated, isAdmin]);
 
-  const loadApprovals = useCallback(async () => {
-    if (!workspaceLive.current) return;
+  const loadApprovals = useCallback(async (afterDecision = false) => {
+    if (!workspaceLive.current || (approvalDecisionInFlightRef.current && !afterDecision)) return;
     const revision = ++approvalReadRevision.current;
     if (!isAuthenticated) {
       setApprovals([]);
@@ -354,6 +363,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       setApprovals(records);
       setApprovalsError("");
       setApprovalDecisionUncertain(false);
+      setApprovalDecisionError("");
     } catch (error) {
       if (!workspaceLive.current || revision !== approvalReadRevision.current) return;
       setApprovals([]);
@@ -376,12 +386,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
     if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError || approvalDecisionUncertain) return;
     const approval = approvals.find((item) => item.approval_id === approvalId);
-    if (!approval || Date.parse(approval.expires_at) <= Date.now()) {
+    if (!approval || approval.status !== "pending" || Date.parse(approval.expires_at) <= Date.now()) {
       setApprovalDecisionError("This approval is unavailable or expired. Refresh the list before deciding.");
       setPendingApprovalDecision(null);
       return;
     }
     approvalDecisionInFlightRef.current = true;
+    approvalReadRevision.current += 1;
     setDecidingApprovalId(approvalId);
     setPendingApprovalDecision(null);
     setApprovalDecisionError("");
@@ -397,7 +408,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
           ? `Decision recorded: ${decision}. Karen must still revalidate and resume the original request.`
           : `Approval status: ${result.status}. No action has been executed by this decision.`,
       );
-      await loadApprovals();
+      await loadApprovals(true);
     } catch (error) {
       if (!workspaceLive.current) return;
       setApprovalDecisionUncertain(true);
@@ -420,8 +431,9 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
 
   const cancelRun = useCallback(
     async (runId: string) => {
-      if (!workspaceLive.current || !isAdmin || cancellationInFlightRef.current) return;
+      if (!workspaceLive.current || !isAdmin || cancellationInFlightRef.current || cancellationUncertainRef.current || isLoadingRuns || runsError || !runs.some((run) => run.run_id === runId && run.cancellable === true)) return;
       cancellationInFlightRef.current = true;
+      cancellationRevision.current += 1;
 
       setCancellingRunId(runId);
       setActionMessage("");
@@ -438,13 +450,16 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         await loadRuns(true);
       } catch (error) {
         if (!workspaceLive.current) return;
+        cancellationRevision.current += 1;
+        cancellationUncertainRef.current = true;
+        setCancellationUncertain(true);
         setCancellationError("Cancellation outcome could not be verified. Refresh to inspect current execution status.");
       } finally {
         cancellationInFlightRef.current = false;
         setCancellingRunId(null);
       }
     },
-    [isAdmin, loadRuns],
+    [isAdmin, loadRuns, isLoadingRuns, runsError, runs],
   );
 
   if (isAuthLoading) {
@@ -551,7 +566,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                     {contextMessage && <p role="status" className="mt-2 text-sm">{contextMessage}</p>}
                     {isAdmin && selectedRun.cancellable && (
                       <Button className="mt-4" variant="destructive" size="sm"
-                        disabled={isRevalidatingRun || isLoadingRuns || cancellingRunId !== null}
+                        disabled={isRevalidatingRun || isLoadingRuns || cancellationUncertain || cancellingRunId !== null}
                         onClick={() => void cancelRun(selectedRun.run_id)}>
                         <CircleStop className="mr-2 h-4 w-4" /> Request cancellation
                       </Button>
@@ -832,7 +847,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                           type="button"
                           variant="destructive"
                           size="sm"
-                          disabled={isLoadingRuns || cancellingRunId !== null}
+                          disabled={isLoadingRuns || cancellationUncertain || cancellingRunId !== null}
                           onClick={() => void cancelRun(run.run_id)}
                         >
                           <CircleStop className="mr-2 h-4 w-4" />
