@@ -293,20 +293,44 @@ class SupabaseArtifactStore(ArtifactStore):
             or type(expected_revision) is not int
             or not 1 <= expected_revision <= 9223372036854775806):
             return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._commit_organization_revision("""
+            SELECT public.move_owned_artifact_folder(
+                CAST(:tenant AS uuid), CAST(:owner AS uuid),
+                CAST(:folder AS uuid), CAST(:parent AS uuid),
+                CAST(:revision AS bigint)
+            )
+        """, {"tenant": tenant_id, "owner": user_id, "folder": folder_id,
+              "parent": parent_folder_id, "revision": expected_revision}, expected_revision)
+
+    @instrument_repository(operation="move_owner_artifact", repository="SupabaseArtifactStore")
+    async def move_owner_artifact(
+        self, tenant_id: str, user_id: str, artifact_id: str, *,
+        folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        if (not tenant_id or not user_id or not artifact_id
+            or not self._valid_folder_ids(tenant_id, user_id, artifact_id, folder_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._commit_organization_revision("""
+            UPDATE public.files SET folder_id = CAST(:folder AS uuid)
+            WHERE tenant_id = CAST(:tenant AS uuid)
+              AND owner_user_id = CAST(:owner AS uuid)
+              AND file_id = :artifact AND deleted_at IS NULL
+              AND organization_revision = :revision
+            RETURNING organization_revision
+        """, {"tenant": tenant_id, "owner": user_id, "artifact": artifact_id,
+              "folder": folder_id, "revision": expected_revision}, expected_revision)
+
+    async def _commit_organization_revision(
+        self, statement: str, params: Dict[str, Any], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        """Shared CAS transaction boundary for folder and artifact movement."""
         commit_attempted = False
         try:
             async with await self._session() as session:
-                result = await session.execute(text("""
-                    SELECT public.move_owned_artifact_folder(
-                        CAST(:tenant AS uuid), CAST(:owner AS uuid),
-                        CAST(:folder AS uuid), CAST(:parent AS uuid),
-                        CAST(:revision AS bigint)
-                    )
-                """), {
-                    "tenant": tenant_id, "owner": user_id, "folder": folder_id,
-                    "parent": parent_folder_id, "revision": expected_revision,
-                })
-                revision = result.scalar_one()
+                result = await session.execute(text(statement), params)
+                revision = result.scalar_one_or_none()
                 if revision is None:
                     return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
                 if type(revision) is not int or revision not in (expected_revision, expected_revision + 1):

@@ -176,6 +176,13 @@ class ArtifactStore(Repository):
         """Compare-and-swap movement; success returns committed revision."""
         return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
+    async def move_owner_artifact(
+        self, tenant_id: str, user_id: str, artifact_id: str, *,
+        folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        """Move active metadata only; return the committed organization revision."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
     @abstractmethod
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
         """Delete an artifact (metadata + bytes)."""
