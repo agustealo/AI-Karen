@@ -731,3 +731,44 @@ async def test_uncertain_commit_leaves_durable_finality_unchanged() -> None:
     assert events[-1].metadata["error_code"] == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
     assert events[-1].metadata["requires_retry"] is False
     assert repo.finalized == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["error", "gated", "not_persisted"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_failure_terminal_waits_for_strict_upstream_cleanup(kind, cleanup_fails):
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-cleanup-before-failure")
+    observations = []
+
+    async def upstream():
+        try:
+            if kind == "error":
+                yield ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content="Provider error",
+                    correlation_id=CORRELATION_ID,
+                )
+            else:
+                terminal = completed()
+                terminal.metadata["transcript_persistence_status"] = "not_persisted"
+                if kind == "gated":
+                    terminal.metadata["status"] = "gate"
+                yield terminal
+        finally:
+            observations.append(list(repo.finalized))
+            if cleanup_fails:
+                raise RuntimeError("upstream_cleanup_failed")
+
+    stream = coordinator.stream(upstream(), lease=lease)
+    if cleanup_fails:
+        with pytest.raises(RuntimeError, match="upstream_cleanup_failed"):
+            await anext(stream)
+        assert repo.finalized == []
+    else:
+        assert (await anext(stream)).type == ChatStreamEventType.ERROR
+        assert len(repo.finalized) == 1
+        assert repo.finalized[0][1] == "failed"
+    await stream.aclose()
+    assert observations == [[]]
