@@ -464,8 +464,8 @@ async def _post_chat_completions(
             f"provider_connection_error:{endpoint.provider_id}"
         ) from None
     try:
-        body = json.loads(raw)
-    except (ValueError, UnicodeError, RecursionError):
+        body = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
         raise ProviderExecutionError("provider_invalid_response_object") from None
     if not isinstance(body, dict):
         raise ProviderExecutionError("provider_invalid_response_object")

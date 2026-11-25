@@ -481,7 +481,7 @@ def test_sync_runtime_ignores_ambient_proxy_environment(monkeypatch):
 
     class Opener:
         def open(self, request, timeout):
-            seen.append((str(request.url), timeout))
+            seen.append((request.full_url, timeout))
             return object()
 
     def guarded_builder(*handlers):

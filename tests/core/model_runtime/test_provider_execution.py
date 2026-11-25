@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import httpx
 
+import httpx
 import pytest
 
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
