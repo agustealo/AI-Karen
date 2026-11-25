@@ -79,9 +79,9 @@ BEGIN
 END;
 $$;
 -- Existing artifact identity and storage remain intact across organization changes.
-INSERT INTO public.files(file_id,tenant_id,owner_user_id,name,storage_uri,sha256,folder_id)
-VALUES ('folder-proof-file','a0000000-0000-4000-8000-000000000001','b0000000-0000-4000-8000-000000000001','proof.txt','fixture://proof',repeat('a',64),'c0000000-0000-4000-8000-000000000002'),
-('folder-proof-foreign','a0000000-0000-4000-8000-000000000001','b0000000-0000-4000-8000-000000000002','foreign.txt','fixture://foreign',repeat('b',64),NULL);
+INSERT INTO public.files(file_id,tenant_id,owner_user_id,name,mime_type,bytes,storage_uri,sha256,folder_id)
+VALUES ('folder-proof-file','a0000000-0000-4000-8000-000000000001','b0000000-0000-4000-8000-000000000001','proof.txt','text/plain',42,'fixture://proof',repeat('a',64),'c0000000-0000-4000-8000-000000000002'),
+('folder-proof-foreign','a0000000-0000-4000-8000-000000000001','b0000000-0000-4000-8000-000000000002','foreign.txt','text/plain',42,'fixture://foreign',repeat('b',64),NULL);
 DO $$ BEGIN
     BEGIN
         UPDATE public.files SET folder_id='c0000000-0000-4000-8000-000000000001'
