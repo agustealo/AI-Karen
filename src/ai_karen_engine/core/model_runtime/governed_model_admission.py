@@ -208,6 +208,12 @@ class GovernedToolModelAdmission:
         or caller cancellation suppresses the result, not the running thread.
         Never abandon an executor future or claim remote/device cessation.
         """
+        return await self._run_owned_blocking(function)
+
+    async def _run_owned_blocking(
+        self, function: Callable[[Callable[[], None]], _T], /,
+    ) -> _T:
+        """Shared worker owner; callers establish admission before entering."""
         async with self.admitted_execution_deadline() as deadline:
             loop = asyncio.get_running_loop()
             context = copy_context()
@@ -242,6 +248,56 @@ class GovernedToolModelAdmission:
                 if not worker.cancelled():
                     worker.exception()  # observe a late failure without logging payloads
                 raise
+
+    async def run_native_attempt_sequence(
+        self,
+        endpoint: ProviderEndpoint,
+        *,
+        model: str,
+        function: Callable[[Callable[[], None], Callable[[], None]], _T],
+        on_reserved: Callable[[], None] | None = None,
+    ) -> _T:
+        """Own a native sequence whose trusted worker reserves every attempt.
+
+        The worker must call reserve_attempt immediately before each native
+        dispatch. Reservations execute on the original event loop and meter,
+        not a new thread-local loop. The callback is valid only inside this
+        worker invocation; it is not a grant or a reusable transport receipt.
+        Preparation and cancellation before an attempt do not charge quota.
+        A successful reservation is never refunded, including on failure.
+        """
+        self.require_native_generation(endpoint, model=model)
+        if not await self.meter.check_duration():
+            raise RuntimeError("governed_model_execution_deadline_exhausted")
+        loop = asyncio.get_running_loop()
+
+        def invoke(checkpoint: Callable[[], None]) -> _T:
+            owner = threading.get_ident()
+            active = True
+
+            async def reserve_on_owner() -> None:
+                checkpoint()
+                await self.reserve_native_generation(endpoint, model=model)
+                if on_reserved is not None:
+                    on_reserved()
+                checkpoint()
+
+            def reserve_attempt() -> None:
+                if not active or threading.get_ident() != owner:
+                    raise RuntimeError("governed_native_attempt_worker_scope_invalid")
+                checkpoint()
+                # Do not abandon this future: a cancellation racing a
+                # reservation must still leave its actual charge observable.
+                reservation = asyncio.run_coroutine_threadsafe(reserve_on_owner(), loop)
+                reservation.result()
+                checkpoint()
+
+            try:
+                return function(checkpoint, reserve_attempt)
+            finally:
+                active = False
+
+        return await self._run_owned_blocking(invoke)
 
     def require_native_generation(self, endpoint: ProviderEndpoint, *, model: str) -> None:
         """Validate only the canonical in-process Transformers endpoint.

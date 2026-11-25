@@ -1401,3 +1401,124 @@ async def test_native_reservation_rejects_mislabeled_endpoint(changes):
         await admission.reserve_native_generation(replace(endpoint, **changes), model="model-a")
     assert admission.meter.model_calls == 0
     assert admission.meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_native_attempt_sequence_reserves_before_dispatch_and_rejects_overrun():
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS
+                    if item.provider_id == "builtin_transformers")
+    admission = _scope(calls=2)
+    observed = []
+    dispatched = []
+    captured = []
+    loop_thread = threading.get_ident()
+
+    def worker(checkpoint, reserve):
+        assert threading.get_ident() != loop_thread
+        captured.append(reserve)
+        checkpoint()
+        for index in range(3):
+            reserve()
+            dispatched.append(index)
+
+    with pytest.raises(RuntimeError, match="budget_exhausted"):
+        await admission.run_native_attempt_sequence(
+            endpoint, model="model-a", function=worker,
+            on_reserved=lambda: observed.append(
+                (threading.get_ident(), admission.meter.model_calls),
+            ),
+        )
+    assert dispatched == [0, 1]
+    assert observed == [(loop_thread, 1), (loop_thread, 2)]
+    assert admission.meter.model_calls == 2
+    assert admission.meter.external_requests == 0
+    with pytest.raises(RuntimeError, match="worker_scope_invalid"):
+        captured[0]()
+
+
+@pytest.mark.asyncio
+async def test_native_attempt_sequence_denies_forged_meter_before_worker():
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS
+                    if item.provider_id == "builtin_transformers")
+    admission = _scope(calls=1)
+    forged = replace(admission, meter=ExecutionBudgetMeter(admission.plan.budget))
+    with pytest.raises(PermissionError, match="scope_or_budget_invalid"):
+        await forged.run_native_attempt_sequence(
+            endpoint, model="model-a",
+            function=lambda *_: pytest.fail("unauthorized worker"),
+        )
+    assert admission.meter.model_calls == forged.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_native_attempt_sequence_preserves_failed_attempt_and_zero_attempt_work():
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS
+                    if item.provider_id == "builtin_transformers")
+    admission = _scope(calls=1)
+    assert await admission.run_native_attempt_sequence(
+        endpoint, model="model-a", function=lambda *_: "prepared",
+    ) == "prepared"
+    assert admission.meter.model_calls == 0
+
+    def worker(checkpoint, reserve):
+        reserve()
+        raise ValueError("native failure")
+
+    with pytest.raises(ValueError, match="native failure"):
+        await admission.run_native_attempt_sequence(
+            endpoint, model="model-a", function=worker,
+        )
+    assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_native_attempt_sequence_retains_worker_and_stops_later_attempts():
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS
+                    if item.provider_id == "builtin_transformers")
+    admission = _scope(calls=2)
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    retired = threading.Event()
+    observed = []
+
+    def worker(checkpoint, reserve):
+        try:
+            reserve()
+            observed.append("first")
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(5):
+                raise RuntimeError("test worker release deadline")
+            reserve()
+            observed.append("second")
+        finally:
+            retired.set()
+
+    task = asyncio.create_task(admission.run_native_attempt_sequence(
+        endpoint, model="model-a", function=worker,
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not retired.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert retired.is_set()
+    assert observed == ["first"]
+    assert admission.meter.model_calls == 1
