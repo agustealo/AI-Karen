@@ -102,6 +102,10 @@ class DurableRunLedger(Protocol):
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None: ...
 
+    async def read_transitions(
+        self, *, run_id: str, tenant_id: str, user_id: str, limit: int = 100,
+    ) -> dict[str, Any] | None: ...
+
     async def list_runs(
         self,
         *,
@@ -498,6 +502,65 @@ class PostgresDurableRunLedger:
                 )
                 row = result.mappings().first()
                 return self._snapshot(dict(row)) if row else None
+        except SQLAlchemyError as exc:
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
+
+    async def read_transitions(
+        self, *, run_id: str, tenant_id: str, user_id: str, limit: int = 100,
+    ) -> dict[str, Any] | None:
+        """Return owner-scoped lifecycle evidence, excluding internal metadata.
+
+        A single statement distinguishes absent ownership from empty history.
+        The extra row detects truncation without a separate count query.
+        """
+        if not run_id or not user_id or not user_id.strip():
+            return None
+        safe_limit = max(1, min(limit, 250))
+        try:
+            async with self._postgres.get_async_session() as session:
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
+                result = await session.execute(
+                    text("""
+                        SELECT t.transition_id, t.from_status, t.to_status,
+                               t.event_at, t.source
+                        FROM agent_medusa_runs AS r
+                        LEFT JOIN agent_medusa_run_transitions AS t
+                          ON t.run_id = r.run_id AND t.tenant_id = r.tenant_id
+                        WHERE r.run_id = :run_id
+                          AND r.tenant_id = CAST(:tenant_id AS uuid)
+                          AND r.user_id = :user_id
+                        ORDER BY t.event_at DESC, t.transition_id DESC
+                        LIMIT :limit
+                    """),
+                    {
+                        "run_id": run_id,
+                        "tenant_id": canonical_tenant_id,
+                        "user_id": user_id,
+                        "limit": safe_limit + 1,
+                    },
+                )
+                rows = result.mappings().all()
+                if not rows:
+                    return None
+                transitions = [
+                    {
+                        "transition_id": str(row["transition_id"]),
+                        "from_status": row["from_status"],
+                        "to_status": row["to_status"],
+                        "event_at": row["event_at"].isoformat(),
+                        "source": row["source"],
+                    }
+                    for row in reversed(rows[:safe_limit])
+                    if row["transition_id"] is not None
+                ]
+                return {
+                    "run_id": run_id,
+                    "transitions": transitions,
+                    "truncated": len(rows) > safe_limit,
+                    "response_source": "postgres_durable_run_ledger",
+                }
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
                 "medusa_durable_ledger_unavailable"
