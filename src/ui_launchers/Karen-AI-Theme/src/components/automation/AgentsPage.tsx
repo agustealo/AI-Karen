@@ -10,6 +10,7 @@ import {
   CircleStop,
   RefreshCw,
   ShieldCheck,
+  Search,
   Workflow,
 } from "lucide-react";
 
@@ -19,6 +20,7 @@ import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalo
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -178,6 +180,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [runDetailError, setRunDetailError] = useState("");
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const normalizedHistoryQuery = historyQuery.trim().toLowerCase();
 
   const activeRuns = useMemo(
     () =>
@@ -219,6 +223,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     return () => { active = false; };
   }, [selectedRunId, isAuthenticated, isAdmin, runListRevision]);
   const visibleRuns = runs.filter((run) => {
+    if (normalizedHistoryQuery && ![run.run_id, run.status, run.started_at, run.completed_at].some((value) => value?.toLowerCase().includes(normalizedHistoryQuery))) return false;
     if (workFilter === "all") return true;
     const status = run.status.toLowerCase();
     if (workFilter === "active") return ["queued", "running", "cancelling"].includes(status);
@@ -554,12 +559,23 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             {cancellationError && <p role="alert" className="text-sm text-destructive">{cancellationError}</p>}
             {runsError && <p role="alert" className="rounded-lg border border-destructive/50 p-3 text-sm text-destructive">Run status refresh failed: {runsError}</p>}
             {runsGeneratedAt && <p className="text-xs text-muted-foreground" role="status">Execution snapshot: {formatTimestamp(runsGeneratedAt)}{isLoadingRuns ? " · Refreshing…" : ""}</p>}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div className="w-full max-w-md space-y-1">
+                <label htmlFor="mission-history-search" className="text-xs font-medium">Search visible executions</label>
+                <div className="relative">
+                  <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input id="mission-history-search" type="search" className="pl-9" placeholder="Run ID, status or date" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} />
+                </div>
+              </div>
+              {historyQuery && <Button type="button" size="sm" variant="outline" onClick={() => setHistoryQuery("")}>Clear search</Button>}
+              {runsGeneratedAt && !runsError && <p role="status" className="text-xs text-muted-foreground">{visibleRuns.length} of {runs.length} visible executions{selectedRunId && !visibleRuns.some((run) => run.run_id === selectedRunId) ? " · Selected execution is outside current filters" : ""}</p>}
+            </div>
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
               {(["all", "active", "completed", "failed"] as const).map((filter) => (
                 <Button key={filter} type="button" size="sm"
                   variant={workFilter === filter ? "default" : "outline"}
                   aria-pressed={workFilter === filter}
-                  onClick={() => { setWorkFilter(filter); setSelectedRunId(null); setVerifiedRun(null); setContextMessage(""); }}>
+                  onClick={() => setWorkFilter(filter)}>
                   {filter === "all" ? "All work" : filter === "active" ? "In progress" : filter === "completed" ? "Completed" : "Failed or cancelled"}
                 </Button>
               ))}
@@ -569,15 +585,16 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                 {isLoadingRuns && !runsGeneratedAt && !runsError ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
                   visibleRuns.length ? visibleRuns.map((run) => (
                     <button type="button" key={run.run_id}
-                      className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                      className={`w-full min-w-0 rounded-lg border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring ${selectedRunId === run.run_id ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "border-border hover:bg-muted/50"}`}
                       aria-pressed={selectedRunId === run.run_id}
-                      onClick={() => setSelectedRunId(run.run_id)}>
-                      <span className="block text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span>
-                      <span className="text-xs text-muted-foreground">{run.status} · {formatTimestamp(run.started_at)}</span>
+                      onClick={() => { setSelectedRunId(run.run_id); setContextMessage(""); }}>
+                      <span className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span><Badge variant={statusVariant(run.status)}>{run.status}</Badge></span>
+                      <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">{run.run_id}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Started {formatTimestamp(run.started_at)}</span>
                     </button>
-                  )) : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
+                  )) : normalizedHistoryQuery ? <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>No visible executions match your search.</p><Button type="button" size="sm" variant="outline" onClick={() => setHistoryQuery("")}>Reset search</Button></div> : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
               </div>
-              <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
+              <div className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-label="Selected execution details">
                 {runsError ? <p className="text-sm text-muted-foreground">Execution details unavailable until history is verified.</p> : runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">
