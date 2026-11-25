@@ -225,4 +225,64 @@ describe("runtime projection validation", () => {
     } finally { visibility.mockRestore(); }
   });
 
+
+  it("discovers approvals on visibility restoration even with empty run history", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+        ? Promise.resolve(++reads === 1 ? [] : [approval]) : fallback(path));
+      render(<AgentsPage />);
+      await screen.findByText(/You’re all caught up/);
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await screen.findByRole("button", { name: "Review approval" });
+      expect(reads).toBe(2);
+    } finally { visibility.mockRestore(); }
+  });
+
+  it("blocks uncertain approval retries until successful reconciliation", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const reconciliation = deferred<unknown>();
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+        ? (++reads === 1 ? Promise.resolve([approval]) : reconciliation.promise) : fallback(path));
+      mocks.post.mockRejectedValue(new Error("Response lost"));
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+      await screen.findByText("Decision outcome could not be verified. Refresh before attempting another decision.");
+      const review = screen.getByRole("button", { name: "Review approval" }) as HTMLButtonElement;
+      expect(review.disabled).toBe(true);
+      fireEvent.click(review);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await act(async () => { reconciliation.resolve([approval]); });
+      expect((await screen.findByRole("button", { name: "Review approval" }) as HTMLButtonElement).disabled).toBe(false);
+      expect(screen.queryByText(/Decision outcome could not be verified/)).toBeNull();
+    } finally { visibility.mockRestore(); }
+  });
+
+  it("does not start an approval discovery read during a pending decision", async () => {
+    const decision = deferred<unknown>();
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+        ? Promise.resolve(++reads === 1 ? [approval] : []) : fallback(path));
+      mocks.post.mockReturnValue(decision.promise);
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+      await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+      expect(reads).toBe(1);
+      await act(async () => { decision.resolve({ ...approval, status: "approved" }); });
+      await screen.findByText(/You’re all caught up/);
+      expect(reads).toBe(2);
+    } finally { visibility.mockRestore(); }
+  });
+
 });
