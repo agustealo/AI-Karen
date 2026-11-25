@@ -405,7 +405,7 @@ describe("runtime projection validation", () => {
     await screen.findByText("No verified executions match this view.");
     expect(screen.queryByText("Administrative execution diagnostics")).toBeNull();
     for (const name of ["Mission history", "Approvals", "Specialists", "Diagnostics"]) {
-      const link = screen.getByRole("link", { name, exact: true });
+      const link = screen.getByRole("link", { name });
       const target = link.getAttribute("href");
       expect(target?.startsWith("#")).toBe(true);
       expect(document.getElementById(target!.slice(1))).not.toBeNull();
