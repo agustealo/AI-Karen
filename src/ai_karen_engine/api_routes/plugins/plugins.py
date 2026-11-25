@@ -134,6 +134,25 @@ class FileExplorerInventoryResponse(BaseModel):
     correlation_id: str
 
 
+class FileExplorerFolderResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder_id: UUID
+    parent_folder_id: Optional[UUID]
+    name: str = Field(min_length=1, max_length=256)
+    revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerHierarchyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    available: bool
+    folders: List[FileExplorerFolderResponse]
+    breadcrumbs: List[FileExplorerFolderResponse]
+    has_more: bool
+    next_folder_id: Optional[UUID] = None
+    request_id: str
+    correlation_id: str
+
+
 class ContentSourceReference(BaseModel):
     """A selection receipt is not a permission grant."""
 
@@ -440,15 +459,7 @@ async def get_search_article(
     return {"article_id": article_id, "full_content": document}
 
 
-@router.get("/file-explorer/inventory", response_model=FileExplorerInventoryResponse)
-async def list_file_explorer_inventory(
-    request: Request,
-    limit: int = Query(100, ge=1, le=200),
-    cursor: Optional[str] = Query(None, min_length=1, max_length=768),
-    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
-    plugin_service: PluginService = Depends(get_plugin_service),
-) -> FileExplorerInventoryResponse:
-    """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
+def _file_explorer_read_scope(request: Request, current_user: Dict[str, Any], operation: str):
     user_id = str(current_user.get("user_id") or "").strip()
     tenant_id = str(current_user.get("tenant_id") or "").strip()
     if not user_id or not tenant_id or tenant_id in {"default", "dev-tenant"}:
@@ -464,7 +475,7 @@ async def list_file_explorer_inventory(
         granted=permitted,
         request=request,
         additional_context={
-            "operation": "file_explorer_owner_inventory",
+            "operation": operation,
             "request_id": meta["request_id"],
             "correlation_id": meta["correlation_id"],
         },
@@ -472,6 +483,21 @@ async def list_file_explorer_inventory(
     if not permitted:
         raise HTTPException(status_code=403, detail="File inventory read access denied")
 
+    return tenant_id, user_id, meta
+
+
+@router.get("/file-explorer/inventory", response_model=FileExplorerInventoryResponse)
+async def list_file_explorer_inventory(
+    request: Request,
+    limit: int = Query(100, ge=1, le=200),
+    cursor: Optional[str] = Query(None, min_length=1, max_length=768),
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerInventoryResponse:
+    """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_owner_inventory",
+    )
     try:
         page = await plugin_service.list_file_explorer_owner_page(
             user_id=user_id,
@@ -502,6 +528,38 @@ async def list_file_explorer_inventory(
         raise HTTPException(
             status_code=503, detail="File inventory is unavailable"
         ) from None
+
+
+@router.get("/file-explorer/hierarchy", response_model=FileExplorerHierarchyResponse)
+async def list_file_explorer_hierarchy(
+    request: Request,
+    limit: int = Query(100, ge=1, le=200),
+    parent_folder_id: Optional[UUID] = None,
+    after_folder_id: Optional[UUID] = None,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerHierarchyResponse:
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_owner_hierarchy",
+    )
+    try:
+        page = await plugin_service.list_file_explorer_owner_page(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            limit=limit, hierarchy=True,
+            parent_folder_id=str(parent_folder_id) if parent_folder_id else None,
+            after_folder_id=str(after_folder_id) if after_folder_id else None,
+        )
+        return FileExplorerHierarchyResponse.model_validate(page)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="File hierarchy access denied") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="File hierarchy request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_hierarchy_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="File hierarchy unavailable") from None
 
 
 @router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)

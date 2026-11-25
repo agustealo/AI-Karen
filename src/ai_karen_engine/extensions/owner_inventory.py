@@ -26,6 +26,12 @@ class ArtifactRepository(Protocol):
 
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> Any: ...
 
+    async def owner_hierarchy_available(self, tenant_id: str, user_id: str) -> Any: ...
+
+    async def list_owner_folders(self, tenant_id: str, user_id: str, **kwargs: Any) -> Any: ...
+
+    async def resolve_owner_breadcrumbs(self, tenant_id: str, user_id: str, folder_id: str) -> Any: ...
+
 
 def _uuid(value: Any, name: str) -> str:
     if not isinstance(value, str):
@@ -147,6 +153,60 @@ class ArtifactSourceAdapter:
         if page["has_more"]:
             raise RuntimeError("file_explorer_pagination_required")
         return page["items"]
+
+    async def list_owner_hierarchy(
+        self, *, tenant_id: str, user_id: str, limit: int,
+        parent_folder_id: str | None, after_folder_id: str | None,
+    ) -> dict[str, Any]:
+        """Project verified folder metadata only; never expose storage information."""
+        tenant_id = _uuid(tenant_id, "tenant_id")
+        user_id = _uuid(user_id, "user_id")
+        probe = getattr(self._repository, "owner_hierarchy_available", None)
+        if not callable(probe):
+            return {"available": False, "folders": [], "breadcrumbs": [],
+                    "has_more": False, "next_folder_id": None}
+        capability = await probe(tenant_id, user_id)
+        if not capability.success or capability.data is not True:
+            return {"available": False, "folders": [], "breadcrumbs": [],
+                    "has_more": False, "next_folder_id": None}
+        page = await self._repository.list_owner_folders(
+            tenant_id, user_id, parent_folder_id=parent_folder_id,
+            after_folder_id=after_folder_id, limit=limit,
+        )
+        if not page.success or not isinstance(page.data, list) or len(page.data) > limit:
+            raise RuntimeError("file_explorer_hierarchy_unavailable")
+        meta = page.metadata
+        more, next_id = meta.get("has_more"), meta.get("next_folder_id")
+        if type(more) is not bool or (more and (
+            not page.data or next_id != page.data[-1].folder_id or next_id == after_folder_id
+        )) or (not more and next_id is not None):
+            raise RuntimeError("file_explorer_hierarchy_page_invalid")
+
+        def project(folder):
+            return {"folder_id": _uuid(folder.folder_id, "folder_id"),
+                    "parent_folder_id": folder.parent_folder_id,
+                    "name": folder.name, "revision": str(folder.revision)}
+
+        folders = [project(folder) for folder in page.data]
+        if any(folder["parent_folder_id"] != parent_folder_id for folder in folders):
+            raise RuntimeError("file_explorer_hierarchy_scope_invalid")
+        if len({folder["folder_id"] for folder in folders}) != len(folders):
+            raise RuntimeError("file_explorer_hierarchy_duplicate")
+        breadcrumbs = []
+        if parent_folder_id is not None:
+            ancestry = await self._repository.resolve_owner_breadcrumbs(
+                tenant_id, user_id, parent_folder_id,
+            )
+            if not ancestry.success or not isinstance(ancestry.data, list) or not ancestry.data:
+                raise RuntimeError("file_explorer_breadcrumbs_unavailable")
+            breadcrumbs = [project(folder) for folder in ancestry.data]
+            if (len(breadcrumbs) > 64 or breadcrumbs[-1]["folder_id"] != parent_folder_id
+                or breadcrumbs[0]["parent_folder_id"] is not None
+                or any(child["parent_folder_id"] != parent["folder_id"]
+                       for parent, child in zip(breadcrumbs, breadcrumbs[1:]))):
+                raise RuntimeError("file_explorer_breadcrumbs_invalid")
+        return {"available": True, "folders": folders, "breadcrumbs": breadcrumbs,
+                "has_more": more, "next_folder_id": next_id}
 
     async def revalidate_owner_reference(
         self,

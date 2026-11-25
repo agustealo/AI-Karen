@@ -29,6 +29,11 @@ class OwnerInventorySource(Protocol):
         self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None
     ) -> dict[str, Any]: ...
 
+    async def list_owner_hierarchy(
+        self, *, tenant_id: str, user_id: str, limit: int,
+        parent_folder_id: str | None, after_folder_id: str | None,
+    ) -> dict[str, Any]: ...
+
     async def revalidate_owner_reference(
         self, *, tenant_id: str, user_id: str, source_id: str,
         expected_revision: str,
@@ -126,6 +131,29 @@ class FileExplorerInventoryHost:
             or admission.payload.get("items") != []
         ):
             raise PermissionError("file_explorer_kernel_denied")
+
+    async def list_owner_hierarchy(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        limit: int, parent_folder_id: str | None, after_folder_id: str | None,
+    ) -> dict[str, Any]:
+        self._authorize_owner(context=context, plan=plan)
+        if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
+            raise ValueError("file_explorer_page_limit_invalid")
+        if any(value is not None and not _canonical_uuid(value)
+               for value in (parent_folder_id, after_folder_id)):
+            raise ValueError("file_explorer_folder_id_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        page = await self._source.list_owner_hierarchy(
+            tenant_id=context.tenant_id, user_id=context.user_id, limit=limit,
+            parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
+        )
+        logger.info("file_explorer_hierarchy_page", extra={
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "available": page["available"], "folder_count": len(page["folders"]),
+        })
+        return {**page, "request_id": context.request_id,
+                "correlation_id": context.correlation_id}
 
     async def revalidate_owner_selection(
         self, *, context: ExtensionExecutionContext,

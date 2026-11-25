@@ -223,3 +223,45 @@ async def test_route_rejects_synthetic_tenant_before_rbac(monkeypatch):
             plugin_service=SimpleNamespace(),
         )
     assert error.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_uses_existing_policy_and_kernel_before_capability(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    repository = Repository()
+    service, kernel, policy = _service()
+    async def probe(tenant_id, user_id):
+        assert (tenant_id, user_id) == (TENANT, OWNER)
+        assert len(kernel.calls) == 1
+        assert policy.evaluate.await_count == 1
+        return SimpleNamespace(success=False, data=None)
+    repository.owner_hierarchy_available = probe
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    page = await service.list_file_explorer_owner_page(**_args(), hierarchy=True)
+    assert page["available"] is False
+    assert page["folders"] == page["breadcrumbs"] == []
+    assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_route_denies_rbac_before_service(monkeypatch):
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(list_file_explorer_owner_page=AsyncMock())
+    request = Request({"type": "http", "method": "GET",
+                       "path": "/api/plugins/file-explorer/hierarchy", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.list_file_explorer_hierarchy(
+            request=request, limit=25,
+            current_user={"user_id": OWNER, "tenant_id": TENANT, "roles": ["user"]},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    service.list_file_explorer_owner_page.assert_not_awaited()

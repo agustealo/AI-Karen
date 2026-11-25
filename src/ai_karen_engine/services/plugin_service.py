@@ -164,6 +164,9 @@ class PluginService:
         correlation_id: str,
         limit: int = 100,
         cursor: Optional[str] = None,
+        hierarchy: bool = False,
+        parent_folder_id: Optional[str] = None,
+        after_folder_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Authorize a fresh read through RuntimePolicy and the canonical kernel.
 
@@ -231,11 +234,14 @@ class PluginService:
         ):
             raise PermissionError("file_explorer_policy_scope_denied")
 
+        from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
+
         database = get_database_client()
         if database is None or not callable(getattr(database, "get_async_session", None)):
             raise RuntimeError("file_explorer_database_unavailable")
         repository = RepositoryFactory(
             session_factory=database.get_async_session,
+            hierarchy_transaction=async_transaction_scope,
         ).create_artifact_store()
 
         # Shared metadata adapter; the File Explorer host still owns admission.
@@ -254,9 +260,13 @@ class PluginService:
                 "permissions": list(permissions),
             },
         )
-        return await FileExplorerInventoryHost(
-            kernel=kernel, source=source
-        ).list_owner_page(
+        host = FileExplorerInventoryHost(kernel=kernel, source=source)
+        if hierarchy:
+            return await host.list_owner_hierarchy(
+                context=context, plan=plan, limit=limit,
+                parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
+            )
+        return await host.list_owner_page(
             context=context,
             plan=plan,
             limit=limit,
