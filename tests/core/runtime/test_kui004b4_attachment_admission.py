@@ -15,7 +15,7 @@ import pytest
 
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.services.auth.auth_service import AuthService
-from ai_karen_engine.auth.auth_service import get_auth_service
+from ai_karen_engine.auth import auth_service
 from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 from ai_karen_engine.core.runtime.chat_runtime import (
     AttachmentAdmissionDenied,
@@ -114,7 +114,7 @@ async def authority(*, grant=True, bind=True, references=None):
         ),
     )
     principal = context.authenticated_user
-    issuer = await get_auth_service()
+    issuer = await auth_service.get_auth_service()
     issuer.revalidate_session_identity.return_value = SimpleNamespace(
         id=user_id, tenant_id=tenant_id, status="active", is_verified=True,
         roles=["admin"] if grant else [],
@@ -652,7 +652,7 @@ async def test_attachment_permission_revoked_during_read_prevents_publication(mo
 async def test_durable_session_denies_before_private_read(monkeypatch, attack):
     request, plan, meter = await authority()
     principal = request.context.authenticated_user
-    issuer = await get_auth_service()
+    issuer = await auth_service.get_auth_service()
     revalidator = issuer.revalidate_session_identity
     if attack == "missing":
         del principal._runtime_session_witness
@@ -682,7 +682,7 @@ async def test_fabricated_internal_witness_cannot_read_private_documents(
     request, plan, meter = await authority()
     principal = request.context.authenticated_user
     original = vars(principal)["_runtime_session_witness"][1]
-    issuer = await get_auth_service()
+    issuer = await auth_service.get_auth_service()
     hostile = AsyncMock(return_value=issuer.revalidate_session_identity.return_value)
     if attack == "fabricated_callable":
         forged = hostile
