@@ -60,3 +60,35 @@ def test_public_vault_write_preserves_non_lineage_memories(
         ),
     )
     vault._validate_persist_authority(entry, object())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["ordinary", "authorized", "revoked", "foreign", "forged"])
+async def test_private_vault_fence_requires_original_scope_and_transaction(mode, monkeypatch):
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
+
+    scope = dict(tenant_id="tenant-1", user_id="user-1", session_id="session-1",
+                 request_id="req-1", correlation_id="corr-1", conversation_id="conv-1")
+    execution = ChatExecutionContext(**scope)
+    monkeypatch.setattr(ChatExecutionContext, "has_runtime_attachment_scope", lambda self: True)
+    validator = AsyncMock(side_effect=PermissionError("revoked") if mode == "revoked" else None)
+    monkeypatch.setattr(ChatExecutionContext, "revalidate_runtime_attachment_session", validator)
+    if mode == "foreign":
+        execution = ChatExecutionContext(**{**scope, "user_id": "foreign"})
+    if mode == "forged":
+        execution = SimpleNamespace(**scope)
+    context = VaultContext(**scope, private_execution=None if mode == "ordinary" else execution)
+    transaction = object()
+    if mode in {"revoked", "foreign", "forged"}:
+        with pytest.raises(PermissionError, match="attachment_session_denied"):
+            await PostgresNeuroVault._require_private_execution(context, transaction)
+    else:
+        await PostgresNeuroVault._require_private_execution(context, transaction)
+    if mode in {"authorized", "revoked"}:
+        validator.assert_awaited_once_with(db_session=transaction)
+    else:
+        validator.assert_not_awaited()
