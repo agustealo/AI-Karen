@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -109,8 +109,9 @@ function statusVariant(
 type AgentsPageProps = { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void>; onDiscussRun?: (runId: string) => void };
 
 export default function AgentsPage(props: AgentsPageProps) {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const identity = JSON.stringify([isAuthenticated, user?.tenant_id, user?.user_id, user?.roles?.includes("admin") ?? false]);
+  if (isLoading) return <p role="status">Restoring your session…</p>;
   return <ScopedAgentsPage key={identity} {...props} />;
 }
 
@@ -156,6 +157,11 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [hasActiveRunPolling, setHasActiveRunPolling] = useState(false);
   const approvalDecisionInFlightRef = useRef(false);
   const approvalReadRevision = useRef(0);
+  const workspaceLive = useRef(false);
+  useLayoutEffect(() => {
+    workspaceLive.current = true;
+    return () => { workspaceLive.current = false; };
+  }, []);
   const runListRequestPromiseRef = useRef<Promise<void> | null>(null);
   const runListRefreshQueuedRef = useRef(false);
   const [runDetailError, setRunDetailError] = useState("");
@@ -235,6 +241,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   }, [isAuthenticated]);
 
   const loadRuns = useCallback((priority = false): Promise<void> => {
+    if (!workspaceLive.current) return Promise.resolve();
     if (runListRequestPromiseRef.current) {
       if (priority) runListRefreshQueuedRef.current = true;
       return runListRequestPromiseRef.current;
@@ -257,6 +264,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             const response = await apiClient.get<unknown>(
               isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
             );
+            if (!workspaceLive.current) return;
             if (!isAgentRunsResponse(response)) throw new Error("Execution history response does not match the runtime contract.");
             setRuns(response.runs);
             setHasActiveRunPolling(response.runs.some((run) =>
@@ -272,7 +280,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
               error instanceof Error ? error.message : "Failed to load tenant-scoped Medusa runs.",
             );
           }
-        } while (runListRefreshQueuedRef.current);
+        } while (workspaceLive.current && runListRefreshQueuedRef.current);
       } finally {
         setIsLoadingRuns(false);
       }
@@ -294,13 +302,15 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   }, [isAuthenticated, hasActiveRunPolling, loadRuns]);
 
   const copyVerifiedRunContext = useCallback(async (runId: string) => {
+    if (!workspaceLive.current || !isAuthenticated || isAdmin) return;
     setContextMessage("");
     try {
       const record = await apiClient.get<{
         resource_type: string; run_id: string; status: string;
         started_at?: string | null; completed_at?: string | null; error_type?: string | null;
       }>(`/api/agent-runtime/my-runs/${encodeURIComponent(runId)}/context`);
-      if (record.resource_type !== "medusa_run" || record.run_id !== runId) {
+      if (!workspaceLive.current) return;
+      if (!isObject(record) || record.resource_type !== "medusa_run" || record.run_id !== runId || !nonemptyString(record.status)) {
         throw new Error("Execution identity changed during verification.");
       }
       const prompt = `Please explain my Agent Runtime execution ${record.run_id}. Verified status: ${record.status}. Check current permissions and execution state before taking action.`;
@@ -309,9 +319,10 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     } catch (error) {
       setContextMessage(error instanceof Error ? error.message : "Could not verify or copy this execution reference.");
     }
-  }, []);
+  }, [isAuthenticated, isAdmin]);
 
   const loadApprovals = useCallback(async () => {
+    if (!workspaceLive.current) return;
     const revision = ++approvalReadRevision.current;
     if (!isAuthenticated) {
       setApprovals([]);
@@ -336,7 +347,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   }, [isAuthenticated]);
 
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
-    if (approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError) return;
+    if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError) return;
     const approval = approvals.find((item) => item.approval_id === approvalId);
     if (!approval || Date.parse(approval.expires_at) <= Date.now()) {
       setApprovalsError("This approval is unavailable or expired. Refresh the list before deciding.");
@@ -352,6 +363,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
         { decision },
       );
+      if (!workspaceLive.current) return;
       if (!isRuntimeApproval(result) || result.approval_id !== approvalId) throw new Error("Approval response could not be verified. Refresh before deciding again.");
       setActionMessage(
         result.status === decision
@@ -365,7 +377,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       approvalDecisionInFlightRef.current = false;
       setDecidingApprovalId(null);
     }
-  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError]);
+  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, isAuthenticated]);
 
   const refresh = useCallback(async () => {
     setActionMessage("");
@@ -379,7 +391,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
 
   const cancelRun = useCallback(
     async (runId: string) => {
-      if (!isAdmin || cancellationInFlightRef.current) return;
+      if (!workspaceLive.current || !isAdmin || cancellationInFlightRef.current) return;
       cancellationInFlightRef.current = true;
 
       setCancellingRunId(runId);
@@ -389,6 +401,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         const response = await apiClient.post<unknown>(
           `/api/admin/agents/runs/${encodeURIComponent(runId)}/cancel`,
         );
+        if (!workspaceLive.current) return;
         if (!isAgentRunRecord(response) || response.run_id !== runId) throw new Error("Cancellation response could not be verified. Refresh to inspect current state.");
         setActionMessage(
           `Cancellation endpoint responded for ${runId}. Reported status: ${response.status}. Check the refreshed run details for current state.`,
