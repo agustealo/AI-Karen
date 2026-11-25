@@ -806,3 +806,63 @@ async def test_exact_copy_of_genuine_witness_is_not_issuer_owned():
     with pytest.raises(PermissionError, match="runtime_attachment_session_binding_invalid"):
         await context.revalidate_runtime_attachment_session()
     issuer.revalidate_session_identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["first_delta", "second_delta", "buffered_result", "terminal"])
+async def test_private_stream_queue_revocation_denies_release(monkeypatch, boundary):
+    request, plan, meter = await authority()
+    context = request.context
+    issuer = await auth_service.get_auth_service()
+    account = issuer.revalidate_session_identity.return_value
+    runtime = object.__new__(ChatRuntime)
+    receipt = {}
+    stopped = asyncio.Event()
+    queued = asyncio.Event()
+    never = asyncio.Event()
+    delivered = []
+
+    async def produce(*_args, token_sink, **_kwargs):
+        try:
+            if boundary == "buffered_result":
+                issuer.revalidate_session_identity.return_value = None
+                return BODY, {"response_source": "provider_runtime"}
+            await token_sink("First ")
+            if boundary == "first_delta":
+                issuer.revalidate_session_identity.return_value = None
+                queued.set()
+                await never.wait()
+            if boundary == "second_delta":
+                await token_sink("second")
+                queued.set()
+                await never.wait()
+            if boundary == "terminal":
+                queued.set()
+                # Consumer revokes after observing the first delta.
+                return "First ", {"response_source": "provider_runtime"}
+            raise AssertionError("Unexpected producer completion")
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(runtime, "_run_simple", produce)
+    stream = runtime._run_simple_stream(
+        request, SimpleNamespace(), plan, meter, _meta=receipt,
+    )
+    try:
+        if boundary in ("second_delta", "terminal"):
+            first = await asyncio.wait_for(anext(stream), timeout=3)
+            delivered.append(first.content)
+            assert first.content == "First "
+            await asyncio.wait_for(queued.wait(), timeout=3)
+            issuer.revalidate_session_identity.return_value = None
+        with pytest.raises(AttachmentAdmissionDenied, match="attachment_session_denied"):
+            await asyncio.wait_for(anext(stream), timeout=3)
+        assert delivered == (
+            ["First "] if boundary in ("second_delta", "terminal") else []
+        )
+        assert receipt == {}
+        assert stopped.is_set()
+        assert issuer.revalidate_session_identity.await_count >= 1
+    finally:
+        issuer.revalidate_session_identity.return_value = account
+        await stream.aclose()
