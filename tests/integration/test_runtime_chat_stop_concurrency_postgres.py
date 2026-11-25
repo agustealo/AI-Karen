@@ -118,6 +118,11 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             / "supabase/migrations/20261125010000_74_runtime_chat_single_active_run.sql"
         ).read_text()
         await raw.execute(active_run_migration)
+        submission_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261125020000_75_runtime_chat_submission_identity.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(submission_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)",
             uuid.UUID(tenant_a), uuid.UUID(tenant_b),
@@ -211,6 +216,29 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             **identity(run_id=winner.transport_run_id),
             request_id="repeat", correlation_id="repeat",
         ) is None
+
+        # Sequential retry with a NEW transport ID must not run the same
+        # original user submission after its first terminal execution.
+        submitted = await worker_a.admit(
+            **identity(run_id="submission-first"), request_id="submission-request",
+            correlation_id="submission-trace", submission_id="user-turn-1",
+        )
+        assert submitted is not None
+        assert await worker_a.finish(
+            submitted, status="failed", error_code="CHAT_TEST_TERMINAL",
+        )
+        assert await worker_b.admit(
+            **identity(run_id="submission-retry"), request_id="retry-request",
+            correlation_id="retry-trace", submission_id="user-turn-1",
+        ) is None
+        distinct_submission = await worker_b.admit(
+            **identity(run_id="submission-next"), request_id="next-request",
+            correlation_id="next-trace", submission_id="user-turn-2",
+        )
+        assert distinct_submission is not None
+        assert await worker_b.finish(
+            distinct_submission, status="failed", error_code="CHAT_TEST_TERMINAL",
+        )
 
         lease = await worker_a.admit(
             **identity(), request_id="request-a", correlation_id="trace-a",

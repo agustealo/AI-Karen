@@ -18,7 +18,7 @@ THREAD = "4f6dc890-2644-4ff8-8f15-888888888888"
 
 
 class Transaction:
-    def __init__(self, values: list[str | None]):
+    def __init__(self, values: list[str | bool | None]):
         self.values = iter(values)
         self.sql: list[str] = []
         self.parameters: list[dict[str, Any]] = []
@@ -43,9 +43,9 @@ def scoped_transaction(monkeypatch, transaction):
 async def test_admit_only_in_authenticated_rls_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The orphan-reconciliation UPDATE does not read a scalar result.
-    # The next scalar is from INSERT ... RETURNING execution_id.
-    transaction = Transaction([str(uuid.uuid4())])
+    # Schema readiness is checked before any mutation. The expiry UPDATE
+    # has no scalar receipt; the next scalar is the INSERT receipt.
+    transaction = Transaction([True, str(uuid.uuid4())])
     scoped_transaction(monkeypatch, transaction)
     lease = await repository.SqlChatRunRepository().admit(
         tenant_id=TENANT,
@@ -54,27 +54,31 @@ async def test_admit_only_in_authenticated_rls_transaction(
         transport_run_id="client-1",
         request_id="request-1",
         correlation_id="correlation-1",
+        submission_id="original-user-turn",
     )
     assert lease is not None
     assert lease.user_id == OWNER
     assert lease.tenant_id == TENANT
     assert lease.conversation_id == THREAD
     assert lease.transport_run_id == "client-1"
-    assert "conversation_id = CAST(:conversation AS uuid)" in transaction.sql[0]
-    assert transaction.parameters[0]["conversation"] == THREAD
-    assert "ON CONFLICT DO NOTHING" in transaction.sql[1]
-    assert "RETURNING execution_id" in transaction.sql[1]
-    assert transaction.parameters[1]["owner"] == OWNER
-    assert transaction.parameters[1]["tenant"] == TENANT
+    assert "runtime_chat_runs_single_active_idx" in transaction.sql[0]
+    assert "runtime_chat_runs_submission_idx" in transaction.sql[0]
+    assert "conversation_id = CAST(:conversation AS uuid)" in transaction.sql[1]
     assert transaction.parameters[1]["conversation"] == THREAD
-    assert transaction.parameters[1]["token"] == lease.lease_token
+    assert "ON CONFLICT DO NOTHING" in transaction.sql[2]
+    assert "RETURNING execution_id" in transaction.sql[2]
+    assert transaction.parameters[2]["owner"] == OWNER
+    assert transaction.parameters[2]["tenant"] == TENANT
+    assert transaction.parameters[2]["conversation"] == THREAD
+    assert transaction.parameters[2]["token"] == lease.lease_token
+    assert transaction.parameters[2]["submission_id"] == "original-user-turn"
 
 
 @pytest.mark.asyncio
 async def test_duplicate_admission_is_not_restarted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    transaction = Transaction([None, None])
+    transaction = Transaction([True, None])
     scoped_transaction(monkeypatch, transaction)
     assert await repository.SqlChatRunRepository().admit(
         tenant_id=TENANT,
@@ -338,3 +342,17 @@ def test_migration_enforces_both_tenant_and_user_rls() -> None:
     assert "UNIQUE (" in sql
     assert "tenant_id, user_id, conversation_id, transport_run_id" in sql
     assert "lease_token UUID" in sql
+
+
+@pytest.mark.asyncio
+async def test_missing_admission_indexes_fail_before_mutation(monkeypatch):
+    transaction = Transaction([False])
+    scoped_transaction(monkeypatch, transaction)
+    with pytest.raises(RuntimeError, match="chat_run_admission_schema_unavailable"):
+        await repository.SqlChatRunRepository().admit(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            transport_run_id="new-run", request_id="request",
+            correlation_id="correlation", submission_id="original-user-turn",
+        )
+    assert len(transaction.sql) == 1
+    assert "pg_catalog.pg_index" in transaction.sql[0]

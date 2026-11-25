@@ -73,7 +73,12 @@ class SqlChatRunRepository:
         transport_run_id: str,
         request_id: str,
         correlation_id: str,
+        submission_id: Optional[str] = None,
     ) -> Optional[ChatRunLease]:
+        if submission_id is not None and (
+            not isinstance(submission_id, str) or not _RUN_ID_PATTERN.fullmatch(submission_id)
+        ):
+            raise ValueError("invalid_chat_submission_id")
         if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
             raise ValueError("invalid_transport_run_id")
         if not request_id or not correlation_id:
@@ -84,6 +89,21 @@ class SqlChatRunRepository:
         execution = str(uuid.uuid4())
         token = str(uuid.uuid4())
         async with async_transaction_scope(tenant, user_id=user) as session:
+            # Never silently run without the admission constraints during a
+            # rolling upgrade or failed migration. No runtime schema writes.
+            readiness = await session.execute(text("""
+                SELECT COUNT(*) = 3
+                FROM pg_catalog.pg_index
+                WHERE indrelid = to_regclass('public.runtime_chat_runs')
+                  AND indexrelid IN (
+                    to_regclass('public.uq_runtime_chat_run_scoped_transport'),
+                    to_regclass('public.runtime_chat_runs_single_active_idx'),
+                    to_regclass('public.runtime_chat_runs_submission_idx')
+                  )
+                  AND indisunique AND indisvalid AND indisready AND indislive
+            """), {})
+            if readiness.scalar_one_or_none() is not True:
+                raise RuntimeError("chat_run_admission_schema_unavailable")
             # Reconcile expired leases only in the requested conversation.
             # The partial unique index serializes active admissions across
             # workers even when callers choose different transport IDs.
@@ -109,18 +129,18 @@ class SqlChatRunRepository:
                     """
                     INSERT INTO public.runtime_chat_runs (
                         execution_id, tenant_id, user_id, conversation_id,
-                        transport_run_id, request_id, correlation_id,
+                        transport_run_id, request_id, correlation_id, submission_id,
                         status, lease_token, lease_expires_at
                     )
                     VALUES (
                         CAST(:execution AS uuid), CAST(:tenant AS uuid),
                         CAST(:owner AS uuid), CAST(:conversation AS uuid),
-                        :run_id, :request_id, :correlation_id,
+                        :run_id, :request_id, :correlation_id, :submission_id,
                         'running', CAST(:token AS uuid),
                         NOW() + make_interval(secs => :ttl)
                     )
-                    -- Both a previously admitted transport ID and a live
-                    -- conversation execution must prevent another admission.
+                    -- Transport replay, submission replay and a live
+                    -- conversation execution all prevent another admission.
                     ON CONFLICT DO NOTHING
                     RETURNING execution_id
                     """
@@ -131,6 +151,7 @@ class SqlChatRunRepository:
                     "owner": user,
                     "conversation": conversation,
                     "run_id": transport_run_id,
+                    "submission_id": submission_id,
                     "request_id": request_id,
                     "correlation_id": correlation_id,
                     "token": token,

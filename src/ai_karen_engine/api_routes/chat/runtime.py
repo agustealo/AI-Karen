@@ -261,6 +261,18 @@ class AGUIRunRequest(BaseModel):
         """
         return {} if value is None else value
 
+    def latest_user_submission_id(self) -> str:
+        """Untrusted, retry-stable user turn identity; never authorization."""
+        last = self.messages[-1]
+        value = last.get("id")
+        if (
+            last.get("role") != "user"
+            or not isinstance(value, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", value)
+        ):
+            raise ValueError("Invalid AG-UI user submission identity")
+        return value
+
     def latest_user_message(self) -> str:
         last = self.messages[-1]
         if last.get("role") != "user":
@@ -1498,6 +1510,8 @@ async def stream_ag_ui_chat(
     try:
         user_id, _tenant_id = _require_execution_identity(user)
         current_text = request.latest_user_message()
+        durable_runs = getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False)
+        submission_id = request.latest_user_submission_id() if durable_runs else None
         correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
         response_id = str(uuid.uuid4())
         # Assistant-ui's canonical threadId is Karen's already-persisted
@@ -1557,12 +1571,16 @@ async def stream_ag_ui_chat(
                 attachment_references=selected_attachments,
                 session_id=session_id,
                 conversation_id=conversation_id,
-                # The validated AG-UI runId belongs to the same client run
-                # across retries; unlike response_id it is not regenerated
-                # during ingress. Runtime binds it to authenticated scope.
+                # The durable path binds planner idempotency to the original
+                # submitted user message, not a regenerated SDK run ID.
+                # Keep the historical key only for the legacy bridge.
                 planner_idempotency_key=uuid.uuid5(
                     uuid.NAMESPACE_URL,
-                    f"ag-ui-planner:{request.threadId}:{request.runId}",
+                    (
+                        f"ag-ui-submission-planner:{request.threadId}:{submission_id}"
+                        if submission_id is not None else
+                        f"ag-ui-planner:{request.threadId}:{request.runId}"
+                    ),
                 ),
                 workspace_run_id=workspace_ref,
                 preferred_llm_provider=requested_provider,
@@ -1584,10 +1602,10 @@ async def stream_ag_ui_chat(
     # The legacy bridge remains unchanged until operators enable the opt-in
     # feature following migration 43. SDK stop remains explicitly denied.
     run_lease: Optional[ChatRunLease] = None
-    if getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False):
+    if durable_runs:
         try:
             run_lease = await get_chat_run_coordinator().admit(
-                canonical_request.context, request.runId,
+                canonical_request.context, request.runId, submission_id=submission_id,
             )
             canonical_request.runtime_run_lease = run_lease
         except ChatRunConflict as exc:

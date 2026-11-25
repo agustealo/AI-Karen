@@ -54,7 +54,10 @@ class ChatRunCoordinator:
     def __init__(self, repository: Optional[SqlChatRunRepository] = None) -> None:
         self._repository = repository or SqlChatRunRepository()
 
-    async def admit(self, context: ChatExecutionContext, run_id: str) -> ChatRunLease:
+    async def admit(
+        self, context: ChatExecutionContext, run_id: str, *,
+        submission_id: Optional[str] = None,
+    ) -> ChatRunLease:
         context.require_authenticated_user()
         # Reauthorize against the canonical repository at run-admission time.
         # Ingress verification alone must not become the execution authority.
@@ -66,6 +69,7 @@ class ChatRunCoordinator:
             transport_run_id=run_id,
             request_id=context.request_id or context.correlation_id,
             correlation_id=context.correlation_id,
+            **({"submission_id": submission_id} if submission_id is not None else {}),
         )
         if lease is None:
             raise ChatRunConflict("chat_run_already_exists")
