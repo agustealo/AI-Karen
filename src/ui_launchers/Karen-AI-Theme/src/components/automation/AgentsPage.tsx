@@ -24,7 +24,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-interface AgentRunRecord {
+export interface AgentRunRecord {
   run_id: string;
   correlation_id?: string | null;
   request_id?: string | null;
@@ -45,7 +45,7 @@ interface AgentRunRecord {
   } | null;
 }
 
-interface RuntimeApproval {
+export interface RuntimeApproval {
   approval_id: string;
   conversation_id?: string | null;
   intent: string;
@@ -55,10 +55,39 @@ interface RuntimeApproval {
   expires_at: string;
 }
 
-interface AgentRunsResponse {
+export interface AgentRunsResponse {
   runs: AgentRunRecord[];
   total: number;
   generated_at: string;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonemptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isAgentRunRecord(value: unknown): value is AgentRunRecord {
+  return isObject(value) && nonemptyString(value.run_id) && nonemptyString(value.status)
+    && ["correlation_id", "request_id", "session_id", "policy_decision_id", "tenant_id", "user_id", "started_at", "completed_at", "error_type", "response_source"].every((key) => value[key] == null || typeof value[key] === "string")
+    && ["cancellable", "durable"].every((key) => value[key] === undefined || typeof value[key] === "boolean")
+    && (value.distributed_control == null || (isObject(value.distributed_control) && (value.distributed_control.supported === undefined || typeof value.distributed_control.supported === "boolean")));
+}
+
+export function isAgentRunsResponse(value: unknown): value is AgentRunsResponse {
+  return isObject(value) && Array.isArray(value.runs) && value.runs.every(isAgentRunRecord)
+    && value.total === value.runs.length && new Set(value.runs.map((run) => run.run_id)).size === value.runs.length
+    && nonemptyString(value.generated_at) && Number.isFinite(Date.parse(value.generated_at));
+}
+
+export function isRuntimeApproval(value: unknown): value is RuntimeApproval {
+  return isObject(value) && nonemptyString(value.approval_id) && nonemptyString(value.intent)
+    && nonemptyString(value.risk_level) && nonemptyString(value.status)
+    && (value.conversation_id == null || typeof value.conversation_id === "string")
+    && Array.isArray(value.reason_codes) && value.reason_codes.every((reason) => typeof reason === "string")
+    && nonemptyString(value.expires_at) && Number.isFinite(Date.parse(value.expires_at));
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -125,6 +154,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runListRevision, setRunListRevision] = useState(0);
   const [hasActiveRunPolling, setHasActiveRunPolling] = useState(false);
+  const approvalDecisionInFlightRef = useRef(false);
+  const approvalReadRevision = useRef(0);
   const runListRequestPromiseRef = useRef<Promise<void> | null>(null);
   const runListRefreshQueuedRef = useRef(false);
   const [runDetailError, setRunDetailError] = useState("");
@@ -153,10 +184,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     setVerifiedRun(null);
     setRunDetailError("");
     // Even an ID from the list is treated as an untrusted lookup key.
-    apiClient.get<AgentRunRecord>(isAdmin
+    apiClient.get<unknown>(isAdmin
       ? `/api/admin/agents/runs/${encodeURIComponent(selectedRunId)}`
       : `/api/agent-runtime/my-runs/${encodeURIComponent(selectedRunId)}`)
-      .then((record) => { if (active) setVerifiedRun(record); })
+      .then((record) => {
+        if (!isAgentRunRecord(record) || record.run_id !== selectedRunId) throw new Error("Execution details do not match the requested run.");
+        if (active) setVerifiedRun(record);
+      })
       .catch((error: unknown) => {
         if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
       });
@@ -220,11 +254,12 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
           runListRefreshQueuedRef.current = false;
           setRunsError("");
           try {
-            const response = await apiClient.get<AgentRunsResponse>(
+            const response = await apiClient.get<unknown>(
               isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
             );
-            setRuns(response.runs || []);
-            setHasActiveRunPolling((response.runs || []).some((run) =>
+            if (!isAgentRunsResponse(response)) throw new Error("Execution history response does not match the runtime contract.");
+            setRuns(response.runs);
+            setHasActiveRunPolling(response.runs.some((run) =>
               ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
             ));
             setRunListRevision((revision) => revision + 1);
@@ -249,11 +284,13 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   }, [isAuthenticated, isAdmin]);
 
   useEffect(() => {
-    if (!isAuthenticated || !hasActiveRunPolling) return;
+    if (!isAuthenticated) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void loadRuns();
-    }, 15000);
-    return () => window.clearInterval(timer);
+    }, hasActiveRunPolling ? 15000 : 60000);
+    const onVisibility = () => { if (document.visibilityState === "visible") void loadRuns(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); };
   }, [isAuthenticated, hasActiveRunPolling, loadRuns]);
 
   const copyVerifiedRunContext = useCallback(async (runId: string) => {
@@ -275,6 +312,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   }, []);
 
   const loadApprovals = useCallback(async () => {
+    const revision = ++approvalReadRevision.current;
     if (!isAuthenticated) {
       setApprovals([]);
       setApprovalsError("");
@@ -283,33 +321,38 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     }
     setIsLoadingApprovals(true);
     try {
-      const records = await apiClient.get<RuntimeApproval[]>("/api/approvals/");
+      const records = await apiClient.get<unknown>("/api/approvals/");
+      if (revision !== approvalReadRevision.current) return;
+      if (!Array.isArray(records) || !records.every(isRuntimeApproval) || new Set(records.map((record) => record.approval_id)).size !== records.length) throw new Error("Approval response does not match the runtime contract.");
       setApprovals(records);
       setApprovalsError("");
     } catch (error) {
+      if (revision !== approvalReadRevision.current) return;
       setApprovals([]);
       setApprovalsError(error instanceof Error ? error.message : "Could not load approval requests.");
     } finally {
-      setIsLoadingApprovals(false);
+      if (revision === approvalReadRevision.current) setIsLoadingApprovals(false);
     }
   }, [isAuthenticated]);
 
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
-    if (decidingApprovalId !== null) return;
+    if (approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError) return;
     const approval = approvals.find((item) => item.approval_id === approvalId);
     if (!approval || Date.parse(approval.expires_at) <= Date.now()) {
       setApprovalsError("This approval is unavailable or expired. Refresh the list before deciding.");
       setPendingApprovalDecision(null);
       return;
     }
+    approvalDecisionInFlightRef.current = true;
     setDecidingApprovalId(approvalId);
     setPendingApprovalDecision(null);
     setApprovalsError("");
     try {
-      const result = await apiClient.post<RuntimeApproval>(
+      const result = await apiClient.post<unknown>(
         `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
         { decision },
       );
+      if (!isRuntimeApproval(result) || result.approval_id !== approvalId) throw new Error("Approval response could not be verified. Refresh before deciding again.");
       setActionMessage(
         result.status === decision
           ? `Decision recorded: ${decision}. Karen must still revalidate and resume the original request.`
@@ -319,9 +362,10 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     } catch (error) {
       setApprovalsError(error instanceof Error ? error.message : "Approval decision was not recorded.");
     } finally {
+      approvalDecisionInFlightRef.current = false;
       setDecidingApprovalId(null);
     }
-  }, [loadApprovals, approvals, decidingApprovalId]);
+  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError]);
 
   const refresh = useCallback(async () => {
     setActionMessage("");
@@ -342,9 +386,10 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       setActionMessage("");
       setRunsError("");
       try {
-        const response = await apiClient.post<AgentRunRecord>(
+        const response = await apiClient.post<unknown>(
           `/api/admin/agents/runs/${encodeURIComponent(runId)}/cancel`,
         );
+        if (!isAgentRunRecord(response) || response.run_id !== runId) throw new Error("Cancellation response could not be verified. Refresh to inspect current state.");
         setActionMessage(
           `Cancellation endpoint responded for ${runId}. Reported status: ${response.status}. Check the refreshed run details for current state.`,
         );
