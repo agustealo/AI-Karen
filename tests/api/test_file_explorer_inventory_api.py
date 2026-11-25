@@ -367,7 +367,7 @@ async def test_folder_create_route_denies_write_before_service(monkeypatch):
             plugin_service=service,
         )
     assert error.value.status_code == 403
-    assert seen == [ingress.Permission.DATA_WRITE]
+    assert seen == [ingress.Permission.FILE_EXPLORER_ORGANIZE]
     service.create_file_explorer_folder.assert_not_awaited()
 
 
@@ -377,14 +377,14 @@ async def test_folder_creation_requires_bound_write_plan_and_kernel(monkeypatch)
     from ai_karen_engine.services.database.repositories import repository_factory
 
     service, kernel, policy = _service()
-    args = _args(permissions=["data:read", "data:write"])
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
     args.pop("limit")
     args.pop("cursor")
     scope = {"operation": "file_explorer.folder.create", "name": "Reports",
              "parent_folder_id": None}
     decision = PolicyDecision(
         decision_id="write-verified", policy_version="v2", allowed=True,
-        allowed_capabilities=["file-explorer", "data:read", "data:write",
+        allowed_capabilities=["file-explorer", "data:read", "file_explorer:organize_own",
                               "file_explorer.folder.create"],
         resource_scope=scope,
         runtime_constraints={"authorized_user_id": OWNER,
@@ -421,14 +421,14 @@ async def test_folder_rename_binds_source_name_and_revision(monkeypatch):
     from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
 
     service, kernel, policy = _service()
-    args = _args(permissions=["data:read", "data:write"])
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
     args.pop("limit")
     args.pop("cursor")
     scope = {"operation": "file_explorer.folder.rename", "folder_id": FILE,
              "name": "Renamed", "expected_revision": 7}
     policy.evaluate.return_value = PolicyDecision(
         decision_id="rename-verified", policy_version="v2", allowed=True,
-        allowed_capabilities=["file-explorer", "data:read", "data:write",
+        allowed_capabilities=["file-explorer", "data:read", "file_explorer:organize_own",
                               "file_explorer.folder.rename"],
         resource_scope=scope,
         runtime_constraints={"authorized_user_id": OWNER,
@@ -486,7 +486,7 @@ async def test_move_binds_kind_source_destination_and_revision(monkeypatch, kind
     from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
 
     service, kernel, policy = _service()
-    args = _args(permissions=["data:read", "data:write"])
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
     args.pop("limit")
     args.pop("cursor")
     destination = "55555555-5555-4555-8555-555555555555"
@@ -495,7 +495,7 @@ async def test_move_binds_kind_source_destination_and_revision(monkeypatch, kind
              "destination_id": destination, "expected_revision": 7}
     policy.evaluate.return_value = PolicyDecision(
         decision_id="move-verified", policy_version="v2", allowed=True,
-        allowed_capabilities=["file-explorer", "data:read", "data:write", operation],
+        allowed_capabilities=["file-explorer", "data:read", "file_explorer:organize_own", operation],
         resource_scope=scope,
         runtime_constraints={"authorized_user_id": OWNER,
                              "authorized_tenant_id": TENANT,
@@ -553,19 +553,19 @@ async def test_empty_folder_delete_requires_delete_permission_and_exact_revision
     from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
 
     service, kernel, policy = _service()
-    args = _args(permissions=["data:read", "data:write"])
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
     args.pop("limit")
     args.pop("cursor")
     with pytest.raises(PermissionError):
         await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=7)
     policy.evaluate.assert_not_awaited()
-    args["permissions"].append("data:delete")
+    args["permissions"] = ["data:read", "file_explorer:delete_empty_own"]
     scope = {"operation": "file_explorer.folder.delete", "folder_id": FILE,
              "expected_revision": 7}
     policy.evaluate.return_value = PolicyDecision(
         decision_id="delete-verified", policy_version="v2", allowed=True,
-        allowed_capabilities=["file-explorer", "data:read", "data:write",
-                              "data:delete", "file_explorer.folder.delete"],
+        allowed_capabilities=["file-explorer", "data:read",
+                              "file_explorer:delete_empty_own", "file_explorer.folder.delete"],
         resource_scope=scope,
         runtime_constraints={"authorized_user_id": OWNER, "authorized_tenant_id": TENANT,
                              "allowed_plugins": ["file-explorer"]},
@@ -612,5 +612,51 @@ async def test_folder_delete_route_denies_before_service(monkeypatch):
             plugin_service=service,
         )
     assert error.value.status_code == 403
-    assert seen == [ingress.Permission.DATA_DELETE]
+    assert seen == [ingress.Permission.FILE_EXPLORER_DELETE_EMPTY]
     service.delete_file_explorer_folder.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", [
+    "file_explorer.folder.create", "file_explorer.folder.rename",
+    "file_explorer.folder.move", "file_explorer.artifact.move",
+    "file_explorer.folder.delete",
+])
+async def test_real_runtime_policy_requires_owner_entitlement(operation):
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.auth.rbac_middleware import FILE_EXPLORER_MUTATION_PERMISSIONS
+
+    entitlement = FILE_EXPLORER_MUTATION_PERMISSIONS[operation].value
+    policy = RuntimePolicyEnforcer()
+    kwargs = dict(
+        user_id=OWNER, tenant_id=TENANT, action="plugin_execution",
+        plugin_id="file-explorer", requested_capabilities=["file-explorer", "data:read",
+                                                            entitlement, operation],
+        resource_scope={"operation": operation},
+    )
+    denied = await policy.evaluate(PolicyEvaluationRequest(
+        **kwargs, permissions=["data:read", "data:write", "data:delete"],
+    ))
+    assert not denied.allowed
+    granted = await policy.evaluate(PolicyEvaluationRequest(
+        **kwargs, permissions=["data:read", entitlement],
+    ))
+    assert granted.allowed and operation in granted.allowed_capabilities
+    kwargs["resource_scope"] = {"operation": "file_explorer.unknown"}
+    assert not (await policy.evaluate(PolicyEvaluationRequest(
+        **kwargs, permissions=["data:read", entitlement],
+    ))).allowed
+
+
+@pytest.mark.asyncio
+async def test_broad_data_grant_cannot_create_owner_folder():
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "data:write", "data:delete"])
+    args.pop("limit")
+    args.pop("cursor")
+    with pytest.raises(PermissionError):
+        await service.create_file_explorer_folder(**args, name="Reports")
+    policy.evaluate.assert_not_awaited()
+    assert kernel.calls == []

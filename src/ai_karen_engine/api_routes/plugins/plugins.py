@@ -11,7 +11,9 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+from ai_karen_engine.auth.rbac_middleware import (
+    FILE_EXPLORER_MUTATION_PERMISSIONS, Permission, get_rbac_manager,
+)
 from ai_karen_engine.auth.session import get_plugin_lifecycle_context
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.persistence.repositories.plugin_lifecycle_repository import (
@@ -642,7 +644,7 @@ async def create_file_explorer_folder(
     from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
 
     tenant_id, user_id, meta = _file_explorer_read_scope(
-        request, current_user, "file_explorer_folder_create", Permission.DATA_WRITE,
+        request, current_user, "file_explorer_folder_create", FILE_EXPLORER_MUTATION_PERMISSIONS["file_explorer.folder.create"],
     )
     try:
         result = await plugin_service.create_file_explorer_folder(
@@ -675,7 +677,7 @@ async def rename_file_explorer_folder(
     from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
 
     tenant_id, user_id, meta = _file_explorer_read_scope(
-        request, current_user, "file_explorer_folder_rename", Permission.DATA_WRITE,
+        request, current_user, "file_explorer_folder_rename", FILE_EXPLORER_MUTATION_PERMISSIONS["file_explorer.folder.rename"],
     )
     try:
         revision = int(payload.expected_revision)
@@ -712,7 +714,7 @@ async def move_file_explorer_item(
     from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
 
     tenant_id, user_id, meta = _file_explorer_read_scope(
-        request, current_user, "file_explorer_item_move", Permission.DATA_WRITE,
+        request, current_user, "file_explorer_item_move", FILE_EXPLORER_MUTATION_PERMISSIONS[f"file_explorer.{kind}.move"],
     )
     try:
         revision = int(payload.expected_revision)
@@ -749,7 +751,7 @@ async def delete_file_explorer_folder(
     from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
 
     tenant_id, user_id, meta = _file_explorer_read_scope(
-        request, current_user, "file_explorer_folder_delete", Permission.DATA_DELETE,
+        request, current_user, "file_explorer_folder_delete", FILE_EXPLORER_MUTATION_PERMISSIONS["file_explorer.folder.delete"],
     )
     try:
         revision = int(payload.expected_revision)

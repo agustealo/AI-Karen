@@ -1128,6 +1128,43 @@ class RuntimePolicyEnforcer:
                     evaluated_at=evaluated_at,
                 )
 
+        # Explorer mutations are owner-only and must not inherit broad data
+        # write/delete authority. Unknown future actions default to denial.
+        explorer_actions = {
+            capability for capability in request.requested_capabilities
+            if isinstance(capability, str) and capability.startswith("file_explorer.")
+        }
+        if explorer_actions:
+            from ai_karen_engine.auth.rbac_middleware import (
+                FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+            )
+
+            scope = request.resource_scope
+            allowed = (
+                len(explorer_actions) == 1
+                and request.plugin_id == "file-explorer"
+                and request.action == "plugin_execution"
+                and isinstance(scope, dict)
+                and scope.get("operation") in explorer_actions
+                and Permission.DATA_READ.value in request.permissions
+                and all(
+                    action in FILE_EXPLORER_MUTATION_PERMISSIONS
+                    and FILE_EXPLORER_MUTATION_PERMISSIONS[action].value in request.permissions
+                    and FILE_EXPLORER_MUTATION_PERMISSIONS[action].value in request.requested_capabilities
+                    for action in explorer_actions
+                )
+            )
+            if not allowed:
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=sorted(explorer_actions),
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
+
         # Planner reads expose tenant-private commitments. Requested capability
         # alone never grants access, even for a read-only presentation.
         if "planner.read" in request.requested_capabilities:

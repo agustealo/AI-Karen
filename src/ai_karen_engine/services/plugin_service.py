@@ -159,15 +159,16 @@ class PluginService:
         mutation: Optional[str] = None, resource_scope: Optional[Dict[str, Any]] = None,
     ):
         """Shared fresh policy admission for the trusted Explorer host."""
-        if mutation not in (
-            None, "file_explorer.folder.create", "file_explorer.folder.rename",
-            "file_explorer.folder.move", "file_explorer.artifact.move",
-            "file_explorer.folder.delete",
-        ):
-            raise ValueError("file_explorer_operation_invalid")
-        required_permissions = ["data:read", "data:write"] if mutation else ["data:read"]
-        if mutation == "file_explorer.folder.delete":
-            required_permissions.append("data:delete")
+        from ai_karen_engine.auth.rbac_middleware import (
+            FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+        )
+
+        required_permissions = [Permission.DATA_READ.value]
+        if mutation is not None:
+            entitlement = FILE_EXPLORER_MUTATION_PERMISSIONS.get(mutation)
+            if entitlement is None:
+                raise ValueError("file_explorer_operation_invalid")
+            required_permissions.append(entitlement.value)
         capabilities = ["file-explorer", *required_permissions]
         if mutation:
             capabilities.append(mutation)

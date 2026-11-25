@@ -187,9 +187,14 @@ class FileExplorerInventoryHost:
         scope: dict[str, Any],
     ) -> None:
         self._authorize_owner(context=context, plan=plan)
-        permissions = {"data:read", "data:write"}
-        if scope["operation"] == "file_explorer.folder.delete":
-            permissions.add("data:delete")
+        from ai_karen_engine.auth.rbac_middleware import (
+            FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+        )
+
+        entitlement = FILE_EXPLORER_MUTATION_PERMISSIONS.get(scope["operation"])
+        if entitlement is None:
+            raise PermissionError("file_explorer_operation_denied")
+        permissions = {Permission.DATA_READ.value, entitlement.value}
         required = permissions | {scope["operation"]}
         if (not required.issubset(plan.allowed_capabilities)
             or not required.issubset(context.allowed_capabilities)
