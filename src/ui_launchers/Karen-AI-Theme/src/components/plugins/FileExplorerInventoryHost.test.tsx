@@ -578,6 +578,28 @@ describe('Explicit composer attachment handoff', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
+  it('rejects confirmation from a superseded selection before React commits the next render', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const onAttach = vi.fn();
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue(page);
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection" onAttach={onAttach}>
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    const prior = screen.getByRole('button', { name: 'Attach selected files (1)' });
+    act(() => {
+      latest.onSelect([latest.items[1]]);
+      prior.click();
+    });
+    expect(onAttach).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Attach selected files (1)' }));
+    expect(onAttach).toHaveBeenCalledTimes(1);
+    expect(onAttach).toHaveBeenCalledWith([{ source_id: FILE_B, revision: SHA }]);
+  });
+
   it('revokes the attachment action when authentication is revalidated', async () => {
     const onAttach = vi.fn();
     mocks.get.mockResolvedValue(response(FILE_A));
@@ -925,6 +947,43 @@ describe('governed server filename search', () => {
     expect(latest.search).toBe('');
     expect(latest.items[0]?.source_id).toBe(FILE_B);
     expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/file-explorer/inventory?limit=100');
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
+  it('rejects invalid queries without changing the current page or selection', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    await act(async () => {
+      for (const value of ['x'.repeat(161), 'bad\nquery', '\uD800']) latest.onSearch?.(value);
+    });
+    expect(latest.selectedSourceIds).toEqual([FILE_A]);
+    expect(latest.search).toBe('');
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+  it('does not revive a query after logout and return to the same principal', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_A));
+    function Probe() { return <FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>; }
+    const view = render(<Probe />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSearch?.('private'));
+    await waitFor(() => expect(latest.authorized && latest.search === 'private').toBe(true));
+    const stale = latest;
+    mocks.useAuth.mockReturnValue({ ...auth(), isAuthenticated: false, user: null });
+    view.rerender(<Probe />);
+    expect(latest.authorized).toBe(false);
+    mocks.useAuth.mockReturnValue(auth());
+    view.rerender(<Probe />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => stale.onSearch?.('private'));
+    expect(latest.search).toBe('');
+    expect(mocks.get).toHaveBeenLastCalledWith('/api/plugins/file-explorer/inventory?limit=100');
     expect(mocks.get).toHaveBeenCalledTimes(3);
   });
   it('submits explicit search without replacing the local page filter', () => {

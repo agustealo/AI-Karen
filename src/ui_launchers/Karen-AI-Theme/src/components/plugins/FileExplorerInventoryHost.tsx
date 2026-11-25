@@ -483,20 +483,26 @@ export function FileExplorerInventoryHost({
   const eligibleSelection = !capacityChanged && selectedSourceIds.length <= capacity
     ? selectedSourceIds.filter(id => selectableItems.some(item => item.source_id === id && item.kind === 'file'))
     : [];
-  const consumedAttachmentSelection = useRef<string[] | null>(null);
+  // Mirror accepted selection events synchronously, not only after a React
+  // render. A retained confirmation cannot attach a superseded selection.
+  const acceptedSelectionRef = useRef<string[] | null>(null);
   const onSelect = useCallback((references: ExplorerSelection[]) => {
     if (scopeRef.current !== scopeIdentity || capacityRef.current !== capacityIdentity ||
         generationRef.current !== callbackGeneration || !currentPage ||
         currentPage.generation !== callbackGeneration) return;
+    const accept = (next: string[]) => {
+      acceptedSelectionRef.current = next;
+      setSelectedSourceIds(next);
+    };
     if (loading || currentError || mutationRef.current?.principalKey === principalKey) {
-      setSelectedSourceIds([]);
+      accept([]);
       return;
     }
     // A plugin UI event is untrusted presentation input, not authority.
     // Never accept a remembered ID with a forged/stale revision or hash.
     // Reject the entire event rather than partially accepting mixed evidence.
     if (!Array.isArray(references) || references.length > capacity) {
-      setSelectedSourceIds([]);
+      accept([]);
       return;
     }
     const byId = new Map(selectableItems.map((item) => [item.source_id, item]));
@@ -512,13 +518,13 @@ export function FileExplorerInventoryHost({
         reference.revision !== item.revision ||
         reference.sha256 !== item.sha256
       ) {
-        setSelectedSourceIds([]);
+        accept([]);
         return;
       }
       seen.add(item.source_id);
       accepted.push(item.source_id);
     }
-    setSelectedSourceIds(accepted);
+    accept(accepted);
   }, [currentPage, loading, currentError, principalKey, callbackGeneration, scopeIdentity,
       capacityIdentity, capacity, selectableItems]);
 
@@ -798,8 +804,8 @@ export function FileExplorerInventoryHost({
           onClick={() => {
             if (!currentPage || currentPage.generation !== generationRef.current ||
                 scopeRef.current !== scopeIdentity || capacityRef.current !== capacityIdentity ||
-                selectedDraftSources.length > capacity || consumedAttachmentSelection.current === selectedSourceIds) return;
-            consumedAttachmentSelection.current = selectedSourceIds;
+                selectedDraftSources.length > capacity || acceptedSelectionRef.current !== selectedSourceIds) return;
+            acceptedSelectionRef.current = null;
             setSelectedSourceIds([]);
             onAttach(selectedDraftSources);
           }}>
