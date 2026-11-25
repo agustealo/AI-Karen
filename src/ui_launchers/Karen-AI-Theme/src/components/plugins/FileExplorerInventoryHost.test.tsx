@@ -657,3 +657,28 @@ describe('KEXP-002A shared explorer interaction feedback', () => {
     expect(screen.queryByText('No matching references on this page.')).toBeNull();
   });
 });
+
+
+describe('KEXP-002B shared explorer layout', () => {
+  it('switches layouts without losing selection, filter or inventory identity', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'alpha' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha.txt' }));
+    const list = screen.getByRole('button', { name: 'List view' });
+    const grid = screen.getByRole('button', { name: 'Grid view' });
+    expect(list.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(grid);
+    expect(grid.getAttribute('aria-pressed')).toBe('true');
+    expect(list.getAttribute('aria-pressed')).toBe('false');
+    expect((screen.getByRole('checkbox', { name: 'Select alpha.txt' }) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('alpha');
+    expect(screen.getByRole('list', { name: 'Files and folders' }).className).toContain('grid');
+    fireEvent.click(list);
+    expect(list.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('list', { name: 'Files and folders' }).className).toContain('flex-col');
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+});

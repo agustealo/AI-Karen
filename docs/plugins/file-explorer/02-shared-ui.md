@@ -100,3 +100,15 @@ is introduced. The canonical UI and published frontend projection must remain
 byte-identical. The existing host Vitest suite exercises these interactions
 through the shared Content Intelligence workspace. Browser acceptance and
 exact-head CI remain required.
+
+
+## KEXP-002B: shared visual presentation
+
+The shared Explorer defaults to a compact list and exposes accessible list/grid
+toggle buttons. Switching views preserves the current page, filter, and selection
+without fetching inventory or granting access. Layout preference is local to the
+mounted page identity and resets on host-issued identity changes. Lucide icons
+are decorative and use the existing frontend dependency; semantic theme tokens
+provide light/dark styling. This change does not introduce folder metadata,
+global search, uploads, or cross-page selection. Responsive browser verification
+remains required.
