@@ -937,7 +937,7 @@ class AuthService(BaseService):
                         AuthSession.user_id == user_uuid,
                         AuthSession.access_token == session_token,
                         AuthSession.is_active,
-                    )
+                    ).execution_options(populate_existing=True)
                 )
                 db_auth_session = result.scalar_one_or_none()
                 if not db_auth_session:
@@ -958,12 +958,15 @@ class AuthService(BaseService):
                         )
                 user_result = await db_session.execute(
                     select(AuthUser).where(AuthUser.user_id == user_uuid)
+                    .execution_options(populate_existing=True)
                 )
                 auth_user = user_result.scalar_one_or_none()
                 if (
                     not auth_user
                     or not auth_user.is_active
                     or not auth_user.is_verified
+                    or (getattr(auth_user, "locked_until", None) is not None
+                        and auth_user.locked_until > datetime.utcnow())
                     or not auth_user.tenant_id
                     or str(auth_user.tenant_id) != token_tenant_id
                 ):
@@ -1028,7 +1031,7 @@ class AuthService(BaseService):
                         AuthSession.session_token == session_uuid,
                         AuthSession.user_id == user_uuid,
                         AuthSession.is_active,
-                    )
+                    ).execution_options(populate_existing=True)
                 )
                 row = result.scalar_one_or_none()
                 if row is None or not row.access_token:
