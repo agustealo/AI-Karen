@@ -158,12 +158,13 @@ function FileExplorerView({
   }
 
   function refresh() {
+    if (busy) return;
     clearSelections();
     onRefresh?.();
   }
 
   function nextPage() {
-    if (!loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
+    if (!busy && !loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
       clearSelections();
       setParentId(null);
       setFilter('');
@@ -197,7 +198,7 @@ function FileExplorerView({
     .sort((a, b) => Number(a.kind === 'file') - Number(b.kind === 'file') ||
       a.name.localeCompare(b.name) || a.source_id.localeCompare(b.source_id)),
     [entries, currentParent, filter]);
-  const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id));
+  const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id) && (!hierarchy || byId.get(id)?.kind === 'file'));
   const selectionSet = new Set(selected);
 
   function navigate(id: string | null) {
@@ -234,6 +235,7 @@ function FileExplorerView({
       {loading ? <p role="status">Loading authorized file inventory…</p> :
         <p>File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.</p>}
       {error && <p className="text-destructive">{error}</p>}
+      {error && <p>Refresh to reload authorized inventory from the root.</p>}
       {authorized && !pageEvidenceValid && <p className="text-destructive">Invalid host pagination evidence.</p>}
       {(authorized || Boolean(error)) && onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </section>;
@@ -265,8 +267,8 @@ function FileExplorerView({
       {edit.action === 'delete' && <p className="text-sm">Delete {edit.item?.name}? Only empty folders can be deleted, including no archived files. File contents will not be deleted.</p>}
       <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={() => setEdit(null)} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
     </form>}
-    <nav aria-label="Folder location" className="flex items-center gap-3 text-sm">
-      <button type="button" className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
+    <nav aria-label="Folder location" className="flex flex-wrap items-center gap-2 text-sm">
+      <button type="button" disabled={busy} className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
       {hierarchy?.breadcrumbs.map(crumb => <React.Fragment key={crumb.folder_id}>
         <span aria-hidden="true">/</span>
         <button type="button" className="min-w-0 truncate rounded border px-2 py-1" onClick={() => navigate(crumb.folder_id)}
@@ -292,7 +294,7 @@ function FileExplorerView({
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className="flex min-w-0 flex-wrap items-center gap-2 rounded border p-2">
           {(!hierarchy || item.kind === 'file') && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error)}
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={busy || loading || Boolean(error)}
             onChange={() => select(item)} />}
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
@@ -312,9 +314,9 @@ function FileExplorerView({
     <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
       <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
       {hierarchy?.hasMoreFolders && hierarchy.nextFolderId && <button type="button" className="rounded border px-3 py-2 text-sm"
-        disabled={loading || Boolean(error)} onClick={() => { clearSelections(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); }}>Next folder page</button>}
+        disabled={busy || loading || Boolean(error)} onClick={() => { if (!busy) { clearSelections(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); } }}>Next folder page</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
-        disabled={loading || Boolean(error) || !pageEvidenceValid} onClick={nextPage}>{hierarchy ? 'Next file page' : 'Next page'}</button>}
+        disabled={loading || Boolean(error) || !pageEvidenceValid || busy} onClick={nextPage}>{hierarchy ? 'Next file page' : 'Next page'}</button>}
     </footer>
   </section>;
 }

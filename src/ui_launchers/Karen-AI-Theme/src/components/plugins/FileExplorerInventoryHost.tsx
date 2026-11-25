@@ -7,7 +7,7 @@
  * no storage credentials and cannot grant read access to selected references.
  * Requests made by an earlier principal or page generation never update state.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
@@ -258,19 +258,19 @@ function assertMutationReceipt(data: unknown, mutation: ExplorerMutation, parent
   const result = data as Record<string, unknown>;
   if (typeof result.request_id !== 'string' || !result.request_id ||
       typeof result.correlation_id !== 'string' || !result.correlation_id) throw new Error('Unconfirmed organization change');
-  const matchesRevision = (revision: unknown, expected: string) => validRevision(revision) &&
-    (revision === expected || BigInt(revision) === BigInt(expected) + BigInt(1));
+  const matchesRevision = (revision: unknown, expected: string, changed: boolean) => validRevision(revision) &&
+    BigInt(revision) === BigInt(expected) + BigInt(changed ? 1 : 0);
   if (mutation.action === 'delete') {
     if (result.deleted === true && result.folder_id === mutation.sourceId) return;
   } else if (mutation.action === 'move') {
     if (result.source_id === mutation.sourceId && result.kind === (item?.kind === 'file' ? 'artifact' : 'folder') &&
         result.parent_folder_id === mutation.destinationId &&
-        matchesRevision(result.organization_revision, mutation.expectedRevision)) return;
+        matchesRevision(result.organization_revision, mutation.expectedRevision, item?.parent_id !== mutation.destinationId)) return;
   } else if (result.folder && typeof result.folder === 'object') {
     const folder = result.folder as Record<string, unknown>;
     if (validUuid(folder.folder_id) && folder.parent_folder_id === parent && folder.name === mutation.name &&
         (mutation.action === 'create' ? folder.revision === '1' :
-          folder.folder_id === mutation.sourceId && matchesRevision(folder.revision, mutation.expectedRevision))) return;
+          folder.folder_id === mutation.sourceId && matchesRevision(folder.revision, mutation.expectedRevision, item?.name !== mutation.name))) return;
   }
   throw new Error('Unconfirmed organization change');
 }
@@ -301,13 +301,14 @@ export function FileExplorerInventoryHost({
     }
     return [
       consumer,
+      mode,
       hierarchy ? 'hierarchy' : 'flat',
       user.tenant_id,
       user.user_id,
       [...(user.roles || [])].sort().join(','),
       [...(user.permissions || [])].sort().join(','),
     ].join('|');
-  }, [isAuthenticated, user, consumer, hierarchy]);
+  }, [isAuthenticated, user, consumer, hierarchy, mode]);
 
   const [request, setRequest] = useState<PageRequest>({
     principalKey: '',
@@ -323,6 +324,15 @@ export function FileExplorerInventoryHost({
   const [capability, setCapability] = useState<{ generation: number; operations: ExplorerManagement['capabilities'] } | null>(null);
   const [mutationState, setMutationState] = useState<{ principalKey: string; message: string | null; busy: boolean } | null>(null);
   const mutationRef = useRef<{ generation: number; principalKey: string } | null>(null);
+
+  // Revoke event closures at the committed identity/mode boundary, before
+  // passive fetch effects run. Retained plugin callbacks are untrusted.
+  useLayoutEffect(() => {
+    return () => {
+      generationRef.current += 1;
+      mutationRef.current = null;
+    };
+  }, [principalKey, authLoading]);
 
   useEffect(() => {
     // The source is authenticated API truth, never browser-supplied inventory.
@@ -340,6 +350,7 @@ export function FileExplorerInventoryHost({
 
     let cancelled = false;
     const generation = ++generationRef.current;
+    setMutationState(value => value?.principalKey === principalKey && !value.busy ? value : null);
     const cursor = request.principalKey === principalKey ? request.cursor : null;
     const parentId = request.principalKey === principalKey ? request.parentId ?? null : null;
     const afterFolderId = request.principalKey === principalKey ? request.afterFolderId ?? null : null;
@@ -388,6 +399,7 @@ export function FileExplorerInventoryHost({
   }, [principalKey, authLoading, request, consumer, hierarchy]);
 
   const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
+  const callbackGeneration = generationRef.current;
   const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
 
   useEffect(() => {
@@ -407,7 +419,9 @@ export function FileExplorerInventoryHost({
   }, [managementEnabled, currentPage]);
 
   const onSelect = useCallback((references: ExplorerSelection[]) => {
-    if (!currentPage || loading || currentError || mutationRef.current?.principalKey === principalKey) {
+    if (generationRef.current !== callbackGeneration || !currentPage ||
+        currentPage.generation !== callbackGeneration) return;
+    if (loading || currentError || mutationRef.current?.principalKey === principalKey) {
       setSelectedSourceIds([]);
       return;
     }
@@ -438,26 +452,30 @@ export function FileExplorerInventoryHost({
       accepted.push(item.source_id);
     }
     setSelectedSourceIds(accepted);
-  }, [currentPage, loading, currentError, principalKey]);
+  }, [currentPage, loading, currentError, principalKey, callbackGeneration]);
 
   const onRefresh = useCallback(() => {
-    if (!principalKey || mutationRef.current?.principalKey === principalKey) return;
+    if (!principalKey || authLoading || generationRef.current !== callbackGeneration ||
+        mutationRef.current?.principalKey === principalKey) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
       principalKey,
       cursor: null,
-      parentId: value.principalKey === principalKey ? value.parentId ?? null : null,
+      parentId: !currentError && value.principalKey === principalKey ? value.parentId ?? null : null,
       afterFolderId: null,
       generation: value.generation + 1,
     }));
-  }, [principalKey]);
+  }, [principalKey, authLoading, callbackGeneration, currentError]);
 
   const onNextPage = useCallback((cursor: string) => {
     if (
-      !principalKey || !currentPage || loading || currentError || mutationRef.current?.principalKey === principalKey ||
+      !principalKey || !currentPage || generationRef.current !== currentPage.generation ||
+      loading || currentError || mutationRef.current?.principalKey === principalKey ||
       !currentPage.has_more || currentPage.next_cursor !== cursor
     ) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
@@ -470,10 +488,12 @@ export function FileExplorerInventoryHost({
   }, [principalKey, currentPage, loading, currentError]);
 
   const onNavigate = useCallback((folderId: string | null) => {
-    if (!principalKey || !currentPage?.hierarchy || loading || currentError || mutationRef.current?.principalKey === principalKey) return;
+    if (!principalKey || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
+        loading || currentError || mutationRef.current?.principalKey === principalKey) return;
     if (folderId !== null &&
         !currentPage.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === folderId) &&
         !currentPage.items.some(item => item.kind === 'folder' && item.source_id === folderId)) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest(value => ({ principalKey, cursor: null, parentId: folderId,
@@ -481,8 +501,10 @@ export function FileExplorerInventoryHost({
   }, [principalKey, currentPage, loading, currentError]);
 
   const onNextFolders = useCallback((folderId: string) => {
-    if (!principalKey || !currentPage?.hierarchy || loading || currentError || mutationRef.current?.principalKey === principalKey ||
+    if (!principalKey || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
+        loading || currentError || mutationRef.current?.principalKey === principalKey ||
         !currentPage.hierarchy.hasMoreFolders || currentPage.hierarchy.nextFolderId !== folderId) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest(value => ({ principalKey,
@@ -496,6 +518,8 @@ export function FileExplorerInventoryHost({
         generationRef.current !== currentPage.generation ||
         capability?.generation !== currentPage.generation ||
         mutationRef.current?.principalKey === principalKey) return;
+    if (!mutation || typeof mutation !== 'object' ||
+        !['create', 'rename', 'move', 'delete'].includes(mutation.action)) return;
     const item = mutation.action === 'create' ? undefined :
       currentPage.items.find(entry => entry.source_id === mutation.sourceId);
     if (mutation.action !== 'create' && (!item || !validRevision(item.organization_revision) ||
@@ -548,6 +572,7 @@ export function FileExplorerInventoryHost({
     } finally {
       if (mutationRef.current === token) mutationRef.current = null;
       if (generationRef.current === token.generation) {
+        generationRef.current += 1;
         setMutationState({ principalKey, busy: false, message });
         setCapability(null);
         setPage(null);

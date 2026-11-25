@@ -57,7 +57,7 @@ def test_pagination_is_host_driven_and_invalid_evidence_fails_closed():
     assert "pageEvidenceValid" in ui
     assert "!pageEvidenceValid" in ui
     assert "onNextPage?.(nextCursor)" in ui
-    assert "disabled={loading || Boolean(error) || !pageEvidenceValid}" in ui
+    assert "disabled={loading || Boolean(error) || !pageEvidenceValid || busy}" in ui
     assert "Boolean(error) || !pageEvidenceValid" in ui
     assert "Invalid host pagination evidence." in ui
     assert "key={props.pageKey ?? 'initial'}" in ui

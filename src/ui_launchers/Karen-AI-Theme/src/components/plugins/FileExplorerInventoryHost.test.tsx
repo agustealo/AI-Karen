@@ -3,7 +3,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FileExplorerInventoryHost, type InventoryConsumer } from './FileExplorerInventoryHost';
+import { FileExplorerInventoryHost, type InventoryConsumer, type FileExplorerInventoryProps } from './FileExplorerInventoryHost';
 
 import { ContentIntelligenceWorkspace } from './ContentIntelligenceWorkspace';
 
@@ -719,6 +719,46 @@ describe('Explorer management preflight and mutation receipts', () => {
       { name: 'New', expected_revision: '7' });
     expect(mocks.get.mock.calls.filter(([path]) => path.includes('/hierarchy?'))).toHaveLength(2);
   });
+  it('rejects retained mutation and selection callbacks across mode and principal changes', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    function Probe({ mode }: { mode: 'analysis' | 'selection' }) {
+      return <FileExplorerInventoryHost hierarchy mode={mode}>
+        {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+      </FileExplorerInventoryHost>;
+    }
+    const view = render(<Probe mode="analysis" />);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.rename']).toBe('available'));
+    const old = latest;
+    view.rerender(<Probe mode="selection" />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => {
+      old.management?.onMutate({ action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New' });
+      old.hierarchy?.onNavigate?.(folder);
+      old.onRefresh();
+    });
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(mocks.get.mock.calls.filter(([path]) => path.includes('parent_folder_id='))).toHaveLength(0);
+    view.rerender(<Probe mode="analysis" />);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.rename']).toBe('available'));
+    const other = latest;
+    mocks.useAuth.mockReturnValue(auth('owner-two'));
+    view.rerender(<Probe mode="analysis" />);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.rename']).toBe('available'));
+    await act(async () => other.management?.onMutate({ action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New' }));
+    expect(mocks.patch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed-name receipt that fails to advance the organization revision', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.patch.mockResolvedValue({ ...evidence, folder: { folder_id: folder, parent_folder_id: null, name: 'New', revision: '7' } });
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Rename') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText('Rename'));
+    await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('not confirmed'));
+    expect(mocks.patch).toHaveBeenCalledTimes(1);
+  });
+
   it('sends explicit delete revision and confirms only matching evidence', async () => {
     mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
     mocks.delete.mockResolvedValue({ ...evidence, folder_id: folder, deleted: true });
