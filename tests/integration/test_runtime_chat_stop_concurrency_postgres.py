@@ -123,6 +123,11 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             / "supabase/migrations/20261125020000_75_runtime_chat_submission_identity.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(submission_migration)
+        unresolved_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261125030000_76_runtime_chat_unresolved_run.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(unresolved_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)",
             uuid.UUID(tenant_a), uuid.UUID(tenant_b),
@@ -842,6 +847,21 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             "cancel_requested": False,
             "cancellation_confirmed": False,
         }
+        # Competing new identities cannot bypass an expired lease. Admission
+        # reconciles it to orphaned without releasing the uniqueness fence.
+        bypasses = await asyncio.gather(
+            worker_a.admit(
+                **identity(run_id="expired-bypass-a"),
+                request_id="bypass-a", correlation_id="bypass-a",
+                submission_id="new-original-a",
+            ),
+            worker_b.admit(
+                **identity(run_id="expired-bypass-b"),
+                request_id="bypass-b", correlation_id="bypass-b",
+                submission_id="new-original-b",
+            ),
+        )
+        assert bypasses == [None, None]
         assert await worker_b.request_cancel(
             **identity(run_id="run-expired")
         ) == "orphaned"
@@ -852,6 +872,20 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         }
         assert not await worker_a.finish(expired, status="cancelled")
         assert not await worker_a.cancel_requested(expired)
+        assert await worker_b.admit(
+            **identity(run_id="orphan-bypass"),
+            request_id="orphan-bypass", correlation_id="orphan-bypass",
+            submission_id="another-original",
+        ) is None
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
+        ) == {"runId": "run-expired", "submissionId": None, "status": "orphaned"}
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs "
+            "WHERE conversation_id=$1 AND transport_run_id IN "
+            "('expired-bypass-a', 'expired-bypass-b', 'orphan-bypass')",
+            uuid.UUID(thread),
+        ) == 0
 
         # RLS and explicit query scoping are both present; a separate
         # tenant may have the same transport run ID, but cannot touch ours.

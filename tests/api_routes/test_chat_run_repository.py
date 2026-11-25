@@ -61,7 +61,7 @@ async def test_admit_only_in_authenticated_rls_transaction(
     assert lease.tenant_id == TENANT
     assert lease.conversation_id == THREAD
     assert lease.transport_run_id == "client-1"
-    assert "runtime_chat_runs_single_active_idx" in transaction.sql[0]
+    assert "runtime_chat_runs_unresolved_idx" in transaction.sql[0]
     assert "runtime_chat_runs_submission_idx" in transaction.sql[0]
     assert "conversation_id = CAST(:conversation AS uuid)" in transaction.sql[1]
     assert transaction.parameters[1]["conversation"] == THREAD
@@ -370,3 +370,16 @@ def test_reserved_draft_identity_is_revision_bound(value, expected):
 def test_invalid_reserved_draft_identity_fails_closed(value):
     with pytest.raises(ValueError, match="invalid_draft_submission_identity"):
         repository.draft_revision_from_submission_id(value)
+
+
+
+def test_unresolved_admission_migration_retains_orphan_fence():
+    root = Path(__file__).resolve().parents[2]
+    sql = (root / (
+        "supabase/migrations/20261125030000_76_runtime_chat_unresolved_run.sql"
+    )).read_text(encoding="utf-8")
+    assert "CREATE UNIQUE INDEX runtime_chat_runs_unresolved_idx" in sql
+    assert "tenant_id, user_id, conversation_id" in sql
+    assert "WHERE status IN ('running', 'cancelling', 'orphaned')" in sql
+    assert "DROP INDEX public.runtime_chat_runs_single_active_idx" in sql
+    assert "UPDATE public.runtime_chat_runs" not in sql

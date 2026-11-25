@@ -120,7 +120,7 @@ class SqlChatRunRepository:
                 WHERE indrelid = to_regclass('public.runtime_chat_runs')
                   AND indexrelid IN (
                     to_regclass('public.uq_runtime_chat_run_scoped_transport'),
-                    to_regclass('public.runtime_chat_runs_single_active_idx'),
+                    to_regclass('public.runtime_chat_runs_unresolved_idx'),
                     to_regclass('public.runtime_chat_runs_submission_idx')
                   )
                   AND indisunique AND indisvalid AND indisready AND indislive
@@ -128,8 +128,9 @@ class SqlChatRunRepository:
             if readiness.scalar_one_or_none() is not True:
                 raise RuntimeError("chat_run_admission_schema_unavailable")
             # Reconcile expired leases only in the requested conversation.
-            # The partial unique index serializes active admissions across
-            # workers even when callers choose different transport IDs.
+            # The unresolved-run unique index retains the fence when a lease
+            # becomes orphaned. A fresh transport/submission ID cannot bypass
+            # uncertainty, even during a concurrent stop or expiry transition.
             await session.execute(
                 text(
                     """
@@ -163,7 +164,7 @@ class SqlChatRunRepository:
                         NOW() + make_interval(secs => :ttl)
                     )
                     -- Transport replay, submission replay and a live
-                    -- conversation execution all prevent another admission.
+                    -- or unresolved conversation execution prevents admission.
                     ON CONFLICT DO NOTHING
                     RETURNING execution_id
                     """
@@ -1089,8 +1090,8 @@ class SqlChatRunRepository:
     ) -> Optional[dict[str, Any]]:
         """Observe the active run or newest unresolved terminal without executing.
 
-        Active rows take precedence over historical rows. A latest orphaned
-        run is not a verified completion. No lease or request payload leaves
+        Unresolved rows take precedence over historical resolved rows. An
+        orphaned run is not a verified completion. No lease or request payload leaves
         this repository; neither identifier grants authority.
         """
         scope = {
@@ -1110,7 +1111,7 @@ class SqlChatRunRepository:
                 WHERE tenant_id = CAST(:tenant AS uuid)
                   AND user_id = CAST(:owner AS uuid)
                   AND conversation_id = CAST(:conversation AS uuid)
-                ORDER BY CASE WHEN status IN ('running', 'cancelling')
+                ORDER BY CASE WHEN status IN ('running', 'cancelling', 'orphaned')
                               THEN 0 ELSE 1 END,
                          created_at DESC, execution_id DESC
                 LIMIT 1
