@@ -153,29 +153,16 @@ class PluginService:
             raise RuntimeError("Plugin kernel is not initialized")
         return self.kernel
 
-    async def list_file_explorer_owner_page(
-        self,
-        *,
-        user_id: str,
-        tenant_id: str,
-        roles: List[str],
-        permissions: List[str],
-        request_id: str,
-        correlation_id: str,
-        limit: int = 100,
-        cursor: Optional[str] = None,
-        hierarchy: bool = False,
-        parent_folder_id: Optional[str] = None,
-        after_folder_id: Optional[str] = None,
-        file_cursor: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Authorize a fresh read through RuntimePolicy and the canonical kernel.
-
-        This is the only application entrypoint for the File Explorer owner
-        inventory. Authentication/RBAC belongs to ingress; this boundary also
-        rejects missing data-read entitlement rather than accepting a plugin
-        identifier as a grant.
-        """
+    async def _prepare_file_explorer(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        create_folder: bool = False, resource_scope: Optional[Dict[str, Any]] = None,
+    ):
+        """Shared fresh policy admission for the trusted Explorer host."""
+        required_permissions = ["data:read", "data:write"] if create_folder else ["data:read"]
+        capabilities = ["file-explorer", *required_permissions]
+        if create_folder:
+            capabilities.append("file_explorer.folder.create")
         from ai_karen_engine.database.factory import get_database_client
         from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
         from ai_karen_engine.extensions.file_explorer_inventory import (
@@ -187,17 +174,10 @@ class PluginService:
 
         if (
             not user_id or not tenant_id
-            or "data:read" not in permissions
+            or not set(required_permissions).issubset(permissions)
             or not request_id or not correlation_id
         ):
             raise PermissionError("file_explorer_read_permission_required")
-        if type(limit) is not int or not 1 <= limit <= 200:
-            raise ValueError("file_explorer_page_limit_invalid")
-        if cursor is not None and (
-            not isinstance(cursor, str) or not 1 <= len(cursor) <= 768
-        ):
-            raise ValueError("file_explorer_cursor_invalid")
-
         await self._ensure_initialized()
         kernel = self._get_kernel()
         record = kernel.get_record("file-explorer")
@@ -217,16 +197,19 @@ class PluginService:
                 permissions=list(permissions),
                 action="plugin_execution",
                 plugin_id="file-explorer",
-                requested_capabilities=["file-explorer", "data:read"],
+                requested_capabilities=capabilities,
+                resource_scope=resource_scope or {},
             )
         )
-        if not decision.allowed:
+        if not decision.allowed or decision.requires_human_gate:
             raise PermissionError("file_explorer_policy_denied")
         plan = decision.to_authorized_plan()
         if (
             "file-explorer" not in plan.allowed_plugins
             or "file-explorer" not in plan.allowed_capabilities
-            or "data:read" not in plan.allowed_capabilities
+            or not set(capabilities).issubset(plan.allowed_capabilities)
+            or plan.approval_requirements
+            or (resource_scope is not None and plan.resource_scope != resource_scope)
             or not plan.matches_execution_scope(
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -256,12 +239,63 @@ class PluginService:
             allowed_capabilities=list(plan.allowed_capabilities),
             resource_scope={},
             audit_context={
-                "origin": "authenticated_file_explorer_inventory",
+                "origin": "authenticated_file_explorer",
                 "user_roles": list(roles),
                 "permissions": list(permissions),
             },
         )
-        host = FileExplorerInventoryHost(kernel=kernel, source=source)
+        return FileExplorerInventoryHost(kernel=kernel, source=source), context, plan
+
+    async def create_file_explorer_folder(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        name: str, parent_folder_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Explicit user-initiated host mutation; plugin remains read-only."""
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id, create_folder=True,
+            resource_scope={"operation": "file_explorer.folder.create",
+                            "name": name, "parent_folder_id": parent_folder_id},
+        )
+        return await host.create_owner_folder(
+            context=context, plan=plan, name=name, parent_folder_id=parent_folder_id,
+        )
+
+    async def list_file_explorer_owner_page(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        roles: List[str],
+        permissions: List[str],
+        request_id: str,
+        correlation_id: str,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        hierarchy: bool = False,
+        parent_folder_id: Optional[str] = None,
+        after_folder_id: Optional[str] = None,
+        file_cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Authorize a fresh read through RuntimePolicy and the canonical kernel.
+
+        This is the only application entrypoint for the File Explorer owner
+        inventory. Authentication/RBAC belongs to ingress; this boundary also
+        rejects missing data-read entitlement rather than accepting a plugin
+        identifier as a grant.
+        """
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("file_explorer_page_limit_invalid")
+        if cursor is not None and (
+            not isinstance(cursor, str) or not 1 <= len(cursor) <= 768
+        ):
+            raise ValueError("file_explorer_cursor_invalid")
+
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id,
+        )
         if hierarchy:
             return await host.list_owner_hierarchy(
                 context=context, plan=plan, limit=limit,

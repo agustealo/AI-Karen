@@ -28,6 +28,9 @@ class ArtifactRepository(Protocol):
 
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> Any: ...
 
+    async def create_owner_folder(self, tenant_id: str, user_id: str, *,
+                                  name: str, parent_folder_id: str | None) -> Any: ...
+
     async def owner_hierarchy_available(self, tenant_id: str, user_id: str) -> Any: ...
 
     async def list_owner_folders(self, tenant_id: str, user_id: str, **kwargs: Any) -> Any: ...
@@ -79,6 +82,10 @@ def _artifact_entry(artifact: Any, tenant_id: str, user_id: str) -> dict[str, An
         "size_bytes": size,
         "sha256": checksum.lower(),
     }
+
+
+class FileExplorerFolderConflict(Exception):
+    """Opaque missing/foreign parent or conflicting folder mutation."""
 
 
 class ArtifactSourceAdapter:
@@ -242,6 +249,28 @@ class ArtifactSourceAdapter:
                 "has_more": more, "next_folder_id": next_id,
                 "files": file_page["items"], "files_has_more": file_page["has_more"],
                 "next_file_cursor": next_file_cursor}
+
+    async def create_owner_folder(
+        self, *, tenant_id: str, user_id: str, name: str,
+        parent_folder_id: str | None,
+    ) -> dict[str, Any]:
+        result = await self._repository.create_owner_folder(
+            _uuid(tenant_id, "tenant_id"), _uuid(user_id, "user_id"),
+            name=name, parent_folder_id=parent_folder_id,
+        )
+        if not result.success:
+            if result.error == "artifact_folder_conflict_or_unavailable":
+                raise FileExplorerFolderConflict()
+            if result.error == "artifact_hierarchy_invalid":
+                raise ValueError("file_explorer_folder_invalid")
+            raise RuntimeError("file_explorer_folder_create_unavailable")
+        folder = result.data
+        if (folder is None or folder.name != name or folder.parent_folder_id != parent_folder_id
+            or type(folder.revision) is not int or folder.revision != 1):
+            raise RuntimeError("file_explorer_folder_create_result_invalid")
+        return {"folder_id": _uuid(folder.folder_id, "folder_id"),
+                "parent_folder_id": folder.parent_folder_id,
+                "name": folder.name, "revision": str(folder.revision)}
 
     async def revalidate_owner_reference(
         self,

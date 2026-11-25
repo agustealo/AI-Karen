@@ -335,3 +335,80 @@ async def test_governed_hierarchy_projects_root_files_after_kernel(monkeypatch):
     assert response.available is True and response.files[0].revision == SHA
     assert response.files[0].organization_revision == "1"
     assert response.files_has_more is False and response.next_file_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_folder_creation_denies_read_only_before_discovery():
+    service, kernel, policy = _service()
+    args = _args()
+    args.pop("limit")
+    args.pop("cursor")
+    with pytest.raises(PermissionError):
+        await service.create_file_explorer_folder(**args, name="Reports")
+    service._ensure_initialized.assert_not_awaited()
+    policy.evaluate.assert_not_awaited()
+    assert kernel.calls == []
+
+
+@pytest.mark.asyncio
+async def test_folder_create_route_denies_write_before_service(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda user, permission: seen.append(permission) or False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(create_file_explorer_folder=AsyncMock())
+    request = Request({"type": "http", "method": "POST",
+                       "path": "/api/plugins/file-explorer/folders", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.create_file_explorer_folder(
+            payload=ingress.FileExplorerCreateFolderRequest(name="Reports"),
+            request=request, current_user={"user_id": OWNER, "tenant_id": TENANT},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    assert seen == [ingress.Permission.DATA_WRITE]
+    service.create_file_explorer_folder.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_folder_creation_requires_bound_write_plan_and_kernel(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "data:write"])
+    args.pop("limit")
+    args.pop("cursor")
+    scope = {"operation": "file_explorer.folder.create", "name": "Reports",
+             "parent_folder_id": None}
+    decision = PolicyDecision(
+        decision_id="write-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read", "data:write",
+                              "file_explorer.folder.create"],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    policy.evaluate.return_value = decision
+    repository = Repository()
+
+    async def create(tenant_id, user_id, *, name, parent_folder_id):
+        assert (tenant_id, user_id, name, parent_folder_id) == (TENANT, OWNER, "Reports", None)
+        assert len(kernel.calls) == 1
+        return SimpleNamespace(success=True, data=SimpleNamespace(
+            folder_id=FILE, parent_folder_id=None, name=name, revision=1,
+        ))
+
+    repository.create_owner_folder = create
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.create_file_explorer_folder(**args, name="Reports")
+    assert result["folder"]["revision"] == "1"
+    assert policy.evaluate.call_args.args[0].resource_scope == scope
+    with pytest.raises(PermissionError):
+        await service.create_file_explorer_folder(**args, name="Different")
+    assert len(kernel.calls) == 1

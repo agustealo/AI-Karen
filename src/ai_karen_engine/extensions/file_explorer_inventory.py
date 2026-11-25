@@ -35,6 +35,11 @@ class OwnerInventorySource(Protocol):
         file_cursor: str | None = None,
     ) -> dict[str, Any]: ...
 
+    async def create_owner_folder(
+        self, *, tenant_id: str, user_id: str, name: str,
+        parent_folder_id: str | None,
+    ) -> dict[str, Any]: ...
+
     async def revalidate_owner_reference(
         self, *, tenant_id: str, user_id: str, source_id: str,
         expected_revision: str,
@@ -160,6 +165,48 @@ class FileExplorerInventoryHost:
             "available": page["available"], "folder_count": len(page["folders"]),
         })
         return {**page, "request_id": context.request_id,
+                "correlation_id": context.correlation_id}
+
+    async def create_owner_folder(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        name: str, parent_folder_id: str | None,
+    ) -> dict[str, Any]:
+        self._authorize_owner(context=context, plan=plan)
+        required = {"data:read", "data:write", "file_explorer.folder.create"}
+        if (not required.issubset(plan.allowed_capabilities)
+            or not required.issubset(context.allowed_capabilities)
+            or plan.approval_requirements
+            or plan.resource_scope != {"operation": "file_explorer.folder.create",
+                                       "name": name, "parent_folder_id": parent_folder_id}
+            or "data:write" not in context.audit_context.get("permissions", [])):
+            raise PermissionError("file_explorer_write_permission_required")
+        if (not isinstance(name, str) or not 1 <= len(name) <= 256
+            or name != name.strip()
+            or any(ord(ch) < 32 or 127 <= ord(ch) <= 159
+                   or 0xD800 <= ord(ch) <= 0xDFFF for ch in name)
+            or (parent_folder_id is not None and not _canonical_uuid(parent_folder_id))):
+            raise ValueError("file_explorer_folder_invalid")
+        # Kernel admission verifies lifecycle and role; the host, not the
+        # read-only extension, performs the narrowly policy-bound mutation.
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        try:
+            folder = await self._source.create_owner_folder(
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                name=name, parent_folder_id=parent_folder_id,
+            )
+        except Exception:
+            logger.warning("file_explorer_folder_create_failed", extra={
+                "request_id": context.request_id, "correlation_id": context.correlation_id,
+                "tenant_id": context.tenant_id, "user_id": context.user_id,
+            })
+            raise
+        logger.info("file_explorer_folder_created", extra={
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "policy_decision_id": context.policy_decision_id,
+            "folder_id": folder["folder_id"], "status": "success",
+        })
+        return {"folder": folder, "request_id": context.request_id,
                 "correlation_id": context.correlation_id}
 
     async def revalidate_owner_selection(

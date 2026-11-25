@@ -142,6 +142,19 @@ class FileExplorerFolderResponse(BaseModel):
     revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
 
 
+class FileExplorerCreateFolderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=256)
+    parent_folder_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
+
+
+class FileExplorerCreateFolderResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder: FileExplorerFolderResponse
+    request_id: str
+    correlation_id: str
+
+
 class FileExplorerHierarchyFileResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_id: UUID
@@ -474,18 +487,21 @@ async def get_search_article(
     return {"article_id": article_id, "full_content": document}
 
 
-def _file_explorer_read_scope(request: Request, current_user: Dict[str, Any], operation: str):
+def _file_explorer_read_scope(
+    request: Request, current_user: Dict[str, Any], operation: str,
+    permission: Permission = Permission.DATA_READ,
+):
     user_id = str(current_user.get("user_id") or "").strip()
     tenant_id = str(current_user.get("tenant_id") or "").strip()
     if not user_id or not tenant_id or tenant_id in {"default", "dev-tenant"}:
         raise HTTPException(status_code=401, detail="Authenticated user and tenant required")
 
     rbac = get_rbac_manager()
-    permitted = rbac.has_permission(current_user, Permission.DATA_READ)
+    permitted = rbac.has_permission(current_user, permission)
     meta = _response_meta(request)
     rbac.audit_access_attempt(
         current_user,
-        Permission.DATA_READ,
+        permission,
         resource=request.url.path,
         granted=permitted,
         request=request,
@@ -496,7 +512,7 @@ def _file_explorer_read_scope(request: Request, current_user: Dict[str, Any], op
         },
     )
     if not permitted:
-        raise HTTPException(status_code=403, detail="File inventory read access denied")
+        raise HTTPException(status_code=403, detail="File Explorer access denied")
 
     return tenant_id, user_id, meta
 
@@ -579,6 +595,38 @@ async def list_file_explorer_hierarchy(
     except Exception:
         logger.warning("file_explorer_hierarchy_unavailable", extra=meta)
         raise HTTPException(status_code=503, detail="File hierarchy unavailable") from None
+
+
+@router.post("/file-explorer/folders", response_model=FileExplorerCreateFolderResponse, status_code=201)
+async def create_file_explorer_folder(
+    payload: FileExplorerCreateFolderRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerCreateFolderResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_folder_create", Permission.DATA_WRITE,
+    )
+    try:
+        result = await plugin_service.create_file_explorer_folder(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            name=payload.name, parent_folder_id=payload.parent_folder_id,
+        )
+        return FileExplorerCreateFolderResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Folder creation denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Folder destination unavailable or conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Folder request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_folder_create_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="Folder creation not confirmed; refresh before retrying") from None
 
 
 @router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)
