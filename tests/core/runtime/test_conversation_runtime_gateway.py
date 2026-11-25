@@ -1313,3 +1313,33 @@ async def test_runtime_transcript_error_redacts_sql_and_bound_values(
             "conversation_history_read_failed", "transcript_persistence_failed",
             "completed_turn_write_failed",
         }
+
+
+@pytest.mark.asyncio
+async def test_private_reconciliation_forwards_original_execution(monkeypatch) -> None:
+    from ai_karen_engine.auth.models import UserData
+
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "11111111-1111-1111-1111-111111111111"
+    context = ChatExecutionContext(
+        tenant_id=tenant, user_id=user,
+        conversation_id="22222222-2222-2222-2222-222222222222",
+        request_id="req-private", correlation_id="corr-private", session_id="session-1",
+        authenticated_user=UserData(user_id=user, tenant_id=tenant),
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "has_runtime_attachment_scope", lambda self: True,
+    )
+
+    class PrivateReadbackRepository(_Repository):
+        async def read_committed_turn(self, **kwargs):
+            assert kwargs["private_execution"] is context
+            return RepositoryResult(success=False, error="committed_turn_reconciliation_unavailable")
+
+    receipt = await ConversationRuntimeGateway(
+        repository=PrivateReadbackRepository(),
+    ).reconcile_interrupted_turn(
+        context, user_text="hello", assistant_text="private answer",
+    )
+    assert receipt.status == "unverified"
+    assert not receipt.success

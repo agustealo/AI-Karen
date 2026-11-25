@@ -130,7 +130,10 @@ async def test_both_messages_and_run_complete_inside_one_transaction() -> None:
     )
     assert "status = 'completed'" in joined
     assert "cancel_requested_at IS NULL" in joined
-    assert "app.current_tenant_id" in joined
+    assert [params["setting"] for sql, params in tx.calls
+            if "set_config(:setting" in sql] == [
+        "app.current_tenant_id", "app.tenant_id",
+    ]
     assert "app.current_user_id" in joined
     assert all(
         item["tenant"] == current.tenant_id
@@ -167,11 +170,12 @@ async def test_terminal_write_failure_rolls_back_both_messages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_foreign_run_lease_never_reaches_message_insert() -> None:
+@pytest.mark.parametrize("field", ["request_id", "correlation_id"])
+async def test_foreign_run_lease_never_reaches_message_insert(field) -> None:
     current = lease()
     tx = FakeTransaction()
     user, assistant = messages(current)
-    assistant.metadata["request_id"] = "foreign-request"
+    assistant.metadata[field] = "foreign-identity"
     result = await make_repo(tx).add_completed_turn(
         user, assistant, run_lease=current,
     )
@@ -346,9 +350,10 @@ async def test_b2c2_committed_turn_read_uses_owned_parent_lock_and_exact_pair(
     else:
         assert receipt.data is (case == "committed")
     statements = [sql for sql, _ in tx.calls]
-    assert next(i for i, x in enumerate(statements) if "app.current_tenant_id" in x) < next(
-        i for i, x in enumerate(statements) if "FOR SHARE" in x
-    )
+    parent_index = next(i for i, x in enumerate(statements) if "FOR SHARE" in x)
+    for setting in ("app.current_tenant_id", "app.tenant_id"):
+        assert next(i for i, (sql, params) in enumerate(tx.calls)
+                    if "set_config(:setting" in sql and params.get("setting") == setting) < parent_index
     assert next(i for i, x in enumerate(statements) if "app.current_user_id" in x) < next(
         i for i, x in enumerate(statements) if "FOR SHARE" in x
     )

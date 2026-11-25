@@ -212,6 +212,7 @@ class ConversationRepository(Repository):
         user_text: str,
         assistant_text: str,
         persona_scope_id: Optional[str] = None,
+        private_execution: Optional["ChatExecutionContext"] = None,
     ) -> RepositoryResult[bool]:
         """Verify an exact committed pair after an interrupted write.
 

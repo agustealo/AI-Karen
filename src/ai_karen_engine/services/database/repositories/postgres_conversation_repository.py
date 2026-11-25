@@ -821,6 +821,7 @@ class PostgresConversationRepository(ConversationRepository):
         user_text: str,
         assistant_text: str,
         persona_scope_id: Optional[str] = None,
+        private_execution: Optional["ChatExecutionContext"] = None,
     ) -> RepositoryResult[bool]:
         """Read back the exact transaction outcome without changing finality.
 
@@ -844,14 +845,30 @@ class PostgresConversationRepository(ConversationRepository):
                         "user_message": user_message_id,
                         "assistant_message": assistant_message_id,
                     }
-                    await session.execute(
-                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
-                        scope,
+                    from ai_karen_engine.persistence.postgres.transactions import (
+                        apply_authenticated_transaction_context,
                     )
-                    await session.execute(
-                        text("SELECT set_config('app.current_user_id', :owner, true)"),
-                        scope,
+                    await apply_authenticated_transaction_context(
+                        session, tenant_id=tenant_id, user_id=user_id,
                     )
+                    if private_execution is not None:
+                        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+                            ChatExecutionContext,
+                        )
+                        if (
+                            type(private_execution) is not ChatExecutionContext
+                            or private_execution.tenant_id != tenant_id
+                            or private_execution.user_id != user_id
+                            or private_execution.conversation_id != conversation_id
+                            or private_execution.request_id != request_id
+                            or private_execution.correlation_id != correlation_id
+                            or private_execution.session_id != session_id
+                            or not private_execution.has_runtime_attachment_scope()
+                        ):
+                            raise PermissionError("attachment_session_denied")
+                        await private_execution.revalidate_runtime_attachment_session(
+                            db_session=session,
+                        )
                     owner = await session.execute(
                         text("""
                             SELECT 1 FROM public.conversations
@@ -966,24 +983,23 @@ class PostgresConversationRepository(ConversationRepository):
                         except Exception:
                             raise ValueError("attachment_session_denied") from None
                     if run_lease is not None:
-                        # Set the canonical RLS scope ON THIS transaction.
-                        # No independent run-ledger session is opened.
-                        await session.execute(
-                            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-                            {"tid": run_lease.tenant_id},
-                        )
-                        await session.execute(
-                            text("SELECT set_config('app.current_user_id', :uid, true)"),
-                            {"uid": run_lease.user_id},
-                        )
+                        # Validate the lease before installing its scope.
                         if (
                             user_message.tenant_id != run_lease.tenant_id
                             or user_message.conversation_id != run_lease.conversation_id
                             or user_message.metadata.get("authorized_user_id") != run_lease.user_id
                             or user_message.metadata.get("request_id") != run_lease.request_id
                             or assistant_message.metadata.get("request_id") != run_lease.request_id
+                            or user_message.metadata.get("correlation_id") != run_lease.correlation_id
+                            or assistant_message.metadata.get("correlation_id") != run_lease.correlation_id
                         ):
                             raise ValueError("chat_run_transcript_scope_mismatch")
+                        from ai_karen_engine.persistence.postgres.transactions import (
+                            apply_authenticated_transaction_context,
+                        )
+                        await apply_authenticated_transaction_context(
+                            session, tenant_id=run_lease.tenant_id, user_id=run_lease.user_id,
+                        )
                         # Lock run FIRST, then conversation. The stop endpoint
                         # locks the same row. The winner defines linearizable
                         # terminal truth for both transcript messages.

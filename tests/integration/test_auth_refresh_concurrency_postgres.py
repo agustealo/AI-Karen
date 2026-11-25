@@ -315,11 +315,12 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
         monkeypatch.setattr(auth_service, "get_auth_service", get_issuer)
         repo = PostgresConversationRepository(session_factory=persistence_factory)
         common = {"authorized_user_id": str(user), "request_id": context.request_id,
-                  "correlation_id": context.correlation_id}
+                  "correlation_id": context.correlation_id, "session_id": context.session_id,
+                  "conversation_id": str(conversation), "source": "chat_runtime"}
         pair = [
             Message(id=str(uuid.uuid4()), conversation_id=str(conversation),
                     tenant_id=str(tenant), role=role, content=role,
-                    metadata=dict(common), created_at=datetime.utcnow())
+                    metadata={**common, "transcript_actor": role}, created_at=datetime.utcnow())
             for role in ("user", "assistant")
         ]
 
@@ -581,7 +582,26 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
                 assert retry.metadata["event_id"] == str(committed[0].event_id)
             assert await durable_rows() == committed
 
+            if target == "transcript":
+                readback_scope = dict(
+                    conversation_id=str(conversation), tenant_id=str(tenant),
+                    user_id=str(user), request_id=context.request_id,
+                    correlation_id=context.correlation_id, session_id=context.session_id,
+                    user_message_id=pair[0].id, assistant_message_id=pair[1].id,
+                    user_text=pair[0].content, assistant_text=pair[1].content,
+                    private_execution=context,
+                )
+                observed = await repo.read_committed_turn(**readback_scope)
+                assert observed.success and observed.data is True
+                wrong_scope = await repo.read_committed_turn(
+                    **{**readback_scope, "correlation_id": "foreign-correlation"},
+                )
+                assert not wrong_scope.success and wrong_scope.data is None
+
             await revoke()
+            if target == "transcript":
+                observed = await repo.read_committed_turn(**readback_scope)
+                assert not observed.success and observed.data is None
             denied = await persist()
             if target == "transcript":
                 assert denied.success is False

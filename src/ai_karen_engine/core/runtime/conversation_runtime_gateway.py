@@ -897,6 +897,8 @@ class ConversationRuntimeGateway:
                 user_text=text_user,
                 assistant_text=text_assistant,
                 persona_scope_id=persona_scope_id,
+                **({"private_execution": context}
+                   if context.has_runtime_attachment_scope() else {}),
             )
             if not observed.success:
                 return TranscriptPersistenceResult(
