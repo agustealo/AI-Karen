@@ -165,8 +165,12 @@ class _RejectProviderRedirect(HTTPRedirectHandler):
         return None
 
 
-def _open_provider_request(request: Request, timeout: float):
-    """Use a fresh, no-redirect and metadata-safe provider HTTP opener."""
+def _require_safe_provider_destination(url: str, *, wire_host: str | None = None) -> None:
+    """Shared literal/authority guard for blocking and asynchronous HTTP.
+
+    DNS resolution and socket pinning are deliberately outside this guard.
+    This validates the destination syntax, not permission to execute inference.
+    """
     # External RuntimePolicy authorization is not permission to contact cloud
     # instance metadata or interface-local addresses. Reject these wire targets
     # even for an otherwise authorized external provider attempt. This is an
@@ -176,8 +180,12 @@ def _open_provider_request(request: Request, timeout: float):
     # Never classify one host and connect to another. Reject encoded
     # authorities and mismatched Request hosts before opener construction.
     try:
-        parsed = urlsplit(request.full_url)
+        # urlsplit and HTTP clients can normalize controls differently.
+        if any(ord(char) <= 32 or ord(char) == 127 for char in url) or "\\" in url:
+            raise ValueError("invalid provider URL")
+        parsed = urlsplit(url)
         parsed_hostname = parsed.hostname
+        parsed.port  # validate port syntax and range before constructing a client
     except ValueError:
         raise ProviderExecutionError("provider_destination_not_allowed") from None
     if (
@@ -190,7 +198,9 @@ def _open_provider_request(request: Request, timeout: float):
         or not parsed.netloc.isascii()
         or parsed.username is not None
         or parsed.password is not None
-        or request.host.lower() != parsed.netloc.lower()
+        or parsed.query
+        or parsed.fragment
+        or (wire_host is not None and wire_host.lower() != parsed.netloc.lower())
     ):
         raise ProviderExecutionError("provider_destination_not_allowed")
     try:
@@ -203,7 +213,7 @@ def _open_provider_request(request: Request, timeout: float):
         # for otherwise authorized external provider execution. inet_aton
         # parses numeric IPv4 only; it performs no DNS lookup.
         try:
-            socket.inet_aton(parsed.hostname)
+            socket.inet_aton(parsed_hostname)
         except OSError:
             destination = None
         else:
@@ -217,6 +227,11 @@ def _open_provider_request(request: Request, timeout: float):
     ):
         raise ProviderExecutionError("provider_destination_not_allowed")
 
+
+
+def _open_provider_request(request: Request, timeout: float):
+    """Use a fresh, no-redirect and metadata-safe provider HTTP opener."""
+    _require_safe_provider_destination(request.full_url, wire_host=request.host)
     # urllib otherwise installs its default ProxyHandler, which honors
     # ambient HTTP(S)_PROXY / ALL_PROXY. An apparently local approved
     # endpoint could therefore egress through an unapproved proxy and
@@ -399,6 +414,7 @@ def _post_chat_completions(
     personal_key: str | None = None,
 ) -> dict[str, Any]:
     """Single OpenAI-compatible HTTP transport for text and tool-call models."""
+    _require_safe_provider_destination(base_url)
     headers = {"Content-Type": "application/json"}
     api_key = personal_key if personal_key is not None else _resolve_api_key(endpoint)
     if endpoint.api_key_env and not api_key:
@@ -838,6 +854,9 @@ async def stream_provider_endpoint(
         raise ProviderExecutionError("private_evidence_local_only")
     if not base_url:
         raise ProviderExecutionError("provider_stream_endpoint_missing")
+    # Validate the effective URL before resolving a credential or opening a
+    # client. Native SSE must not bypass the blocking transport's wire guard.
+    _require_safe_provider_destination(base_url)
 
     import httpx
 
@@ -887,7 +906,7 @@ async def stream_provider_endpoint(
                     "POST", f"{base_url}/chat/completions",
                     json=payload, headers=headers,
                 ) as response:
-                    if response.status_code >= 400:
+                    if not 200 <= response.status_code < 300:
                         raise ProviderExecutionError(
                             f"provider_stream_http_error:{endpoint.provider_id}:{response.status_code}"
                         )

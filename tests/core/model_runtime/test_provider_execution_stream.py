@@ -409,3 +409,59 @@ async def test_private_attachment_sse_payload_preserves_complete_ordered_evidenc
     assert len(seen) == 1
     assert seen[0]["messages"] == messages
     assert seen[0]["stream"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_url", [
+    "http://169.254.169.254/v1",
+    "http://[fe80::1]:11434/v1",
+    "http://[::ffff:169.254.169.254]/v1",
+    "http://0.0.0.0:11434/v1",
+    "http://224.0.0.1:11434/v1",
+    "http://2852039166/v1",
+    "http://0xa9fea9fe/v1",
+    "http://%31%36%39.254.169.254/v1",
+    "http://１６９.254.169.254/v1",
+    "http://user:password@localhost:11434/v1",
+    "http://localhost:99999/v1",
+    "http://localhost:11434/v1?target=elsewhere",
+    "http://localhost:11434/v1#fragment",
+])
+async def test_native_sse_rejects_unsafe_destination_before_credentials_or_client(
+    monkeypatch, base_url,
+):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("unsafe destination reached credentials or network")
+
+    monkeypatch.setattr(provider_execution, "_resolve_base_url", lambda _: base_url)
+    monkeypatch.setattr(provider_execution, "_resolve_api_key", unexpected)
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected)
+    with pytest.raises(ProviderExecutionError, match="provider_destination_not_allowed"):
+        await _events()
+
+
+@pytest.mark.asyncio
+async def test_native_sse_never_accepts_redirect_response_as_completion(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request.url)
+        return httpx.Response(
+            302,
+            headers={
+                "content-type": "text/event-stream",
+                "location": "https://unapproved.example/v1/chat/completions",
+            },
+            content=(
+                _chunk("Untrusted redirect body")
+                + _chunk(None, finish="stop")
+                + "data: [DONE]\n\n"
+            ).encode(),
+        )
+
+    _transport_client(monkeypatch, respond)
+    with pytest.raises(ProviderExecutionError, match="provider_stream_http_error:.*:302"):
+        await _events()
+    assert len(requests) == 1
