@@ -42,11 +42,13 @@ interface InventoryPage {
 }
 
 interface ScopedPage extends InventoryPage {
+  scopeIdentity: object;
   principalKey: string;
   generation: number;
 }
 
 interface PageRequest {
+  scopeIdentity?: object;
   principalKey: string;
   cursor: string | null;
   search: string;
@@ -199,6 +201,8 @@ export function FileExplorerInventoryHost({
     ].join('|');
   }, [isAuthenticated, user, consumer, mode]);
 
+  // Each committed authentication scope has a distinct identity, even on A → B → A.
+  const scopeIdentity = useMemo(() => ({ principalKey, authLoading }), [principalKey, authLoading]);
   const [request, setRequest] = useState<PageRequest>({
     principalKey: '',
     cursor: null,
@@ -206,15 +210,15 @@ export function FileExplorerInventoryHost({
     generation: 0,
   });
   const [page, setPage] = useState<ScopedPage | null>(null);
-  const [errorState, setErrorState] = useState<{ principalKey: string; message: string } | null>(null);
+  const [errorState, setErrorState] = useState<{ scopeIdentity: object; principalKey: string; message: string } | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const generationRef = useRef(0);
-  const scopeRef = useRef({ principalKey, authLoading });
+  const scopeRef = useRef(scopeIdentity);
   useLayoutEffect(() => {
-    scopeRef.current = { principalKey, authLoading };
+    scopeRef.current = scopeIdentity;
     return () => { scopeRef.current = { principalKey: '', authLoading: true }; };
-  }, [principalKey, authLoading]);
+  }, [scopeIdentity]);
 
   useEffect(() => {
     // The source is authenticated API truth, never browser-supplied inventory.
@@ -229,8 +233,8 @@ export function FileExplorerInventoryHost({
 
     let cancelled = false;
     const generation = ++generationRef.current;
-    const cursor = request.principalKey === principalKey ? request.cursor : null;
-    const search = request.principalKey === principalKey ? request.search : '';
+    const cursor = request.scopeIdentity === scopeIdentity ? request.cursor : null;
+    const search = request.scopeIdentity === scopeIdentity ? request.search : '';
 
     setLoading(true);
     setPage(null);
@@ -245,7 +249,7 @@ export function FileExplorerInventoryHost({
       .then((data) => {
         if (cancelled || generationRef.current !== generation) return;
         const verified = assertInventoryPage(data, consumer, mode);
-        setPage({ ...verified, principalKey, generation });
+        setPage({ ...verified, principalKey, scopeIdentity, generation });
       })
       .catch((error: unknown) => {
         if (cancelled || generationRef.current !== generation) return;
@@ -253,6 +257,7 @@ export function FileExplorerInventoryHost({
         // error payloads containing tenancy or internal runtime detail.
         setPage(null);
         setErrorState({
+          scopeIdentity,
           principalKey,
           message: error instanceof Error && error.message === 'Invalid file inventory response'
             ? 'Invalid file inventory response.'
@@ -269,10 +274,10 @@ export function FileExplorerInventoryHost({
       cancelled = true;
       generationRef.current += 1;
     };
-  }, [principalKey, authLoading, request, consumer, mode]);
+  }, [principalKey, authLoading, request, consumer, mode, scopeIdentity]);
 
-  const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
-  const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
+  const currentPage = !authLoading && principalKey && page?.scopeIdentity === scopeIdentity ? page : null;
+  const currentError = !authLoading && principalKey && errorState?.scopeIdentity === scopeIdentity ? errorState.message : null;
 
   const attachedIds = new Set(existingAttachments.map(item => item.source_id));
   const capacity = currentPage ? Math.max(0, Math.min(currentPage.maxSelection,
@@ -295,9 +300,9 @@ export function FileExplorerInventoryHost({
   }, [capacityIdentity]);
   const callbackGeneration = generationRef.current;
   const isCurrentCallback = useCallback(() => !scopeRef.current.authLoading &&
-    scopeRef.current.principalKey === principalKey &&
+    scopeRef.current === scopeIdentity &&
     generationRef.current === callbackGeneration && capacityRef.current === capacityIdentity,
-  [principalKey, callbackGeneration, capacityIdentity]);
+  [scopeIdentity, callbackGeneration, capacityIdentity]);
 
   const onSelect = useCallback((references: ExplorerSelection[]) => {
     if (!isCurrentCallback()) return;
@@ -334,7 +339,7 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds(accepted);
   }, [currentPage, loading, currentError, isCurrentCallback, capacity, selectableItems]);
 
-  const activeSearch = request.principalKey === principalKey && !authLoading ? request.search : '';
+  const activeSearch = request.scopeIdentity === scopeIdentity && !authLoading ? request.search : '';
   const onSearch = useCallback((value: string) => {
     if (!principalKey || !isCurrentCallback() || typeof value !== 'string' ||
         Array.from(value).length > 160 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return;
@@ -345,8 +350,8 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds([]);
     setPage(null);
     setErrorState(null);
-    setRequest(previous => ({ principalKey, cursor: null, search, generation: previous.generation + 1 }));
-  }, [principalKey, isCurrentCallback]);
+    setRequest(previous => ({ scopeIdentity, principalKey, cursor: null, search, generation: previous.generation + 1 }));
+  }, [principalKey, isCurrentCallback, scopeIdentity]);
 
   const onRefresh = useCallback(() => {
     if (!principalKey || !isCurrentCallback()) return;
@@ -354,12 +359,13 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
+      scopeIdentity,
       principalKey,
       cursor: null,
       search: activeSearch,
       generation: value.generation + 1,
     }));
-  }, [principalKey, isCurrentCallback, activeSearch]);
+  }, [principalKey, isCurrentCallback, activeSearch, scopeIdentity]);
 
   const onNextPage = useCallback((cursor: string) => {
     if (
@@ -371,12 +377,13 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
+      scopeIdentity,
       principalKey,
       cursor,
       search: activeSearch,
       generation: value.generation + 1,
     }));
-  }, [principalKey, currentPage, loading, currentError, isCurrentCallback, activeSearch]);
+  }, [principalKey, currentPage, loading, currentError, isCurrentCallback, activeSearch, scopeIdentity]);
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
@@ -392,7 +399,7 @@ export function FileExplorerInventoryHost({
     hasMore: currentPage?.has_more || false,
     nextCursor: currentPage?.next_cursor || null,
     onNextPage,
-    pageKey: principalKey + ':' + (currentPage?.generation ?? 'pending'),
+    pageKey: principalKey + ':' + (currentPage?.generation ?? 'pending') + ':' + request.generation,
   };
 
   const selectedAnalysisSources = mode === 'analysis' && currentPage && !currentError && !loading

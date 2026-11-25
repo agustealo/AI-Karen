@@ -891,3 +891,53 @@ describe('KEXP-004A inventory-wide search', () => {
     expect(mocks.get.mock.calls[3]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100']);
   });
 });
+
+
+describe('KEXP-004A adversarial search isolation', () => {
+  it('discards out-of-order search results and old pagination callbacks', async () => {
+    let latest!: FileExplorerInventoryProps;
+    let resolveOld!: (value: ReturnType<typeof response>) => void;
+    const old = new Promise<ReturnType<typeof response>>(resolve => { resolveOld = resolve; });
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'old-cursor'))
+      .mockReturnValueOnce(old).mockResolvedValueOnce(response(FILE_B));
+    render(<FileExplorerInventoryHost mode="selection">{props => {
+      latest = props;
+      return <output>{props.items.map(item => item.name).join(',')}</output>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const stale = latest;
+    act(() => latest.onSearch?.('old'));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    act(() => latest.onSearch?.('new'));
+    await waitFor(() => expect(latest.authorized && !latest.loading && latest.search === 'new').toBe(true));
+    await act(async () => { resolveOld(response(FILE_A)); await old; });
+    act(() => stale.onNextPage('old-cursor'));
+    expect(latest.items.map(item => item.source_id)).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not revive search terms after logout and return to the same principal', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_A));
+    const view = () => <FileExplorerInventoryHost mode="selection">{props => {
+      latest = props;
+      return <output>{props.search}</output>;
+    }}</FileExplorerInventoryHost>;
+    const rendered = render(view());
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    act(() => latest.onSearch?.('private-name'));
+    await waitFor(() => expect(latest.authorized && latest.search === 'private-name').toBe(true));
+    const stale = latest;
+    mocks.useAuth.mockReturnValue({ ...auth(), isAuthenticated: false });
+    rendered.rerender(view());
+    expect(latest.onSearch).toBeUndefined();
+    expect(latest.search).toBe('');
+    mocks.useAuth.mockReturnValue(auth());
+    rendered.rerender(view());
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    expect(latest.search).toBe('');
+    expect(mocks.get.mock.calls.at(-1)).toEqual(['/api/plugins/file-explorer/inventory?limit=100']);
+    act(() => stale.onSearch?.('private-name'));
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
+});
