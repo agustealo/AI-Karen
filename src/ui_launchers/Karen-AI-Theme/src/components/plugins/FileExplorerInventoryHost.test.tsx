@@ -54,7 +54,7 @@ function auth(userId = 'owner-one') {
 
 function Consumer({ mode, consumer, onAttach }: { mode?: 'analysis' | 'selection'; consumer?: InventoryConsumer; onAttach?: (refs: { source_id: string; revision: string }[]) => void } = {}) {
   return (
-    <FileExplorerInventoryHost mode={mode} consumer={consumer} onAttach={onAttach}>
+    <FileExplorerInventoryHost hierarchy={false} mode={mode} consumer={consumer} onAttach={onAttach}>
       {(props) => (
         <section>
           <output data-testid="authorized">{String(props.authorized)}</output>
@@ -609,5 +609,60 @@ describe('Standalone Content Intelligence workspace', () => {
     expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
     expect(mocks.get.mock.calls).toEqual([['/api/plugins/content-intelligence/inventory?limit=100']]);
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('governed hierarchy inventory', () => {
+  const folderId = '55555555-5555-4555-8555-555555555555';
+  function hierarchyPage(parent: string | null = null) {
+    return {
+      available: true, request_id: 'request', correlation_id: 'correlation',
+      folders: parent ? [] : [{ folder_id: folderId, parent_folder_id: null, name: 'Reports', revision: '1' }],
+      breadcrumbs: parent ? [{ folder_id: folderId, parent_folder_id: null, name: 'Reports', revision: '1' }] : [],
+      has_more: false, next_folder_id: null,
+      files: parent ? [{ ...response(FILE_A).items[0], parent_id: parent, organization_revision: '2' }] : [],
+      files_has_more: false, next_file_cursor: null,
+    };
+  }
+  function HierarchyConsumer() {
+    return <FileExplorerInventoryHost hierarchy mode="selection">
+      {props => <div>
+        <span data-testid="hierarchy-authorized">{String(props.authorized)}</span>
+        <span data-testid="hierarchy-error">{props.error}</span>
+        {props.items.map(item => <button key={item.source_id} onClick={() => {
+          if (item.kind === 'folder') props.hierarchy?.onNavigate?.(item.source_id);
+          else props.onSelect([item]);
+        }}>{item.name}</button>)}
+        <button onClick={() => props.hierarchy?.onNavigate?.(null)}>Go root</button>
+        <span data-testid="hierarchy-selected">{props.selectedSourceIds.join(',')}</span>
+      </div>}
+    </FileExplorerInventoryHost>;
+  }
+  it('loads a nested location from the backend and preserves file selection semantics', async () => {
+    mocks.get.mockResolvedValueOnce(hierarchyPage()).mockResolvedValueOnce(hierarchyPage(folderId))
+      .mockResolvedValueOnce(hierarchyPage());
+    render(<HierarchyConsumer />);
+    await waitFor(() => expect(screen.getByText('Reports')).toBeTruthy());
+    fireEvent.click(screen.getByText('Reports'));
+    await waitFor(() => expect(screen.getByText('alpha.txt')).toBeTruthy());
+    expect(mocks.get).toHaveBeenNthCalledWith(2,
+      '/api/plugins/file-explorer/hierarchy?limit=100&parent_folder_id=' + folderId);
+    fireEvent.click(screen.getByText('alpha.txt'));
+    expect(screen.getByTestId('hierarchy-selected').textContent).toBe(FILE_A);
+    fireEvent.click(screen.getByText('Go root'));
+    await waitFor(() => expect(screen.getByText('Reports')).toBeTruthy());
+    expect(screen.getByTestId('hierarchy-selected').textContent).toBe('');
+  });
+  it('rejects a malformed breadcrumb chain instead of displaying foreign location metadata', async () => {
+    mocks.get.mockResolvedValueOnce(hierarchyPage()).mockResolvedValueOnce({
+      ...hierarchyPage(folderId), breadcrumbs: [],
+    });
+    render(<HierarchyConsumer />);
+    await waitFor(() => expect(screen.getByText('Reports')).toBeTruthy());
+    fireEvent.click(screen.getByText('Reports'));
+    await waitFor(() => expect(screen.getByTestId('hierarchy-error').textContent).toContain('Invalid file inventory response'));
+    expect(screen.getByTestId('hierarchy-authorized').textContent).toBe('false');
+    expect(screen.queryByText('alpha.txt')).toBeNull();
   });
 });

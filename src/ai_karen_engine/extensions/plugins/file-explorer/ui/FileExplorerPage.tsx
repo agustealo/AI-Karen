@@ -17,6 +17,7 @@ export interface ExplorerItem {
   revision: string;
   size_bytes: number;
   sha256: string | null;
+  organization_revision?: string;
 }
 
 export interface ExplorerSelection {
@@ -41,6 +42,14 @@ export interface FileExplorerProps {
   onNextPage?: (cursor: string) => void;
   /** Change this on every authorized page or identity/scope transition. */
   pageKey?: string;
+  hierarchy?: {
+    parentId: string | null;
+    breadcrumbs: { folder_id: string; name: string }[];
+    hasMoreFolders: boolean;
+    nextFolderId: string | null;
+    onNavigate?: (folderId: string | null) => void;
+    onNextFolders?: (folderId: string) => void;
+  };
 }
 
 const MAX_SELECTION = 24;
@@ -85,6 +94,7 @@ function FileExplorerView({
   hasMore = false,
   nextCursor = null,
   onNextPage,
+  hierarchy,
 }: FileExplorerProps) {
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
@@ -131,9 +141,9 @@ function FileExplorerView({
     () => new Map(entries.map((item) => [item.source_id, item])),
     [entries],
   );
-  const currentParent = parentId !== null && byId.get(parentId)?.kind === 'folder'
+  const currentParent = hierarchy ? hierarchy.parentId : (parentId !== null && byId.get(parentId)?.kind === 'folder'
     ? parentId
-    : null;
+    : null);
   const folder = currentParent === null ? null : byId.get(currentParent);
   const visible = useMemo(() => entries
     .filter((item) => item.parent_id === currentParent &&
@@ -144,7 +154,15 @@ function FileExplorerView({
   const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id));
   const selectionSet = new Set(selected);
 
+  function navigate(id: string | null) {
+    clearSelections();
+    setFilter('');
+    if (hierarchy) hierarchy.onNavigate?.(id);
+    else setParentId(id);
+  }
+
   function select(item: ExplorerItem) {
+    if (hierarchy && item.kind !== 'file') return;
     const next = multiSelect
       ? (selectionSet.has(item.source_id)
         ? selected.filter((id) => id !== item.source_id)
@@ -185,8 +203,13 @@ function FileExplorerView({
       {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
     <nav aria-label="Folder location" className="flex items-center gap-3 text-sm">
-      <button type="button" className="rounded border px-3 py-2" onClick={() => { setParentId(null); setFilter(''); }}>Root</button>
-      {folder && <>
+      <button type="button" className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
+      {hierarchy?.breadcrumbs.map(crumb => <React.Fragment key={crumb.folder_id}>
+        <span aria-hidden="true">/</span>
+        <button type="button" className="min-w-0 truncate rounded border px-2 py-1" onClick={() => navigate(crumb.folder_id)}
+          aria-current={crumb.folder_id === hierarchy.parentId ? 'location' : undefined}>{crumb.name}</button>
+      </React.Fragment>)}
+      {!hierarchy && folder && <>
         <span aria-hidden="true">/</span>
         <span className="truncate">{folder.name}</span>
         <button type="button" className="rounded border px-3 py-2" onClick={() => {
@@ -205,12 +228,12 @@ function FileExplorerView({
       : visible.length === 0 ? <p role="status" className="py-8 text-center text-sm text-muted-foreground">No files or folders in this view.</p>
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className="flex min-w-0 items-center gap-2 rounded border p-2">
-          <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
+          {(!hierarchy || item.kind === 'file') && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
             aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error)}
-            onChange={() => select(item)} />
+            onChange={() => select(item)} />}
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
-                onClick={() => { setParentId(item.source_id); setFilter(''); }} aria-label={'Open folder ' + item.name}>
+                onClick={() => navigate(item.source_id)} aria-label={'Open folder ' + item.name}>
                 📁 {item.name}</button>
             : <div className="min-w-0 flex-1">
                 <p className="truncate text-sm" title={item.name}>📄 {item.name}</p>
@@ -220,8 +243,10 @@ function FileExplorerView({
       </ul>}
     <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
       <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
+      {hierarchy?.hasMoreFolders && hierarchy.nextFolderId && <button type="button" className="rounded border px-3 py-2 text-sm"
+        disabled={loading || Boolean(error)} onClick={() => { clearSelections(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); }}>Next folder page</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
-        disabled={loading || Boolean(error) || !pageEvidenceValid} onClick={nextPage}>Next page</button>}
+        disabled={loading || Boolean(error) || !pageEvidenceValid} onClick={nextPage}>{hierarchy ? 'Next file page' : 'Next page'}</button>}
     </footer>
   </section>;
 }
