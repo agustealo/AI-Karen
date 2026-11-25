@@ -160,9 +160,18 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
     await engine.dispose()
 
 
-@pytest.mark.parametrize("winner", ["revocation", "persistence"])
-@pytest.mark.parametrize("target", ["transcript", "memory", "memory_replay"])
-@pytest.mark.parametrize("invalidation", ["revocation", "rotation", "password"])
+@pytest.mark.parametrize(
+    "winner,target,invalidation",
+    [
+        (winner, target, invalidation)
+        for winner in ("revocation", "persistence")
+        for target in ("transcript", "memory", "memory_replay")
+        for invalidation in ("revocation", "rotation", "password")
+    ] + [
+        ("cancel", target, "revocation")
+        for target in ("transcript", "memory", "memory_replay")
+    ],
+)
 async def test_private_session_fence_serializes_revocation(winner, target, invalidation, monkeypatch):
     """Exercise real auth row locks against both canonical mutation owners."""
     from contextlib import asynccontextmanager
@@ -270,10 +279,13 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
         locked = asyncio.Event()
         release = asyncio.Event()
         original = service.revalidate_issued_session_in_transaction
+        cancellation_armed = False
 
         async def paused_fence(*args, **kwargs):
             account = await original(*args, **kwargs)
-            if winner == "persistence":
+            if winner == "persistence" or (
+                winner == "cancel" and target == "transcript" and cancellation_armed
+            ):
                 locked.set()
                 await release.wait()
             return account
@@ -328,11 +340,37 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
         async def vault_session():
             async with factory() as db:
                 await db.begin()
+                original_flush = db.flush
+                original_commit = db.commit
+
+                async def paused_flush(*args, **kwargs):
+                    # Inspect pending rows before flush, then pause only after
+                    # PostgreSQL has staged the event in the savepoint.
+                    staging_event = any(isinstance(row, MemoryEvent) for row in db.new)
+                    await original_flush(*args, **kwargs)
+                    if (winner == "cancel" and cancellation_armed
+                            and target == "memory" and staging_event):
+                        locked.set()
+                        await release.wait()
+
+                async def paused_commit():
+                    # Replay has already checked durable matching evidence.
+                    # Cancel before sending COMMIT, not after an uncertain ACK.
+                    if winner == "cancel" and cancellation_armed and target == "memory_replay":
+                        locked.set()
+                        await release.wait()
+                    await original_commit()
+
+                monkeypatch.setattr(db, "flush", paused_flush)
+                monkeypatch.setattr(db, "commit", paused_commit)
                 try:
                     yield db
                 finally:
                     if db.in_transaction():
-                        await db.rollback()
+                        from ai_karen_engine.persistence.postgres.transactions import (
+                            rollback_async_transaction,
+                        )
+                        await rollback_async_transaction(db)
 
         vault = PostgresNeuroVault(session_factory=vault_session)
         vault_context = VaultContext(
@@ -362,6 +400,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
             assert seeded.persisted
             monkeypatch.setattr(service, "revalidate_issued_session_in_transaction", paused_fence)
 
+        cancellation_armed = True
         first = asyncio.create_task(revoke() if winner == "revocation" else persist())
         second = None
         try:
@@ -370,10 +409,25 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
             # A competing transaction must not finish while the winner holds its lock.
             done, _ = await asyncio.wait({second}, timeout=0.2)
             assert not done
-            release.set()
-            results = await asyncio.wait_for(asyncio.gather(first, second), 10)
-            receipt = results[1] if winner == "revocation" else results[0]
-            if target == "transcript":
+            if winner == "cancel":
+                # Cancellation must release locks without allowing a partially
+                # staged ledger write or successful receipt to escape.
+                first.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(first, 10)
+                release.set()
+                await asyncio.wait_for(second, 10)
+                receipt = None
+                # A subsequent checkout must be usable after cleanup.
+                async with factory() as probe:
+                    assert (await probe.execute(text("SELECT 1"))).scalar_one() == 1
+            else:
+                release.set()
+                results = await asyncio.wait_for(asyncio.gather(first, second), 10)
+                receipt = results[1] if winner == "revocation" else results[0]
+            if winner == "cancel":
+                assert receipt is None
+            elif target == "transcript":
                 assert receipt.success is (winner == "persistence")
                 if winner == "revocation":
                     assert receipt.error == "attachment_session_denied"
