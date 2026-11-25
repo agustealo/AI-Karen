@@ -45,10 +45,54 @@ BEGIN
     END IF;
 END;
 $$;
+-- Existing artifact identity and storage remain intact across organization changes.
+INSERT INTO public.files(file_id,tenant_id,owner_user_id,name,storage_uri,sha256,folder_id)
+VALUES ('folder-proof-file','a0000000-0000-4000-8000-000000000001','b0000000-0000-4000-8000-000000000001','proof.txt','fixture://proof',repeat('a',64),'c0000000-0000-4000-8000-000000000002'),
+('folder-proof-foreign','a0000000-0000-4000-8000-000000000001','b0000000-0000-4000-8000-000000000002','foreign.txt','fixture://foreign',repeat('b',64),NULL);
+DO $$ BEGIN
+    BEGIN
+        UPDATE public.files SET folder_id='c0000000-0000-4000-8000-000000000001'
+        WHERE file_id='folder-proof-foreign';
+        RAISE EXCEPTION 'foreign folder assignment accepted';
+    EXCEPTION WHEN foreign_key_violation THEN NULL;
+    END;
+    BEGIN
+        UPDATE public.files SET organization_revision=999 WHERE file_id='folder-proof-file';
+        RAISE EXCEPTION 'forged revision accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+END $$;
+UPDATE public.files SET deleted_at=now() WHERE file_id='folder-proof-file';
+UPDATE public.files SET deleted_at=NULL WHERE file_id='folder-proof-file';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.files WHERE file_id='folder-proof-file'
+        AND folder_id='c0000000-0000-4000-8000-000000000002'
+        AND organization_revision=1 AND deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'archive restore changed organization';
+    END IF;
+END $$;
+DELETE FROM public.artifact_folders WHERE folder_id='c0000000-0000-4000-8000-000000000002';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.files WHERE file_id='folder-proof-file'
+        AND folder_id IS NULL AND organization_revision=2
+        AND storage_uri='fixture://proof' AND sha256=repeat('a',64)) THEN
+        RAISE EXCEPTION 'folder deletion did not preserve artifact';
+    END IF;
+END $$;
+UPDATE public.files SET folder_id='c0000000-0000-4000-8000-000000000001'
+WHERE file_id='folder-proof-file';
 DELETE FROM public.auth_users WHERE user_id='b0000000-0000-4000-8000-000000000001';
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM public.artifact_folders WHERE owner_user_id='b0000000-0000-4000-8000-000000000001') THEN
         RAISE EXCEPTION 'folder cleanup failed';
     END IF;
 END $$;
+DO $ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM public.files WHERE file_id='folder-proof-file'
+        AND owner_user_id IS NULL AND folder_id IS NULL AND organization_revision=4
+        AND tenant_id='a0000000-0000-4000-8000-000000000001'
+        AND storage_uri='fixture://proof' AND sha256=repeat('a',64)) THEN
+        RAISE EXCEPTION 'account deletion changed retained artifact or left folder reference';
+    END IF;
+END $;
 ROLLBACK;

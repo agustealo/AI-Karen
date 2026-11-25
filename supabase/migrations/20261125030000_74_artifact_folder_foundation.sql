@@ -60,5 +60,53 @@ REVOKE ALL ON public.artifact_folders FROM PUBLIC, anon, authenticated;
 -- No client policies or grants; trusted server operations remain unavailable
 -- until the governed repository and actor-scoped admission are implemented.
 COMMENT ON TABLE public.artifact_folders IS
-    'Private logical folder metadata. No artifact association or movement in this migration.';
+    'Private logical folder metadata. No governed movement API activated.';
+-- Folder assignment is organization metadata, not a content revision.
+-- Existing rows remain at root. On folder deletion retain the artifact.
+ALTER TABLE public.files
+    ADD COLUMN folder_id UUID,
+    ADD COLUMN organization_revision BIGINT NOT NULL DEFAULT 1
+        CHECK (organization_revision BETWEEN 1 AND 9223372036854775806),
+    ADD CONSTRAINT ck_file_folder_owner_present CHECK (
+        folder_id IS NULL OR (tenant_id IS NOT NULL AND owner_user_id IS NOT NULL)
+    ),
+    ADD CONSTRAINT fk_file_owned_folder
+        FOREIGN KEY (tenant_id, owner_user_id, folder_id)
+        REFERENCES public.artifact_folders (tenant_id, owner_user_id, folder_id)
+        ON DELETE SET NULL (folder_id);
+
+CREATE INDEX idx_files_owner_folder_page
+    ON public.files (tenant_id, owner_user_id, folder_id, created_at DESC, file_id DESC)
+    WHERE deleted_at IS NULL;
+
+-- Account deletion can null the file owner before cascading folder deletion.
+-- Clear the association in that same row update, independent of FK trigger order.
+CREATE FUNCTION public.guard_file_folder_organization() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.owner_user_id IS NULL AND OLD.owner_user_id IS NOT NULL THEN
+            NEW.folder_id := NULL;
+        END IF;
+        IF NEW.folder_id IS DISTINCT FROM OLD.folder_id THEN
+            NEW.organization_revision := OLD.organization_revision + 1;
+        ELSIF NEW.organization_revision IS DISTINCT FROM OLD.organization_revision THEN
+            RAISE EXCEPTION 'artifact_organization_revision_managed' USING ERRCODE = '23514';
+        END IF;
+    ELSIF NEW.organization_revision <> 1 THEN
+        RAISE EXCEPTION 'artifact_organization_revision_invalid' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$;
+CREATE TRIGGER file_folder_organization_guard
+    BEFORE INSERT OR UPDATE ON public.files
+    FOR EACH ROW EXECUTE FUNCTION public.guard_file_folder_organization();
+REVOKE ALL ON FUNCTION public.guard_file_folder_organization() FROM PUBLIC;
+
+COMMENT ON COLUMN public.files.folder_id IS
+    'Logical organization only; NULL is root. Not a content access grant.';
+COMMENT ON COLUMN public.files.organization_revision IS
+    'Database-managed folder assignment revision; not SHA-256 content revision. Governed CAS API pending.';
+
 COMMIT;
