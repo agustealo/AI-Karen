@@ -151,6 +151,9 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [catalogError, setCatalogError] = useState("");
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const [cancellationError, setCancellationError] = useState("");
+  const [approvalDecisionError, setApprovalDecisionError] = useState("");
+  const [approvalDecisionUncertain, setApprovalDecisionUncertain] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const cancellationInFlightRef = useRef(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -339,37 +342,49 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     if (!isAuthenticated) {
       setApprovals([]);
       setApprovalsError("");
+      setApprovalDecisionUncertain(false);
       setIsLoadingApprovals(false);
       return;
     }
     setIsLoadingApprovals(true);
     try {
       const records = await apiClient.get<unknown>("/api/approvals/");
-      if (revision !== approvalReadRevision.current) return;
+      if (!workspaceLive.current || revision !== approvalReadRevision.current) return;
       if (!Array.isArray(records) || !records.every(isRuntimeApproval) || new Set(records.map((record) => record.approval_id)).size !== records.length) throw new Error("Approval response does not match the runtime contract.");
       setApprovals(records);
       setApprovalsError("");
+      setApprovalDecisionUncertain(false);
     } catch (error) {
-      if (revision !== approvalReadRevision.current) return;
+      if (!workspaceLive.current || revision !== approvalReadRevision.current) return;
       setApprovals([]);
       setApprovalsError(error instanceof Error ? error.message : "Could not load approval requests.");
     } finally {
-      if (revision === approvalReadRevision.current) setIsLoadingApprovals(false);
+      if (workspaceLive.current && revision === approvalReadRevision.current) setIsLoadingApprovals(false);
     }
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const discover = () => {
+      if (document.visibilityState === "visible" && !approvalDecisionInFlightRef.current) void loadApprovals();
+    };
+    const timer = window.setInterval(discover, 60000);
+    document.addEventListener("visibilitychange", discover);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", discover); };
+  }, [isAuthenticated, loadApprovals]);
+
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
-    if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError) return;
+    if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError || approvalDecisionUncertain) return;
     const approval = approvals.find((item) => item.approval_id === approvalId);
     if (!approval || Date.parse(approval.expires_at) <= Date.now()) {
-      setApprovalsError("This approval is unavailable or expired. Refresh the list before deciding.");
+      setApprovalDecisionError("This approval is unavailable or expired. Refresh the list before deciding.");
       setPendingApprovalDecision(null);
       return;
     }
     approvalDecisionInFlightRef.current = true;
     setDecidingApprovalId(approvalId);
     setPendingApprovalDecision(null);
-    setApprovalsError("");
+    setApprovalDecisionError("");
     try {
       const result = await apiClient.post<unknown>(
         `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
@@ -384,12 +399,14 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       );
       await loadApprovals();
     } catch (error) {
-      setApprovalsError(error instanceof Error ? error.message : "Approval decision was not recorded.");
+      if (!workspaceLive.current) return;
+      setApprovalDecisionUncertain(true);
+      setApprovalDecisionError("Decision outcome could not be verified. Refresh before attempting another decision.");
     } finally {
       approvalDecisionInFlightRef.current = false;
       setDecidingApprovalId(null);
     }
-  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, isAuthenticated]);
+  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, approvalDecisionUncertain, isAuthenticated]);
 
   const refresh = useCallback(async () => {
     setActionMessage("");
@@ -408,7 +425,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
 
       setCancellingRunId(runId);
       setActionMessage("");
-      setRunsError("");
+      setCancellationError("");
       try {
         const response = await apiClient.post<unknown>(
           `/api/admin/agents/runs/${encodeURIComponent(runId)}/cancel`,
@@ -420,11 +437,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         );
         await loadRuns(true);
       } catch (error) {
-        setRunsError(
-          error instanceof Error
-            ? error.message
-            : `Failed to cancel Medusa run ${runId}.`,
-        );
+        if (!workspaceLive.current) return;
+        setCancellationError("Cancellation outcome could not be verified. Refresh to inspect current execution status.");
       } finally {
         cancellationInFlightRef.current = false;
         setCancellingRunId(null);
@@ -483,6 +497,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         </div>
         {isAuthenticated ? (
           <>
+            {cancellationError && <p role="alert" className="text-sm text-destructive">{cancellationError}</p>}
             {runsError && <p role="alert" className="rounded-lg border border-destructive/50 p-3 text-sm text-destructive">Run status refresh failed: {runsError}</p>}
             {runsGeneratedAt && <p className="text-xs text-muted-foreground" role="status">Execution snapshot: {formatTimestamp(runsGeneratedAt)}{isLoadingRuns ? " · Refreshing…" : ""}</p>}
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
@@ -555,6 +570,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       <section aria-label="Needs your review" className="space-y-3" data-testid="agent-runtime-approvals">
         <h3 className="text-lg font-semibold">Needs your review</h3>
         <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
+        {approvalDecisionError && <p role="alert" className="text-sm text-destructive">{approvalDecisionError}</p>}
         {approvalsError && <p role="alert" className="text-sm text-destructive">{approvalsError}</p>}
         {!isAuthenticated ? <p className="text-sm text-muted-foreground">Sign in to review authorized approval requests.</p> : isLoadingApprovals ? <p role="status" className="text-sm text-muted-foreground">Loading approval requests…</p> : approvalsError ? <p className="text-sm text-muted-foreground">Approval requests are unavailable. Refresh runtime to try again.</p> : approvals.length === 0 ? (
           <p className="rounded-lg border p-4 text-sm text-muted-foreground">You’re all caught up. No actionable approval requests are available. Karen will show requests here when human review is required.</p>
@@ -573,9 +589,9 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             <div className="flex flex-wrap gap-2">
               {approval.conversation_id && onOpenConversation && <Button size="sm" variant="outline" onClick={() => void onOpenConversation(approval.conversation_id!)}>Open original conversation</Button>}
               {onAskKaren && <Button size="sm" variant="outline" onClick={onAskKaren}>Open Karen chat</Button>}
-              <Button size="sm" disabled={decidingApprovalId !== null}
+              <Button size="sm" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                 onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "approved" })}>Review approval</Button>
-              <Button size="sm" variant="outline" disabled={decidingApprovalId !== null}
+              <Button size="sm" variant="outline" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                 onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "rejected" })}>Review rejection</Button>
             </div>
             {pendingApprovalDecision?.approvalId === approval.approval_id && (
@@ -584,11 +600,11 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                 <p className="text-sm">Request: {approval.intent}. Risk: {approval.risk_level}. Expires: {formatTimestamp(approval.expires_at)}.</p>
                 <p className="text-xs text-muted-foreground">This records your decision only. Karen must separately revalidate authorization and execution state.</p>
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" disabled={decidingApprovalId !== null}
+                  <Button type="button" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                     onClick={() => void decideApproval(approval.approval_id, pendingApprovalDecision.decision)}>
                     Confirm {pendingApprovalDecision.decision === "approved" ? "approval" : "rejection"}
                   </Button>
-                  <Button type="button" variant="outline" disabled={decidingApprovalId !== null}
+                  <Button type="button" variant="outline" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
                     onClick={() => setPendingApprovalDecision(null)}>Back</Button>
                 </div>
               </section>
