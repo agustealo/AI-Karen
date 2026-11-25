@@ -11,7 +11,7 @@ Provides graceful Redis connection handling with:
 import os
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     import redis.asyncio as redis
@@ -257,6 +257,46 @@ class RedisConnectionManager:
             logger.warning("Redis SET failed for key %s: %s", key, e)
             await self._handle_connection_error(e)
             return self._set_in_memory_cache(key, value, ex)
+
+    async def conditional_set(
+        self, key: str, value: str, *, ex: int,
+        should_replace: Callable[[Optional[str]], bool],
+    ) -> bool:
+        """Atomically update a key using Redis WATCH; never fall back locally.
+
+        A false predicate means the current state already supersedes the
+        requested write. A failed transaction or unavailable Redis returns
+        False, so callers cannot report a successful ordered projection.
+        """
+        if self._degraded_mode or not self._client:
+            return False
+        from redis.exceptions import WatchError
+
+        for _ in range(8):
+            try:
+                async with self._client.pipeline(transaction=True) as pipe:
+                    await pipe.watch(key)
+                    prior = await pipe.get(key)
+                    if not should_replace(prior):
+                        return True
+                    pipe.multi()
+                    pipe.set(key, value, ex=ex)
+                    result = await pipe.execute()
+                # Do not install a potentially stale local copy after a
+                # competing process commits a newer value.
+                self._delete_from_memory_cache(key)
+                return bool(result and result[0])
+            except WatchError:
+                continue
+            except Exception as exc:
+                self._delete_from_memory_cache(key)
+                logger.warning(
+                    "Redis conditional write failed",
+                    extra={"error_type": type(exc).__name__},
+                )
+                return False
+        self._delete_from_memory_cache(key)
+        return False
 
     async def delete(self, *keys: str) -> int:
         """Delete keys from Redis with fallback to memory cache."""

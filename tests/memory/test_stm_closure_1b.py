@@ -40,6 +40,13 @@ class FakeSTM:
         self.values[self._key(scope, slot)] = dict(value)
         return True
 
+    async def put_episode_if_newer(self, *, scope: STMScope, value: dict[str, Any]) -> bool:
+        from ai_karen_engine.core.memory.episodic import EpisodeFrame
+        prior = self.values.get(self._key(scope, STMSlot.ACTIVE_EPISODE))
+        if prior and EpisodeFrame.from_dict(prior).updated_at >= EpisodeFrame.from_dict(value).updated_at:
+            return True
+        return await self.put_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE, value=value)
+
     async def delete_slot(self, *, scope: STMScope, slot: STMSlot) -> bool:
         return self.values.pop(self._key(scope, slot), None) is not None
 

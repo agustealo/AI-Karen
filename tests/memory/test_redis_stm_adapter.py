@@ -153,3 +153,75 @@ def test_adapter_reports_degraded_backing() -> None:
     redis._degraded = True
     adapter = RedisSTMAdapter(redis_manager=redis, default_ttl_seconds=600)
     assert adapter.degraded() is True
+
+
+@pytest.mark.asyncio
+async def test_ordered_episode_adapter_delegates_atomic_compare_and_validates_scope():
+    import json
+    from dataclasses import replace
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    redis = FakeRedisManager()
+    adapter = RedisSTMAdapter(redis_manager=redis, default_ttl_seconds=600)
+    scope = STMScope("tenant", "user", "session")
+    frame = EpisodeFrame.new(EpisodeObservation(
+        tenant_id=scope.tenant_id, user_id=scope.user_id, session_id=scope.session_id,
+        observed_at=datetime.now(timezone.utc), text="committed fact",
+    ))
+    value = {**frame.to_dict(), "event_id": "event-1", "source_type": "chat_user",
+             "source_ref": "conversation-1"}
+
+    async def conditional(key, payload, *, ex, should_replace):
+        assert ex == 600
+        assert should_replace(None)
+        assert not should_replace(json.dumps(value))
+        assert not should_replace(json.dumps(replace(
+            frame, updated_at=frame.updated_at + timedelta(seconds=1),
+        ).to_dict()))
+        assert should_replace(json.dumps(replace(
+            frame, updated_at=frame.updated_at - timedelta(seconds=1),
+        ).to_dict()))
+        return await redis.set(key, payload, ex=ex)
+
+    redis.conditional_set = AsyncMock(side_effect=conditional)
+    assert await adapter.put_episode_if_newer(scope=scope, value=value)
+    assert await adapter.get_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE) == value
+    with pytest.raises(ValueError, match="scope mismatch"):
+        await adapter.put_episode_if_newer(scope=scope, value={**value, "tenant_id": "foreign"})
+    redis.conditional_set.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_conditional_redis_write_retries_watch_conflict_and_never_uses_local_fallback():
+    from unittest.mock import AsyncMock, MagicMock
+    from redis.exceptions import WatchError
+    from ai_karen_engine.platform.memory.redis.redis_connection_manager import RedisConnectionManager
+
+    manager = RedisConnectionManager()
+    client = MagicMock()
+    manager._client = client
+
+    def pipeline(prior, conflict=False):
+        pipe = MagicMock()
+        pipe.__aenter__ = AsyncMock(return_value=pipe)
+        pipe.__aexit__ = AsyncMock(return_value=False)
+        pipe.watch = AsyncMock()
+        pipe.get = AsyncMock(return_value=prior)
+        pipe.execute = AsyncMock(side_effect=WatchError() if conflict else None,
+                                 return_value=[True])
+        return pipe
+
+    first = pipeline("old", conflict=True)
+    second = pipeline("newest")
+    client.pipeline.side_effect = [first, second]
+    assert await manager.conditional_set("key", "incoming", ex=600,
+                                         should_replace=lambda prior: prior != "newest")
+    first.execute.assert_awaited_once()
+    second.execute.assert_not_awaited()
+    assert client.pipeline.call_count == 2
+
+    manager._degraded_mode = True
+    assert not await manager.conditional_set("key", "incoming", ex=600,
+                                             should_replace=lambda prior: True)
+    assert manager._get_from_memory_cache("key") is None

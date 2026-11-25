@@ -139,16 +139,12 @@ class HotStateWorker(ProjectionWorker):
             return False
         # The recall router checks committed event identity, content and ACL.
         # Do not write an untagged frame that can bypass source revocation.
-        prior = await self._stm.get_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE)
-        if prior:
-            try:
-                previous = EpisodeFrame.from_dict(prior)
-            except (KeyError, TypeError, ValueError):
-                previous = None
-            if previous is not None and previous.updated_at >= frame.updated_at:
-                return True
-        return await self._stm.put_slot(
-            scope=scope, slot=STMSlot.ACTIVE_EPISODE,
+        # No read/modify/write fallback: unsupported adapters fail closed.
+        ordered_write = getattr(self._stm, "put_episode_if_newer", None)
+        if not callable(ordered_write):
+            return False
+        return await ordered_write(
+            scope=scope,
             value={
                 **frame.to_dict(),
                 "event_id": event_data["event_id"],

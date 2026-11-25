@@ -82,6 +82,35 @@ class RedisSTMAdapter(STMPort):
             raise ValueError("STM TTL must be positive")
         return await self.redis.set(self._key(scope, slot), payload, ex=ttl)
 
+    async def put_episode_if_newer(
+        self, *, scope: STMScope, value: dict[str, Any],
+    ) -> bool:
+        """Order event-backed episode frames atomically in the shared store."""
+        scope.validate()
+        incoming = EpisodeFrame.from_dict(value)
+        identity = (scope.tenant_id, scope.user_id, scope.session_id)
+        if (incoming.tenant_id, incoming.user_id, incoming.session_id) != identity:
+            raise ValueError("episode projection scope mismatch")
+        if not all(isinstance(value.get(key), str) and value[key].strip()
+                   for key in ("event_id", "source_type", "source_ref")):
+            raise ValueError("episode projection requires committed source identity")
+        payload = json.dumps(value, default=str, separators=(",", ":"))
+        if len(payload.encode("utf-8")) > self.max_slot_bytes:
+            raise ValueError("STM slot payload exceeds configured limit")
+
+        def should_replace(raw: str | None) -> bool:
+            if raw is None:
+                return True
+            previous = EpisodeFrame.from_dict(json.loads(raw))
+            if (previous.tenant_id, previous.user_id, previous.session_id) != identity:
+                raise ValueError("stored episode scope mismatch")
+            return previous.updated_at < incoming.updated_at
+
+        return await self.redis.conditional_set(
+            self._key(scope, STMSlot.ACTIVE_EPISODE), payload,
+            ex=self.default_ttl_seconds, should_replace=should_replace,
+        )
+
     async def delete_slot(self, *, scope: STMScope, slot: STMSlot) -> bool:
         return bool(await self.redis.delete(self._key(scope, slot)))
 
