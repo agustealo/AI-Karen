@@ -424,4 +424,58 @@ describe("runtime projection validation", () => {
     expect(screen.queryByRole("button", { name: "Request cancellation" })).toBeNull();
   });
 
+
+  it("retains an objective when no ready conversation accepts the handoff", async () => {
+    render(<AgentsPage />);
+    await screen.findByText("No verified executions match this view.");
+    const objective = screen.getByRole("textbox", { name: "Mission objective" }) as HTMLTextAreaElement;
+    fireEvent.change(objective, { target: { value: "Prepare a verified report" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review objective" }));
+    expect(screen.getByRole("alert").textContent).toContain("Your text is retained");
+    expect(objective.value).toBe("Prepare a verified report");
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it("hands off only reviewable user content and clears only after acknowledgement", async () => {
+    const received = vi.fn();
+    const listener = (event: Event) => {
+      received((event as CustomEvent).detail);
+      event.preventDefault();
+    };
+    window.addEventListener("karen:inject-message", listener);
+    try {
+      render(<AgentsPage />);
+      await screen.findByText("No verified executions match this view.");
+      const objective = screen.getByRole("textbox", { name: "Mission objective" }) as HTMLTextAreaElement;
+      fireEvent.change(objective, { target: { value: "  Prepare a verified report  " } });
+      fireEvent.click(screen.getByRole("button", { name: "Review objective" }));
+      expect(received).toHaveBeenCalledTimes(1);
+      expect(received).toHaveBeenCalledWith({ role: "user", content: "Prepare a verified report", autoSubmit: false });
+      expect(objective.value).toBe("");
+      fireEvent.click(screen.getByRole("button", { name: "Review objective" }));
+      expect(received).toHaveBeenCalledTimes(1);
+      expect(mocks.post).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("karen:inject-message", listener);
+    }
+  });
+
+  it("does not retain personal objectives across execution scope or principal changes", async () => {
+    const view = render(<AgentsPage />);
+    await screen.findByText("No verified executions match this view.");
+    fireEvent.change(screen.getByRole("textbox", { name: "Mission objective" }), { target: { value: "Private objective" } });
+    fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+    expect(screen.queryByRole("textbox", { name: "Mission objective" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "My work" }));
+    await screen.findByText("No verified executions match this view.");
+    const input = screen.getByRole("textbox", { name: "Mission objective" }) as HTMLTextAreaElement;
+    expect(input.value).toBe("");
+    fireEvent.change(input, { target: { value: "Another private objective" } });
+    mocks.user = { tenant_id: "tenant-B", user_id: "user-B", roles: [] };
+    view.rerender(<AgentsPage />);
+    await screen.findByText("No verified executions match this view.");
+    expect((screen.getByRole("textbox", { name: "Mission objective" }) as HTMLTextAreaElement).value).toBe("");
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
 });
