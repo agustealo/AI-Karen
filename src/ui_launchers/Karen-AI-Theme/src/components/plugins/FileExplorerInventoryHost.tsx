@@ -49,6 +49,7 @@ interface ScopedPage extends InventoryPage {
 interface PageRequest {
   principalKey: string;
   cursor: string | null;
+  search: string;
   generation: number;
 }
 
@@ -61,6 +62,8 @@ export interface FileExplorerInventoryProps extends Record<string, unknown> {
   selectedSourceIds: string[];
   onSelect: (references: ExplorerSelection[]) => void;
   onRefresh: () => void;
+  search: string;
+  onSearch?: (search: string) => void;
   hasMore: boolean;
   nextCursor: string | null;
   onNextPage: (cursor: string) => void;
@@ -199,6 +202,7 @@ export function FileExplorerInventoryHost({
   const [request, setRequest] = useState<PageRequest>({
     principalKey: '',
     cursor: null,
+    search: '',
     generation: 0,
   });
   const [page, setPage] = useState<ScopedPage | null>(null);
@@ -226,6 +230,7 @@ export function FileExplorerInventoryHost({
     let cancelled = false;
     const generation = ++generationRef.current;
     const cursor = request.principalKey === principalKey ? request.cursor : null;
+    const search = request.principalKey === principalKey ? request.search : '';
 
     setLoading(true);
     setPage(null);
@@ -233,7 +238,8 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds([]);
 
     const endpoint = INVENTORY_ENDPOINTS[consumer] + '?limit=100' +
-      (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+      (cursor ? '&cursor=' + encodeURIComponent(cursor) : '') +
+      (search ? '&search=' + encodeURIComponent(search) : '');
 
     void apiClient.get<unknown>(endpoint)
       .then((data) => {
@@ -328,6 +334,20 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds(accepted);
   }, [currentPage, loading, currentError, isCurrentCallback, capacity, selectableItems]);
 
+  const activeSearch = request.principalKey === principalKey && !authLoading ? request.search : '';
+  const onSearch = useCallback((value: string) => {
+    if (!principalKey || !isCurrentCallback() || typeof value !== 'string' ||
+        Array.from(value).length > 160 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return;
+    // Reject lone surrogate code points before URI encoding.
+    try { encodeURIComponent(value); } catch { return; }
+    const search = value.trim();
+    generationRef.current += 1;
+    setSelectedSourceIds([]);
+    setPage(null);
+    setErrorState(null);
+    setRequest(previous => ({ principalKey, cursor: null, search, generation: previous.generation + 1 }));
+  }, [principalKey, isCurrentCallback]);
+
   const onRefresh = useCallback(() => {
     if (!principalKey || !isCurrentCallback()) return;
     generationRef.current += 1;
@@ -336,9 +356,10 @@ export function FileExplorerInventoryHost({
     setRequest((value) => ({
       principalKey,
       cursor: null,
+      search: activeSearch,
       generation: value.generation + 1,
     }));
-  }, [principalKey, isCurrentCallback]);
+  }, [principalKey, isCurrentCallback, activeSearch]);
 
   const onNextPage = useCallback((cursor: string) => {
     if (
@@ -352,9 +373,10 @@ export function FileExplorerInventoryHost({
     setRequest((value) => ({
       principalKey,
       cursor,
+      search: activeSearch,
       generation: value.generation + 1,
     }));
-  }, [principalKey, currentPage, loading, currentError, isCurrentCallback]);
+  }, [principalKey, currentPage, loading, currentError, isCurrentCallback, activeSearch]);
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
@@ -365,6 +387,8 @@ export function FileExplorerInventoryHost({
     selectedSourceIds: currentPage && !currentError && !capacityChanged && effectiveSelection.length <= capacity ? effectiveSelection : [],
     onSelect,
     onRefresh,
+    search: activeSearch,
+    onSearch: principalKey && !authLoading ? onSearch : undefined,
     hasMore: currentPage?.has_more || false,
     nextCursor: currentPage?.next_cursor || null,
     onNextPage,

@@ -867,3 +867,27 @@ describe('KEXP-003F capacity transition isolation', () => {
     expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe('KEXP-004A inventory-wide search', () => {
+  it('submits a literal query, clears selection, preserves query on pagination and clears search', async () => {
+    mocks.get.mockResolvedValueOnce(response(FILE_A))
+      .mockResolvedValueOnce(response(FILE_B, true, 'search-cursor'))
+      .mockResolvedValueOnce(response(FILE_A))
+      .mockResolvedValueOnce(response(FILE_B));
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha.txt' }));
+    fireEvent.change(screen.getByLabelText('Search all authorized files'), { target: { value: 'report_%' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search inventory' }));
+    await screen.findByRole('checkbox', { name: 'Select beta.txt' });
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.get.mock.calls[1]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100&search=report_%25']);
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    expect(mocks.get.mock.calls[2]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100&cursor=search-cursor&search=report_%25']);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear inventory search' }));
+    await screen.findByRole('checkbox', { name: 'Select beta.txt' });
+    expect(mocks.get.mock.calls[3]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100']);
+  });
+});

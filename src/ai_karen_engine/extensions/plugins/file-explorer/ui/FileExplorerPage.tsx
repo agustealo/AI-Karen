@@ -38,6 +38,9 @@ export interface FileExplorerProps {
   maxSelection?: number;
   onSelect?: (references: ExplorerSelection[]) => void;
   onRefresh?: () => void;
+  /** Optional authenticated inventory-wide search, owned by the host. */
+  search?: string;
+  onSearch?: (search: string) => void;
   /** The host owns pagination state and must reject stale/out-of-order responses. */
   hasMore?: boolean;
   nextCursor?: string | null;
@@ -86,6 +89,8 @@ function FileExplorerView({
   maxSelection = MAX_SELECTION,
   onSelect,
   onRefresh,
+  search = '',
+  onSearch,
   hasMore = false,
   nextCursor = null,
   onNextPage,
@@ -93,6 +98,7 @@ function FileExplorerView({
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  const [searchDraft, setSearchDraft] = useState(search);
   const [layout, setLayout] = useState<'list' | 'grid'>('list');
   const [sort, setSort] = useState<'name-asc' | 'name-desc' | 'size-asc' | 'size-desc'>('name-asc');
   const [reviewSelection, setReviewSelection] = useState(false);
@@ -187,11 +193,24 @@ function FileExplorerView({
     onSelect?.(references);
   }
 
+  const searchControls = onSearch && <div role="search" aria-label="Search all authorized files" className="flex flex-wrap items-end gap-2">
+    <label className="flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">
+      Search all authorized files
+      <input type="text" maxLength={160} value={searchDraft} className="min-w-0 rounded-md border bg-background px-3 py-2"
+        onChange={event => setSearchDraft(event.target.value)}
+        onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); onSearch(searchDraft); } }} />
+    </label>
+    <button type="button" className="rounded border px-3 py-2 text-sm" onClick={() => onSearch(searchDraft)}>Search inventory</button>
+    {(search || searchDraft) && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={() => { setSearchDraft(''); onSearch(''); }}>Clear inventory search</button>}
+    {search && <p className="basis-full break-all text-xs text-muted-foreground">Inventory search: {search}</p>}
+  </div>;
+
   if (!authorized || Boolean(error) || !pageEvidenceValid || (!loading && inventory === null)) {
     return <section role="alert" className="flex flex-col items-start gap-3 rounded-lg border p-6 text-sm text-muted-foreground">
       {loading ? <p role="status">Loading authorized file inventory…</p> :
         <p>File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.</p>}
       {error && <p className="text-destructive">{error}</p>}
+      {searchControls}
       {authorized && !pageEvidenceValid && <p className="text-destructive">Invalid host pagination evidence.</p>}
       {(authorized || Boolean(error)) && onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </section>;
@@ -207,6 +226,7 @@ function FileExplorerView({
       </div>
       {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
+    {searchControls}
     <nav aria-label="Folder location" className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/40 p-2 text-sm">
       <button type="button" className="rounded border px-3 py-2" onClick={() => { setParentId(null); setFilter(''); }}>Root</button>
       {folder && <>
@@ -255,7 +275,7 @@ function FileExplorerView({
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {loading ? <p role="status" className="py-8 text-center text-sm">Loading authorized file inventory…</p>
       : visible.length === 0 ? <div role="status" className="space-y-2 py-8 text-center text-sm text-muted-foreground">
-        <p className="font-medium text-foreground">{filter ? 'No matching references on this page.' : 'No files or folders in this view.'}</p>
+        <p className="font-medium text-foreground">{filter ? 'No matching references on this page.' : search ? 'No selectable references match this inventory search page.' : 'No files or folders in this view.'}</p>
         <p>{filter ? 'Clear the filter to see other references on this page.' : 'No references were supplied for this location on the current page.'}</p>
       </div>
       : <ul className={layout === 'grid' ? 'grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3' : 'flex min-w-0 flex-col gap-1'} aria-label="Files and folders">
@@ -291,7 +311,7 @@ function FileExplorerView({
     <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs text-muted-foreground">
       <div className="space-y-1">
         <p role="status" aria-live="polite">{selectionSet.size} selected · {visible.length} shown on this page · Maximum {selectionLimit} selections{atLimit ? ' · Selection limit reached. Deselect a reference to select another.' : ''}</p>
-        <p>Refreshing or moving to the next page clears this selection.</p>
+        <p>Refreshing, searching or moving to the next page clears this selection.</p>
       </div>
       {selectionSet.size > 0 && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={clearSelections} disabled={loading}>Clear selection</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
