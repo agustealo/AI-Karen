@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from contextvars import ContextVar
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
@@ -1136,4 +1138,168 @@ async def test_governed_http_deadline_rejects_late_receipt_without_success(monke
     assert transport.await_args.kwargs["local_only"] is True
     assert not any(call.args[1] is True for call in observations.call_args_list)
     assert attempts == []
+    assert admission.meter.model_calls == 1
+
+
+def _owned_worker_fixture(monkeypatch, native, worker):
+    manager, _, endpoint = _local_manager(monkeypatch)
+    if native:
+        from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+            TransformersRuntime,
+        )
+        from ai_karen_engine.core.model_runtime.runtime_engine import (
+            EndpointProtocol, RuntimeEngine,
+        )
+        endpoint = replace(
+            endpoint, provider_id="builtin_transformers", base_url=None,
+            endpoint_type=ProviderEndpointType.BUILTIN_TRANSFORMERS,
+            protocol=EndpointProtocol.NATIVE, runtime_engine=RuntimeEngine.TRANSFORMERS,
+        )
+        selection = RuntimeSelection(
+            provider_id=endpoint.provider_id, display_name=endpoint.display_name,
+            endpoint_type=endpoint.endpoint_type, model=endpoint.default_model,
+            runtime_engine=endpoint.runtime_engine.value, base_url=endpoint.base_url,
+        )
+        provider = object.__new__(TransformersRuntime)
+        monkeypatch.setattr(provider, "generate_text_with_model", worker, raising=False)
+        monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+        monkeypatch.setattr(manager, "_resolve_endpoint", lambda _: endpoint)
+        monkeypatch.setattr(manager, "resolve_runtime", lambda _: provider)
+
+        def invoke(admission):
+            return manager.generate_chat(
+                [{"role": "user", "content": "input"}],
+                return_receipt=True, execution_admission=admission,
+            )
+    else:
+        manager.embedding_manager = SimpleNamespace(
+            model_name="local-embedding-model", model_loaded=True, model=object(),
+            embed_authoritative=worker,
+        )
+
+        def invoke(admission):
+            return manager.generate_embedding("input", execution_admission=admission)
+    return manager, invoke
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("late_failure", [False, True])
+async def test_governed_native_worker_owned_across_repeated_cancellation(
+    monkeypatch, native, late_failure,
+):
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    retired = threading.Event()
+    marker = ContextVar("native_worker_scope", default="missing")
+    marker.set("original")
+    observed = []
+
+    def worker(*args, **kwargs):
+        try:
+            observed.append(marker.get())
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(5):
+                raise RuntimeError("test worker release deadline")
+            if late_failure:
+                raise RuntimeError("late worker failure")
+            return ("late text", "model-a") if native else [0.1]
+        finally:
+            retired.set()
+
+    manager, invoke = _owned_worker_fixture(monkeypatch, native, worker)
+    from unittest.mock import Mock
+    observations = Mock()
+    monkeypatch.setattr(manager, "_record_provider_result", observations)
+    admission = _scope(calls=1)
+    task = asyncio.create_task(invoke(admission))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        assert observed == ["original"]
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not retired.is_set()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+
+    assert retired.is_set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert admission.meter.model_calls == 1
+    assert not any(call.args[1] is True for call in observations.call_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+async def test_expired_native_worker_result_never_becomes_success(monkeypatch, native):
+    from unittest.mock import Mock
+
+    admission = _scope(calls=1)
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    retired = threading.Event()
+
+    def worker(*args, **kwargs):
+        try:
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(5):
+                raise RuntimeError("test worker release deadline")
+            return ("late text", "model-a") if native else [0.1]
+        finally:
+            retired.set()
+
+    manager, invoke = _owned_worker_fixture(monkeypatch, native, worker)
+    observations = Mock()
+    monkeypatch.setattr(manager, "_record_provider_result", observations)
+    task = asyncio.create_task(invoke(admission))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        admission.meter._start_ms -= 61000
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+    assert retired.is_set()
+    with pytest.raises(RuntimeError, match="execution_deadline_exhausted"):
+        await task
+    assert admission.meter.model_calls == 1
+    assert not any(call.args[1] is True for call in observations.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_native_embedding_timeout_waits_for_worker_retirement(monkeypatch):
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    retired = threading.Event()
+
+    def worker(text):
+        try:
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(5):
+                raise RuntimeError("test worker release deadline")
+            return [0.1]
+        finally:
+            retired.set()
+
+    _, invoke = _owned_worker_fixture(monkeypatch, False, worker)
+    admission = _scope(calls=1, max_duration_ms=500)
+    task = asyncio.create_task(invoke(admission))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await asyncio.sleep(0.6)
+        assert not task.done()
+        assert not retired.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+    assert retired.is_set()
+    with pytest.raises(RuntimeError, match="execution_deadline_exhausted"):
+        await task
     assert admission.meter.model_calls == 1

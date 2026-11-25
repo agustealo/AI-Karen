@@ -9,15 +9,21 @@ prompts and facade dictionaries cannot issue permission or reset a budget.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from contextvars import copy_context
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
 from ai_karen_engine.core.model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
 )
+
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -161,7 +167,7 @@ class GovernedToolModelAdmission:
             raise RuntimeError("governed_model_execution_budget_exhausted")
 
     @asynccontextmanager
-    async def admitted_execution_deadline(self) -> AsyncIterator[None]:
+    async def admitted_execution_deadline(self) -> AsyncIterator[float]:
         """Fence already-reserved async work by the original meter deadline.
 
         Call only after the existing atomic reservation. This is neither
@@ -178,7 +184,7 @@ class GovernedToolModelAdmission:
         scope = asyncio.timeout_at(deadline)
         try:
             async with scope:
-                yield
+                yield deadline
                 # A transport can suppress cancellation and return late.
                 # Do not project its result into a successful SDK receipt.
                 self._require_scope()
@@ -189,6 +195,45 @@ class GovernedToolModelAdmission:
             if scope.expired():
                 raise RuntimeError("governed_model_execution_deadline_exhausted") from None
             raise
+
+    async def run_admitted_blocking(
+        self, function: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs,
+    ) -> _T:
+        """Own a synchronous native call until its local worker returns.
+
+        The caller must already have reserved this exact operation. A deadline
+        or caller cancellation suppresses the result, not the running thread.
+        Never abandon an executor future or claim remote/device cessation.
+        """
+        async with self.admitted_execution_deadline() as deadline:
+            loop = asyncio.get_running_loop()
+            context = copy_context()
+            stopped = threading.Event()
+
+            def invoke() -> _T:
+                # An executor queue may outlive the authorized duration.
+                # Do not start fresh native work after observing expiry/stop.
+                if stopped.is_set() or loop.time() >= deadline:
+                    raise RuntimeError("governed_model_execution_deadline_exhausted")
+                return context.run(function, *args, **kwargs)
+
+            worker = loop.run_in_executor(None, invoke)
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                stopped.set()
+                # Repeated cancellation must not detach the native call.
+                # Keep ownership while it retires, even beyond the deadline.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not worker.cancelled():
+                    worker.exception()  # observe a late failure without logging payloads
+                raise
 
     async def reserve_local_embedding(self, *, model: str) -> None:
         """Charge a real local embedding attempt, never a synthetic fallback."""

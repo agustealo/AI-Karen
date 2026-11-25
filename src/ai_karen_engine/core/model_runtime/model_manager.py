@@ -365,6 +365,14 @@ class ModelManager:
                     temperature=float(temperature), return_receipt=return_receipt,
                     breaker=breaker,
                 )
+            if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_TRANSFORMERS:
+                if stream:
+                    raise ProviderNotAvailable("governed_model_stream_unsupported")
+                await execution_admission.reserve_transport(endpoint, model=selection.model)
+                return await self._execute_admitted_native(
+                    selection, execution_admission, prompt=prompt,
+                    return_receipt=return_receipt, breaker=breaker, options=kwargs,
+                )
             await execution_admission.reserve_transport(endpoint, model=selection.model)
         provider = self.resolve_runtime(selection)
 
@@ -488,6 +496,61 @@ class ModelManager:
             )
             raise
 
+    async def _execute_admitted_native(
+        self,
+        selection: RuntimeSelection,
+        admission: GovernedToolModelAdmission,
+        *,
+        prompt: str,
+        return_receipt: bool,
+        breaker: CircuitBreaker,
+        options: Dict[str, Any],
+    ) -> ProviderExecutionResult | str:
+        """Own native generation and verify its observed model before success."""
+        from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+            TransformersRuntime,
+        )
+
+        start = time.perf_counter()
+        try:
+            async with admission.admitted_execution_deadline():
+                provider = self.resolve_runtime(selection)
+                if not isinstance(provider, TransformersRuntime):
+                    raise ProviderNotAvailable("model_execution_provenance_unsupported")
+                response, observed_model = await admission.run_admitted_blocking(
+                    provider.generate_text_with_model, prompt, **options,
+                )
+                if (
+                    not isinstance(observed_model, str)
+                    or not observed_model.strip()
+                    or observed_model.strip().lower() == "auto"
+                ):
+                    raise ProviderNotAvailable("native_execution_model_unobserved")
+                if (
+                    selection.model not in (None, "", "auto")
+                    and os.path.realpath(selection.model) != os.path.realpath(observed_model)
+                ):
+                    raise ProviderNotAvailable("executed_model_registry_identity_drift")
+                if not isinstance(response, str) or not response.strip():
+                    raise ProviderNotAvailable("native_execution_empty_response")
+                receipt = ProviderExecutionResult(
+                    text=response, model=observed_model,
+                    provider_id=selection.provider_id, runtime_engine=selection.runtime_engine,
+                )
+            self._record_provider_result(selection.provider_id, True, start)
+            breaker.record_success()
+            return receipt if return_receipt else receipt.text
+        except Exception as exc:
+            self._record_provider_result(
+                selection.provider_id, False, start, error_message=type(exc).__name__,
+            )
+            breaker.record_failure()
+            logger.warning(
+                "governed_model_native_failed",
+                extra={"provider_id": selection.provider_id, "error_type": type(exc).__name__},
+            )
+            raise
+
     async def generate_embedding(
         self,
         text: str,
@@ -516,7 +579,9 @@ class ModelManager:
         await execution_admission.reserve_local_embedding(
             model=self.embedding_manager.model_name,
         )
-        return await asyncio.to_thread(self.embedding_manager.embed_authoritative, text)
+        return await execution_admission.run_admitted_blocking(
+            self.embedding_manager.embed_authoritative, text,
+        )
 
     @classmethod
     async def invoke_provider(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:
