@@ -358,3 +358,127 @@ async def test_empty_folder_delete_rejects_stale_isolation():
                     )
     finally:
         await conn.close()
+
+
+async def test_real_folder_search_literal_owner_scope_and_keyset(monkeypatch):
+    """Prove search and continuation against migrated PostgreSQL, not SQL mocks."""
+    from types import SimpleNamespace
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from ai_karen_engine.persistence.postgres import transactions
+    from ai_karen_engine.services.database.repositories.supabase_artifact_store import (
+        SupabaseArtifactStore,
+    )
+
+    tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"])
+    owner = UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_ID"])
+    other = UUID(os.environ["KAREN_TEST_ARTIFACT_OTHER_USER_ID"])
+    tenant_b = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_B_ID"])
+    owner_b = UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_B_ID"])
+    folder, sibling, foreign = uuid4(), uuid4(), uuid4()
+    marker = uuid4().hex
+    query = marker + "%_"
+    matching = [str(uuid4()) for _ in range(2)]
+    fixtures = [
+        (matching[0], tenant, owner, folder, query + "-one.txt", False),
+        (matching[1], tenant, owner, folder, query.upper() + "-two.txt", False),
+        (str(uuid4()), tenant, owner, folder, marker + "XY-decoy.txt", False),
+        (str(uuid4()), tenant, owner, folder, query + "-deleted.txt", True),
+        (str(uuid4()), tenant, owner, sibling, query + "-sibling.txt", False),
+        (str(uuid4()), tenant, owner, None, query + "-root.txt", False),
+        (str(uuid4()), tenant, other, foreign, query + "-foreign.txt", False),
+        (str(uuid4()), tenant_b, owner_b, None, query + "-tenant.txt", False),
+    ]
+    engine = create_async_engine(make_url(_dsn()).set(drivername="postgresql+asyncpg"))
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        transactions, "get_postgres_engine",
+        lambda: SimpleNamespace(async_session_factory=sessions),
+    )
+    store = SupabaseArtifactStore(
+        sessions, None, hierarchy_transaction=transactions.async_transaction_scope,
+    )
+    conn = None
+    try:
+        conn = await asyncpg.connect(_dsn())
+        async with conn.transaction():
+            await conn.executemany(
+                "INSERT INTO public.artifact_folders "
+                "(folder_id,tenant_id,owner_user_id,name) VALUES ($1,$2,$3,$4)",
+                [(folder, tenant, owner, marker + "-folder"),
+                 (sibling, tenant, owner, marker + "-sibling"),
+                 (foreign, tenant, other, marker + "-foreign")],
+            )
+            for file_id, file_tenant, file_owner, parent, name, deleted in fixtures:
+                await conn.execute(
+                    "INSERT INTO public.files "
+                    "(file_id,tenant_id,owner_user_id,folder_id,name,mime_type,"
+                    "bytes,storage_uri,sha256,metadata,deleted_at) "
+                    "VALUES ($1,$2,$3,$4,$5,'text/plain',42,$6,$7,'{}'::jsonb,"
+                    "CASE WHEN $8::boolean THEN now() ELSE NULL END)",
+                    file_id, file_tenant, file_owner, parent, name,
+                    f"supabase://artifacts/{file_tenant}/{file_id}/content",
+                    "a" * 64, deleted,
+                )
+
+        options = dict(folder_scoped=True, folder_id=str(folder), search=query, limit=1)
+        first = await store.list_owner_artifacts_page(str(tenant), str(owner), **options)
+        assert first.success and len(first.data) == 1
+        assert first.metadata["has_more"] is True
+        cursor = first.metadata["next_cursor"]
+        assert isinstance(cursor, str) and cursor
+        second = await store.list_owner_artifacts_page(
+            str(tenant), str(owner), cursor=cursor, **options,
+        )
+        assert second.success and len(second.data) == 1
+        assert second.metadata == {"has_more": False, "next_cursor": None}
+        assert {first.data[0].id, second.data[0].id} == set(matching)
+        for artifact in (first.data[0], second.data[0]):
+            assert artifact.tenant_id == str(tenant)
+            assert artifact.user_id == str(owner)
+            assert artifact.folder_id == str(folder)
+            assert artifact.organization_revision == 1
+
+        for principal_tenant, principal_owner, changes in (
+            (tenant, owner, {"search": marker}),
+            (tenant, owner, {"folder_id": str(sibling)}),
+            (tenant, owner, {"folder_id": None}),
+            (tenant, owner, {"folder_scoped": False, "folder_id": None}),
+            (tenant, other, {"folder_id": str(foreign)}),
+            (tenant_b, owner_b, {"folder_id": None}),
+        ):
+            replay = await store.list_owner_artifacts_page(
+                str(principal_tenant), str(principal_owner), cursor=cursor,
+                **{**options, **changes},
+            )
+            assert not replay.success
+            assert replay.error == "artifact_owner_page_invalid: artifact_owner_cursor_invalid"
+
+        denied = await store.list_owner_artifacts_page(
+            str(tenant), str(owner), **{**options, "folder_id": str(foreign)},
+        )
+        assert not denied.success
+        root = await store.list_owner_artifacts_page(
+            str(tenant), str(owner), **{**options, "folder_id": None},
+        )
+        assert root.success
+        assert [artifact.id for artifact in root.data] == [fixtures[5][0]]
+        assert root.metadata == {"has_more": False, "next_cursor": None}
+    finally:
+        try:
+            if conn is not None:
+                try:
+                    async with conn.transaction():
+                        await conn.executemany(
+                            "DELETE FROM public.files WHERE file_id=$1",
+                            [(fixture[0],) for fixture in fixtures],
+                        )
+                        await conn.execute(
+                            "DELETE FROM public.artifact_folders "
+                            "WHERE folder_id IN ($1,$2,$3)", folder, sibling, foreign,
+                        )
+                finally:
+                    await conn.close()
+        finally:
+            await engine.dispose()
