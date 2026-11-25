@@ -102,3 +102,20 @@ describe("Agent Runtime discovery contract", () => {
     expect(source).toContain("not exposed by this discovery endpoint");
   });
 });
+
+
+describe("Agent Runtime truthful availability states", () => {
+  it("distinguishes initial loading and retrieval errors from empty execution history", () => {
+    expect(source).toContain("const [isLoadingRuns, setIsLoadingRuns] = useState(true)");
+    expect(source).toContain("Execution history is unavailable. Refresh runtime to try again.");
+    expect(source).toContain("No work is currently in progress.");
+    expect(source).toContain("No completed executions are recorded.");
+  });
+
+  it("does not present unavailable metrics as zero or an unverified approval inbox as empty", () => {
+    expect(source).toContain("const [isLoadingApprovals, setIsLoadingApprovals] = useState(true)");
+    expect(source).toContain("Loading approval requests…");
+    expect(source).toContain("Approval requests are unavailable. Refresh runtime to try again.");
+    expect(source).not.toContain("catalog?.total ?? 0");
+  });
+});
