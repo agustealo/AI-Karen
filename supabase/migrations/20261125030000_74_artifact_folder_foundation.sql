@@ -39,7 +39,7 @@ CREATE TABLE public.artifact_folder_mutation_fences (
 );
 ALTER TABLE public.artifact_folder_mutation_fences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.artifact_folder_mutation_fences FORCE ROW LEVEL SECURITY;
-REVOKE ALL ON public.artifact_folder_mutation_fences FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON public.artifact_folder_mutation_fences FROM PUBLIC;
 
 CREATE FUNCTION public.guard_artifact_folder_identity() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $$
@@ -100,7 +100,7 @@ CREATE TRIGGER artifact_folder_identity_guard
 REVOKE ALL ON FUNCTION public.guard_artifact_folder_identity() FROM PUBLIC;
 ALTER TABLE public.artifact_folders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.artifact_folders FORCE ROW LEVEL SECURITY;
-REVOKE ALL ON public.artifact_folders FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON public.artifact_folders FROM PUBLIC;
 -- No client policies or grants; trusted server operations remain unavailable
 -- until the governed repository and actor-scoped admission are implemented.
 COMMENT ON TABLE public.artifact_folders IS
@@ -126,8 +126,7 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.move_owned_artifact_folder(UUID, UUID, UUID, UUID, BIGINT)
-    FROM PUBLIC, anon, authenticated, service_role;
-REVOKE ALL ON public.artifact_folders FROM service_role;
+    FROM PUBLIC;
 
 -- Folder assignment is organization metadata, not a content revision.
 -- Existing rows remain at root. On folder deletion retain the artifact.
@@ -226,6 +225,23 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.delete_empty_owned_artifact_folder(UUID, UUID, UUID, BIGINT)
-    FROM PUBLIC, anon, authenticated, service_role;
+    FROM PUBLIC;
+
+-- Supabase roles exist in managed installations but not every local PostgreSQL
+-- cluster. Always revoke PUBLIC above; revoke each existing named role here.
+-- Do not create roles or grant privileges as a side effect of this migration.
+DO $artifact_folder_private_revoke$
+DECLARE role_name text;
+BEGIN
+    FOREACH role_name IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
+            EXECUTE format('REVOKE ALL ON public.artifact_folder_mutation_fences FROM %I', role_name);
+            EXECUTE format('REVOKE ALL ON public.artifact_folders FROM %I', role_name);
+            EXECUTE format('REVOKE ALL ON FUNCTION public.move_owned_artifact_folder(UUID, UUID, UUID, UUID, BIGINT) FROM %I', role_name);
+            EXECUTE format('REVOKE ALL ON FUNCTION public.delete_empty_owned_artifact_folder(UUID, UUID, UUID, BIGINT) FROM %I', role_name);
+        END IF;
+    END LOOP;
+END
+$artifact_folder_private_revoke$;
 
 COMMIT;

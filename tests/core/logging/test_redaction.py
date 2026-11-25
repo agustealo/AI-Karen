@@ -65,8 +65,8 @@ def test_access_filter_denies_unknown_formats_and_is_idempotent(monkeypatch):
         install_request_target_privacy_filter,
     )
 
-    logger = logging.Logger("uvicorn.access")
-    monkeypatch.setattr(logging, "getLogger", lambda name: logger)
+    logger = logging.getLogger("uvicorn.access")
+    monkeypatch.setattr(logger, "filters", [])
     install_request_target_privacy_filter()
     install_request_target_privacy_filter()
     assert len(logger.filters) == 1

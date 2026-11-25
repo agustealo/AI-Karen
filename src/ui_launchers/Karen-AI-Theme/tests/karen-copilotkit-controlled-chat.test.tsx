@@ -57,7 +57,8 @@ vi.mock("@/components/chat/KarenBrowserDictationCapture", () => ({
   KarenBrowserDictationCapture: () => <div data-testid="shared-browser-dictation" />,
 }));
 
-vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
+vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/components/chat/copilotkit/useKarenPersistedDraft")>(),
   useKarenPersistedDraft: () => {
     const [draft, setDraft] = React.useState("");
     const text = React.useRef("");
