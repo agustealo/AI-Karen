@@ -274,14 +274,24 @@ export function FileExplorerInventoryHost({
   const selectableItems = currentPage?.items.filter(item => mode !== 'selection' || !attachedIds.has(item.source_id)) ?? [];
   const selectableIds = new Set(selectableItems.map(item => item.source_id));
   const effectiveSelection = selectedSourceIds.filter(id => selectableIds.has(id));
-  const capacityKey = JSON.stringify([capacity, ...Array.from(attachedIds).sort()]);
-  const capacityRef = useRef(capacityKey);
-  useLayoutEffect(() => { capacityRef.current = capacityKey; }, [capacityKey]);
+  const capacityKey = JSON.stringify([capacity, ...existingAttachments
+    .map(item => JSON.stringify([item.source_id, item.revision])).sort()]);
+  // A new identity on every capacity transition prevents A → B → A replay.
+  // Comparing only a serialized value would revive callbacks from state A.
+  const capacityIdentity = useMemo(() => ({ key: capacityKey }), [capacityKey]);
+  const capacityRef = useRef(capacityIdentity);
+  const capacityChanged = capacityRef.current !== capacityIdentity;
+  useLayoutEffect(() => {
+    if (capacityRef.current !== capacityIdentity) {
+      capacityRef.current = capacityIdentity;
+      setSelectedSourceIds([]);
+    }
+  }, [capacityIdentity]);
   const callbackGeneration = generationRef.current;
   const isCurrentCallback = useCallback(() => !scopeRef.current.authLoading &&
     scopeRef.current.principalKey === principalKey &&
-    generationRef.current === callbackGeneration && capacityRef.current === capacityKey,
-  [principalKey, callbackGeneration, capacityKey]);
+    generationRef.current === callbackGeneration && capacityRef.current === capacityIdentity,
+  [principalKey, callbackGeneration, capacityIdentity]);
 
   const onSelect = useCallback((references: ExplorerSelection[]) => {
     if (!isCurrentCallback()) return;
@@ -352,7 +362,7 @@ export function FileExplorerInventoryHost({
     items: selectableItems,
     loading: Boolean(principalKey && !authLoading && (loading || (!currentPage && !currentError))),
     error: currentError,
-    selectedSourceIds: currentPage && !currentError && effectiveSelection.length <= capacity ? effectiveSelection : [],
+    selectedSourceIds: currentPage && !currentError && !capacityChanged && effectiveSelection.length <= capacity ? effectiveSelection : [],
     onSelect,
     onRefresh,
     hasMore: currentPage?.has_more || false,
@@ -362,7 +372,7 @@ export function FileExplorerInventoryHost({
   };
 
   const selectedAnalysisSources = mode === 'analysis' && currentPage && !currentError && !loading
-    ? selectedSourceIds.flatMap((id) => {
+    ? props.selectedSourceIds.flatMap((id) => {
       const item = currentPage.items.find((entry) => entry.source_id === id);
       return item ? [{ source_id: item.source_id, revision: item.revision, name: item.name }] : [];
     })

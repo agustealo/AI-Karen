@@ -803,3 +803,67 @@ describe('KEXP-003F remaining draft capacity', () => {
     expect(latest.selectedSourceIds).toEqual([FILE_B]);
   });
 });
+
+
+describe('KEXP-003F capacity transition isolation', () => {
+  it('clears pending selections on a full draft and rejects ABA callback replay after capacity returns', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue(page);
+    const onAttach = vi.fn();
+    const existing = Array.from({ length: 12 }, (_, i) => ({
+      source_id: '66666666-6666-4666-8666-' + String(i + 1).padStart(12, '0'),
+      revision: SHA,
+    }));
+    const view = (count: number) => <FileExplorerInventoryHost mode="selection"
+      existingAttachments={existing.slice(0, count)} onAttach={onAttach}>{props => {
+      latest = props;
+      return <output>{props.items.map(item => item.name).join(',')}</output>;
+    }}</FileExplorerInventoryHost>;
+    const rendered = render(view(10));
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const refs = [FILE_A, FILE_B].map(source_id => ({
+      source_id, revision: SHA, sha256: SHA, kind: 'file' as const,
+    }));
+    act(() => latest.onSelect(refs));
+    expect(latest.selectedSourceIds).toEqual([FILE_A, FILE_B]);
+    const stale = latest;
+    rendered.rerender(view(12));
+    expect(latest.maxSelection).toBe(0);
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(screen.queryByRole('button', { name: /Attach selected files/ })).toBeNull();
+    act(() => latest.onSelect(refs.slice(0, 1)));
+    expect(latest.selectedSourceIds).toEqual([]);
+    rendered.rerender(view(10));
+    expect(latest.maxSelection).toBe(2);
+    expect(latest.selectedSourceIds).toEqual([]);
+    act(() => latest.onSelect(refs.slice(1)));
+    act(() => { stale.onSelect(refs); stale.onRefresh(); });
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(onAttach).not.toHaveBeenCalled();
+  });
+
+  it('invalidates selection when an attached source revision changes without changing capacity', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_B));
+    const view = (revision: string) => <FileExplorerInventoryHost mode="selection"
+      existingAttachments={[{ source_id: FILE_A, revision }]}>{props => {
+      latest = props;
+      return <output>{props.items.map(item => item.name).join(',')}</output>;
+    }}</FileExplorerInventoryHost>;
+    const rendered = render(view(SHA));
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const ref = { source_id: FILE_B, revision: SHA, sha256: SHA, kind: 'file' as const };
+    act(() => latest.onSelect([ref]));
+    const stale = latest;
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    rendered.rerender(view('b'.repeat(64)));
+    expect(latest.maxSelection).toBe(11);
+    expect(latest.selectedSourceIds).toEqual([]);
+    act(() => stale.onSelect([ref]));
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+});
