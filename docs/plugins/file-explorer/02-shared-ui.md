@@ -112,3 +112,14 @@ are decorative and use the existing frontend dependency; semantic theme tokens
 provide light/dark styling. This change does not introduce folder metadata,
 global search, uploads, or cross-page selection. Responsive browser verification
 remains required.
+
+
+## KEXP-002C/D: local sorting and bounded selection
+
+Name and size sorting apply only to loaded references in the current folder;
+folders remain first. The bulk action selects visible references only when the
+complete union fits the existing limit; otherwise it is disabled with a reason.
+No silent truncation or cross-page selection is introduced. Selection review
+derives from current-page selection IDs, including references hidden by a filter,
+and removal uses the same validated reference callback as individual selection.
+The host remains authoritative for inventory and consuming-service permissions.

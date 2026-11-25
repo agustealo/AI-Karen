@@ -91,6 +91,8 @@ function FileExplorerView({
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
   const [layout, setLayout] = useState<'list' | 'grid'>('list');
+  const [sort, setSort] = useState<'name-asc' | 'name-desc' | 'size-asc' | 'size-desc'>('name-asc');
+  const [reviewSelection, setReviewSelection] = useState(false);
   const pageEvidenceValid = typeof hasMore === 'boolean' && (
     hasMore
       ? typeof nextCursor === 'string' && nextCursor.length > 0 &&
@@ -100,6 +102,7 @@ function FileExplorerView({
 
   function clearSelections() {
     setLocalSelection([]);
+    setReviewSelection(false);
     onSelect?.([]);
   }
 
@@ -141,21 +144,31 @@ function FileExplorerView({
     .filter((item) => item.parent_id === currentParent &&
       item.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()))
     .sort((a, b) => Number(a.kind === 'file') - Number(b.kind === 'file') ||
-      a.name.localeCompare(b.name) || a.source_id.localeCompare(b.source_id)),
-    [entries, currentParent, filter]);
-  const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id));
+      (sort === 'size-asc' ? a.size_bytes - b.size_bytes : sort === 'size-desc' ? b.size_bytes - a.size_bytes : 0) ||
+      (sort === 'name-desc' ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name)) || a.source_id.localeCompare(b.source_id)),
+    [entries, currentParent, filter, sort]);
+  const selected = Array.from(new Set(selectedSourceIds ?? localSelection)).filter((id) => byId.has(id));
   const selectionSet = new Set(selected);
   const selectionLimit = multiSelect ? MAX_SELECTION : 1;
   const atLimit = multiSelect && selectionSet.size >= selectionLimit;
 
+  const canSelect = authorized && !loading && !error && pageEvidenceValid && inventory !== null;
+  const unselectedVisible = visible.filter((item) => !selectionSet.has(item.source_id));
+  const bulkFits = selected.length + unselectedVisible.length <= selectionLimit;
+
   function select(item: ExplorerItem) {
-    if (!authorized || loading || error || !pageEvidenceValid || inventory === null) return;
+    if (!canSelect) return;
     if (atLimit && !selectionSet.has(item.source_id)) return;
     const next = multiSelect
       ? (selectionSet.has(item.source_id)
         ? selected.filter((id) => id !== item.source_id)
         : [...selected, item.source_id])
       : [item.source_id];
+    publishSelection(next);
+  }
+
+  function publishSelection(next: string[]) {
+    if (!canSelect || next.length > selectionLimit || new Set(next).size !== next.length || next.some((id) => !byId.has(id))) return;
     if (selectedSourceIds === undefined) setLocalSelection(next);
     const references = next.flatMap((id) => {
       const entry = byId.get(id);
@@ -210,12 +223,30 @@ function FileExplorerView({
           onChange={(event) => setFilter(event.target.value)} placeholder="Find files or folders…" />
       </div>
     </label>
+    <label className="flex flex-col gap-1 text-sm">
+      Sort current page
+      <select className="rounded-md border bg-background px-2 py-2" value={sort} onChange={(event) => {
+        const value = event.target.value;
+        if (value === 'name-asc' || value === 'name-desc' || value === 'size-asc' || value === 'size-desc') setSort(value);
+      }}>
+        <option value="name-asc">Name (A–Z)</option>
+        <option value="name-desc">Name (Z–A)</option>
+        <option value="size-asc">Size (smallest)</option>
+        <option value="size-desc">Size (largest)</option>
+      </select>
+    </label>
     <div role="group" aria-label="Explorer layout" className="inline-flex rounded-md border p-1">
       <button type="button" aria-label="List view" aria-pressed={layout === 'list'} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('list')}><List aria-hidden="true" className="h-4 w-4" /></button>
       <button type="button" aria-label="Grid view" aria-pressed={layout === 'grid'} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'grid' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4" /></button>
     </div>
     </div>
     {filter && <button type="button" className="self-start rounded border px-3 py-2 text-sm" onClick={() => setFilter('')}>Clear filter</button>}
+    {multiSelect && !loading && visible.length > 0 && <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className="rounded border px-3 py-2 text-sm disabled:opacity-50"
+        disabled={!canSelect || !bulkFits || unselectedVisible.length === 0}
+        onClick={() => publishSelection([...selected, ...unselectedVisible.map((item) => item.source_id)])}>Select visible ({visible.length})</button>
+      {!bulkFits && <p className="text-xs text-muted-foreground">Selection would exceed the limit. Narrow the filter or deselect references.</p>}
+    </div>}
     {hasMore && <p className="text-xs text-muted-foreground">More references are available on later pages. Filtering and sorting apply only to this page.</p>}
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {loading ? <p role="status" className="py-8 text-center text-sm">Loading authorized file inventory…</p>
@@ -239,6 +270,20 @@ function FileExplorerView({
               </div>}
         </li>)}
       </ul>}
+    {!loading && selected.length > 0 && <div className="rounded-lg border p-3">
+      <button type="button" aria-expanded={reviewSelection} className="text-sm font-medium underline"
+        onClick={() => setReviewSelection((value) => !value)}>Review selection ({selected.length})</button>
+      {reviewSelection && <ul aria-label="Selected references" className="mt-2 space-y-2">
+        {selected.map((id) => {
+          const entry = byId.get(id)!;
+          return <li key={id} className="flex min-w-0 items-center justify-between gap-2 text-sm">
+            <span className="truncate" title={entry.name}>{entry.name}</span>
+            <button type="button" aria-label={'Remove ' + entry.name + ' from selection'} className="shrink-0 rounded border px-2 py-1"
+              onClick={() => publishSelection(selected.filter((value) => value !== id))}>Remove</button>
+          </li>;
+        })}
+      </ul>}
+    </div>}
     <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs text-muted-foreground">
       <div className="space-y-1">
         <p role="status" aria-live="polite">{selectionSet.size} selected · {visible.length} shown on this page · Maximum {selectionLimit} selections{atLimit ? ' · Selection limit reached. Deselect a reference to select another.' : ''}</p>

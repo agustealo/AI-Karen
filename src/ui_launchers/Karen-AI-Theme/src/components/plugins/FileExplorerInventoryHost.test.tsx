@@ -682,3 +682,45 @@ describe('KEXP-002B shared explorer layout', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 });
+
+
+describe('KEXP-002C/D page-local sorting and selection review', () => {
+  it('sorts current inventory and reviews hidden selections without fetching', async () => {
+    const page = response(FILE_A);
+    page.items = [
+      { ...page.items[0], name: 'alpha.txt', size_bytes: 20 },
+      { ...page.items[0], source_id: '44444444-4444-4444-8444-000000000002', name: 'beta.txt', size_bytes: 10 },
+    ];
+    mocks.get.mockResolvedValue(page);
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.change(screen.getByLabelText('Sort current page'), { target: { value: 'size-asc' } });
+    expect(screen.getAllByRole('checkbox').map(box => box.getAttribute('aria-label'))).toEqual(['Select beta.txt', 'Select alpha.txt']);
+    fireEvent.click(screen.getByRole('button', { name: 'Select visible (2)' }));
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'alpha' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review selection (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove beta.txt from selection' }));
+    expect(screen.getByRole('button', { name: 'Review selection (1)' })).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Select alpha.txt' }) as HTMLInputElement).checked).toBe(true);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('refuses bulk overflow rather than silently truncating references', async () => {
+    const page = response(FILE_A);
+    page.items = Array.from({ length: 25 }, (_, i) => ({
+      ...page.items[0],
+      source_id: '55555555-5555-4555-8555-' + String(i + 1).padStart(12, '0'),
+      name: 'file-' + String(i + 1).padStart(2, '0') + '.txt',
+    }));
+    mocks.get.mockResolvedValue(page);
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select file-01.txt' });
+    expect((screen.getByRole('button', { name: 'Select visible (25)' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Selection would exceed the limit/)).toBeTruthy();
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'file-01' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Select visible (1)' }));
+    expect((screen.getByRole('checkbox', { name: 'Select file-01.txt' }) as HTMLInputElement).checked).toBe(true);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+});
