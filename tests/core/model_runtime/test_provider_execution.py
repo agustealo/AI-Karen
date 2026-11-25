@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+from contextvars import ContextVar
+
+import pytest
+
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     BUILTIN_PROVIDER_ENDPOINTS,
     ProviderEndpoint,
@@ -257,3 +263,71 @@ def test_private_attachment_http_payload_preserves_complete_ordered_evidence(mon
     assert len(seen) == 1
     assert seen[0]["messages"] == messages
     assert seen[0]["stream"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("late_failure", [False, True])
+async def test_cancelled_provider_await_retains_local_worker(
+    monkeypatch, structured, late_failure,
+) -> None:
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    entered = asyncio.Event()
+    release = threading.Event()
+    exited = threading.Event()
+    loop = asyncio.get_running_loop()
+    marker = ContextVar("provider_test_scope", default="missing")
+    marker.set("owned-context")
+    observed = []
+
+    def blocking_request(*args, **kwargs):
+        try:
+            observed.append(marker.get())
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(5):
+                raise RuntimeError("test worker release deadline")
+            if late_failure:
+                raise RuntimeError("late provider failure")
+            return object()
+        finally:
+            exited.set()
+
+    if structured:
+        monkeypatch.setattr(
+            provider_execution, "_sync_structured_chat_request", blocking_request,
+        )
+        invoke = provider_execution.execute_structured_provider_endpoint(
+            _endpoint("ollama-local"), messages=[], model="test-model",
+            tools=[], max_tokens=8, temperature=0.0,
+        )
+    else:
+        monkeypatch.setattr(
+            provider_execution, "_sync_openai_compatible_request", blocking_request,
+        )
+        invoke = provider_execution.execute_provider_endpoint(
+            _endpoint("ollama-local"), messages=[], model="test-model",
+            max_tokens=8, temperature=0.0,
+        )
+
+    task = asyncio.create_task(invoke)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        assert observed == ["owned-context"]
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not exited.is_set()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not exited.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(
+            asyncio.gather(task, return_exceptions=True), timeout=3,
+        )
+
+    assert exited.is_set()
+    with pytest.raises(asyncio.CancelledError):
+        await task

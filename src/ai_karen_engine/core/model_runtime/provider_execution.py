@@ -12,8 +12,10 @@ import json
 import os
 import ipaddress
 import socket
+from contextvars import copy_context
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
+from functools import partial
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal, Mapping, ParamSpec, Sequence, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -533,6 +535,44 @@ def _sync_structured_chat_request(
     )
 
 
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+async def _await_sync_provider_worker(
+    function: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs,
+) -> _T:
+    """Keep a blocking HTTP worker owned until its local work actually ends.
+
+    Cancelling a normal to_thread await does not stop its running thread.
+    Shield the executor future from caller cancellation, observe its final
+    outcome, and re-raise cancellation without returning the provider result.
+    This proves only local worker retirement, not remote inference cessation.
+    """
+    loop = asyncio.get_running_loop()
+    # Preserve to_thread's context propagation without creating a second
+    # asyncio Task that could be independently cancelled during shutdown.
+    worker = loop.run_in_executor(
+        None, partial(copy_context().run, function, *args, **kwargs),
+    )
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # A repeated stop or request timeout must not abandon the same
+        # still-running worker. The caller's lease may expire while draining;
+        # the canonical run ledger then retains its unresolved fence.
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()  # observe a late failure without exposing payloads
+        raise
+
+
 async def execute_structured_provider_endpoint(
     endpoint: ProviderEndpoint,
     *,
@@ -548,7 +588,7 @@ async def execute_structured_provider_endpoint(
         await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
         if personal_model_grant is not None else None
     )
-    return await asyncio.to_thread(
+    return await _await_sync_provider_worker(
         _sync_structured_chat_request,
         endpoint,
         messages=messages,
@@ -677,7 +717,7 @@ async def execute_provider_endpoint(
         await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
         if personal_model_grant is not None else None
     )
-    return await asyncio.to_thread(
+    return await _await_sync_provider_worker(
         _sync_openai_compatible_request,
         endpoint,
         messages=messages,
