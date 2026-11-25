@@ -392,4 +392,36 @@ describe("runtime projection validation", () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
+
+  it("provides a single authorized cancellation surface and real navigation targets", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const adminRun = { ...run, cancellable: true, user_id: "owner-evidence", policy_decision_id: "policy-evidence" };
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/admin/agents/runs?include_terminal=true") return Promise.resolve(history([adminRun]));
+      if (path.endsWith("/" + run.run_id)) return Promise.resolve(adminRun);
+      return fallback(path);
+    });
+    render(<AgentsPage />);
+    await screen.findByText("No verified executions match this view.");
+    expect(screen.queryByText("Administrative execution diagnostics")).toBeNull();
+    for (const name of ["Mission history", "Approvals", "Specialists", "Diagnostics"]) {
+      const link = screen.getByRole("link", { name, exact: true });
+      const target = link.getAttribute("href");
+      expect(target?.startsWith("#")).toBe(true);
+      expect(document.getElementById(target!.slice(1))).not.toBeNull();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByRole("button", { name: "Request cancellation" });
+    expect(screen.getAllByRole("button", { name: "Request cancellation" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+    fireEvent.click(screen.getByText("Technical details"));
+    expect(screen.getByText("owner-evidence")).toBeTruthy();
+    expect(screen.getByText("policy-evidence")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "My work" }));
+    await screen.findByText("No verified executions match this view.");
+    expect(screen.queryByText("owner-evidence")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Request cancellation" })).toBeNull();
+  });
+
 });
