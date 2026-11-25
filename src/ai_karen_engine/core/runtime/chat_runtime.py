@@ -1138,6 +1138,25 @@ class ChatRuntime:
                 pending_memory_meta=memory_recall_meta,
             )
             raise
+        if transcript_result.reason == "attachment_session_denied":
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                error_type="AttachmentAdmissionDenied",
+                metadata={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    mode="emergency",
+                    degraded_mode=True,
+                    degradation_reason="attachment_session_denied",
+                    extra={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+                ),
+            )
         provider_meta.update(transcript_result.to_metadata())
         transcript_failed = not transcript_result.success
         if transcript_failed:
@@ -2153,6 +2172,28 @@ class ChatRuntime:
                 )
                 raise
 
+        if transcript_result.reason == "attachment_session_denied":
+            generation_error = AttachmentAdmissionDenied("attachment_session_denied")
+            provider_meta["generation_error"] = True
+            provider_meta["degraded_mode"] = True
+            provider_meta["degradation_reason"] = "attachment_session_denied"
+            provider_meta["error_code"] = "CHAT_ATTACHMENT_SESSION_DENIED"
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                error_type="AttachmentAdmissionDenied",
+                metadata={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content="The response could not be authorized.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+                ),
+                sequence, request_id, response_id, conversation_id,
+            )
+            sequence += 1
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
             "failed",
@@ -2314,6 +2355,17 @@ class ChatRuntime:
             durable.pop("presentation_replay_incomplete", None)
         return durable
 
+    @staticmethod
+    async def _private_persistence_authorized(request: ChatExecutionRequest) -> bool:
+        """Revalidate private evidence against the original execution authority."""
+        if not ChatRuntime._attachment_restriction_required(request):
+            return True
+        binding = vars(request.context).get("_runtime_model_authority")
+        if not isinstance(binding, tuple) or len(binding) != 2:
+            return False
+        plan, meter = binding
+        return await ChatRuntime._private_evidence_authorized(request, plan, meter)
+
     async def _persist_transcript(
         self,
         request: ChatExecutionRequest,
@@ -2365,6 +2417,20 @@ class ChatRuntime:
             snapshot.persona_id if snapshot.memory_filter_required else None
         )
         durable_meta = self._durable_presentation_metadata(provider_meta)
+
+        if not await ChatRuntime._private_persistence_authorized(request):
+            self._emitter.emit(
+                RuntimeEventType.PERSISTENCE_FAILED,
+                status="denied",
+                error_type="AttachmentAdmissionDenied",
+                metadata={"target": "transcript", "error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+            )
+            return TranscriptPersistenceResult(
+                status="rejected",
+                conversation_id=conversation_id,
+                reason="attachment_session_denied",
+                error_type="AttachmentAdmissionDenied",
+            )
 
         result = await gateway.persist_completed_turn(
             ctx,
@@ -3001,6 +3067,11 @@ class ChatRuntime:
         try:
             from ai_karen_engine.core.memory import get_memory_manager
 
+            if not await ChatRuntime._private_persistence_authorized(request):
+                memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
+                memory_recall_meta["memory_degraded"] = True
+                memory_recall_meta["memory_degradation_reason"] = "attachment_session_denied"
+                return {"status": "rejected", "reason": "attachment_session_denied", "persisted": 0}
             mem = get_memory_manager()
             result = await mem.process_interaction(
                 text=user_message,
