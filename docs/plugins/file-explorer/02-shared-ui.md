@@ -110,3 +110,17 @@ and independent organization revisions; mutations require fresh authorization
 and matching receipts. The shared component has no direct IO or local storage.
 Canonical and materialized sources remain identical. Source regression tests
 are not substitutes for authenticated browser acceptance or release certification.
+
+## Protected hierarchy and filename-search acceptance (KEXP-004B.7A)
+
+The reviewed-main `file-explorer` protected browser scenario requires a
+sanitized owner with more than 100 active **root** artifacts, at least one
+owned root folder, and a printable ASCII filename of 1–160 characters on the
+first root page (no leading or trailing whitespace). The browser test does not
+create or change these fixtures. It observes the real hierarchy endpoint,
+verifies the server search request, matching owner file metadata, unchanged
+folder navigation, selection reset, query-bound pagination when a second search
+page exists, and explicit search clearing. The protected workflow requires
+nested navigation instead of treating missing folders as a successful proof.
+Real authenticated deployment evidence is still required; source changes and
+skipped browser cases do not certify consumer readiness.

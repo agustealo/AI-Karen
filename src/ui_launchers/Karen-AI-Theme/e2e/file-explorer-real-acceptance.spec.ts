@@ -12,6 +12,9 @@ import { signInApprovedKaren } from "./fixtures/approved-karen-login";
  * Requires a dedicated, sanitized account and an enabled File Explorer plugin.
  * To prove a second real page, seed >100 genuinely owned artifacts beforehand
  * and set KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE=true.
+ * Protected File Explorer acceptance also requires an owned root folder and
+ * a root artifact with a printable ASCII filename (1–160 characters) for
+ * literal, case-insensitive search evidence. No fixture is created by this test.
  */
 const enabled = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === "true";
 const requireSecondPage =
@@ -160,13 +163,13 @@ async function nextRealAnalysis(page: Page, target: URL) {
   }, { timeout: 45_000 });
 }
 
-async function verifyDisplayedInventory(page: Page, inventory: Inventory) {
+async function verifyDisplayedInventory(page: Page, inventory: Inventory, search = '') {
   const explorer = page.getByRole("region", { name: "Shared File Explorer" });
   await expect(explorer).toBeVisible();
   const entries = explorer.getByRole("list", { name: "Files and folders" });
   const count = inventory.items.length + inventory.folders.length;
   if (count === 0) {
-    await expect(explorer.getByText("No files or folders in this view.")).toBeVisible();
+    await expect(explorer.getByText(search ? "No matching files or folders on this search page." : "No files or folders in this view.")).toBeVisible();
   } else {
     await expect(entries.getByRole("listitem")).toHaveCount(count);
     for (const folder of inventory.folders) {
@@ -310,13 +313,65 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
       .getByRole("checkbox").first()).not.toBeChecked();
   }
 
+  // A real server search is distinct from filtering already-loaded rows.
+  // Use an observed owner filename, not a fabricated positive fixture.
+  const searchSource = refreshed.items.find(file =>
+    /^[\x20-\x7e]{1,160}$/.test(file.name) && file.name.trim() === file.name);
+  expect(searchSource, "Seed an owned root file with a printable ASCII filename of at most 160 characters").toBeDefined();
+  if (!searchSource) throw new Error("No eligible real search fixture");
+  const query = searchSource.name.toLowerCase();
+  await explorer.getByRole("checkbox", { name: "Select " + searchSource.name, exact: true }).first().check();
+  const searchInput = explorer.getByRole("searchbox", { name: "Search filenames in this folder" });
+  await searchInput.fill(query);
+  const searchWait = nextRealPage(page, origin);
+  await explorer.getByRole("form", { name: "Search authorized filenames" }).getByRole("button", { name: "Search", exact: true }).click();
+  const searchHttp = await searchWait;
+  expect(searchHttp.status()).toBe(200);
+  const searchParams = new URL(searchHttp.request().url()).searchParams;
+  expect(searchParams.get("search")).toBe(query);
+  expect(searchParams.has("file_cursor")).toBe(false);
+  expect(searchParams.has("parent_folder_id")).toBe(false);
+  const searched = inventoryResponse(await searchHttp.json());
+  expect(searched.items.some(file => file.source_id === searchSource.source_id)).toBe(true);
+  expect(searched.items.every(file => file.name.toLowerCase().includes(query))).toBe(true);
+  expect(searched.folders.map(folder => folder.folder_id)).toEqual(refreshed.folders.map(folder => folder.folder_id));
+  await verifyDisplayedInventory(page, searched, query);
+  await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+  await expect(explorer.getByRole("searchbox", { name: "Search filenames in this folder" })).toHaveValue(query);
+
+  if (searched.has_more) {
+    const searchNext = nextRealPage(page, origin);
+    await explorer.getByRole("button", { name: "Next file page" }).click();
+    const nextHttp = await searchNext;
+    expect(nextHttp.status()).toBe(200);
+    const nextParams = new URL(nextHttp.request().url()).searchParams;
+    expect(nextParams.get("search")).toBe(query);
+    expect(nextParams.get("file_cursor")).toBe(searched.next_cursor);
+    const nextSearched = inventoryResponse(await nextHttp.json());
+    expect(nextSearched.items.every(file => file.name.toLowerCase().includes(query) &&
+      !searched.items.some(earlier => earlier.source_id === file.source_id))).toBe(true);
+    await verifyDisplayedInventory(page, nextSearched, query);
+  }
+
+  const clearWait = nextRealPage(page, origin);
+  await explorer.getByRole("button", { name: "Clear search", exact: true }).click();
+  const clearHttp = await clearWait;
+  expect(clearHttp.status()).toBe(200);
+  const clearParams = new URL(clearHttp.request().url()).searchParams;
+  expect(clearParams.has("search")).toBe(false);
+  expect(clearParams.has("file_cursor")).toBe(false);
+  const cleared = inventoryResponse(await clearHttp.json());
+  await verifyDisplayedInventory(page, cleared);
+  await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+  await expect(explorer.getByRole("searchbox", { name: "Search filenames in this folder" })).toHaveValue("");
+
   // Observe real nested navigation when a sanitized fixture exists.
   // The protected fixture may explicitly require nested proof; absence is not a pass.
   if (process.env.KAREN_FILE_EXPLORER_REQUIRE_NESTED === "true") {
-    expect(refreshed.folders.length, "A real root folder fixture is required").toBeGreaterThan(0);
+    expect(cleared.folders.length, "A real root folder fixture is required").toBeGreaterThan(0);
   }
-  if (refreshed.folders.length > 0) {
-    const folder = refreshed.folders[0];
+  if (cleared.folders.length > 0) {
+    const folder = cleared.folders[0];
     const next = nextRealPage(page, origin);
     await explorer.getByRole("button", { name: "Open folder " + folder.name, exact: true }).first().click();
     const nestedHttp = await next;

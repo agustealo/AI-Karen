@@ -19,6 +19,7 @@ def test_existing_protected_browser_workflow_owns_live_file_explorer_dispatch():
     assert "inputs.scenario == 'settings' || inputs.scenario == 'navigation'" in source
     assert "|| '' }}" in source
     assert "KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}" in source
+    assert "KAREN_FILE_EXPLORER_REQUIRE_NESTED: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}" in source
     assert "file-explorer-real-acceptance.spec.ts" in source
     assert "verify_vercel_deployment.py" in source
     assert "verify_deployment_revision.py" in source
@@ -51,6 +52,10 @@ def test_live_file_explorer_acceptance_is_not_a_mock_or_skipped_proof():
     assert "KAREN_FILE_EXPLORER_REQUIRE_NESTED" in source
     assert "parent_folder_id" in source
     assert "organization_revision" in source
+    assert 'searchParams.get("search")' in source
+    assert 'nextParams.get("file_cursor")' in source
+    assert 'clearParams.has("search")' in source
+    assert 'searched.folders.map' in source
     assert "firstPage.items.length" in source
     assert "expect(firstPage.has_more" in source
     assert "route.fulfill(" not in source
