@@ -682,18 +682,27 @@ async def test_transition_reader_projects_bounded_owner_scoped_evidence():
         limit=2,
     )
     assert receipt == {
-        "run_id": "run-1", "truncated": True,
+        "run_id": "run-1",
+        "truncated": True,
         "response_source": "postgres_durable_run_ledger",
         "transitions": [
-            {"transition_id": str(n), "from_status": "running", "to_status": "completed",
-             "event_at": stamp.isoformat(), "source": "runtime"}
+            {
+                "transition_id": str(n),
+                "from_status": "running",
+                "to_status": "completed",
+                "event_at": stamp.isoformat(),
+                "source": "runtime",
+            }
             for n in (9007199254740994, 9007199254740995)
         ],
     }
     scope, query = session.execute.await_args_list
     assert scope.args[1] == {"tenant_id": tenant}
     assert query.args[1] == {
-        "tenant_id": tenant, "run_id": "run-1", "user_id": "owner", "limit": 3,
+        "tenant_id": tenant,
+        "run_id": "run-1",
+        "user_id": "owner",
+        "limit": 3,
     }
     sql = " ".join(str(query.args[0]).split())
     assert "r.user_id = :user_id" in sql
@@ -704,27 +713,48 @@ async def test_transition_reader_projects_bounded_owner_scoped_evidence():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rows, expected", [
-    ([], None),
-    ([{"transition_id": None}], {
-        "run_id": "run-1", "transitions": [], "truncated": False,
-        "response_source": "postgres_durable_run_ledger",
-    }),
-])
-async def test_transition_reader_distinguishes_absent_owner_from_empty_history(rows, expected):
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        ([], None),
+        (
+            [{"transition_id": None}],
+            {
+                "run_id": "run-1",
+                "transitions": [],
+                "truncated": False,
+                "response_source": "postgres_durable_run_ledger",
+            },
+        ),
+    ],
+)
+async def test_transition_reader_distinguishes_absent_owner_from_empty_history(
+    rows, expected
+):
     ledger, session = _transition_reader(rows)
-    assert await ledger.read_transitions(
-        run_id="run-1", tenant_id="tenant-1", user_id="owner", limit=9999,
-    ) == expected
+    assert (
+        await ledger.read_transitions(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            user_id="owner",
+            limit=9999,
+        )
+        == expected
+    )
     assert session.execute.await_args_list[-1].args[1]["limit"] == 251
 
 
 @pytest.mark.asyncio
 async def test_transition_reader_rejects_blank_owner_without_query():
     ledger, session = _transition_reader([])
-    assert await ledger.read_transitions(
-        run_id="run-1", tenant_id="tenant-1", user_id=" ",
-    ) is None
+    assert (
+        await ledger.read_transitions(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            user_id=" ",
+        )
+        is None
+    )
     session.execute.assert_not_awaited()
 
 
@@ -734,5 +764,7 @@ async def test_transition_reader_does_not_turn_database_failure_into_empty_histo
     session.execute.side_effect = [MagicMock(), SQLAlchemyError("database unavailable")]
     with pytest.raises(DurableRunLedgerUnavailable):
         await ledger.read_transitions(
-            run_id="run-1", tenant_id="tenant-1", user_id="owner",
+            run_id="run-1",
+            tenant_id="tenant-1",
+            user_id="owner",
         )
