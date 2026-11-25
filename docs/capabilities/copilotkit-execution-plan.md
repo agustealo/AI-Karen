@@ -1247,3 +1247,9 @@ completion, content-size or presentation validation to silence the UI.
 - Prior head `1b6825a9f59532a36a00dff6c3081279754fb147` passed 43/43 checks, including PostgreSQL Chat Run Replay (112 supporting tests and one integration test), Production Auth Security, Main Quality and First-Boot. Independent review is still absent.
 - Reuse the canonical HTTP error translator in both chat and Copilot assist; uncertain finality is HTTP 409 without retry advice, ordinary runtime errors HTTP 503. The common legacy SSE/NDJSON/WebSocket serializer converts explicit uncertain COMPLETE receipts to redacted ERROR, with no second terminal.
 - Regression candidates exercise every existing legacy wire adapter and nonstream Copilot error translation. Fresh exact-head CI required. Legacy ingress admission parity and durable submission recovery across reloads remain outstanding; this is not a deployment or merge certification.
+
+## KCON-770 / KUI-004B4.48C7O: Owned run recovery after reopen (2026-11-25, SOURCE_CANDIDATE)
+
+- Governed history reads the canonical owned ledger and forwards a minimal recovery observation (transport run ID, original submission ID, unresolved status). The proxy rejects missing/malformed governed evidence and strips unapproved fields. Read-only SDK reconnect does not synthesize a finish when recovery remains unresolved.
+- The existing history gate refreshes the observation using authenticated history GET; its scoped controller blocks new submission and draft clearance. No browser storage, automatic inference, or duplicate execution authority. Legacy non-governed history remains outside this contract.
+- PostgreSQL and transport/consumer regression candidates require fresh exact-head CI; separate history and ledger reads are not an atomic recovery snapshot. Durable pre-admission draft intent, orphan resolution, legacy admission parity, real browser acceptance and independent review remain outstanding.

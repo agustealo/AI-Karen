@@ -163,3 +163,46 @@ async def test_readonly_endpoint_requires_enabled_durable_owner_and_no_leak(monk
             THREAD, "run-exact", user={"user_id": OWNER, "tenant_id": TENANT}
         )
     assert off.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("state", "live", "expected"), [
+    ("running", True, "running"), ("cancelling", True, "cancelling"),
+    ("running", False, "interrupted"), ("orphaned", None, "orphaned"),
+    ("completed", None, None), ("failed", None, None), ("cancelled", None, None),
+])
+async def test_recovery_observation_is_scoped_and_never_an_execution_receipt(
+    monkeypatch, state, live, expected,
+):
+    queries = []
+
+    class Session:
+        async def execute(self, statement, params):
+            queries.append((str(statement), params))
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                one_or_none=lambda: {
+                    "transport_run_id": "original-run", "submission_id": "original-turn",
+                    "status": state, "stop_requested": state == "cancelling",
+                    "terminal_recorded": state not in {"running", "cancelling"},
+                    "lease_live": live,
+                },
+            ))
+
+    @asynccontextmanager
+    async def scope(tenant, *, user_id=None):
+        assert (tenant, user_id) == (TENANT, OWNER)
+        yield Session()
+
+    monkeypatch.setattr(repo, "async_transaction_scope", scope)
+    result = await repo.SqlChatRunRepository().read_recovery_run(
+        tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+    )
+    assert result == (None if expected is None else {
+        "runId": "original-run", "submissionId": "original-turn", "status": expected,
+    })
+    assert len(queries) == 1
+    sql, args = queries[0]
+    assert sql.lstrip().startswith("SELECT")
+    assert "ORDER BY CASE WHEN status IN ('running', 'cancelling')" in sql
+    assert "lease_token" not in sql
+    assert args == {"tenant": TENANT, "owner": OWNER, "conversation": THREAD}

@@ -45,6 +45,14 @@ def snapshot(*, rich=False):
     )
 
 
+class RecoveryLedger:
+    async def read_recovery_run(self, **kwargs):
+        assert kwargs == {
+            "tenant_id": TENANT, "user_id": USER, "conversation_id": THREAD,
+        }
+        return None
+
+
 @pytest.fixture
 def replay_on(monkeypatch):
     monkeypatch.setattr(route, "get_runtime_settings", lambda: SimpleNamespace(
@@ -65,7 +73,12 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
             calls.append(("owned", ctx.tenant_id, ctx.user_id, ctx.conversation_id, message_limit))
             return snapshot(rich=True)
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
+        async def read_recovery_run(self, **kwargs):
+            await super().read_recovery_run(**kwargs)
+            return {"runId": "interrupted-run", "submissionId": "original-turn",
+                    "status": "interrupted"}
+
         async def completed_replay_attestations(self, **kwargs):
             calls.append(("attested", kwargs))
             saved = snapshot(rich=True).messages[1]
@@ -88,6 +101,9 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
     assert body["threadId"] == THREAD
     assert body["owner_user_id"] == USER
     assert body["owner_tenant_id"] == TENANT
+    assert body["recovery_run"] == {
+        "runId": "interrupted-run", "submissionId": "original-turn", "status": "interrupted",
+    }
     assert [e["name"] for e in body["replayEvents"]] == [
         "karen.execution_receipt.v1",
     ]
@@ -125,7 +141,7 @@ async def test_owned_text_continuation_is_explicit_and_requires_completed_run_di
             assert message_limit == 501
             return original
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             assert kwargs == {
                 "tenant_id": TENANT, "user_id": USER, "conversation_id": THREAD,
@@ -217,7 +233,7 @@ async def test_long_original_thread_continuation_reads_only_newest_500_attested_
         async def get_owned_snapshot(self, context, *, message_limit):
             raise AssertionError("Text continuation must not fetch the oldest page")
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {last.id: (REQUEST, recorded_digest)}
 
@@ -282,7 +298,7 @@ async def test_first_prompt_verified_direct_capability_surface_returns_200_not_4
             assert message_limit == 501
             return original
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {ASSISTANT: (
                 REQUEST, canonical_message_digest(original.messages[1]),
@@ -344,7 +360,7 @@ async def test_unknown_or_unattested_rich_history_refuses_entire_snapshot(
         async def get_owned_snapshot(self, ctx, *, message_limit):
             return snapshot(rich=True)
 
-    class NoAttestation:
+    class NoAttestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {}
 
@@ -391,7 +407,7 @@ async def test_governed_history_allows_brand_new_empty_owned_conversation(
                 messages=(),
             )
 
-    class NoRuns:
+    class NoRuns(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {}
 

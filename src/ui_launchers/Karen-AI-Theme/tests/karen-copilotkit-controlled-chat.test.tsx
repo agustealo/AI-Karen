@@ -23,6 +23,7 @@ const sdk = vi.hoisted(() => ({
   post: vi.fn(),
   get: vi.fn(),
   refreshHistory: vi.fn(),
+  recoveryRun: null as null | { runId: string; submissionId: string | null; status: string },
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   lifecycle: null as null | {
@@ -91,6 +92,7 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
   return {
     useKarenScopedAgent: () => ({
       agent: sdk.agent, isReady: sdk.isReady, refreshVerifiedHistory: sdk.refreshHistory,
+      recoveryRun: sdk.recoveryRun,
     }),
   };
 });
@@ -119,6 +121,7 @@ beforeEach(() => {
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
   sdk.refreshHistory.mockReset().mockResolvedValue(true);
+  sdk.recoveryRun = null;
   sdk.get.mockReset().mockResolvedValue({
     status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
   });
@@ -1102,4 +1105,14 @@ describe("KUI uncertain finality recovery", () => {
     expect(sdk.clearDraft).toHaveBeenCalledTimes(1);
     expect(sdk.get).not.toHaveBeenCalled();
   });
+});
+
+
+it("blocks draft clearance and inference for a recovered outstanding run", () => {
+  sdk.recoveryRun = { runId: "previous-run", submissionId: "previous-turn", status: "interrupted" };
+  render(<KarenCopilotControlledChat conversationId={THREAD} />);
+  act(() => input().onSubmitMessage("new message"));
+  expect(sdk.clearDraft).not.toHaveBeenCalled();
+  expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+  expect(sdk.runAgent).not.toHaveBeenCalled();
 });

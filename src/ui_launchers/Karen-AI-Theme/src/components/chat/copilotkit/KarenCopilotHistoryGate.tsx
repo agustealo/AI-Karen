@@ -21,6 +21,7 @@ type KarenOwnedThreadResponse = {
   threadId: string;
   messages: KarenOwnedHistoryMessage[];
   replayEvents?: unknown;
+  recovery_run?: unknown;
   text_only?: unknown;
   continuation_authorized?: unknown;
   omitted_rich_message_count?: unknown;
@@ -118,8 +119,35 @@ const HISTORY_REPLAY_DIAGNOSTICS: Readonly<Record<string, string>> = {
 // The history gate owns the sole SDK agent registration for this conversation.
 // Children consume the same instance; a second useAgent call with the same ID
 // causes CopilotKitCore.registerProxiedAgent to reject the duplicate.
+type RecoveryRun = {
+  runId: string; submissionId: string | null;
+  status: "running" | "cancelling" | "interrupted" | "orphaned";
+};
+
+function parseRecoveryRun(value: unknown): RecoveryRun | null {
+  // The legacy, non-governed history projection has no run ledger.
+  // Governed history requires the field at the server-side proxy.
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid run recovery observation");
+  }
+  const run = value as Record<string, unknown>;
+  const validId = (id: unknown): id is string =>
+    typeof id === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(id);
+  if (!validId(run.runId) || (run.submissionId !== null && !validId(run.submissionId)) ||
+      typeof run.status !== "string" ||
+      !["running", "cancelling", "interrupted", "orphaned"].includes(run.status)) {
+    throw new Error("Invalid run recovery observation");
+  }
+  return {
+    runId: run.runId, submissionId: run.submissionId as string | null,
+    status: run.status as RecoveryRun["status"],
+  };
+}
+
 type ScopedAgentRegistration = ReturnType<typeof useAgent> & {
   refreshVerifiedHistory: () => Promise<boolean>;
+  recoveryRun: RecoveryRun | null;
 };
 const ScopedAgentContext = createContext<ScopedAgentRegistration | null>(null);
 
@@ -222,6 +250,9 @@ export function KarenCopilotHistoryGate({
   });
   const { agent, isReady } = registration;
   const [loaded, setLoaded] = useState<string | null>(null);
+  const [recoveryRun, setRecoveryRun] = useState<RecoveryRun | null>(null);
+  const [checkingRecovery, setCheckingRecovery] = useState(false);
+  const recoveryCheckInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [retryAttempt, setRetryAttempt] = useState(0);
   const [verifiedParts, setVerifiedParts] = useState<VerifiedHistoryParts>(new Map());
@@ -254,6 +285,9 @@ export function KarenCopilotHistoryGate({
     if (!isReady) return;
     let cancelled = false;
     setLoaded(null);
+    setRecoveryRun(null);
+    setCheckingRecovery(false);
+    recoveryCheckInFlight.current = false;
     setError(null);
     setVerifiedParts(new Map());
     setTranscript(null);
@@ -299,6 +333,7 @@ export function KarenCopilotHistoryGate({
             // Complete rich replay and explicitly requested text continuation
             // are independent backend-attested contracts. Text mode never
             // treats omitted rich content as restored or as a tool capability.
+            const pendingRun = parseRecoveryRun(snapshot.recovery_run);
             const messages = textMode
               ? validatedKarenTextContinuation(snapshot, conversationId)
               : toCopilotTextMessages(snapshot.messages);
@@ -307,6 +342,7 @@ export function KarenCopilotHistoryGate({
             );
             if (restoreQueued) continue;
             agent.setMessages(messages);
+            setRecoveryRun(pendingRun);
             setVerifiedParts(parts);
             setTextContinuationActive(textMode);
             setContinuationWindowHasOlder(
@@ -577,8 +613,29 @@ export function KarenCopilotHistoryGate({
     );
   }
   return (
-    <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory }}>
+    <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun }}>
       <KarenVerifiedHistoryProvider parts={verifiedParts}>
+        {recoveryRun && (
+          <section aria-label="Saved run recovery" className="space-y-2 border-b border-border px-3 py-2">
+            <p role="status" className="text-sm">
+              Previous run: {recoveryRun.status}. Sending is blocked until saved run recovery is verified.
+            </p>
+            <p className="text-xs text-muted-foreground">Run reference: {recoveryRun.runId}</p>
+            <button type="button" disabled={checkingRecovery} onClick={() => {
+              if (recoveryCheckInFlight.current) return;
+              recoveryCheckInFlight.current = true;
+              setCheckingRecovery(true);
+              const generation = recoveryGeneration.current;
+              void refreshVerifiedHistory().finally(() => {
+                if (generation !== recoveryGeneration.current) return;
+                recoveryCheckInFlight.current = false;
+                setCheckingRecovery(false);
+              });
+            }} className="rounded-md border border-input px-3 py-2 text-sm">
+              {checkingRecovery ? "Checking saved run…" : "Refresh saved run and history"}
+            </button>
+          </section>
+        )}
         {textContinuationActive && (
           <p role="status" data-testid="karen-text-continuation-banner"
             className="border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">

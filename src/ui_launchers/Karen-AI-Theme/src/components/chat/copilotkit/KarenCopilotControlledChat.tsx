@@ -72,7 +72,7 @@ export function KarenCopilotControlledChat({
   onOpenAgents?: () => void;
   fileExplorerPluginId?: string;
 }) {
-  const { agent, isReady, refreshVerifiedHistory } = useKarenScopedAgent();
+  const { agent, isReady, refreshVerifiedHistory, recoveryRun } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
   const [draftRecoveryFeedback, setDraftRecoveryFeedback] = useState<string | null>(null);
@@ -265,7 +265,7 @@ export function KarenCopilotControlledChat({
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
-    if (finalityHoldRef.current?.conversationId === conversationId) {
+    if (recoveryRun || finalityHoldRef.current?.conversationId === conversationId) {
       setError("The previous run is unverified. Check its status and saved history before sending another message.");
       return;
     }
@@ -351,7 +351,7 @@ export function KarenCopilotControlledChat({
   }, [
     agent, conversationId, copilotkit, isReady, prepareSubmission,
     draftStatus, readDraftText, setDraftText, failedSubmission, attachments.length,
-    reportBusy, holdUnverifiedRun,
+    reportBusy, holdUnverifiedRun, recoveryRun,
   ]);
 
   const checkUnverifiedFinality = useCallback(() => {

@@ -1017,6 +1017,10 @@ class SqlChatRunRepository:
             row = result.mappings().one_or_none()
         if row is None:
             return None
+        return self._project_run_status(row)
+
+    @staticmethod
+    def _project_run_status(row: Mapping[str, Any]) -> dict[str, Any]:
         status = str(row["status"])
         if status not in {
             "running", "cancelling", "cancelled", "completed",
@@ -1036,6 +1040,53 @@ class SqlChatRunRepository:
                 status == "cancelled" and requested and terminal
             ),
         }
+
+    async def read_recovery_run(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Observe the active run or newest unresolved terminal without executing.
+
+        Active rows take precedence over historical rows. A latest orphaned
+        run is not a verified completion. No lease or request payload leaves
+        this repository; neither identifier grants authority.
+        """
+        scope = {
+            "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+        }
+        async with async_transaction_scope(
+            scope["tenant"], user_id=scope["owner"],
+        ) as session:
+            result = await session.execute(text("""
+                SELECT transport_run_id, submission_id, status,
+                       cancel_requested_at IS NOT NULL AS stop_requested,
+                       terminal_at IS NOT NULL AS terminal_recorded,
+                       lease_expires_at > clock_timestamp() AS lease_live
+                FROM public.runtime_chat_runs
+                WHERE tenant_id = CAST(:tenant AS uuid)
+                  AND user_id = CAST(:owner AS uuid)
+                  AND conversation_id = CAST(:conversation AS uuid)
+                ORDER BY CASE WHEN status IN ('running', 'cancelling')
+                              THEN 0 ELSE 1 END,
+                         created_at DESC, execution_id DESC
+                LIMIT 1
+            """), scope)
+            row = result.mappings().one_or_none()
+        if row is None:
+            return None
+        status = self._project_run_status(row)["status"]
+        if status in {"completed", "failed", "cancelled"}:
+            return None
+        run_id, submission_id = row["transport_run_id"], row["submission_id"]
+        if (
+            not isinstance(run_id, str) or not _RUN_ID_PATTERN.fullmatch(run_id)
+            or (submission_id is not None and (
+                not isinstance(submission_id, str)
+                or not _RUN_ID_PATTERN.fullmatch(submission_id)
+            ))
+        ):
+            raise RuntimeError("unverified_chat_run_recovery_identity")
+        return {"runId": run_id, "submissionId": submission_id, "status": status}
 
     async def cancel_requested(self, lease: ChatRunLease) -> bool:
         """Observe an authorized stop without accepting a caller's SDK token."""

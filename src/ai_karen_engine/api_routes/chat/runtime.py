@@ -1377,6 +1377,13 @@ async def get_ag_ui_owned_history(
         raise HTTPException(status_code=503, detail="History temporarily unavailable") from exc
     try:
         repository = SqlChatRunRepository()
+        # Read only after the canonical gateway verified conversation ownership.
+        # This observation is not an execution grant or a transcript receipt.
+        recovery_run = await repository.read_recovery_run(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=thread,
+        )
         attestations = await repository.completed_replay_attestations(
             tenant_id=context.tenant_id,
             user_id=context.user_id,
@@ -1407,6 +1414,7 @@ async def get_ag_ui_owned_history(
             observed_activity=observed_activity,
             text_continuation=text_mode,
         )
+        history["recovery_run"] = recovery_run
         if text_mode:
             history.update({
                 "history_window_has_older": window_has_older,

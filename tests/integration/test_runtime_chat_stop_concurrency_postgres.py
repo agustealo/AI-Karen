@@ -224,9 +224,18 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             correlation_id="submission-trace", submission_id="user-turn-1",
         )
         assert submitted is not None
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
+        ) == {"runId": "submission-first", "submissionId": "user-turn-1", "status": "running"}
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_b, user_id=user_b, conversation_id=thread,
+        ) is None
         assert await worker_a.finish(
             submitted, status="failed", error_code="CHAT_TEST_TERMINAL",
         )
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
+        ) is None
         assert await worker_b.admit(
             **identity(run_id="submission-retry"), request_id="retry-request",
             correlation_id="retry-trace", submission_id="user-turn-1",
