@@ -9,7 +9,7 @@ import uuid
 from copy import copy
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -866,3 +866,71 @@ async def test_private_stream_queue_revocation_denies_release(monkeypatch, bound
     finally:
         issuer.revalidate_session_identity.return_value = account
         await stream.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revocation", ["before_persona", "during_persona"])
+async def test_revoked_attachment_cannot_invoke_transcript_gateway(monkeypatch, revocation):
+    request, plan, meter = await authority()
+    request.context.conversation_id = str(uuid.uuid4())
+    runtime = runtime_with_reader(monkeypatch, BoundedReader({}))
+    runtime._emitter = SimpleNamespace(emit=Mock())
+    runtime._conversation_gateway.persist_completed_turn = AsyncMock()
+    issuer = await auth_service.get_auth_service()
+    snapshot = SimpleNamespace(status="none", memory_filter_required=False, persona_id=None)
+    if revocation == "before_persona":
+        issuer.revalidate_session_identity.return_value = None
+    else:
+        async def resolve_persona(_request):
+            issuer.revalidate_session_identity.return_value = None
+            return snapshot
+        monkeypatch.setattr(runtime, "_freeze_persona_snapshot", resolve_persona)
+
+    receipt = await runtime._persist_transcript(request, BODY, {})
+    assert not receipt.success
+    assert receipt.reason == "attachment_session_denied"
+    runtime._conversation_gateway.persist_completed_turn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted,revoked,bound,expected", [
+    (True, False, True, True),
+    (True, True, True, False),
+    (True, False, False, False),
+    (False, True, False, True),
+])
+async def test_private_persistence_uses_original_authority_only(restricted, revoked, bound, expected):
+    request, plan, meter = await authority(
+        bind=bound, references=[selected()] if restricted else [],
+    )
+    issuer = await auth_service.get_auth_service()
+    if revoked:
+        issuer.revalidate_session_identity.return_value = None
+    assert await ChatRuntime._private_persistence_authorized(request) is expected
+    if not restricted or not bound:
+        issuer.revalidate_session_identity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_revoked_private_execution_cannot_initiate_memory_formation(monkeypatch):
+    from ai_karen_engine.core import memory
+    from ai_karen_engine.core.runtime import chat_runtime
+
+    request, plan, meter = await authority()
+    runtime = runtime_with_reader(monkeypatch, BoundedReader({}))
+    issuer = await auth_service.get_auth_service()
+    issuer.revalidate_session_identity.return_value = None
+    snapshot = SimpleNamespace(
+        status="none", persona_id=None, matches=lambda _context: True,
+    )
+    monkeypatch.setattr(runtime, "_freeze_persona_snapshot", AsyncMock(return_value=snapshot))
+    monkeypatch.setattr(chat_runtime.ActionExecutionGate, "authorize", AsyncMock(return_value=True))
+    manager_factory = Mock()
+    monkeypatch.setattr(memory, "get_memory_manager", manager_factory)
+    meta = {}
+    receipt = await runtime._persist_memory(request, BODY, meta, plan)
+    assert receipt["status"] == "rejected"
+    assert receipt["reason"] == "attachment_session_denied"
+    assert receipt["persisted"] == 0
+    assert meta["memory_persistence_status"] == "denied_by_policy"
+    manager_factory.assert_not_called()
