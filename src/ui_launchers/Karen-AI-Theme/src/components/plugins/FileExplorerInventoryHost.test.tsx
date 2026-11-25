@@ -871,27 +871,55 @@ describe('KEXP-003F capacity transition isolation', () => {
 
 describe('KEXP-004A inventory-wide search', () => {
   it('submits a literal query, clears selection, preserves query on pagination and clears search', async () => {
+    const matchingPage = (id: string, hasMore = false, cursor: string | null = null) => {
+      const page = response(id, hasMore, cursor);
+      return { ...page, items: page.items.map(item => ({ ...item, name: id === FILE_A ? 'report_%_alpha.txt' : 'report_%_beta.txt' })) };
+    };
     mocks.get.mockResolvedValueOnce(response(FILE_A))
-      .mockResolvedValueOnce(response(FILE_B, true, 'search-cursor'))
-      .mockResolvedValueOnce(response(FILE_A))
+      .mockResolvedValueOnce(matchingPage(FILE_B, true, 'search-cursor'))
+      .mockResolvedValueOnce(matchingPage(FILE_A))
+      .mockResolvedValueOnce(matchingPage(FILE_B, true, 'search-cursor'))
       .mockResolvedValueOnce(response(FILE_B));
     render(<ContentIntelligenceWorkspace />);
     await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha.txt' }));
     fireEvent.change(screen.getByLabelText('Search all authorized files'), { target: { value: 'report_%' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search inventory' }));
-    await screen.findByRole('checkbox', { name: 'Select beta.txt' });
+    const match = await screen.findByRole('checkbox', { name: 'Select report_%_beta.txt' });
+    expect((match as HTMLInputElement).checked).toBe(false);
+    expect(screen.queryByRole('checkbox', { name: 'Select alpha.txt' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
     expect(mocks.get.mock.calls[1]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100&search=report_%25']);
     fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
-    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    await screen.findByRole('checkbox', { name: 'Select report_%_alpha.txt' });
     expect(mocks.get.mock.calls[2]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100&cursor=search-cursor&search=report_%25']);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await screen.findByRole('checkbox', { name: 'Select report_%_beta.txt' });
+    expect(mocks.get.mock.calls[3]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100&search=report_%25']);
     fireEvent.click(screen.getByRole('button', { name: 'Clear inventory search' }));
     await screen.findByRole('checkbox', { name: 'Select beta.txt' });
-    expect(mocks.get.mock.calls[3]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100']);
+    expect(mocks.get.mock.calls[4]).toEqual(['/api/plugins/content-intelligence/inventory?limit=100']);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid queries without replacing the current page or selection', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<FileExplorerInventoryHost mode="selection">{props => {
+      latest = props;
+      return <output>{props.search}</output>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    act(() => latest.onSelect([{ source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file' }]));
+    for (const invalid of ['a'.repeat(161), 'bad\u0000query', '\ud800']) {
+      act(() => latest.onSearch?.(invalid));
+      expect(latest.selectedSourceIds).toEqual([FILE_A]);
+      expect(latest.search).toBe('');
+      expect(mocks.get).toHaveBeenCalledTimes(1);
+    }
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });
-
 
 describe('KEXP-004A adversarial search isolation', () => {
   it('discards out-of-order search results and old pagination callbacks', async () => {
