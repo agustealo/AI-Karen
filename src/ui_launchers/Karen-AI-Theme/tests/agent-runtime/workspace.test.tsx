@@ -175,4 +175,54 @@ describe("runtime projection validation", () => {
     await act(async () => { decision.resolve({ ...approval, status: "approved" }); });
   });
 
+
+  it("preserves verified history and selected details while a background refresh is pending", async () => {
+    const nextHistory = deferred<unknown>();
+    const nextDetail = deferred<unknown>();
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    let detailReads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/agent-runtime/my-runs") return ++reads === 1 ? Promise.resolve(history([run])) : nextHistory.promise;
+        if (path.endsWith("/" + run.run_id)) return ++detailReads === 1 ? Promise.resolve(run) : nextDetail.promise;
+        return fallback(path);
+      });
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      await screen.findByRole("heading", { name: "Execution details" });
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(screen.getByRole("button", { name: /Execution run-1234/ })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Execution details" })).toBeTruthy();
+      expect(screen.getByText(/Execution snapshot:.*Refreshing/)).toBeTruthy();
+      await act(async () => { nextHistory.resolve(history([run])); });
+      expect(screen.getByRole("heading", { name: "Execution details" })).toBeTruthy();
+      expect(screen.getByText("Revalidating execution status…")).toBeTruthy();
+      expect((screen.getByRole("button", { name: "Copy verified context for Karen" }) as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { nextDetail.resolve({ ...run, status: "completed" }); });
+      expect(await screen.findByText("Execution completed. A saved artifact is not implied by this status.")).toBeTruthy();
+    } finally { visibility.mockRestore(); }
+  });
+
+  it("removes previously verified history and details when refresh fails", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    let reads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/agent-runtime/my-runs") return ++reads === 1 ? Promise.resolve(history([run])) : Promise.reject(new Error("Access unavailable"));
+        if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+        return fallback(path);
+      });
+      render(<AgentsPage />);
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      await screen.findByRole("heading", { name: "Execution details" });
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await screen.findByText("Execution history is unavailable. Refresh runtime to try again.");
+      expect(screen.queryByRole("heading", { name: "Execution details" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Execution run-1234/ })).toBeNull();
+    } finally { visibility.mockRestore(); }
+  });
+
 });
