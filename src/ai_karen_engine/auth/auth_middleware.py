@@ -8,7 +8,7 @@ import secrets
 import time
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import jwt
 import redis
@@ -379,13 +379,15 @@ class SecureAuthMiddleware:
             path.startswith(pattern) for pattern in public_patterns
         )
 
-    async def validate_token(self, token: str, *, issue_witness: bool = False) -> Dict[str, Any]:
+    async def validate_token(
+        self, token: str, *, _witness_sink: Optional[Callable[[Any], None]] = None,
+    ) -> Dict[str, Any]:
         """Never report JWT signature validity as authenticated session truth."""
         try:
             payload = self._verify_access_token(token)
             canonical = await self._require_active_session(
-                token, payload, issue_witness=True,
-            ) if issue_witness else await self._require_active_session(token, payload)
+                token, payload, _witness_sink=_witness_sink,
+            ) if _witness_sink is not None else await self._require_active_session(token, payload)
             return {"status": TokenStatus.VALID, "payload": canonical}
         except AuthenticationError as exc:
             if "revoked" in exc.message.lower():
@@ -416,7 +418,8 @@ class SecureAuthMiddleware:
         return payload
 
     async def _require_active_session(
-        self, token: str, payload: Dict[str, Any], *, issue_witness: bool = False
+        self, token: str, payload: Dict[str, Any], *,
+        _witness_sink: Optional[Callable[[Any], None]] = None,
     ) -> Dict[str, Any]:
         """Resolve canonical active-session truth after JWT verification.
 
@@ -430,7 +433,7 @@ class SecureAuthMiddleware:
 
             auth_service = await get_auth_service()
             witness = None
-            if issue_witness:
+            if _witness_sink is not None:
                 account, witness = await auth_service.validate_session_with_witness(token)
                 if account is not None and witness is None:
                     raise RuntimeError("Session witness unavailable")
@@ -457,15 +460,14 @@ class SecureAuthMiddleware:
         validated["roles"] = list(account.roles or [])
         validated["email"] = account.email
         validated["permissions"] = []
-        if witness is not None:
-            # This is an internal validation result, not a JWT claim. The
-            # witness is transferred only into a non-mapping principal attribute.
-            validated["_runtime_session_witness"] = witness
-        else:
-            validated.pop("_runtime_session_witness", None)
+        validated.pop("_runtime_session_witness", None)
+        if _witness_sink is not None and witness is not None:
+            _witness_sink(witness)
         return validated
 
-    def _get_user_from_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_user_from_payload(
+        self, payload: Dict[str, Any], *, witness: Any = None,
+    ) -> Dict[str, Any]:
         user = {
             "user_id": payload["sub"],
             "email": payload.get("email"),
@@ -475,7 +477,6 @@ class SecureAuthMiddleware:
             "token_id": payload.get("token_id"),
             "roles": payload.get("roles", []),
         }
-        witness = payload.get("_runtime_session_witness")
         if witness is not None:
             from ai_karen_engine.auth.models import UserData
 
