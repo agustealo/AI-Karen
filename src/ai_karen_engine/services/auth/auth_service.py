@@ -997,6 +997,52 @@ class AuthService(BaseService):
             access_token_digest=witness.access_token_digest,
         )
 
+    async def revalidate_issued_session_in_transaction(
+        self, witness: object, principal: Any, context: Any, db_session: AsyncSession,
+    ) -> Optional[UserAccount]:
+        """Fence revocation against the caller's PostgreSQL transaction."""
+        if not db_session.in_transaction() or db_session.get_bind().dialect.name != "postgresql":
+            return None
+        if not self.is_issued_session_witness(witness):
+            return None
+        with self._witness_binding_lock():
+            entry = self._witness_bindings().get(witness)
+            if (entry is None or entry[0] is None or entry[1] is None
+                    or entry[0]() is not principal or entry[1]() is not context):
+                return None
+        user_uuid = uuid.UUID(witness.user_id)
+        # Match password-change lock ordering. Locks live until caller commit.
+        account_row = await db_session.execute(
+            select(AuthUser).where(AuthUser.user_id == user_uuid)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        if account_row.scalar_one_or_none() is None:
+            return None
+        session_row = await db_session.execute(
+            select(AuthSession).where(
+                AuthSession.session_token == uuid.UUID(witness.session_id),
+                AuthSession.user_id == user_uuid, AuthSession.is_active,
+            ).with_for_update().execution_options(populate_existing=True)
+        )
+        row = session_row.scalar_one_or_none()
+        if row is None or not row.access_token:
+            return None
+        if not secrets.compare_digest(
+            hashlib.sha256(row.access_token.encode("utf-8")).hexdigest(),
+            witness.access_token_digest,
+        ):
+            return None
+        # Reuse the existing JWT, expiry and account checks on these locked rows.
+        token = _db_session_ctx.set(db_session)
+        try:
+            account = await self.validate_session(row.access_token, strict_errors=True)
+        finally:
+            _db_session_ctx.reset(token)
+        if (account is None or account.id != witness.user_id
+                or account.tenant_id != witness.tenant_id):
+            return None
+        return account
+
     async def validate_session_with_witness(
         self, session_token: str,
     ) -> Tuple[Optional[UserAccount], Optional[_IssuedSessionWitness]]:

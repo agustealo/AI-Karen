@@ -47,6 +47,7 @@ _SAFE_TRANSCRIPT_FAILURE_CODES = frozenset({
     "conversation_history_persona_scope_mismatch",
     "conversation_storage_unavailable", "message_idempotency_conflict",
     "incomplete_turn_replay", "invalid_completed_turn",
+    "attachment_session_denied",
     "chat_run_transcript_scope_mismatch", "chat_run_commit_not_authorized",
     "completed_turn_write_failed", "assistant_write_failed",
     "user_write_failed", "duplicate_conversation_id",
@@ -1028,7 +1029,18 @@ class ConversationRuntimeGateway:
                     "transcript_actor": "assistant",
                 },
             )
-            if run_lease is not None:
+            if context.has_runtime_attachment_scope():
+                try:
+                    write_result = await self._repository.add_completed_turn(
+                        user_message, assistant_message, run_lease=run_lease,
+                        private_execution=context,
+                    )
+                except TypeError:
+                    return TranscriptPersistenceResult(
+                        status="rejected", conversation_id=conversation_id,
+                        reason="attachment_session_denied",
+                    )
+            elif run_lease is not None:
                 write_result = await self._repository.add_completed_turn(
                     user_message, assistant_message, run_lease=run_lease,
                 )
@@ -1038,7 +1050,7 @@ class ConversationRuntimeGateway:
                 )
             if not write_result.success:
                 return TranscriptPersistenceResult(
-                    status="failed",
+                    status="rejected" if write_result.error == "attachment_session_denied" else "failed",
                     conversation_id=conversation_id,
                     user_message_id=user_message_id,
                     assistant_message_id=assistant_message_id,

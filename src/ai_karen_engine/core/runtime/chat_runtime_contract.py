@@ -280,7 +280,7 @@ class ChatExecutionContext:
         if not get_rbac_manager().has_permission(principal, Permission.DATA_READ):
             raise PermissionError("runtime_attachment_read_permission_denied")
 
-    async def revalidate_runtime_attachment_session(self) -> None:
+    async def revalidate_runtime_attachment_session(self, *, db_session: Any = None) -> None:
         """Require durable account truth and current RBAC for private content."""
         from ai_karen_engine.auth.models import UserData
         from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
@@ -303,7 +303,12 @@ class ChatExecutionContext:
         issuer = await get_auth_service()
         if not issuer.bind_issued_session_execution(grant[1], principal, self):
             raise PermissionError("runtime_attachment_session_binding_invalid")
-        account = await issuer.revalidate_issued_session_witness(grant[1])
+        if db_session is None:
+            account = await issuer.revalidate_issued_session_witness(grant[1])
+        else:
+            account = await issuer.revalidate_issued_session_in_transaction(
+                grant[1], principal, self, db_session,
+            )
         if (
             account is None
             or str(account.id) != str(self.user_id)

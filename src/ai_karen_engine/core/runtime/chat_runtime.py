@@ -2432,7 +2432,10 @@ class ChatRuntime:
         )
         durable_meta = self._durable_presentation_metadata(provider_meta)
 
-        if not await ChatRuntime._private_persistence_authorized(request):
+        if (
+            ChatRuntime._attachment_restriction_required(request)
+            and not ctx.has_runtime_attachment_scope()
+        ) or not await ChatRuntime._private_persistence_authorized(request):
             self._emitter.emit(
                 RuntimeEventType.PERSISTENCE_FAILED,
                 status="denied",

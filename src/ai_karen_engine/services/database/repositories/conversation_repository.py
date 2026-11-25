@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
 from .base import Repository, RepositoryResult
 
@@ -190,6 +191,7 @@ class ConversationRepository(Repository):
     async def add_completed_turn(
         self, user_message: Message, assistant_message: Message,
         *, run_lease: Optional["ChatRunLease"] = None,
+        private_execution: Optional["ChatExecutionContext"] = None,
     ) -> RepositoryResult[int]:
         """Atomically persist a pair; unsupported repositories fail closed."""
         return RepositoryResult(

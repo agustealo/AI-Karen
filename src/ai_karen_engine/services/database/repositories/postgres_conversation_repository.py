@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,6 +64,7 @@ _ALLOWED_TURN_FAILURE_CODES = frozenset({
     "conversation_persona_scope_mismatch",
     "message_idempotency_conflict",
     "incomplete_turn_replay",
+    "attachment_session_denied",
 })
 
 
@@ -916,6 +920,7 @@ class PostgresConversationRepository(ConversationRepository):
     async def add_completed_turn(
         self, user_message: Message, assistant_message: Message,
         *, run_lease: Optional[ChatRunLease] = None,
+        private_execution: Optional[ChatExecutionContext] = None,
     ) -> RepositoryResult[int]:
         """Commit both messages under one locked, tenant-owned transaction."""
         if (
@@ -931,6 +936,22 @@ class PostgresConversationRepository(ConversationRepository):
         try:
             async with await self._session() as session:
                 async with session.begin():
+                    if private_execution is not None:
+                        try:
+                            if (
+                                private_execution.tenant_id != user_message.tenant_id
+                                or private_execution.user_id != user_message.metadata["authorized_user_id"]
+                                or private_execution.conversation_id != user_message.conversation_id
+                                or private_execution.request_id != user_message.metadata.get("request_id")
+                                or private_execution.correlation_id != user_message.metadata.get("correlation_id")
+                                or not private_execution.has_runtime_attachment_scope()
+                            ):
+                                raise PermissionError("attachment_session_denied")
+                            await private_execution.revalidate_runtime_attachment_session(
+                                db_session=session,
+                            )
+                        except Exception:
+                            raise ValueError("attachment_session_denied") from None
                     if run_lease is not None:
                         # Set the canonical RLS scope ON THIS transaction.
                         # No independent run-ledger session is opened.
