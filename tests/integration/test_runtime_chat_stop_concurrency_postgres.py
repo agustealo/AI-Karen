@@ -587,6 +587,69 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             draft_thread, tenant_a, user_id=user_a,
         )).data["text"] == "Newer draft"
 
+        # The revision-bound handoff keeps text durable until transcript commit.
+        # A stale or mismatched submission must roll back the staged ledger row.
+        draft_identity = {
+            "tenant_id": tenant_a, "user_id": user_a, "conversation_id": draft_thread,
+        }
+        with pytest.raises(module.DraftSubmissionConflict):
+            await worker_a.admit(
+                **draft_identity, transport_run_id="draft-stale", request_id="draft-stale",
+                correlation_id="draft-stale", submission_id="draft-v1-1",
+                submitted_text="Unsent across windows",
+            )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs WHERE transport_run_id='draft-stale'",
+        ) == 0
+        with pytest.raises(module.DraftSubmissionConflict):
+            await worker_a.admit(
+                **draft_identity, transport_run_id="draft-mismatch", request_id="draft-mismatch",
+                correlation_id="draft-mismatch", submission_id="draft-v1-2",
+                submitted_text="different text",
+            )
+        draft_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="draft-admitted", request_id="draft-request",
+            correlation_id="draft-trace", submission_id="draft-v1-2",
+            submitted_text="Newer draft",
+        )
+        assert draft_lease is not None
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "Newer draft", "revision": 2}
+        # A failed run does not erase the only recoverable user content.
+        assert await worker_a.finish(draft_lease, status="failed", error_code="CHAT_TEST_TERMINAL")
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "Newer draft", "revision": 2}
+        # A new explicit edit creates the next submission revision.
+        assert (await conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="Complete this draft", expected_revision=2,
+        )).success
+        draft_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="draft-complete", request_id="draft-complete",
+            correlation_id="draft-complete", submission_id="draft-v1-3",
+            submitted_text="Complete this draft",
+        )
+        assert draft_lease is not None
+        draft_messages = [
+            Message(
+                id=str(uuid.uuid4()), conversation_id=draft_thread,
+                tenant_id=tenant_a, role=role, content=content,
+                metadata={
+                    "authorized_user_id": user_a,
+                    "request_id": draft_lease.request_id,
+                    "correlation_id": draft_lease.correlation_id,
+                    "transcript_actor": role,
+                },
+            )
+            for role, content in (("user", "Complete this draft"), ("assistant", "Done"))
+        ]
+        assert (await conversations.add_completed_turn(*draft_messages, run_lease=draft_lease)).success
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "", "revision": 4}
+
         # Actual PostgreSQL RLS must hold for a least-privilege login;
         # superuser-only repository queries do not prove policy isolation.
         await raw.execute(

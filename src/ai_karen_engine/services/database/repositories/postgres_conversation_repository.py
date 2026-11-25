@@ -17,7 +17,9 @@ if TYPE_CHECKING:
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+from ai_karen_engine.persistence.repositories.chat_run_repository import (
+    ChatRunLease, draft_revision_from_submission_id,
+)
 from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
 
 from ai_karen_engine.services.database.repositories.conversation_repository import (
@@ -580,6 +582,30 @@ class PostgresConversationRepository(ConversationRepository):
             expected_revision=expected_revision, attachment_references=references,
         )
 
+    @staticmethod
+    async def lock_matching_submission_draft(
+        session: AsyncSession, *, tenant_id: str, user_id: str,
+        conversation_id: str, revision: int, submitted_text: Optional[str],
+    ) -> bool:
+        """Lock the exact text-only draft in the caller's authenticated transaction."""
+        result = await session.execute(text("""
+            SELECT draft_text FROM public.conversation_composer_drafts
+            WHERE tenant_id = CAST(:tenant AS uuid)
+              AND user_id = CAST(:owner AS uuid)
+              AND conversation_id = CAST(:conversation AS uuid)
+              AND revision = :revision
+              AND attachment_references = '[]'::jsonb
+            FOR UPDATE
+        """), {
+            "tenant": tenant_id, "owner": user_id,
+            "conversation": conversation_id, "revision": revision,
+        })
+        saved = result.scalar_one_or_none()
+        return (
+            isinstance(saved, str) and isinstance(submitted_text, str)
+            and bool(saved.strip()) and saved.strip() == submitted_text.strip()
+        )
+
     async def _put_composer_draft(
         self, conversation_id: str, tenant_id: str, *, user_id: str,
         content: str, expected_revision: int,
@@ -1058,6 +1084,7 @@ class PostgresConversationRepository(ConversationRepository):
                                   AND conversation_id = CAST(:conversation AS uuid)
                                   AND request_id = :request_id
                                   AND correlation_id = :correlation_id
+                                  AND submission_id IS NOT DISTINCT FROM :submission_id
                                   AND lease_token = CAST(:token AS uuid)
                                   AND lease_expires_at > NOW()
                                   AND status = 'running'
@@ -1071,6 +1098,7 @@ class PostgresConversationRepository(ConversationRepository):
                                 "conversation": run_lease.conversation_id,
                                 "request_id": run_lease.request_id,
                                 "correlation_id": run_lease.correlation_id,
+                                "submission_id": run_lease.submission_id,
                                 "token": run_lease.lease_token,
                             },
                         )
@@ -1226,6 +1254,29 @@ class PostgresConversationRepository(ConversationRepository):
                         )
                         if finished.scalar_one_or_none() is None:
                             raise ValueError("chat_run_commit_not_authorized")
+                        # Retire only the submitted draft revision, in the same
+                        # commit as the completed transcript and ledger receipt.
+                        # A newer draft (including attachments) remains untouched.
+                        draft_revision = draft_revision_from_submission_id(run_lease.submission_id)
+                        if draft_revision is not None and await self.lock_matching_submission_draft(
+                            session, tenant_id=run_lease.tenant_id,
+                            user_id=run_lease.user_id,
+                            conversation_id=run_lease.conversation_id,
+                            revision=draft_revision, submitted_text=user_message.content,
+                        ):
+                            await session.execute(text("""
+                                UPDATE public.conversation_composer_drafts
+                                SET draft_text = '', revision = revision + 1,
+                                    updated_at = clock_timestamp()
+                                WHERE tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND conversation_id = CAST(:conversation AS uuid)
+                                  AND revision = :revision
+                                  AND attachment_references = '[]'::jsonb
+                            """), {
+                                "tenant": run_lease.tenant_id, "owner": run_lease.user_id,
+                                "conversation": run_lease.conversation_id, "revision": draft_revision,
+                            })
                     # Only the transaction exit can commit this staged pair.
                     # An exception during commit or later cleanup is uncertain;
                     # an earlier exception cannot have committed this attempt.

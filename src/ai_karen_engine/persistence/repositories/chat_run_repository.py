@@ -47,6 +47,21 @@ class ChatRunLease:
     transport_run_id: str
     request_id: str
     correlation_id: str
+    submission_id: Optional[str] = None
+
+
+def draft_revision_from_submission_id(submission_id: Optional[str]) -> Optional[int]:
+    """Recognize the reserved original-draft identity; no client authority."""
+    if submission_id is None or not submission_id.startswith("draft-v1-"):
+        return None
+    match = re.fullmatch(r"draft-v1-([1-9][0-9]{0,15})", submission_id)
+    if match is None or int(match[1]) > 9007199254740990:
+        raise ValueError("invalid_draft_submission_identity")
+    return int(match[1])
+
+
+class DraftSubmissionConflict(Exception):
+    """The original owned draft no longer matches the submitted turn."""
 
 
 def _uuid(value: str) -> str:
@@ -74,11 +89,18 @@ class SqlChatRunRepository:
         request_id: str,
         correlation_id: str,
         submission_id: Optional[str] = None,
+        submitted_text: Optional[str] = None,
     ) -> Optional[ChatRunLease]:
         if submission_id is not None and (
             not isinstance(submission_id, str) or not _RUN_ID_PATTERN.fullmatch(submission_id)
         ):
             raise ValueError("invalid_chat_submission_id")
+        draft_revision = draft_revision_from_submission_id(submission_id)
+        if draft_revision is not None and (
+            not isinstance(submitted_text, str) or not submitted_text.strip()
+            or len(submitted_text) > 10000
+        ):
+            raise ValueError("invalid_draft_submission_text")
         if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
             raise ValueError("invalid_transport_run_id")
         if not request_id or not correlation_id:
@@ -160,6 +182,18 @@ class SqlChatRunRepository:
             )
             if result.scalar_one_or_none() is None:
                 return None
+            if draft_revision is not None:
+                # Keep the original text durable until transcript completion.
+                # Failure raises inside this transaction, rolling back admission.
+                from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+                    PostgresConversationRepository,
+                )
+                if not await PostgresConversationRepository.lock_matching_submission_draft(
+                    session, tenant_id=tenant, user_id=user,
+                    conversation_id=conversation, revision=draft_revision,
+                    submitted_text=submitted_text,
+                ):
+                    raise DraftSubmissionConflict("composer_draft_submission_conflict")
         return ChatRunLease(
             execution_id=execution,
             lease_token=token,
@@ -169,6 +203,7 @@ class SqlChatRunRepository:
             transport_run_id=transport_run_id,
             request_id=request_id,
             correlation_id=correlation_id,
+            submission_id=submission_id,
         )
 
     async def renew(self, lease: ChatRunLease) -> bool:

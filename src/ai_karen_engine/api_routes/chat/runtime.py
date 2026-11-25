@@ -27,7 +27,9 @@ from ai_karen_engine.core.runtime.owned_history_projection import (
     UnreplayableHistory, project_owned_history,
 )
 from ai_karen_engine.persistence.repositories.chat_run_repository import (
+    DraftSubmissionConflict,
     SqlChatRunRepository,
+    draft_revision_from_submission_id,
 )
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
     ChatRunConflict,
@@ -1543,6 +1545,12 @@ async def stream_ag_ui_chat(
         current_text = request.latest_user_message()
         durable_runs = getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False)
         submission_id = request.latest_user_submission_id() if durable_runs else None
+        draft_revision = draft_revision_from_submission_id(submission_id)
+        # Reserved draft identities are supported only by durable admission.
+        if not durable_runs and str(request.messages[-1].get("id", "")).startswith("draft-v1-"):
+            raise ValueError("durable_draft_submission_unavailable")
+        if draft_revision is not None and selected_attachments:
+            raise ValueError("draft_attachment_submission_unavailable")
         correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
         response_id = str(uuid.uuid4())
         # Assistant-ui's canonical threadId is Karen's already-persisted
@@ -1637,8 +1645,13 @@ async def stream_ag_ui_chat(
         try:
             run_lease = await get_chat_run_coordinator().admit(
                 canonical_request.context, request.runId, submission_id=submission_id,
+                **({"submitted_text": current_text} if draft_revision is not None else {}),
             )
             canonical_request.runtime_run_lease = run_lease
+        except DraftSubmissionConflict as exc:
+            raise HTTPException(
+                status_code=409, detail="Saved draft changed before execution admission",
+            ) from exc
         except ChatRunConflict as exc:
             raise HTTPException(
                 status_code=409, detail="Chat execution has already been admitted",

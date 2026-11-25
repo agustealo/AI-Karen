@@ -57,6 +57,7 @@ class ChatRunCoordinator:
     async def admit(
         self, context: ChatExecutionContext, run_id: str, *,
         submission_id: Optional[str] = None,
+        submitted_text: Optional[str] = None,
     ) -> ChatRunLease:
         context.require_authenticated_user()
         # Reauthorize against the canonical repository at run-admission time.
@@ -70,6 +71,7 @@ class ChatRunCoordinator:
             request_id=context.request_id or context.correlation_id,
             correlation_id=context.correlation_id,
             **({"submission_id": submission_id} if submission_id is not None else {}),
+            **({"submitted_text": submitted_text} if submitted_text is not None else {}),
         )
         if lease is None:
             raise ChatRunConflict("chat_run_already_exists")

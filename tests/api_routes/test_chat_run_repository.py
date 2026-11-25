@@ -356,3 +356,17 @@ async def test_missing_admission_indexes_fail_before_mutation(monkeypatch):
         )
     assert len(transaction.sql) == 1
     assert "pg_catalog.pg_index" in transaction.sql[0]
+
+
+@pytest.mark.parametrize(("value", "expected"), [
+    (None, None), ("ordinary-turn", None), ("draft-v1-1", 1),
+    ("draft-v1-9007199254740990", 9007199254740990),
+])
+def test_reserved_draft_identity_is_revision_bound(value, expected):
+    assert repository.draft_revision_from_submission_id(value) == expected
+
+
+@pytest.mark.parametrize("value", ["draft-v1-0", "draft-v1-01", "draft-v1-abc", "draft-v1-9007199254740991"])
+def test_invalid_reserved_draft_identity_fails_closed(value):
+    with pytest.raises(ValueError, match="invalid_draft_submission_identity"):
+        repository.draft_revision_from_submission_id(value)

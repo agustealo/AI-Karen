@@ -1253,3 +1253,9 @@ completion, content-size or presentation validation to silence the UI.
 - Governed history reads the canonical owned ledger and forwards a minimal recovery observation (transport run ID, original submission ID, unresolved status). The proxy rejects missing/malformed governed evidence and strips unapproved fields. Read-only SDK reconnect does not synthesize a finish when recovery remains unresolved.
 - The existing history gate refreshes the observation using authenticated history GET; its scoped controller blocks new submission and draft clearance. No browser storage, automatic inference, or duplicate execution authority. Legacy non-governed history remains outside this contract.
 - PostgreSQL and transport/consumer regression candidates require fresh exact-head CI; separate history and ledger reads are not an atomic recovery snapshot. Durable pre-admission draft intent, orphan resolution, legacy admission parity, real browser acceptance and independent review remain outstanding.
+
+## KCON-770 / KUI-004B4.48C7P: Revision-bound draft handoff (2026-11-25, SOURCE_CANDIDATE)
+
+- Reserve draft-v1-<revision> for durable text-only original submissions. Canonical run admission checks and locks the exact owned draft revision and normalized text inside the same ledger transaction; conflicts roll back admission. No draft clear at admission.
+- Canonical transcript commit verifies the ledger submission identity and retires only the matching draft revision in the same transaction as both messages and the completed run. Failed or interrupted runs and newer edits retain saved text. No new store or migration.
+- This is the backend contract slice; the existing consumer still clears before invoking SDK and must be migrated to revision-bound IDs with verified readback before claiming browser recovery. Regression candidates require exact-head CI and real PostgreSQL evidence. Legacy ingress and independent review remain outstanding.
