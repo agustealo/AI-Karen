@@ -929,6 +929,27 @@ class ChatRuntime:
                             "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
                         },
                     )
+                if transcript_result.status == "unverified":
+                    # The fallback response is subject to the same finality
+                    # gate as ordinary generation.
+                    self._emitter.emit(
+                        RuntimeEventType.REQUEST_FAILED,
+                        status="unverified",
+                        metadata={"error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"},
+                    )
+                    return ChatExecutionResult(
+                        answer="", status=ChatExecutionStatus.ERROR,
+                        metadata=ChatRuntimeMetadata(
+                            correlation_id=ctx.correlation_id,
+                            latency_ms=(time.time() - start) * 1000.0,
+                            degraded_mode=True,
+                            degradation_reason="transcript_commit_outcome_unverified",
+                            extra={
+                                **transcript_result.to_metadata(),
+                                "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                            },
+                        ),
+                    )
                 transcript_meta = transcript_result.to_metadata()
                 recovery_meta.update(transcript_meta)
                 fallback.metadata.extra.update(transcript_meta)
@@ -1158,6 +1179,28 @@ class ChatRuntime:
                 ),
             )
         provider_meta.update(transcript_result.to_metadata())
+        if transcript_result.status == "unverified":
+            # No final trajectory or adaptive-learning outcome may be derived
+            # from uncertain durable state. Do not return private answer bytes.
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="unverified",
+                metadata={"error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    degraded_mode=True,
+                    degradation_reason="transcript_commit_outcome_unverified",
+                    extra={
+                        **transcript_result.to_metadata(),
+                        "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                    },
+                ),
+            )
         transcript_failed = not transcript_result.success
         if transcript_failed:
             # Conversation durability is independent of successful inference.
@@ -2214,6 +2257,29 @@ class ChatRuntime:
             "rejected",
             "unverified",
         }
+
+        if transcript_result.status == "unverified":
+            # Retain unresolved trajectory truth. COMPLETE here is a runtime
+            # envelope, not permission for transports to announce success.
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="unverified",
+                metadata={"error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.COMPLETE, content="",
+                    correlation_id=ctx.correlation_id,
+                    metadata={
+                        **transcript_meta,
+                        "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                        "status": "error", "degraded_mode": True,
+                        "requires_retry": False,
+                    },
+                ),
+                sequence, request_id, response_id, conversation_id,
+            )
+            return
 
         # A provider may emit text and subsequently emit a stream error.
         # A partial answer is not a successful outcome for adaptive learning.

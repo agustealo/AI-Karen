@@ -610,13 +610,19 @@ async def create_chat_response(
         if result.status == ChatExecutionStatus.ERROR:
             # An unsuccessful runtime execution must not become an HTTP 200
             # success envelope with empty assistant content.
+            uncertain = (
+                result.metadata.extra.get("error_code") == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+            )
             return JSONResponse(
-                status_code=503,
+                status_code=409 if uncertain else 503,
                 content={
                     "error_code": result.metadata.extra.get("error_code") or "CHAT_EXECUTION_FAILED",
-                    "message": "The chat runtime could not complete the response.",
+                    "message": (
+                        "Chat persistence is unverified. Check saved history before sending again."
+                        if uncertain else "The chat runtime could not complete the response."
+                    ),
                     "correlation_id": correlation_id,
-                    "requires_retry": True,
+                    "requires_retry": not uncertain,
                 },
                 headers={"X-Correlation-Id": correlation_id},
             )
@@ -815,7 +821,19 @@ async def _ag_ui_sse(
                 canonical_stream, lease=run_lease,
             )
         async for chunk in canonical_stream:
-            for event in projection.project(chunk):
+            projected = projection.project(chunk)
+            if any(
+                event.get("type") == "RUN_ERROR"
+                and event.get("code") == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+                for event in projected
+            ):
+                # This diagnostic is NOT a durable journal terminal. The
+                # existing ledger may already be completed or still running.
+                # Do not append a contradictory RUN_ERROR or assign a cursor.
+                for event in projected:
+                    yield f"data: {json.dumps(event, ensure_ascii=False, allow_nan=False)}\n\n"
+                break
+            for event in projected:
                 yield await frame(event)
             if projection.terminal:
                 break

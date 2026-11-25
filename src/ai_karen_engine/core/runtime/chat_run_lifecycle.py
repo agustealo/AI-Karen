@@ -289,6 +289,21 @@ class ChatRunCoordinator:
                         isinstance(persistence_status, str)
                         and persistence_status in {"persisted", "already_persisted"}
                     )
+                    if not gated and persistence_status == "unverified":
+                        # The commit may already be durable. Do not attempt a
+                        # failed/cancelled transition or manufacture a receipt.
+                        terminal = True
+                        yield ChatStreamChunk(
+                            type=ChatStreamEventType.ERROR,
+                            content="Chat persistence is unverified. Check saved history and run status before sending again.",
+                            correlation_id=lease.correlation_id,
+                            metadata={
+                                "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                                "transcript_persistence_status": "unverified",
+                                "requires_retry": False,
+                            },
+                        )
+                        break
                     error_code = (
                         "CHAT_RUNTIME_GATED" if gated else
                         "CHAT_TRANSCRIPT_NOT_PERSISTED" if not persisted else None

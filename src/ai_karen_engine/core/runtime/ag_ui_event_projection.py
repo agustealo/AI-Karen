@@ -327,10 +327,16 @@ class AGUIEventProjection:
                 return self._finish_message() + [{
                     "type": "RUN_ERROR",
                     "message": (
+                        "Chat persistence is unverified. Check saved history and run status before sending again."
+                        if persistence_status == "unverified" else
                         "The response could not be saved. Check verified "
                         "conversation history before retrying."
                     ),
-                    "code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
+                    "code": (
+                        "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+                        if persistence_status == "unverified" else
+                        "CHAT_TRANSCRIPT_PERSISTENCE_FAILED"
+                    ),
                 }]
 
             # Explicit terminal receipt, not an unrestricted metadata dump.

@@ -710,3 +710,24 @@ def test_whole_event_source_scrub_preserves_benign_presentation() -> None:
         },
     }
     assert ChatRunCoordinator._journal_safe_event(event) == event
+
+
+@pytest.mark.asyncio
+async def test_uncertain_commit_leaves_durable_finality_unchanged() -> None:
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-uncertain")
+
+    async def upstream():
+        yield content()
+        final = completed()
+        final.metadata["transcript_persistence_status"] = "unverified"
+        yield final
+
+    events = [chunk async for chunk in coordinator.stream(upstream(), lease=lease)]
+    assert [chunk.type for chunk in events] == [
+        ChatStreamEventType.CONTENT, ChatStreamEventType.ERROR,
+    ]
+    assert events[-1].metadata["error_code"] == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+    assert events[-1].metadata["requires_retry"] is False
+    assert repo.finalized == []
