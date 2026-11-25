@@ -3,11 +3,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  ArrowUpRight,
   Bot,
+  CheckCircle2,
+  Users,
   CircleStop,
   RefreshCw,
   ShieldCheck,
-  Workflow,
+  Search,
 } from "lucide-react";
 
 import useAuth from "@/lib/useAuth";
@@ -16,6 +19,7 @@ import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalo
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -175,6 +179,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [runDetailError, setRunDetailError] = useState("");
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const normalizedHistoryQuery = historyQuery.trim().toLowerCase();
 
   const activeRuns = useMemo(
     () =>
@@ -216,6 +222,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
     return () => { active = false; };
   }, [selectedRunId, isAuthenticated, isAdmin, runListRevision]);
   const visibleRuns = runs.filter((run) => {
+    if (normalizedHistoryQuery && ![run.run_id, run.status, run.started_at, run.completed_at].some((value) => value?.toLowerCase().includes(normalizedHistoryQuery))) return false;
     if (workFilter === "all") return true;
     const status = run.status.toLowerCase();
     if (workFilter === "active") return ["queued", "running", "cancelling"].includes(status);
@@ -471,16 +478,16 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   }
 
   return (
-    <div className="space-y-6" data-testid="agent-runtime-page">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="mx-auto w-full max-w-7xl min-w-0 space-y-6 pb-6" data-testid="agent-runtime-page">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <Bot className="mt-1 h-8 w-8 text-primary" />
           <div>
             <h2 className="text-2xl font-semibold tracking-tight">
-              Agent Runtime
+              Mission Control
             </h2>
             <p className="karen-page-description mt-1">
-              Delegate work to Karen, monitor verified execution progress, and inspect outcomes. Agent diagnostics are available below.
+              {isAdmin ? "Inspect authorized tenant execution activity and operational evidence." : "Delegate objectives, review execution evidence, and stay in control of your work."}
             </p>
           </div>
         </div>
@@ -498,29 +505,83 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
           />
           Refresh runtime
         </Button>
-      </div>
+      </header>
 
-      <section aria-label="Your AI work" className="space-y-4" data-testid="agent-workspace">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
-          <div>
-            <h3 className="text-lg font-semibold">{isAdmin ? "Tenant execution workspace" : "Your AI workspace"}</h3>
-            <p className="text-sm text-muted-foreground">Ask Karen to work on a goal, then return to review real progress and results.</p>
+      {!isAdmin && (
+        <section aria-label="Start a mission" className="relative overflow-hidden rounded-2xl border border-primary/20 bg-card p-5 sm:p-7">
+          <div className="relative flex flex-col items-start gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-widest text-primary">Your AI workspace</p>
+              <h3 className="text-xl font-semibold tracking-tight sm:text-2xl">What are we accomplishing today?</h3>
+              <p className="max-w-xl text-sm text-muted-foreground">Describe your objective in Karen Chat. Authorized executions will appear here when the runtime records them.</p>
+            </div>
+            <Button type="button" size="lg" className="w-full shrink-0 sm:w-auto" onClick={onAskKaren} disabled={!isAuthenticated || !onAskKaren}>
+              Ask Karen <ArrowUpRight aria-hidden="true" className="ml-2 h-4 w-4" />
+            </Button>
           </div>
-          <Button type="button" onClick={onAskKaren} disabled={!onAskKaren}>
-            <Bot className="mr-2 h-4 w-4" /> Ask Karen
-          </Button>
+        </section>
+      )}
+
+      {isAuthenticated && (
+        <section aria-label="Workspace overview" className="space-y-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold">Workspace overview</h3>
+            <p className="text-xs text-muted-foreground">{isAdmin ? "Tenant executions · your approvals" : "Your visible executions and approvals"}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {[
+              { label: "Active executions", icon: Activity, value: runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : activeRuns.length, hint: isLoadingRuns && runsGeneratedAt ? "Refreshing snapshot" : "Visible run history" },
+              { label: "Completed executions", icon: CheckCircle2, value: runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : runs.filter((run) => ["completed", "succeeded"].includes(run.status.toLowerCase())).length, hint: isLoadingRuns && runsGeneratedAt ? "Refreshing snapshot" : "Visible run history" },
+              { label: "Approval requests", icon: ShieldCheck, value: approvalsError ? "Unavailable" : isLoadingApprovals ? "Loading" : approvals.length, hint: "Your approval inbox" },
+              { label: "Registered specialists", icon: Users, value: catalogError ? "Unavailable" : isLoadingCatalog ? "Loading" : catalog?.total ?? "Unavailable", hint: "Eligibility decided per request" },
+            ].map(({ label, icon: Icon, value, hint }) => (
+              <Card key={label} className="min-w-0">
+                <CardHeader className="space-y-2 p-3 sm:p-4">
+                  <Icon aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
+                  <CardDescription className="text-xs">{label}</CardDescription>
+                  <CardTitle className="break-words text-base tabular-nums sm:text-2xl">{value}</CardTitle>
+                  <p className="text-xs text-muted-foreground">{hint}</p>
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <nav aria-label="Mission Control sections" className="flex flex-wrap gap-2 border-b border-border pb-3">
+        <Button asChild variant="ghost" size="sm"><a href="#mission-history">Mission history</a></Button>
+        <Button asChild variant="ghost" size="sm"><a href="#mission-approvals">Approvals</a></Button>
+        <Button asChild variant="ghost" size="sm"><a href="#mission-specialists">Specialists</a></Button>
+        <Button asChild variant="ghost" size="sm"><a href="#mission-diagnostics">Diagnostics</a></Button>
+      </nav>
+
+      <section id="mission-history" aria-label="Your AI work" className="scroll-mt-4 space-y-4" data-testid="agent-workspace">
+        <div>
+          <h3 className="text-lg font-semibold">{isAdmin ? "Tenant execution workspace" : "Mission history"}</h3>
+          <p className="text-sm text-muted-foreground">Inspect recorded executions and their verified status.</p>
         </div>
         {isAuthenticated ? (
           <>
             {cancellationError && <p role="alert" className="text-sm text-destructive">{cancellationError}</p>}
             {runsError && <p role="alert" className="rounded-lg border border-destructive/50 p-3 text-sm text-destructive">Run status refresh failed: {runsError}</p>}
             {runsGeneratedAt && <p className="text-xs text-muted-foreground" role="status">Execution snapshot: {formatTimestamp(runsGeneratedAt)}{isLoadingRuns ? " · Refreshing…" : ""}</p>}
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div className="w-full max-w-md space-y-1">
+                <label htmlFor="mission-history-search" className="text-xs font-medium">Search visible executions</label>
+                <div className="relative">
+                  <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Input id="mission-history-search" type="search" className="pl-9" placeholder="Run ID, status or date" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} />
+                </div>
+              </div>
+              {historyQuery && <Button type="button" size="sm" variant="outline" onClick={() => setHistoryQuery("")}>Clear search</Button>}
+              {runsGeneratedAt && !runsError && <p role="status" className="text-xs text-muted-foreground">{visibleRuns.length} of {runs.length} visible executions{selectedRunId && !visibleRuns.some((run) => run.run_id === selectedRunId) ? " · Selected execution is outside current filters" : ""}</p>}
+            </div>
             <div className="flex flex-wrap gap-2" role="group" aria-label="Filter visible runs">
               {(["all", "active", "completed", "failed"] as const).map((filter) => (
                 <Button key={filter} type="button" size="sm"
                   variant={workFilter === filter ? "default" : "outline"}
                   aria-pressed={workFilter === filter}
-                  onClick={() => { setWorkFilter(filter); setSelectedRunId(null); setVerifiedRun(null); setContextMessage(""); }}>
+                  onClick={() => setWorkFilter(filter)}>
                   {filter === "all" ? "All work" : filter === "active" ? "In progress" : filter === "completed" ? "Completed" : "Failed or cancelled"}
                 </Button>
               ))}
@@ -530,15 +591,16 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                 {isLoadingRuns && !runsGeneratedAt && !runsError ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
                   visibleRuns.length ? visibleRuns.map((run) => (
                     <button type="button" key={run.run_id}
-                      className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+                      className={`w-full min-w-0 rounded-lg border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring ${selectedRunId === run.run_id ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "border-border hover:bg-muted/50"}`}
                       aria-pressed={selectedRunId === run.run_id}
-                      onClick={() => setSelectedRunId(run.run_id)}>
-                      <span className="block text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span>
-                      <span className="text-xs text-muted-foreground">{run.status} · {formatTimestamp(run.started_at)}</span>
+                      onClick={() => { setSelectedRunId(run.run_id); setContextMessage(""); }}>
+                      <span className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span><Badge variant={statusVariant(run.status)}>{run.status}</Badge></span>
+                      <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">{run.run_id}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Started {formatTimestamp(run.started_at)}</span>
                     </button>
-                  )) : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
+                  )) : normalizedHistoryQuery ? <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>No visible executions match your search.</p><Button type="button" size="sm" variant="outline" onClick={() => setHistoryQuery("")}>Reset search</Button></div> : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
               </div>
-              <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
+              <div className="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-label="Selected execution details">
                 {runsError ? <p className="text-sm text-muted-foreground">Execution details unavailable until history is verified.</p> : runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -556,6 +618,12 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                         <div><dt>Run ID</dt><dd className="break-all">{selectedRun.run_id}</dd></div>
                         <div><dt>Correlation ID</dt><dd className="break-all">{selectedRun.correlation_id || "Not recorded"}</dd></div>
                         <div><dt>Response source</dt><dd>{selectedRun.response_source || "Not recorded"}</dd></div>
+                        {isAdmin && <>
+                          <div><dt>User</dt><dd className="break-all">{selectedRun.user_id || "Not recorded"}</dd></div>
+                          <div><dt>Session</dt><dd className="break-all">{selectedRun.session_id || "Not recorded"}</dd></div>
+                          <div><dt>Policy decision</dt><dd className="break-all">{selectedRun.policy_decision_id || "Not recorded"}</dd></div>
+                          <div><dt>Durability</dt><dd>{selectedRun.durable === undefined ? "Not recorded" : selectedRun.durable ? "Durable" : "Not durable"}</dd></div>
+                        </>}
                       </dl>
                     </details>
                     <div className="mt-4 flex flex-wrap gap-2">
@@ -582,7 +650,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         )}
       </section>
 
-      <section aria-label="Needs your review" className="space-y-3" data-testid="agent-runtime-approvals">
+      <section id="mission-approvals" aria-label="Needs your review" className="scroll-mt-4 space-y-3" data-testid="agent-runtime-approvals">
         <h3 className="text-lg font-semibold">Needs your review</h3>
         <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
         {approvalDecisionError && <p role="alert" className="text-sm text-destructive">{approvalDecisionError}</p>}
@@ -628,7 +696,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         ))}
       </section>
 
-      <details className="rounded-lg border border-border p-3 text-sm"><summary className="cursor-pointer font-medium">Runtime architecture and authorization</summary><Alert className="mt-3">
+      <details id="mission-diagnostics" className="scroll-mt-4 rounded-lg border border-border p-3 text-sm"><summary className="cursor-pointer font-medium">Runtime architecture and authorization</summary><Alert className="mt-3">
         <ShieldCheck className="h-4 w-4" />
         <AlertTitle>Canonical ownership</AlertTitle>
         <AlertDescription>
@@ -649,12 +717,12 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       {actionMessage && (
         <Alert>
           <Activity className="h-4 w-4" />
-          <AlertTitle>Runtime action accepted</AlertTitle>
+          <AlertTitle>Runtime action response</AlertTitle>
           <AlertDescription>{actionMessage}</AlertDescription>
         </Alert>
       )}
 
-      <details className="space-y-3 rounded-lg border border-border p-3"><summary className="cursor-pointer font-medium">Registered specialists and diagnostics</summary><section className="mt-3 space-y-3">
+      <section id="mission-specialists" aria-label="Registered specialists" className="scroll-mt-4 space-y-3 rounded-xl border border-border p-4 sm:p-5">
         <div>
           <h3 className="text-lg font-semibold">Registered specialists</h3>
           <p className="text-sm text-muted-foreground">
@@ -719,157 +787,15 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             </CardContent>
           </Card>
         )}
-      </section></details>
+      </section>
 
-      <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer font-medium">Administrative execution diagnostics</summary><section className="mt-3 space-y-3">
-        <div className="flex items-center gap-2">
-          <Workflow className="h-5 w-5 text-primary" />
-          <div>
-            <h3 className="text-lg font-semibold">Execution control</h3>
-            <p className="text-sm text-muted-foreground">
-              {isAdmin
-                ? "Tenant-scoped Medusa run history and cancellation authority."
-                : "Run-level operational controls are available only in the authorized tenant administration workspace. Your chat still uses Medusa automatically when policy selects multi-agent execution."}
-            </p>
-          </div>
-        </div>
-
-        {!isAdmin ? (
-          <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
-              Agent execution activity is surfaced directly in Chat when a
-              multi-agent plan runs. Administrative run history is intentionally
-              excluded from personal work.
-            </CardContent>
-          </Card>
-        ) : (
-          <>
-            {runsError && (
-              <Alert variant="destructive">
-                <AlertTitle>Run control unavailable</AlertTitle>
-                <AlertDescription>{runsError}</AlertDescription>
-              </Alert>
-            )}
-
-            <div className="grid gap-3 md:grid-cols-3">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardDescription>Total visible runs</CardDescription>
-                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : runs.length}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardDescription>Active runs</CardDescription>
-                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : activeRuns.length}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardDescription>Registered specialists</CardDescription>
-                  <CardTitle>{isLoadingCatalog ? "Loading" : catalogError || !catalog ? "Unavailable" : catalog.total}</CardTitle>
-                </CardHeader>
-              </Card>
-            </div>
-
-            {isLoadingRuns && !runsGeneratedAt && !runsError ? (
-              <Card>
-                <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Loading Medusa run history…
-                </CardContent>
-              </Card>
-            ) : runsError ? (
-              <p className="text-sm text-muted-foreground">Run history is unavailable. Refresh runtime to try again.</p>
-            ) : runs.length ? (
-              <div className="space-y-3">
-                {runs.map((run) => (
-                  <Card key={run.run_id} data-run-id={run.run_id}>
-                    <CardHeader>
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <CardTitle className="break-all text-sm">
-                            {run.run_id}
-                          </CardTitle>
-                          <CardDescription>
-                            Started {formatTimestamp(run.started_at)}
-                          </CardDescription>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Badge variant={statusVariant(run.status)}>
-                            {run.status}
-                          </Badge>
-                          {run.durable && <Badge variant="outline">durable</Badge>}
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <dl className="grid gap-2 text-xs text-muted-foreground md:grid-cols-2 xl:grid-cols-3">
-                        <div>
-                          <dt className="font-medium text-foreground">User</dt>
-                          <dd className="break-all">{run.user_id || "Unknown"}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Session</dt>
-                          <dd className="break-all">{run.session_id || "Unknown"}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Policy decision</dt>
-                          <dd className="break-all">
-                            {run.policy_decision_id || "Not recorded"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Correlation ID</dt>
-                          <dd className="break-all">
-                            {run.correlation_id || "Not recorded"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Completed</dt>
-                          <dd>{formatTimestamp(run.completed_at)}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Response source</dt>
-                          <dd>{run.response_source || "Not recorded"}</dd>
-                        </div>
-                      </dl>
-
-                      {run.error_type && (
-                        <Alert variant="destructive">
-                          <AlertTitle>Run failure</AlertTitle>
-                          <AlertDescription>{run.error_type}</AlertDescription>
-                        </Alert>
-                      )}
-
-                      {run.cancellable && (
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          disabled={isLoadingRuns || cancellationUncertain || cancellingRunId !== null}
-                          onClick={() => void cancelRun(run.run_id)}
-                        >
-                          <CircleStop className="mr-2 h-4 w-4" />
-                          {cancellingRunId === run.run_id
-                            ? "Requesting cancellation…"
-                            : "Cancel run"}
-                        </Button>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            ) : (
-              <Card>
-                <CardContent className="p-6 text-sm text-muted-foreground">
-                  No Medusa execution runs are visible for this tenant.
-                </CardContent>
-              </Card>
-            )}
-          </>
-        )}
-      </section></details>
+      {isAdmin && (
+        <details className="rounded-lg border border-border p-3 text-sm">
+          <summary className="cursor-pointer font-medium">Administrative execution diagnostics</summary>
+          <p className="mt-3 text-muted-foreground">Select an execution in Mission history to inspect its verified user, session, policy decision and durability details. Authorized cancellation controls are available in that inspector only.</p>
+          <p className="mt-2 text-muted-foreground">Execution snapshot: {runsGeneratedAt ? formatTimestamp(runsGeneratedAt) : "Unavailable"}</p>
+        </details>
+      )}
     </div>
   );
 }
