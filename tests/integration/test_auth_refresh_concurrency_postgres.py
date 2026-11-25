@@ -170,6 +170,9 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
     ] + [
         ("cancel", target, "revocation")
         for target in ("transcript", "memory", "memory_replay")
+    ] + [
+        ("persistence", target, "rls")
+        for target in ("transcript", "memory", "memory_replay")
     ],
 )
 async def test_private_session_fence_serializes_revocation(winner, target, invalidation, monkeypatch):
@@ -184,7 +187,9 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
         NeuroVaultAuthorizationError, PostgresNeuroVault,
     )
     from datetime import datetime
-    from sqlalchemy import text
+    from sqlalchemy import text, event
+    from pathlib import Path
+    import re
     from ai_karen_engine.auth.models import UserData
     from ai_karen_engine.auth import auth_service
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
@@ -227,6 +232,40 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
                 message_metadata JSONB, created_at TIMESTAMP
             )
         """))
+    actor_role = "private_fence_" + uuid.uuid4().hex
+    rls_tables = ["auth_users", "conversations", "messages"]
+    if target in {"memory", "memory_replay"}:
+        rls_tables += ["memory_event", "memory_assertion"]
+    if invalidation == "rls":
+        migration = (Path(__file__).resolve().parents[2] / "supabase/migrations/"
+                     "20260827050000_05_schema_security_finalization.sql").read_text()
+        async with engine.begin() as conn:
+            await conn.execute(text(f"CREATE ROLE {actor_role} NOLOGIN NOSUPERUSER NOBYPASSRLS"))
+            for table in rls_tables:
+                await conn.execute(text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
+                await conn.execute(text(f"DROP POLICY IF EXISTS {table}_tenant_isolation ON {table}"))
+                policy = re.search(
+                    rf"CREATE POLICY {table}_tenant_isolation ON {table}\b[^;]+;",
+                    migration,
+                )
+                assert policy is not None, table
+                await conn.execute(text(policy.group()))
+            await conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {actor_role}"))
+            grants = rls_tables + ["auth_sessions"]
+            if target in {"memory", "memory_replay"}:
+                grants += ["consent_scope", "retention_policy"]
+            await conn.execute(text(
+                f"GRANT SELECT, INSERT, UPDATE ON {', '.join(grants)} TO {actor_role}"
+            ))
+
+    def persistence_factory():
+        db = factory()
+        if invalidation == "rls":
+            @event.listens_for(db.sync_session, "after_begin")
+            def apply_role(_session, _transaction, connection):
+                connection.execute(text(f"SET LOCAL ROLE {actor_role}"))
+        return db
+
     try:
         async with factory.begin() as db:
             db.add(Tenant(id=tenant, name=str(tenant), slug=str(tenant),
@@ -266,7 +305,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
             return service
 
         monkeypatch.setattr(auth_service, "get_auth_service", get_issuer)
-        repo = PostgresConversationRepository(session_factory=factory)
+        repo = PostgresConversationRepository(session_factory=persistence_factory)
         common = {"authorized_user_id": str(user), "request_id": context.request_id,
                   "correlation_id": context.correlation_id}
         pair = [
@@ -282,6 +321,17 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
         cancellation_armed = False
 
         async def paused_fence(*args, **kwargs):
+            if invalidation == "rls":
+                db = args[-1]
+                scope_row = (await db.execute(text(
+                    "SELECT current_user, current_setting('app.current_tenant_id', true), "
+                    "current_setting('app.tenant_id', true), current_setting('app.current_user_id', true)"
+                ))).one()
+                assert tuple(scope_row) == (actor_role, str(tenant), str(tenant), str(user))
+                role_row = (await db.execute(text(
+                    "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"
+                ))).one()
+                assert tuple(role_row) == (False, False)
             account = await original(*args, **kwargs)
             if winner == "persistence" or (
                 winner == "cancel" and target == "transcript" and cancellation_armed
@@ -293,7 +343,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
         monkeypatch.setattr(service, "revalidate_issued_session_in_transaction", paused_fence)
 
         async def revoke():
-            if invalidation == "revocation":
+            if invalidation in {"revocation", "rls"}:
                 async with factory.begin() as db:
                     row = (await db.execute(select(AuthSession).where(
                         AuthSession.session_token == session
@@ -338,8 +388,9 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
 
         @asynccontextmanager
         async def vault_session():
-            async with factory() as db:
-                await db.begin()
+            async with persistence_factory() as db:
+                # Intentionally idle: standalone vault must establish scope
+                # and begin the transaction before auth revalidation.
                 original_flush = db.flush
                 original_commit = db.commit
 
@@ -495,4 +546,10 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
             await db.execute(delete(AuthSession).where(AuthSession.session_token == session))
             await db.execute(delete(AuthUser).where(AuthUser.user_id == user))
             await db.execute(delete(Tenant).where(Tenant.id == tenant))
+            if invalidation == "rls":
+                for table in rls_tables:
+                    await db.execute(text(f"DROP POLICY IF EXISTS {table}_tenant_isolation ON {table}"))
+                    await db.execute(text(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY"))
+                await db.execute(text(f"DROP OWNED BY {actor_role}"))
+                await db.execute(text(f"DROP ROLE {actor_role}"))
         await engine.dispose()

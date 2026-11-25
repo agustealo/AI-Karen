@@ -392,6 +392,15 @@ class PostgresNeuroVault(VaultPort):
         self._require_non_historical_write(entry)
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
+            if context.private_execution is not None:
+                # The standalone factory may return an idle session. Apply
+                # scope on this owned transaction before the auth row locks.
+                from ai_karen_engine.persistence.postgres.transactions import (
+                    apply_authenticated_transaction_context,
+                )
+                await apply_authenticated_transaction_context(
+                    session, tenant_id=context.tenant_id, user_id=context.user_id,
+                )
             return await self._persist_with_session(
                 entry, context=context, session=session, commit=True,
             )

@@ -939,14 +939,24 @@ class PostgresConversationRepository(ConversationRepository):
                     if private_execution is not None:
                         try:
                             if (
-                                private_execution.tenant_id != user_message.tenant_id
+                                type(private_execution) is not ChatExecutionContext
+                                or private_execution.tenant_id != user_message.tenant_id
                                 or private_execution.user_id != user_message.metadata["authorized_user_id"]
                                 or private_execution.conversation_id != user_message.conversation_id
                                 or private_execution.request_id != user_message.metadata.get("request_id")
                                 or private_execution.correlation_id != user_message.metadata.get("correlation_id")
+                                or private_execution.request_id != assistant_message.metadata.get("request_id")
+                                or private_execution.correlation_id != assistant_message.metadata.get("correlation_id")
                                 or not private_execution.has_runtime_attachment_scope()
                             ):
                                 raise PermissionError("attachment_session_denied")
+                            from ai_karen_engine.persistence.postgres.transactions import (
+                                apply_authenticated_transaction_context,
+                            )
+                            await apply_authenticated_transaction_context(
+                                session, tenant_id=private_execution.tenant_id,
+                                user_id=private_execution.user_id,
+                            )
                             await private_execution.revalidate_runtime_attachment_session(
                                 db_session=session,
                             )
