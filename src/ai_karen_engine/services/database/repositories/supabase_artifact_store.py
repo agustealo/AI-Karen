@@ -40,15 +40,26 @@ from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 logger = logging.getLogger(__name__)
 
 
+class _HierarchyConflict(Exception):
+    """A no-row CAS must unwind without committing."""
+
+
 class SupabaseArtifactStore(ArtifactStore):
     """Supabase Storage + PostgreSQL artifact store."""
 
-    def __init__(self, session_factory, storage_client):
+    def __init__(self, session_factory, storage_client, *, hierarchy_transaction=None):
+        self._hierarchy_transaction = hierarchy_transaction
         self._session_factory = session_factory
         self._storage = storage_client
 
     async def _session(self) -> AsyncSession:
         return self._session_factory()
+
+    def _hierarchy_scope(self, tenant_id: str, user_id: str):
+        """Require an explicitly wired actor-scoped transaction owner."""
+        if self._hierarchy_transaction is None:
+            raise RuntimeError("artifact_hierarchy_transaction_unavailable")
+        return self._hierarchy_transaction(tenant_id, user_id=user_id)
 
     def _bucket(self):
         """Reuse the initialized platform Storage client, never recreate credentials."""
@@ -115,7 +126,7 @@ class SupabaseArtifactStore(ArtifactStore):
             "after": after_folder_id, "limit": limit + 1,
         }
         try:
-            async with await self._session() as session:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
                 # Verify a non-root location and continuation anchor in the
                 # same statement snapshot as the listing. A foreign or deleted
                 # anchor must not silently become an empty authorized page.
@@ -190,15 +201,16 @@ class SupabaseArtifactStore(ArtifactStore):
         """Shared transaction boundary for internal fixed create/rename SQL."""
         commit_attempted = False
         try:
-            async with await self._session() as session:
+            async with self._hierarchy_scope(params["tenant"], params["owner"]) as session:
                 result = await session.execute(text(statement), params)
                 row = result.mappings().one_or_none()
                 if row is None:
-                    return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+                    raise _HierarchyConflict()
                 folder = self._row_to_folder(row)
                 commit_attempted = True
-                await session.commit()
             return RepositoryResult(success=True, data=folder)
+        except _HierarchyConflict:
+            return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
         except Exception as exc:
             if commit_attempted:
                 logger.warning("Artifact folder metadata commit outcome uncertain")
@@ -253,7 +265,7 @@ class SupabaseArtifactStore(ArtifactStore):
             or not self._valid_folder_ids(tenant_id, user_id, folder_id)):
             return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
         try:
-            async with await self._session() as session:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
                 result = await session.execute(text("""
                     WITH RECURSIVE ancestry AS (
                         SELECT folder_id, parent_folder_id, name, revision,
@@ -328,19 +340,20 @@ class SupabaseArtifactStore(ArtifactStore):
         """Shared CAS transaction boundary for folder and artifact movement."""
         commit_attempted = False
         try:
-            async with await self._session() as session:
+            async with self._hierarchy_scope(params["tenant"], params["owner"]) as session:
                 result = await session.execute(text(statement), params)
                 revision = result.scalar_one_or_none()
                 if revision is None:
-                    return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+                    raise _HierarchyConflict()
                 if type(revision) is not int or revision not in (expected_revision, expected_revision + 1):
                     # The injected production session context commits on normal
                     # exit. An invalid result must unwind exceptionally, never
                     # return normally after potentially changing a row.
                     raise ValueError("artifact_organization_revision_invalid")
                 commit_attempted = True
-                await session.commit()
             return RepositoryResult(success=True, data=revision)
+        except _HierarchyConflict:
+            return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
         except Exception as exc:
             if commit_attempted:
                 logger.warning("Artifact folder move commit outcome uncertain")
@@ -929,7 +942,11 @@ class SupabaseArtifactStore(ArtifactStore):
             LIMIT :page_limit
         """
         try:
-            async with await self._session() as session:
+            scope = (
+                self._hierarchy_scope(tenant, owner) if folder_scoped
+                else await self._session()
+            )
+            async with scope as session:
                 if folder_scoped and folder_id is not None:
                     # Lock the authorized destination until the page is read.
                     scope = await session.execute(text("""

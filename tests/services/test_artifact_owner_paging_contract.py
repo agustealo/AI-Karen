@@ -6,6 +6,7 @@ Live PostgreSQL performance and full UI acceptance are separate gates.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -53,11 +54,21 @@ class _Session:
         return SimpleNamespace(fetchall=lambda: self.rows)
 
 
+@asynccontextmanager
+async def _scoped_fixture(session, tenant, *, user_id):
+    assert tenant == TENANT and user_id == OWNER
+    async with session:
+        yield session
+        if hasattr(session, "commit"):
+            await session.commit()
+
+
 def _store(rows):
     session = _Session(rows)
     store = SupabaseArtifactStore(
         session_factory=lambda: session,
         storage_client=None,
+        hierarchy_transaction=lambda tenant, *, user_id: _scoped_fixture(session, tenant, user_id=user_id),
     )
     return store, session
 
@@ -220,7 +231,10 @@ class _HierarchySession(_Session):
 
 
 def _hierarchy_store(session):
-    return SupabaseArtifactStore(lambda: session, None)
+    return SupabaseArtifactStore(
+        lambda: session, None,
+        hierarchy_transaction=lambda tenant, *, user_id: _scoped_fixture(session, tenant, user_id=user_id),
+    )
 
 
 def test_foreign_folder_fails_before_inventory_read():
@@ -318,3 +332,37 @@ def test_invalid_hierarchy_mutations_do_not_execute_sql():
         TENANT, OWNER, artifact, name="bad\x00name", expected_revision=1,
     )).success
     assert session.calls == []
+
+
+def test_unwired_hierarchy_denies_without_legacy_session():
+    session = _HierarchySession(scalar=2)
+    store = SupabaseArtifactStore(lambda: session, None)
+    result = _run(store.move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert not result.success
+    assert session.calls == []
+    assert session.commits == 0
+
+
+def test_hierarchy_commit_owned_by_scoped_context():
+    session = _HierarchySession(scalar=2)
+    scopes = []
+
+    @asynccontextmanager
+    async def scope(tenant, *, user_id):
+        scopes.append((tenant, user_id))
+        yield session
+        assert session.commits == 0
+        await session.commit()
+
+    def legacy_session():
+        raise AssertionError("Hierarchy must not use the legacy session")
+
+    store = SupabaseArtifactStore(legacy_session, None, hierarchy_transaction=scope)
+    result = _run(store.move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert result.success and result.data == 2
+    assert scopes == [(TENANT, OWNER)]
+    assert session.commits == 1
