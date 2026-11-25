@@ -29,6 +29,8 @@ class Artifact:
     created_at: datetime = field(default_factory=datetime.utcnow)
     deleted_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    folder_id: Optional[str] = None
+    organization_revision: Optional[int] = None
 
 
 @dataclass
@@ -132,11 +134,14 @@ class ArtifactStore(Repository):
         *,
         limit: int = 100,
         cursor: Optional[str] = None,
+        folder_scoped: bool = False,
+        folder_id: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """List only one authenticated owner's active metadata using keyset paging.
 
         The result's metadata carries has_more: bool and next_cursor: str | None.
-        Cursors select a position, never confer access. No bytes or storage
+        folder_scoped=False preserves flat inventory; True selects root (None)
+        or one folder. Cursors select a position, never confer access. No bytes or storage
         locations are exposed by the explorer projection.
         """
 

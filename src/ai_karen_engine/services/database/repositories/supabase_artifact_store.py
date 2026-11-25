@@ -801,7 +801,8 @@ class SupabaseArtifactStore(ArtifactStore):
 
     @staticmethod
     def _decode_owner_cursor(
-        cursor: Optional[str], tenant_id: str, user_id: str
+        cursor: Optional[str], tenant_id: str, user_id: str,
+        *, folder_scoped: bool = False, folder_id: Optional[str] = None,
     ) -> Optional[tuple[datetime, str]]:
         if cursor is None:
             return None
@@ -813,10 +814,15 @@ class SupabaseArtifactStore(ArtifactStore):
                 (cursor + padding).encode("ascii"), altchars=b"-_", validate=True
             )
             value = json.loads(raw)
+            keys = {"v", "tenant_id", "user_id", "created_at", "file_id"}
+            if folder_scoped:
+                keys.add("folder_id")
             if (
                 not isinstance(value, dict)
-                or set(value) != {"v", "tenant_id", "user_id", "created_at", "file_id"}
-                or value["v"] != 1
+                or set(value) != keys
+                or type(value["v"]) is not int
+                or value["v"] != (2 if folder_scoped else 1)
+                or (folder_scoped and value["folder_id"] != folder_id)
                 or value["tenant_id"] != tenant_id
                 or value["user_id"] != user_id
                 or not isinstance(value["created_at"], str)
@@ -834,15 +840,18 @@ class SupabaseArtifactStore(ArtifactStore):
 
     @staticmethod
     def _encode_owner_cursor(
-        artifact: Artifact, tenant_id: str, user_id: str
+        artifact: Artifact, tenant_id: str, user_id: str,
+        *, folder_scoped: bool = False, folder_id: Optional[str] = None,
     ) -> str:
         payload = {
-            "v": 1,
+            "v": 2 if folder_scoped else 1,
             "tenant_id": tenant_id,
             "user_id": user_id,
             "created_at": artifact.created_at.isoformat(),
             "file_id": artifact.id,
         }
+        if folder_scoped:
+            payload["folder_id"] = folder_id
         return base64.urlsafe_b64encode(
             json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         ).decode("ascii").rstrip("=")
@@ -855,6 +864,8 @@ class SupabaseArtifactStore(ArtifactStore):
         *,
         limit: int = 100,
         cursor: Optional[str] = None,
+        folder_scoped: bool = False,
+        folder_id: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """Stable, bounded owner-only metadata listing. No storage reads.
 
@@ -869,11 +880,16 @@ class SupabaseArtifactStore(ArtifactStore):
                 or not isinstance(user_id, str)
                 or tenant_id != tenant
                 or user_id != owner
+                or type(folder_scoped) is not bool
+                or (not folder_scoped and folder_id is not None)
+                or not self._valid_folder_ids(folder_id)
                 or type(limit) is not int
                 or not 1 <= limit <= 200
             ):
                 raise ValueError("artifact_owner_page_scope_invalid")
-            before = self._decode_owner_cursor(cursor, tenant, owner)
+            before = self._decode_owner_cursor(
+                cursor, tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id
+            )
         except (ValueError, TypeError, AttributeError) as exc:
             return RepositoryResult(
                 success=False, error=f"artifact_owner_page_invalid: {exc}"
@@ -892,25 +908,44 @@ class SupabaseArtifactStore(ArtifactStore):
                 "AND (created_at < :before_created OR "
                 "(created_at = :before_created AND file_id < :before_id))"
             )
+        folder_clause = ""
+        if folder_scoped:
+            params["folder_id"] = folder_id
+            folder_clause = "AND folder_id IS NOT DISTINCT FROM CAST(:folder_id AS uuid)"
+        projection = ", folder_id, organization_revision" if folder_scoped else ""
         sql = f"""
             SELECT file_id, tenant_id, owner_user_id, name, mime_type,
-                   bytes, storage_uri, sha256, metadata, created_at, deleted_at
+                   bytes, storage_uri, sha256, metadata, created_at, deleted_at{projection}
             FROM files
             WHERE tenant_id = :tenant_id
               AND owner_user_id = :user_id
               AND deleted_at IS NULL
+              {folder_clause}
               {cursor_clause}
             ORDER BY created_at DESC, file_id DESC
             LIMIT :page_limit
         """
         try:
             async with await self._session() as session:
+                if folder_scoped and folder_id is not None:
+                    # Lock the authorized destination until the page is read.
+                    scope = await session.execute(text("""
+                        SELECT folder_id FROM public.artifact_folders
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND owner_user_id = CAST(:user_id AS uuid)
+                          AND folder_id = CAST(:folder_id AS uuid)
+                        FOR KEY SHARE
+                    """), {"tenant_id": tenant, "user_id": owner, "folder_id": folder_id})
+                    if scope.scalar_one_or_none() is None:
+                        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
                 result = await session.execute(text(sql), params)
                 rows = list(result.fetchall())
             has_more = len(rows) > limit
             page = [self._row_to_artifact(row) for row in rows[:limit]]
             next_cursor = (
-                self._encode_owner_cursor(page[-1], tenant, owner)
+                self._encode_owner_cursor(
+                    page[-1], tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id
+                )
                 if has_more and page else None
             )
             return RepositoryResult(
@@ -1088,7 +1123,8 @@ class SupabaseArtifactStore(ArtifactStore):
             return RepositoryResult(success=False, error=str(exc))
 
     def _row_to_artifact(self, row: Any) -> Artifact:
-        metadata = json.loads(row.metadata) if row.metadata else {}
+        metadata = (row.metadata if isinstance(row.metadata, dict)
+                    else json.loads(row.metadata) if row.metadata else {})
         return Artifact(
             id=str(row.file_id),
             tenant_id=str(row.tenant_id) if row.tenant_id else "",
@@ -1103,4 +1139,6 @@ class SupabaseArtifactStore(ArtifactStore):
             metadata=metadata,
             created_at=row.created_at,
             deleted_at=row.deleted_at,
+            folder_id=str(row.folder_id) if getattr(row, "folder_id", None) else None,
+            organization_revision=getattr(row, "organization_revision", None),
         )
