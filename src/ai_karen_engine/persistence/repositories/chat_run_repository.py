@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.core.runtime.presentation_contract import (
     contains_revocable_code_artifact,
@@ -222,21 +223,31 @@ class SqlChatRunRepository:
         *,
         user_message_id: str,
         assistant_message_id: str,
+        expected_assistant_digest: str | None = None,
+        db_session: AsyncSession | None = None,
     ) -> bool:
         """Read-only proof that the completed run and BOTH messages committed.
 
         A terminal receipt is not inferred from a model COMPLETE chunk. The
         repository must have atomically committed the scoped run and the two
-        idempotent canonical transcript messages.
+        idempotent canonical transcript messages. Reconciliation supplies the
+        digest of the locked assistant row and its already-scoped transaction;
+        no second authorization or storage snapshot is opened in that case.
         """
         try:
             user_message = _uuid(user_message_id)
             assistant_message = _uuid(assistant_message_id)
         except (TypeError, ValueError, AttributeError):
             return False
-        async with async_transaction_scope(
-            lease.tenant_id, user_id=lease.user_id,
-        ) as session:
+        if expected_assistant_digest is not None and (
+            not isinstance(expected_assistant_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_assistant_digest) is None
+        ):
+            return False
+        if db_session is not None and expected_assistant_digest is None:
+            return False
+
+        async def observe(session: AsyncSession) -> bool:
             result = await session.execute(
                 text("""
                     SELECT 1
@@ -264,7 +275,25 @@ class SqlChatRunRepository:
                       AND r.terminal_at IS NOT NULL
                       AND r.user_message_id = CAST(:user_message AS uuid)
                       AND r.assistant_message_id = CAST(:assistant_message AS uuid)
-                      AND r.assistant_message_digest IS NOT NULL
+                      AND r.assistant_message_digest ~ '^[0-9a-f]{64}                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
+                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
+                    LIMIT 1
+                """),
+                {
+                    **self._scope(lease),
+                    "transport_run_id": lease.transport_run_id,
+                    "request_id": lease.request_id,
+                    "correlation_id": lease.correlation_id,
+                    "user_message": user_message,
+                    "assistant_message": assistant_message,
+                    "expected_digest": expected_assistant_digest,
+                },
+            )
+            return result.scalar_one_or_none() is not None
+
+
+                      AND (CAST(:expected_digest AS text) IS NULL
+                           OR r.assistant_message_digest = CAST(:expected_digest AS text))
                       AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
                       AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
                     LIMIT 1
@@ -279,6 +308,13 @@ class SqlChatRunRepository:
                 },
             )
             return result.scalar_one_or_none() is not None
+
+        if db_session is not None:
+            return await observe(db_session)
+        async with async_transaction_scope(
+            lease.tenant_id, user_id=lease.user_id,
+        ) as session:
+            return await observe(session)
 
     async def append_projected_event(
         self, lease: ChatRunLease, *, event: Mapping[str, Any],

@@ -366,3 +366,68 @@ async def test_b2c2_committed_turn_read_uses_owned_parent_lock_and_exact_pair(
         "INSERT INTO messages" in sql or "UPDATE public.runtime_chat_runs" in sql
         for sql in statements
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["match", "wrong_digest", "tampered_metadata", "missing_run", "missing_pair"])
+async def test_leased_reconciliation_binds_digest_in_same_transaction(case) -> None:
+    current = lease()
+    user, assistant = messages(current)
+    for message in (user, assistant):
+        message.metadata.update({
+            "source": "chat_runtime", "session_id": "session-1",
+            "conversation_id": current.conversation_id,
+        })
+    digest = canonical_message_digest(assistant)
+    rows = [
+        {
+            "message_id": message.id, "conversation_id": message.conversation_id,
+            "role": message.role, "content": message.content,
+            "message_metadata": dict(message.metadata),
+        }
+        for message in (user, assistant)
+    ]
+    if case == "tampered_metadata":
+        rows[1]["message_metadata"]["provider"] = "unexpected"
+    if case == "missing_pair":
+        rows.pop()
+    stored_digest = "0" * 64 if case == "wrong_digest" else digest
+
+    class FinalityTransaction(FakeTransaction):
+        async def execute(self, sql, args):
+            statement = str(sql)
+            self.calls.append((statement, args))
+            if "FROM public.conversations" in statement:
+                return SimpleNamespace(scalar_one_or_none=lambda: 1)
+            if "FROM public.messages AS m" in statement:
+                assert "FOR SHARE" in statement
+                return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: rows))
+            if "FROM public.runtime_chat_runs r" in statement:
+                assert self._depth == 2
+                assert args["execution"] == current.execution_id
+                assert args["user_message"] == user.id
+                assert args["assistant_message"] == assistant.id
+                assert "r.assistant_message_digest = CAST(:expected_digest AS text)" in statement
+                return SimpleNamespace(scalar_one_or_none=lambda: (
+                    1 if case != "missing_run" and args["expected_digest"] == stored_digest else None
+                ))
+            return SimpleNamespace()
+
+    tx = FinalityTransaction()
+    receipt = await make_repo(tx).read_committed_turn(
+        conversation_id=current.conversation_id, tenant_id=current.tenant_id,
+        user_id=current.user_id, request_id=current.request_id,
+        correlation_id=current.correlation_id, session_id="session-1",
+        user_message_id=user.id, assistant_message_id=assistant.id,
+        user_text=user.content, assistant_text=assistant.content, run_lease=current,
+    )
+    assert receipt.success is (case == "match")
+    if case == "match":
+        assert receipt.data is True
+    else:
+        assert receipt.data is None
+        assert receipt.error == "chat_run_finality_unverified"
+    assert sum("FROM public.runtime_chat_runs r" in sql for sql, _ in tx.calls) == (
+        0 if case == "missing_pair" else 1
+    )
+    assert tx.committed and not tx.rolled_back

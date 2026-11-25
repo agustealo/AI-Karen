@@ -1343,3 +1343,38 @@ async def test_private_reconciliation_forwards_original_execution(monkeypatch) -
     )
     assert receipt.status == "unverified"
     assert not receipt.success
+
+
+@pytest.mark.asyncio
+async def test_leased_reconciliation_delegates_finality_to_canonical_readback() -> None:
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "11111111-1111-1111-1111-111111111111"
+    conversation = "22222222-2222-2222-2222-222222222222"
+    context = ChatExecutionContext(
+        tenant_id=tenant, user_id=user, conversation_id=conversation,
+        request_id="req-lease", correlation_id="corr-lease", session_id="session-1",
+        authenticated_user=UserData(user_id=user, tenant_id=tenant),
+    )
+    run = ChatRunLease(
+        execution_id="33333333-3333-3333-3333-333333333333",
+        lease_token="44444444-4444-4444-4444-444444444444",
+        tenant_id=tenant, user_id=user, conversation_id=conversation,
+        transport_run_id="run-lease", request_id=context.request_id,
+        correlation_id=context.correlation_id,
+    )
+
+    class FinalityRepository(_Repository):
+        async def read_committed_turn(self, **kwargs):
+            assert kwargs["run_lease"] is run
+            return RepositoryResult(success=False, error="chat_run_finality_unverified")
+
+    receipt = await ConversationRuntimeGateway(
+        repository=FinalityRepository(),
+    ).reconcile_interrupted_turn(
+        context, user_text="hello", assistant_text="answer", run_lease=run,
+    )
+    assert receipt.status == "unverified"
+    assert receipt.reason == "chat_run_finality_unverified"

@@ -822,6 +822,7 @@ class PostgresConversationRepository(ConversationRepository):
         assistant_text: str,
         persona_scope_id: Optional[str] = None,
         private_execution: Optional["ChatExecutionContext"] = None,
+        run_lease: Optional["ChatRunLease"] = None,
     ) -> RepositoryResult[bool]:
         """Read back the exact transaction outcome without changing finality.
 
@@ -835,6 +836,21 @@ class PostgresConversationRepository(ConversationRepository):
             user_message_id, assistant_message_id, user_text, assistant_text,
         )) or user_message_id == assistant_message_id:
             return RepositoryResult(success=False, error="invalid_committed_turn_scope")
+        if run_lease is not None and (
+            run_lease.tenant_id != tenant_id
+            or run_lease.user_id != user_id
+            or run_lease.conversation_id != conversation_id
+            or run_lease.request_id != request_id
+            or run_lease.correlation_id != correlation_id
+        ):
+            return RepositoryResult(success=False, error="invalid_committed_turn_scope")
+
+        # For a leased run, missing or conflicting transcript evidence alone
+        # cannot distinguish cancellation from a damaged completed receipt.
+        missing = RepositoryResult(
+            success=run_lease is None, data=False if run_lease is None else None,
+            error=None if run_lease is None else "chat_run_finality_unverified",
+        )
         try:
             async with await self._session() as session:
                 async with session.begin():
@@ -880,7 +896,7 @@ class PostgresConversationRepository(ConversationRepository):
                         scope,
                     )
                     if owner.scalar_one_or_none() is None:
-                        return RepositoryResult(success=True, data=False)
+                        return missing
                     found = await session.execute(
                         text("""
                             SELECT m.message_id::text AS message_id,
@@ -892,6 +908,7 @@ class PostgresConversationRepository(ConversationRepository):
                                   CAST(:user_message AS uuid),
                                   CAST(:assistant_message AS uuid)
                               )
+                            FOR SHARE
                         """),
                         scope,
                     )
@@ -900,15 +917,16 @@ class PostgresConversationRepository(ConversationRepository):
                         for row in found.mappings().all()
                     }
                     if len(rows) != 2:
-                        return RepositoryResult(success=True, data=False)
+                        return missing
                     expected = (
                         (user_message_id, "user", user_text, "user"),
                         (assistant_message_id, "assistant", assistant_text, "assistant"),
                     )
+                    assistant_digest: str | None = None
                     for message_id, role, content, actor in expected:
                         row = rows.get(message_id)
                         if row is None or row["role"] != role or row["content"] != content:
-                            return RepositoryResult(success=True, data=False)
+                            return missing
                         meta = row["message_metadata"]
                         if isinstance(meta, str):
                             meta = json.loads(meta)
@@ -923,7 +941,23 @@ class PostgresConversationRepository(ConversationRepository):
                             and meta.get("authorized_user_id") == user_id
                             and meta.get("persona_scope_id") == persona_scope_id
                         ):
-                            return RepositoryResult(success=True, data=False)
+                            return missing
+                        if role == "assistant" and run_lease is not None:
+                            assistant_digest = canonical_message_digest(Message(
+                                id=message_id, conversation_id=conversation_id,
+                                tenant_id=tenant_id, role=role, content=content,
+                                metadata=meta,
+                            ))
+                    if run_lease is not None:
+                        from ai_karen_engine.persistence.repositories.chat_run_repository import (
+                            SqlChatRunRepository,
+                        )
+                        if assistant_digest is None or not await SqlChatRunRepository().committed_turn(
+                            run_lease, user_message_id=user_message_id,
+                            assistant_message_id=assistant_message_id,
+                            expected_assistant_digest=assistant_digest, db_session=session,
+                        ):
+                            return missing
                     return RepositoryResult(success=True, data=True)
         except Exception as exc:
             logger.warning(

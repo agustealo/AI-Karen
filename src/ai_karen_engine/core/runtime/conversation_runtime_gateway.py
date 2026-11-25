@@ -899,29 +899,19 @@ class ConversationRuntimeGateway:
                 persona_scope_id=persona_scope_id,
                 **({"private_execution": context}
                    if context.has_runtime_attachment_scope() else {}),
+                **({"run_lease": run_lease} if run_lease is not None else {}),
             )
             if not observed.success:
                 return TranscriptPersistenceResult(
                     status="unverified", conversation_id=conversation_id,
-                    reason="committed_turn_read_unavailable",
+                    reason=("chat_run_finality_unverified"
+                            if observed.error == "chat_run_finality_unverified"
+                            else "committed_turn_read_unavailable"),
                 )
             if not observed.data:
                 return TranscriptPersistenceResult(
                     status="not_found", conversation_id=conversation_id,
                 )
-            if run_lease is not None:
-                # The canonical run ledger is atomically completed with the
-                # same transcript transaction. Never promote a detached pair
-                # to a completed leased run if that receipt cannot be read.
-                from ai_karen_engine.persistence.repositories.chat_run_repository import (
-                    SqlChatRunRepository,
-                )
-
-                if not await SqlChatRunRepository().completed(run_lease):
-                    return TranscriptPersistenceResult(
-                        status="unverified", conversation_id=conversation_id,
-                        reason="chat_run_finality_unverified",
-                    )
             return TranscriptPersistenceResult(
                 status="already_persisted",
                 conversation_id=conversation_id,

@@ -213,10 +213,13 @@ class ConversationRepository(Repository):
         assistant_text: str,
         persona_scope_id: Optional[str] = None,
         private_execution: Optional["ChatExecutionContext"] = None,
+        run_lease: Optional["ChatRunLease"] = None,
     ) -> RepositoryResult[bool]:
         """Verify an exact committed pair after an interrupted write.
 
         This is a scoped read-only reconciliation contract, not a second writer.
+        For a leased run the same transaction must also verify the exact
+        run-ledger message IDs and canonical assistant digest.
         Unsupported stores must not fabricate a negative or positive receipt.
         """
         return RepositoryResult(success=False, error="committed_turn_read_not_supported")
