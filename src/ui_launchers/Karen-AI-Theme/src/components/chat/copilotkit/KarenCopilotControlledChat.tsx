@@ -128,7 +128,7 @@ export function KarenCopilotControlledChat({
     // An optimistic empty clear dispatched by CopilotKit's input handler during
     // message send must not clobber the authoritative draft or mark it dirty.
     if (submitPending.current && value === "") return;
-    setError(null);
+    if (!finalityHoldRef.current) setError(null);
     setDraftText(value);
   }, [readDraftText, setDraftText]);
   const draftPort: KarenVoiceDraftPort = {
@@ -235,7 +235,14 @@ export function KarenCopilotControlledChat({
       },
       onRunFinalized: () => { activeRunId.current = null; },
       onRunFailed: (failure: unknown) => {
-        const failedRunId = activeRunId.current;
+        // Finalized may precede failed. Recover the observed ID only while
+        // the explicit invocation or that exact stop remains in flight.
+        const observed = observedRunId.current;
+        const failedRunId = activeRunId.current ?? (
+          observed !== null && (sdkInvocationPending.current ||
+            pendingStopId.current === observed || lastStopRunId.current === observed)
+            ? observed : null
+        );
         const failedBeforeStart = failedRunId === null && sdkInvocationPending.current;
         activeRunId.current = null;
         // SDK may emit RUN_ERROR before RUN_STARTED, or resolve runAgent()
@@ -245,10 +252,12 @@ export function KarenCopilotControlledChat({
         const unconfirmedStop = failedRunId !== null &&
           (pendingStopId.current === failedRunId ||
            lastStopRunId.current === failedRunId);
-        if (mounted.current && !unconfirmedStop &&
-            (failedRunId !== null || failedBeforeStart)) {
-          if (!holdUnverifiedRun(failure, failedRunId ?? observedRunId.current) &&
-              !finalityHoldRef.current) {
+        if (mounted.current && (failedRunId !== null || failedBeforeStart)) {
+          // A stop request never proves transcript finality. Suppress only
+          // ordinary transport failures caused by a stop, not explicit
+          // canonical uncertainty.
+          if (!holdUnverifiedRun(failure, failedRunId) &&
+              !unconfirmedStop && !finalityHoldRef.current) {
             setError(getCopilotRunFailureMessage(failure));
           }
         }
@@ -259,6 +268,7 @@ export function KarenCopilotControlledChat({
       activeRunId.current = null;
       pendingStopId.current = null;
       lastStopRunId.current = null;
+      observedRunId.current = null;
       sdkInvocationPending.current = false;
       subscription.unsubscribe();
     };

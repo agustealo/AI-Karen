@@ -399,11 +399,11 @@ export function useKarenPersistedDraft(conversationId: string) {
       return false;
     }
     const generation = generationRef.current;
-    // CopilotKit or controlled inputs may clear their internal value to ""
-    // synchronously upon submit dispatch. Restore textRef to the authoritative
-    // submitted text so the CAS save-and-clear invariant holds.
+    // Only the legacy path tolerates a synchronous SDK optimistic clear.
+    // Governed submission must match the actual composer, never reconstruct
+    // a retired or concurrently replaced draft from stale callback text.
     if (textRef.current.trim() !== submittedText.trim()) {
-      if (textRef.current === "") {
+      if (legacyOptimisticClear && textRef.current === "") {
         textRef.current = submittedText;
         dirtyRef.current = true;
       } else {

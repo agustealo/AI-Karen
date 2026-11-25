@@ -36,6 +36,9 @@ function Surface({ conversationId = CONV }: { conversationId?: string } = {}) {
       Prepare governed submission
     </button>
     <button onClick={() => void draft.refreshSubmittedDraft()}>Refresh submitted draft</button>
+    <button onClick={() => void draft.prepareRevisionSubmission("Retired callback text").then(setSubmissionId)}>
+      Replay stale submission callback
+    </button>
     <button onClick={() => {
       void draft.clearBeforeSubmit(draft.draft).then(setClearConfirmed);
     }}>Confirm durable clear</button>
@@ -650,4 +653,17 @@ it("retains the exact saved draft revision until canonical retirement and readba
   fireEvent.click(screen.getByRole("button", { name: "Refresh submitted draft" }));
   await waitFor(() => expect(input.value).toBe(""));
   expect(backend.put).toHaveBeenCalledTimes(1);
+});
+
+
+it("does not reconstruct a retired draft from a stale governed submit callback", async () => {
+  backend.get.mockResolvedValueOnce({ text: "", revision: 8, attachment_references: [] });
+  render(<Surface />);
+  await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+  await act(async () => fireEvent.click(screen.getByRole("button", {
+    name: "Replay stale submission callback",
+  })));
+  expect(screen.getByTestId("submission-id").textContent).toBe("none");
+  expect(backend.put).not.toHaveBeenCalled();
+  expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
 });

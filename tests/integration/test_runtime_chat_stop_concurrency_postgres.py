@@ -720,6 +720,50 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         finally:
             await reader.close()
 
+        # A newer edit from a separate repository must survive completion
+        # of the previously admitted revision. A new transport ID does not
+        # grant the original submission another execution.
+        assert (await conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="Original in-flight draft", expected_revision=4,
+        )).success
+        editing_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="draft-edit-race",
+            request_id="draft-edit-race", correlation_id="draft-edit-race",
+            submission_id="draft-v1-5", submitted_text="Original in-flight draft",
+        )
+        assert editing_lease is not None
+        other_conversations = PostgresConversationRepository(factory)
+        newer = await other_conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="New unsent question", expected_revision=5,
+        )
+        assert newer.success and newer.data["revision"] == 6
+        editing_messages = [
+            Message(
+                id=str(uuid.uuid4()), conversation_id=draft_thread,
+                tenant_id=tenant_a, role=role, content=content,
+                metadata={
+                    "authorized_user_id": user_a,
+                    "request_id": editing_lease.request_id,
+                    "correlation_id": editing_lease.correlation_id,
+                    "transcript_actor": role,
+                },
+            )
+            for role, content in (("user", "Original in-flight draft"), ("assistant", "Done"))
+        ]
+        assert (await conversations.add_completed_turn(
+            *editing_messages, run_lease=editing_lease,
+        )).success
+        assert (await other_conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "New unsent question", "revision": 6}
+        assert await worker_b.admit(
+            **draft_identity, transport_run_id="draft-edit-replay",
+            request_id="draft-edit-replay", correlation_id="draft-edit-replay",
+            submission_id="draft-v1-5", submitted_text="Original in-flight draft",
+        ) is None
+
         deleted_draft_parent = await conversations.delete_conversation(
             draft_thread, tenant_a, user_id=user_a,
         )

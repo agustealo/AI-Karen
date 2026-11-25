@@ -1172,3 +1172,36 @@ describe("KUI governed revision-bound submission", () => {
     expect(input().value).toBe("Original governed question");
   });
 });
+
+
+it("preserves explicit finality uncertainty when stop and SDK finalization race", async () => {
+  let finish!: (receipt: unknown) => void;
+  sdk.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  sdk.agent.isRunning = true;
+  render(<KarenCopilotControlledChat conversationId={THREAD} />);
+  act(() => sdk.lifecycle?.onRunStartedEvent({
+    event: { threadId: THREAD, runId: "stop-uncertain" },
+  }));
+  act(() => input().onStop());
+  act(() => sdk.lifecycle?.onRunFinalized());
+  sdk.agent.isRunning = false;
+  act(() => sdk.lifecycle?.onRunFailed({
+    event: { code: "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED" },
+  }));
+  await act(async () => finish({
+    status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+  }));
+  expect(screen.getByRole("region", { name: "Unverified run recovery" })).toBeTruthy();
+  act(() => input().onChange("New unsent text"));
+  expect(screen.getByRole("alert").textContent).toContain("final outcome");
+  act(() => input().onSubmitMessage("New unsent text"));
+  expect(sdk.runAgent).not.toHaveBeenCalled();
+  expect(sdk.clearDraft).not.toHaveBeenCalled();
+  sdk.get.mockResolvedValueOnce({
+    status: "interrupted", cancel_requested: true, cancellation_confirmed: false,
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+  await waitFor(() => expect(sdk.get).toHaveBeenCalledWith(
+    "/api/copilotkit/agent/default/runs/" + THREAD + "/stop-uncertain/status",
+  ));
+});
