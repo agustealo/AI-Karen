@@ -279,6 +279,21 @@ def test_artifact_movement_commits_only_valid_revision():
         }
 
 
+def test_invalid_mutation_result_unwinds_autocommit_session():
+    class AutoCommitSession(_HierarchySession):
+        async def __aexit__(self, exc_type, exc, tb):
+            if exc_type is None:
+                await self.commit()
+            return False
+
+    session = AutoCommitSession(scalar=99)
+    result = _run(_hierarchy_store(session).move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert not result.success
+    assert session.commits == 0
+
+
 def test_uncertain_movement_commit_is_not_retried():
     session = _HierarchySession(scalar=2, fail_commit=True)
     result = _run(_hierarchy_store(session).move_owner_artifact(

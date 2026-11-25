@@ -334,7 +334,10 @@ class SupabaseArtifactStore(ArtifactStore):
                 if revision is None:
                     return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
                 if type(revision) is not int or revision not in (expected_revision, expected_revision + 1):
-                    return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+                    # The injected production session context commits on normal
+                    # exit. An invalid result must unwind exceptionally, never
+                    # return normally after potentially changing a row.
+                    raise ValueError("artifact_organization_revision_invalid")
                 commit_attempted = True
                 await session.commit()
             return RepositoryResult(success=True, data=revision)
