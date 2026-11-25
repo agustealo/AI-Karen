@@ -317,4 +317,45 @@ describe("runtime projection validation", () => {
     } finally { visibility.mockRestore(); }
   });
 
+
+  it("does not reconcile cancellation uncertainty with a read started before the lost response", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const cancellableRun = { ...run, cancellable: true };
+    const staleRead = deferred<unknown>();
+    const freshRead = deferred<unknown>();
+    let rejectCancellation!: (reason: Error) => void;
+    const cancellation = new Promise<unknown>((_resolve, reject) => { rejectCancellation = reject; });
+    let tenantReads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/admin/agents/runs?include_terminal=true") {
+          tenantReads += 1;
+          return tenantReads === 1 ? Promise.resolve(history([cancellableRun])) : tenantReads === 2 ? staleRead.promise : freshRead.promise;
+        }
+        if (path.endsWith("/" + run.run_id)) return Promise.resolve(cancellableRun);
+        return fallback(path);
+      });
+      mocks.post.mockReturnValue(cancellation);
+      render(<AgentsPage />);
+      fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      const cancel = await screen.findByRole("button", { name: "Request cancellation" });
+      fireEvent.click(cancel);
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(tenantReads).toBe(2);
+      await act(async () => { rejectCancellation(new Error("Response lost")); });
+      await screen.findByText(/Cancellation outcome could not be verified/);
+      await act(async () => { staleRead.resolve(history([cancellableRun])); });
+      expect((screen.getByRole("button", { name: "Request cancellation" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByText(/Cancellation outcome could not be verified/)).toBeTruthy();
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(tenantReads).toBe(3);
+      await act(async () => { freshRead.resolve(history([cancellableRun])); });
+      await waitFor(() => expect((screen.getByRole("button", { name: "Request cancellation" }) as HTMLButtonElement).disabled).toBe(false));
+      expect(screen.queryByText(/Cancellation outcome could not be verified/)).toBeNull();
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+    } finally { visibility.mockRestore(); }
+  });
+
 });
