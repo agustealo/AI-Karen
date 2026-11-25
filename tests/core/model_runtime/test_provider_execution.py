@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import threading
-from contextvars import ContextVar
+import httpx
 
 import pytest
 
@@ -13,6 +12,15 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
 from ai_karen_engine.core.model_runtime.runtime_engine import RuntimeEngine
+
+
+def _mock_client(monkeypatch, handler) -> None:
+    original = httpx.AsyncClient
+    def client(**kwargs):
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        return original(transport=httpx.MockTransport(handler), **kwargs)
+    monkeypatch.setattr(httpx, "AsyncClient", client)
 
 
 def _endpoint(provider_id: str) -> ProviderEndpoint:
@@ -65,9 +73,9 @@ def test_explicit_ollama_override_path_remains_authoritative(monkeypatch) -> Non
     assert _resolve_base_url(endpoint) == "http://ollama:11434/custom-openai/v1"
 
 
-def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
     import json
-    from contextlib import contextmanager
 
     from ai_karen_engine.core.model_runtime import provider_execution
 
@@ -82,12 +90,11 @@ def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
                 "usage": {"completion_tokens": 32},
             }).encode()
 
-    @contextmanager
-    def fake_urlopen(request, timeout):
-        yield Response()
+    def fake_urlopen(request):
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(provider_execution, "_open_provider_request", fake_urlopen)
-    result = provider_execution._sync_openai_compatible_request(
+    _mock_client(monkeypatch, fake_urlopen)
+    result = await provider_execution.execute_provider_endpoint(
         _endpoint("ollama-local"),
         messages=[{"role": "user", "content": "Explain"}],
         model="qwen3:4b",
@@ -100,13 +107,13 @@ def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
 
 
 
-def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
+@pytest.mark.asyncio
+async def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
     monkeypatch,
 ) -> None:
     import json
     import sys
     import types
-    from contextlib import contextmanager
     from types import SimpleNamespace
 
     import pytest
@@ -168,13 +175,12 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
                 "model": "Hermes-4.3-36B",
             }).encode()
 
-    @contextmanager
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request):
         requests.append(request)
-        yield Response()
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(provider_execution, "_open_provider_request", fake_urlopen)
-    result = provider_execution._sync_openai_compatible_request(
+    _mock_client(monkeypatch, fake_urlopen)
+    result = await provider_execution.execute_provider_endpoint(
         endpoint,
         messages=[{"role": "user", "content": "Hello Hermes"}],
         model="Hermes-4.3-36B",
@@ -184,9 +190,9 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
     assert result.text == "Real adapter response"
     assert result.provider_id == "nous"
     assert result.model == "Hermes-4.3-36B"
-    assert requests[0].full_url == "https://inference-api.nousresearch.com/v1/chat/completions"
-    assert requests[0].get_header("Authorization") == "Bearer credential-from-settings"
-    payload = json.loads(requests[0].data)
+    assert str(requests[0].url) == "https://inference-api.nousresearch.com/v1/chat/completions"
+    assert requests[0].headers.get("Authorization") == "Bearer credential-from-settings"
+    payload = json.loads(requests[0].content)
     assert payload["model"] == "Hermes-4.3-36B"
     assert payload["messages"] == [{"role": "user", "content": "Hello Hermes"}]
     assert "NOUS_API_KEY" not in __import__("os").environ
@@ -196,7 +202,7 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
         provider_execution.ProviderExecutionError,
         match="provider_credential_unavailable",
     ):
-        provider_execution._sync_openai_compatible_request(
+        await provider_execution.execute_provider_endpoint(
             endpoint,
             messages=[{"role": "user", "content": "Hello Hermes"}],
             model="Hermes-4.3-36B",
@@ -214,14 +220,14 @@ def test_streaming_uses_same_governed_credential_resolver_as_sync_transport() ->
         / "src/ai_karen_engine/core/model_runtime/provider_execution.py"
     ).read_text(encoding="utf-8")
     assert "personal_key if personal_key is not None else _resolve_api_key(endpoint)" in source
-    assert source.count("provider_credential_unavailable") == 2
+    assert source.count("provider_credential_unavailable") == 1
     assert "get_provider_config_manager()" in source
 
 
-def test_private_attachment_http_payload_preserves_complete_ordered_evidence(monkeypatch):
+@pytest.mark.asyncio
+async def test_private_attachment_http_payload_preserves_complete_ordered_evidence(monkeypatch):
     import hashlib
     import json
-    from contextlib import contextmanager
 
     from ai_karen_engine.core.model_runtime import provider_execution
     from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
@@ -248,14 +254,13 @@ def test_private_attachment_http_payload_preserves_complete_ordered_evidence(mon
                 "choices": [{"message": {"content": "Compared."}, "finish_reason": "stop"}],
             }).encode()
 
-    @contextmanager
-    def capture(request, timeout):
-        assert request.full_url == "http://127.0.0.1:11434/v1/chat/completions"
-        seen.append(json.loads(request.data))
-        yield Response()
+    def capture(request):
+        assert str(request.url) == "http://127.0.0.1:11434/v1/chat/completions"
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(provider_execution, "_open_provider_request", capture)
-    result = provider_execution._sync_openai_compatible_request(
+    _mock_client(monkeypatch, capture)
+    result = await provider_execution.execute_provider_endpoint(
         _endpoint("ollama-local"), messages=messages, model="qwen3:4b",
         max_tokens=64, temperature=0.1, local_only=True,
     )
@@ -267,67 +272,84 @@ def test_private_attachment_http_payload_preserves_complete_ordered_evidence(mon
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("structured", [False, True])
-@pytest.mark.parametrize("late_failure", [False, True])
-async def test_cancelled_provider_await_retains_local_worker(
-    monkeypatch, structured, late_failure,
-) -> None:
+async def test_cancelled_json_transport_closes_response(monkeypatch, structured):
+    from dataclasses import replace
     from ai_karen_engine.core.model_runtime import provider_execution
 
     entered = asyncio.Event()
-    release = threading.Event()
-    exited = threading.Event()
-    loop = asyncio.get_running_loop()
-    marker = ContextVar("provider_test_scope", default="missing")
-    marker.set("owned-context")
-    observed = []
+    closed = asyncio.Event()
 
-    def blocking_request(*args, **kwargs):
-        try:
-            observed.append(marker.get())
-            loop.call_soon_threadsafe(entered.set)
-            if not release.wait(5):
-                raise RuntimeError("test worker release deadline")
-            if late_failure:
-                raise RuntimeError("late provider failure")
-            return object()
-        finally:
-            exited.set()
+    class Paused(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            entered.set()
+            await asyncio.Event().wait()
+            yield b""
 
+        async def aclose(self):
+            closed.set()
+
+    _mock_client(monkeypatch, lambda _: httpx.Response(200, stream=Paused()))
+    endpoint = replace(_endpoint("ollama-local"), capabilities=("chat_completion", "tools"))
+    kwargs = dict(messages=[], model="test-model", max_tokens=8, temperature=0.0)
     if structured:
-        monkeypatch.setattr(
-            provider_execution, "_sync_structured_chat_request", blocking_request,
-        )
         invoke = provider_execution.execute_structured_provider_endpoint(
-            _endpoint("ollama-local"), messages=[], model="test-model",
-            tools=[], max_tokens=8, temperature=0.0,
+            endpoint, tools=[], **kwargs,
         )
     else:
-        monkeypatch.setattr(
-            provider_execution, "_sync_openai_compatible_request", blocking_request,
-        )
-        invoke = provider_execution.execute_provider_endpoint(
-            _endpoint("ollama-local"), messages=[], model="test-model",
-            max_tokens=8, temperature=0.0,
-        )
-
+        invoke = provider_execution.execute_provider_endpoint(endpoint, **kwargs)
     task = asyncio.create_task(invoke)
     try:
         await asyncio.wait_for(entered.wait(), timeout=2)
-        assert observed == ["owned-context"]
-        task.cancel()
-        await asyncio.sleep(0)
-        assert not task.done()
-        assert not exited.is_set()
-        task.cancel()
-        await asyncio.sleep(0)
-        assert not task.done()
-        assert not exited.is_set()
     finally:
-        release.set()
-        await asyncio.wait_for(
-            asyncio.gather(task, return_exceptions=True), timeout=3,
-        )
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+    assert closed.is_set()
 
-    assert exited.is_set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,body,error", [
+    (302, b"redirect", "provider_http_error:.*:302"),
+    (200, b"not JSON", "provider_invalid_response_object"),
+    (200, b"{}", None),
+    (200, b"x" * (2 * 1024 * 1024 + 1), "provider_response_too_large"),
+])
+async def test_async_json_wire_rejects_untrusted_envelopes(monkeypatch, status, body, error):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    _mock_client(monkeypatch, lambda _: httpx.Response(status, content=body))
+    endpoint = _endpoint("ollama-local")
+    base_url = provider_execution._resolve_base_url(endpoint)
+    if error:
+        with pytest.raises(provider_execution.ProviderExecutionError, match=error):
+            await provider_execution._post_chat_completions(endpoint, base_url, {})
+    else:
+        assert await provider_execution._post_chat_completions(endpoint, base_url, {}) == {}
+
+
+@pytest.mark.asyncio
+async def test_async_json_transport_has_total_wire_deadline(monkeypatch):
+    from dataclasses import replace
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    closed = asyncio.Event()
+
+    class Trickle(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        async def aclose(self):
+            closed.set()
+
+    _mock_client(monkeypatch, lambda _: httpx.Response(200, stream=Trickle()))
+    endpoint = replace(_endpoint("ollama-local"), timeout_seconds=0.08)
+    with pytest.raises(provider_execution.ProviderExecutionError, match="provider_deadline_exceeded"):
+        await asyncio.wait_for(
+            provider_execution.execute_provider_endpoint(
+                endpoint, messages=[], model="test-model", max_tokens=8, temperature=0,
+            ),
+            timeout=2,
+        )
+    assert closed.is_set()

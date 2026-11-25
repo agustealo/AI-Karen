@@ -2,8 +2,7 @@ from __future__ import annotations
 
 """Core-owned provider execution for canonical runtime endpoints.
 
-This module deliberately depends only on Core contracts and the Python standard
-library. Extensions and integrations may register/configure endpoints, but Core
+This module depends on Core contracts and the shared asynchronous HTTP client. Extensions and integrations may register/configure endpoints, but Core
 never imports their implementations to execute a model request.
 """
 
@@ -12,11 +11,8 @@ import json
 import os
 import ipaddress
 import socket
-from contextvars import copy_context
 from dataclasses import dataclass
-from functools import partial
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal, Mapping, ParamSpec, Sequence, TypeVar
-from urllib.error import HTTPError, URLError
+from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import UUID
@@ -406,16 +402,15 @@ def _resolve_api_key(endpoint: ProviderEndpoint) -> str | None:
     return value or None
 
 
-def _post_chat_completions(
-    endpoint: ProviderEndpoint,
-    base_url: str,
-    payload: dict[str, Any],
-    *,
-    personal_key: str | None = None,
-) -> dict[str, Any]:
-    """Single OpenAI-compatible HTTP transport for text and tool-call models."""
-    _require_safe_provider_destination(base_url)
-    headers = {"Content-Type": "application/json"}
+# Bound the decoded JSON envelope, including tool arguments and metadata.
+# This is a wire-safety ceiling, independent of the provider's token budget.
+_MAX_COMPLETION_RESPONSE_BYTES = 2 * 1024 * 1024
+
+
+def _provider_headers(
+    endpoint: ProviderEndpoint, personal_key: str | None, *, accept: str,
+) -> dict[str, str]:
+    headers = {"Accept": accept, "Content-Type": "application/json"}
     api_key = personal_key if personal_key is not None else _resolve_api_key(endpoint)
     if endpoint.api_key_env and not api_key:
         raise ProviderExecutionError(
@@ -423,24 +418,55 @@ def _post_chat_completions(
         )
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    request = Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method="POST",
+    return headers
+
+
+def _provider_http_client(timeout_seconds: float):
+    import httpx
+
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout_seconds), follow_redirects=False, trust_env=False,
     )
+
+
+async def _post_chat_completions(
+    endpoint: ProviderEndpoint,
+    base_url: str,
+    payload: dict[str, Any],
+    *,
+    personal_key: str | None = None,
+) -> dict[str, Any]:
+    """Bounded asynchronous JSON transport for text and structured-tool models."""
+    import httpx
+
+    _require_safe_provider_destination(base_url)
+    headers = _provider_headers(endpoint, personal_key, accept="application/json")
+    total_seconds = endpoint.timeout_seconds
+    raw = bytearray()
     try:
-        with _open_provider_request(request, timeout=endpoint.timeout_seconds) as response:
-            body = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        # Do not echo a potentially sensitive provider response into telemetry.
-        raise ProviderExecutionError(
-            f"provider_http_error:{endpoint.provider_id}:{exc.code}"
-        ) from exc
-    except URLError as exc:
+        async with asyncio.timeout(total_seconds):
+            async with _provider_http_client(total_seconds) as client:
+                async with client.stream(
+                    "POST", f"{base_url}/chat/completions", json=payload, headers=headers,
+                ) as response:
+                    if not 200 <= response.status_code < 300:
+                        raise ProviderExecutionError(
+                            f"provider_http_error:{endpoint.provider_id}:{response.status_code}"
+                        )
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        if len(raw) + len(chunk) > _MAX_COMPLETION_RESPONSE_BYTES:
+                            raise ProviderExecutionError("provider_response_too_large")
+                        raw.extend(chunk)
+    except TimeoutError:
+        raise ProviderExecutionError("provider_deadline_exceeded") from None
+    except httpx.HTTPError:
         raise ProviderExecutionError(
             f"provider_connection_error:{endpoint.provider_id}"
-        ) from exc
+        ) from None
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ProviderExecutionError("provider_invalid_response_object") from None
     if not isinstance(body, dict):
         raise ProviderExecutionError("provider_invalid_response_object")
     return body
@@ -458,7 +484,7 @@ class StructuredChatResult:
     usage: dict[str, int]
 
 
-def _sync_structured_chat_request(
+async def _request_structured_chat(
     endpoint: ProviderEndpoint,
     *,
     messages: Sequence[Mapping[str, Any]],
@@ -486,7 +512,7 @@ def _sync_structured_chat_request(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    body = _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
+    body = await _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
     choices = body.get("choices")
     if not isinstance(choices, list) or not choices:
         raise ProviderExecutionError("tool_call_response_has_no_choices")
@@ -551,44 +577,6 @@ def _sync_structured_chat_request(
     )
 
 
-_P = ParamSpec("_P")
-_T = TypeVar("_T")
-
-
-async def _await_sync_provider_worker(
-    function: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs,
-) -> _T:
-    """Keep a blocking HTTP worker owned until its local work actually ends.
-
-    Cancelling a normal to_thread await does not stop its running thread.
-    Shield the executor future from caller cancellation, observe its final
-    outcome, and re-raise cancellation without returning the provider result.
-    This proves only local worker retirement, not remote inference cessation.
-    """
-    loop = asyncio.get_running_loop()
-    # Preserve to_thread's context propagation without creating a second
-    # asyncio Task that could be independently cancelled during shutdown.
-    worker = loop.run_in_executor(
-        None, partial(copy_context().run, function, *args, **kwargs),
-    )
-    try:
-        return await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        # A repeated stop or request timeout must not abandon the same
-        # still-running worker. The caller's lease may expire while draining;
-        # the canonical run ledger then retains its unresolved fence.
-        while not worker.done():
-            try:
-                await asyncio.shield(worker)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        if not worker.cancelled():
-            worker.exception()  # observe a late failure without exposing payloads
-        raise
-
-
 async def execute_structured_provider_endpoint(
     endpoint: ProviderEndpoint,
     *,
@@ -604,8 +592,7 @@ async def execute_structured_provider_endpoint(
         await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
         if personal_model_grant is not None else None
     )
-    return await _await_sync_provider_worker(
-        _sync_structured_chat_request,
+    return await _request_structured_chat(
         endpoint,
         messages=messages,
         model=model,
@@ -616,7 +603,7 @@ async def execute_structured_provider_endpoint(
     )
 
 
-def _sync_openai_compatible_request(
+async def _request_text_chat(
     endpoint: ProviderEndpoint,
     *,
     messages: Sequence[Mapping[str, str]],
@@ -647,7 +634,7 @@ def _sync_openai_compatible_request(
     if request_model:
         payload["model"] = request_model
 
-    body = _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
+    body = await _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
 
     # Non-streaming chat must prove the same model and assistant-content
     # identity as the native SSE terminal contract. Never manufacture an
@@ -733,8 +720,7 @@ async def execute_provider_endpoint(
         await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
         if personal_model_grant is not None else None
     )
-    return await _await_sync_provider_worker(
-        _sync_openai_compatible_request,
+    return await _request_text_chat(
         endpoint,
         messages=messages,
         model=model,
@@ -876,19 +862,11 @@ async def stream_provider_endpoint(
         await _resolve_personal_transport_key(endpoint, selected_model, personal_model_grant)
         if personal_model_grant is not None else None
     )
-    headers = {"Accept": "text/event-stream", "Content-Type": "application/json"}
-    api_key = personal_key if personal_key is not None else _resolve_api_key(endpoint)
-    if endpoint.api_key_env and not api_key:
-        raise ProviderExecutionError(
-            f"provider_credential_unavailable:{endpoint.provider_id}"
-        )
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers = _provider_headers(endpoint, personal_key, accept="text/event-stream")
 
     # The request-level CORTEX budget cannot be extended by an endpoint
     # timeout setting. The read timeout also guards stalled event streams.
     total_seconds = min(timeout_ms / 1000.0, endpoint.timeout_seconds)
-    timeout = httpx.Timeout(total_seconds)
     max_text_bytes = min(524288, max(4096, max_tokens * 48))
     text_parts: list[str] = []
     total_text_bytes = 0
@@ -899,9 +877,7 @@ async def stream_provider_endpoint(
     data_lines: list[str] = []
     try:
         async with asyncio.timeout(total_seconds):
-            async with httpx.AsyncClient(
-                timeout=timeout, follow_redirects=False, trust_env=False
-            ) as client:
+            async with _provider_http_client(total_seconds) as client:
                 async with client.stream(
                     "POST", f"{base_url}/chat/completions",
                     json=payload, headers=headers,
