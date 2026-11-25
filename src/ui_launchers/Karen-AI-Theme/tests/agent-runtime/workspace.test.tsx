@@ -358,4 +358,38 @@ describe("runtime projection validation", () => {
     } finally { visibility.mockRestore(); }
   });
 
+
+  it("searches verified history locally and preserves selection outside the filters", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const completed = { run_id: "finished-987654", status: "completed" };
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/agent-runtime/my-runs") return Promise.resolve(history([run, completed]));
+      if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+      return fallback(path);
+    });
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByRole("heading", { name: "Execution details" });
+    const reads = mocks.get.mock.calls.length;
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search visible executions" }), { target: { value: "FINISHED" } });
+    expect(screen.queryByRole("button", { name: /Execution run-1234/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Execution finished/ })).toBeTruthy();
+    expect(screen.getByText(/Selected execution is outside current filters/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Execution details" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "In progress" }));
+    expect(screen.getByText("No visible executions match your search.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reset search" }));
+    expect(screen.getByRole("button", { name: /Execution run-1234/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(mocks.get.mock.calls.length).toBe(reads);
+  });
+
+  it("uses the canonical chat navigation for mission initiation", async () => {
+    const onAskKaren = vi.fn();
+    render(<AgentsPage onAskKaren={onAskKaren} />);
+    await screen.findByText("No verified executions match this view.");
+    fireEvent.click(screen.getByRole("button", { name: "Ask Karen" }));
+    expect(onAskKaren).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
 });
