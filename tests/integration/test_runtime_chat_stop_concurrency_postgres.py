@@ -686,10 +686,14 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
                 assert await reader.fetchval(
                     "SELECT count(*) FROM public.runtime_chat_run_events"
                 ) == 3
-                assert await reader.fetchval(
-                    "SELECT draft_text FROM public.conversation_composer_drafts "
+                # The owner must see the actual retired row, not a missing
+                # row or the text from before the completed transcript.
+                owned_draft = await reader.fetchrow(
+                    "SELECT draft_text, revision FROM public.conversation_composer_drafts "
                     "WHERE conversation_id=$1", uuid.UUID(draft_thread),
-                ) == "Newer draft"
+                )
+                assert owned_draft is not None
+                assert dict(owned_draft) == {"draft_text": "", "revision": 4}
                 assert await reader.fetchval(
                     "SELECT count(*) FROM public.runtime_chat_runs "
                     "WHERE transport_run_id='run-journal'"
