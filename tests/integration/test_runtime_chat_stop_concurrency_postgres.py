@@ -655,6 +655,26 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             draft_thread, tenant_a, user_id=user_a,
         )).data == {"text": "", "revision": 4}
 
+        # A terminal label cannot substitute for its exact transcript.
+        completed_identity = dict(draft_identity, transport_run_id="draft-complete")
+        assert (await worker_b.read_status(**completed_identity))["status"] == "completed"
+        await raw.execute(
+            "UPDATE public.messages SET message_metadata = message_metadata - 'request_id' "
+            "WHERE message_id=$1", uuid.UUID(draft_messages[1].id),
+        )
+        try:
+            with pytest.raises(RuntimeError, match="unverified_chat_run_completion_binding"):
+                await worker_b.read_status(**completed_identity)
+            with pytest.raises(RuntimeError, match="unverified_chat_run_completion_binding"):
+                await worker_b.read_recovery_run(**draft_identity)
+        finally:
+            await raw.execute(
+                "UPDATE public.messages SET message_metadata = message_metadata || "
+                "jsonb_build_object('request_id', $2::text) WHERE message_id=$1",
+                uuid.UUID(draft_messages[1].id), draft_lease.request_id,
+            )
+        assert (await worker_b.read_status(**completed_identity))["status"] == "completed"
+
         # A repeatable-read recovery snapshot cannot mix an older ledger
         # state with a newer completion committed by another connection.
         snapshot_lease = await worker_a.admit(
