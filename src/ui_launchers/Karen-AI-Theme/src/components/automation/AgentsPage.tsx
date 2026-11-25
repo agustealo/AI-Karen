@@ -77,9 +77,35 @@ function statusVariant(
   return "outline";
 }
 
-export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRun }: { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void>; onDiscussRun?: (runId: string) => void }) {
+type AgentsPageProps = { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void>; onDiscussRun?: (runId: string) => void };
+
+export default function AgentsPage(props: AgentsPageProps) {
+  const { user, isAuthenticated } = useAuth();
+  const identity = JSON.stringify([isAuthenticated, user?.tenant_id, user?.user_id, user?.roles?.includes("admin") ?? false]);
+  return <ScopedAgentsPage key={identity} {...props} />;
+}
+
+function ScopedAgentsPage(props: AgentsPageProps) {
+  const { user, isAuthenticated } = useAuth();
+  const canAdminister = isAuthenticated && (user?.roles?.includes("admin") ?? false);
+  const [scope, setScope] = useState<"personal" | "tenant">("personal");
+  const effectiveScope = canAdminister ? scope : "personal";
+  return (
+    <div className="space-y-4">
+      {canAdminister && (
+        <div role="group" aria-label="Execution scope" className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" variant={effectiveScope === "personal" ? "default" : "outline"} aria-pressed={effectiveScope === "personal"} onClick={() => setScope("personal")}>My work</Button>
+          <Button type="button" size="sm" variant={effectiveScope === "tenant" ? "default" : "outline"} aria-pressed={effectiveScope === "tenant"} onClick={() => setScope("tenant")}>Tenant administration</Button>
+        </div>
+      )}
+      <AgentRuntimeWorkspace key={effectiveScope} {...props} tenantScope={effectiveScope === "tenant"} />
+    </div>
+  );
+}
+
+function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, tenantScope }: AgentsPageProps & { tenantScope: boolean }) {
   const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
-  const isAdmin = user?.roles?.includes("admin") ?? false;
+  const isAdmin = tenantScope && isAuthenticated && (user?.roles?.includes("admin") ?? false);
 
   const [catalog, setCatalog] = useState<AgentCatalogResponse | null>(null);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
@@ -378,7 +404,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
       <section aria-label="Your AI work" className="space-y-4" data-testid="agent-workspace">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
           <div>
-            <h3 className="text-lg font-semibold">Your AI workspace</h3>
+            <h3 className="text-lg font-semibold">{isAdmin ? "Tenant execution workspace" : "Your AI workspace"}</h3>
             <p className="text-sm text-muted-foreground">Ask Karen to work on a goal, then return to review real progress and results.</p>
           </div>
           <Button type="button" onClick={onAskKaren} disabled={!onAskKaren}>
@@ -431,8 +457,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                       </dl>
                     </details>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {onDiscussRun && <Button type="button" size="sm" onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
-                      <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>
+                      {!isAdmin && onDiscussRun && <Button type="button" size="sm" onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
+                      {!isAdmin && <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>}
                       {onAskKaren && <Button type="button" size="sm" variant="outline" onClick={onAskKaren}>Open Karen</Button>}
                     </div>
                     {contextMessage && <p role="status" className="mt-2 text-sm">{contextMessage}</p>}
@@ -600,7 +626,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             <p className="text-sm text-muted-foreground">
               {isAdmin
                 ? "Tenant-scoped Medusa run history and cancellation authority."
-                : "Run-level operational controls are administrator-only. Your chat still uses Medusa automatically when policy selects multi-agent execution."}
+                : "Run-level operational controls are available only in the authorized tenant administration workspace. Your chat still uses Medusa automatically when policy selects multi-agent execution."}
             </p>
           </div>
         </div>
@@ -610,7 +636,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             <CardContent className="p-6 text-sm text-muted-foreground">
               Agent execution activity is surfaced directly in Chat when a
               multi-agent plan runs. Administrative run history is intentionally
-              hidden from ordinary users.
+              excluded from personal work.
             </CardContent>
           </Card>
         ) : (
