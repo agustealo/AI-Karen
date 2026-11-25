@@ -735,3 +735,74 @@ async def test_genuine_witness_cannot_authorize_second_execution():
         await competing.revalidate_runtime_attachment_session()
     issuer = await auth_service.get_auth_service()
     assert issuer.revalidate_session_identity.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_contexts_cannot_both_claim_original_witness():
+    request, _, _ = await authority()
+    original = request.context
+    competing = replace(original)
+    issuer = await auth_service.get_auth_service()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    account = issuer.revalidate_session_identity.return_value
+
+    async def delayed_readback(**_kwargs):
+        entered.set()
+        await release.wait()
+        return account
+
+    issuer.revalidate_session_identity.side_effect = delayed_readback
+    worker = asyncio.create_task(original.revalidate_runtime_attachment_session())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        with pytest.raises(PermissionError, match="runtime_attachment_session_binding_invalid"):
+            await competing.revalidate_runtime_attachment_session()
+        assert issuer.revalidate_session_identity.await_count == 1
+    finally:
+        release.set()
+        await asyncio.wait_for(worker, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_issuer_does_not_retain_destroyed_witness_or_reassign_dead_context():
+    import gc
+    import weakref
+
+    issuer = await auth_service.get_auth_service()
+    user_id, tenant_id = str(uuid.uuid4()), str(uuid.uuid4())
+    principal = UserData(user_id=user_id, tenant_id=tenant_id)
+    witness = issuer._issue_session_witness(
+        session_id=str(uuid.uuid4()), user_id=user_id, tenant_id=tenant_id,
+        access_token_digest="a" * 64,
+    )
+    context = ChatExecutionContext(user_id=user_id, tenant_id=tenant_id)
+    assert issuer.bind_issued_session_principal(witness, principal)
+    assert issuer.bind_issued_session_execution(witness, principal, context)
+    context_ref = weakref.ref(context)
+    del context
+    gc.collect()
+    assert context_ref() is None
+    replacement = ChatExecutionContext(user_id=user_id, tenant_id=tenant_id)
+    assert not issuer.bind_issued_session_execution(witness, principal, replacement)
+    witness_ref = weakref.ref(witness)
+    del witness
+    gc.collect()
+    assert witness_ref() is None
+    assert len(issuer._witness_bindings()) == 0
+
+
+@pytest.mark.asyncio
+async def test_exact_copy_of_genuine_witness_is_not_issuer_owned():
+    request, _, _ = await authority()
+    context = request.context
+    principal = context.authenticated_user
+    witness = vars(principal)["_runtime_session_witness"][1]
+    issuer = await auth_service.get_auth_service()
+    cloned = replace(witness)
+    assert issuer.is_issued_session_witness(cloned)
+    assert not issuer.bind_issued_session_principal(cloned, principal)
+    principal._runtime_session_witness = (principal, cloned)
+    with pytest.raises(PermissionError, match="runtime_attachment_session_binding_invalid"):
+        await context.revalidate_runtime_attachment_session()
+    issuer.revalidate_session_identity.assert_not_awaited()
