@@ -671,23 +671,37 @@ class PostgresNeuroVault(VaultPort):
             valid_to=valid_to,
             supersedes=self._optional_uuid(entry.parent_id),
         )
-        try:
-            # Explicitly flush the parent row before inserting the child.
-            # Independent ORM objects without relationship wiring are not
-            # guaranteed to flush in FK dependency order.
+        async def stage_pair() -> None:
+            # Flush the parent before the child; do not rely on ORM ordering.
             session.add(event)
             await session.flush()
             session.add(assertion)
             await session.flush()
-            if commit:
-                await session.commit()
+
+        private_standalone = commit and context.private_execution is not None
+        try:
+            if private_standalone:
+                # Authorization and consent locks were acquired BEFORE this
+                # savepoint. A duplicate pair rolls back only the savepoint,
+                # leaving the enclosing transaction and its RLS scope intact.
+                async with session.begin_nested():
+                    await stage_pair()
+            else:
+                await stage_pair()
         except IntegrityError:
             if not commit:
                 raise
-            await session.rollback()
-            # Rollback releases authorization locks; private replay must fail closed.
-            if context.private_execution is not None:
-                raise NeuroVaultAuthorizationError("private_memory_replay_requires_new_transaction") from None
+            if private_standalone:
+                # Recheck current authority, including JWT expiry, under the
+                # still-held outer locks before returning any replay evidence.
+                await self._require_private_execution(context, session)
+                if not await self._consent_granted(
+                    session, tenant_id=tenant_uuid, user_id=user_uuid,
+                    scope_name=consent_scope,
+                ):
+                    raise NeuroVaultAuthorizationError("memory consent scope is revoked")
+            else:
+                await session.rollback()
             existing = await self._find_by_idempotency(
                 session,
                 self._idempotency_key(entry, context),
@@ -727,7 +741,7 @@ class PostgresNeuroVault(VaultPort):
                 raise NeuroVaultAuthorizationError(
                     "idempotency collision does not match canonical memory write"
                 )
-            return VaultWriteReceipt(
+            replay = VaultWriteReceipt(
                 memory_id=str(existing_assertion.assertion_id),
                 persisted=True,
                 version=entry.version,
@@ -738,7 +752,12 @@ class PostgresNeuroVault(VaultPort):
                     "idempotent_replay": True,
                 },
             )
+            if private_standalone:
+                await session.commit()
+            return replay
 
+        if commit:
+            await session.commit()
         return VaultWriteReceipt(
             memory_id=str(assertion_id),
             persisted=True,

@@ -161,7 +161,7 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
 
 
 @pytest.mark.parametrize("winner", ["revocation", "persistence"])
-@pytest.mark.parametrize("target", ["transcript", "memory"])
+@pytest.mark.parametrize("target", ["transcript", "memory", "memory_replay"])
 async def test_private_session_fence_serializes_revocation(winner, target, monkeypatch):
     """Exercise real auth row locks against both canonical mutation owners."""
     from contextlib import asynccontextmanager
@@ -196,7 +196,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
     )
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
-        if target == "memory":
+        if target in {"memory", "memory_replay"}:
             await conn.run_sync(lambda sync: LedgerBase.metadata.create_all(
                 sync, tables=[MemoryEvent.__table__, MemoryAssertion.__table__,
                               ConsentScope.__table__, RetentionPolicy.__table__],
@@ -319,6 +319,13 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
             except NeuroVaultAuthorizationError as exc:
                 return exc
 
+        if target == "memory_replay":
+            # Seed an authorized event before racing its exact retry.
+            monkeypatch.setattr(service, "revalidate_issued_session_in_transaction", original)
+            seeded = await vault.persist(entry, context=vault_context)
+            assert seeded.persisted
+            monkeypatch.setattr(service, "revalidate_issued_session_in_transaction", paused_fence)
+
         first = asyncio.create_task(revoke() if winner == "revocation" else persist())
         second = None
         try:
@@ -339,6 +346,9 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
                 assert str(receipt) == "attachment_session_denied"
             else:
                 assert receipt.persisted is True
+                if target == "memory_replay":
+                    assert receipt.metadata["idempotent_replay"] is True
+                    assert receipt.metadata["event_id"] == seeded.metadata["event_id"]
             async with factory() as db:
                 count = (await db.execute(text(
                     "SELECT count(*) FROM messages WHERE conversation_id = :cid"
@@ -346,7 +356,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
                 active = (await db.execute(select(AuthSession.is_active).where(
                     AuthSession.session_token == session
                 ))).scalar_one()
-                if target == "memory":
+                if target in {"memory", "memory_replay"}:
                     from sqlalchemy import func
                     for model in (MemoryEvent, MemoryAssertion):
                         durable_count = (await db.execute(
@@ -354,10 +364,10 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
                                 model.tenant_id == tenant, model.user_id == user,
                             )
                         )).scalar_one()
-                        assert durable_count == (1 if winner == "persistence" else 0)
+                        assert durable_count == (1 if winner == "persistence" or target == "memory_replay" else 0)
             assert count == (2 if winner == "persistence" and target == "transcript" else 0)
             assert active is False
-            if target == "memory":
+            if target in {"memory", "memory_replay"}:
                 # A previously successful receipt cannot bypass revoked authority.
                 with pytest.raises(NeuroVaultAuthorizationError, match="attachment_session_denied"):
                     await vault.persist(entry, context=vault_context)
@@ -373,7 +383,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
             await db.execute(text("DELETE FROM messages WHERE conversation_id = :cid"), {"cid": conversation})
             await db.execute(text("DELETE FROM conversations WHERE conversation_id = :cid"), {"cid": conversation})
             from sqlalchemy import delete
-            if target == "memory":
+            if target in {"memory", "memory_replay"}:
                 await db.execute(delete(MemoryAssertion).where(MemoryAssertion.tenant_id == tenant))
                 await db.execute(delete(MemoryEvent).where(MemoryEvent.tenant_id == tenant))
             await db.execute(delete(AuthSession).where(AuthSession.session_token == session))
