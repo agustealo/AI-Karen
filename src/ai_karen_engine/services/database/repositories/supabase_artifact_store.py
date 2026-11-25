@@ -6,6 +6,7 @@ Stores artifact bytes in Supabase Storage and metadata in PostgreSQL.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import base64
 import binascii
 import io
@@ -55,11 +56,63 @@ class SupabaseArtifactStore(ArtifactStore):
     async def _session(self) -> AsyncSession:
         return self._session_factory()
 
-    def _hierarchy_scope(self, tenant_id: str, user_id: str):
-        """Require an explicitly wired actor-scoped transaction owner."""
+    @asynccontextmanager
+    async def _hierarchy_scope(self, tenant_id: str, user_id: str):
+        """Admit only the existing trusted server role in this transaction.
+
+        Folder tables intentionally have FORCE RLS and no actor policies.
+        A non-bypass role with grants alone cannot execute this contract.
+        Never elevate or switch roles here; retain explicit owner predicates.
+        """
         if self._hierarchy_transaction is None:
             raise RuntimeError("artifact_hierarchy_transaction_unavailable")
-        return self._hierarchy_transaction(tenant_id, user_id=user_id)
+        async with self._hierarchy_transaction(tenant_id, user_id=user_id) as session:
+            admitted = await session.execute(text("""
+                SELECT
+                    current_setting('app.current_tenant_id', true) = :tenant
+                    AND current_setting('app.current_user_id', true) = :owner
+                    AND current_user NOT IN ('anon', 'authenticated', 'service_role')
+                    AND has_schema_privilege('public', 'USAGE')
+                    AND has_table_privilege('public.artifact_folders', 'SELECT')
+                    AND has_table_privilege('public.artifact_folders', 'INSERT')
+                    AND has_table_privilege('public.artifact_folders', 'UPDATE')
+                    AND has_table_privilege('public.artifact_folder_mutation_fences', 'SELECT')
+                    AND has_table_privilege('public.artifact_folder_mutation_fences', 'INSERT')
+                    AND has_table_privilege('public.artifact_folder_mutation_fences', 'UPDATE')
+                    AND has_table_privilege('public.files', 'SELECT')
+                    AND has_column_privilege('public.files', 'folder_id', 'UPDATE')
+                    AND has_column_privilege('public.files', 'organization_revision', 'SELECT')
+                    AND has_function_privilege(
+                        'public.move_owned_artifact_folder(uuid,uuid,uuid,uuid,bigint)', 'EXECUTE'
+                    )
+                    AND NOT row_security_active('public.artifact_folders')
+                    AND NOT row_security_active('public.artifact_folder_mutation_fences')
+                    AND (
+                        SELECT count(*) = 2 FROM pg_class
+                        WHERE oid IN ('public.artifact_folders'::regclass,
+                                      'public.artifact_folder_mutation_fences'::regclass)
+                          AND relrowsecurity AND relforcerowsecurity
+                    )
+                    AS hierarchy_admitted
+            """), {"tenant": tenant_id, "owner": user_id})
+            if admitted.scalar_one_or_none() is not True:
+                raise RuntimeError("artifact_hierarchy_transaction_unavailable")
+            yield session
+
+    @instrument_repository(operation="owner_hierarchy_available", repository="SupabaseArtifactStore")
+    async def owner_hierarchy_available(
+        self, tenant_id: str, user_id: str,
+    ) -> RepositoryResult[bool]:
+        if (not tenant_id or not user_id
+            or not self._valid_folder_ids(tenant_id, user_id)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id):
+                pass
+            return RepositoryResult(success=True, data=True)
+        except Exception:
+            logger.warning("Artifact hierarchy capability unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
     def _bucket(self):
         """Reuse the initialized platform Storage client, never recreate credentials."""

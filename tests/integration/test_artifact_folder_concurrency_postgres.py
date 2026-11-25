@@ -188,3 +188,66 @@ async def test_artifact_move_after_concurrent_destination_removal(delete_account
             await first.execute("DELETE FROM public.auth_users WHERE user_id=$1", owner)
         finally:
             await first.close()
+
+
+async def test_scoped_repository_hierarchy_admission(monkeypatch):
+    """Use canonical transaction scope on the disposable engine; no grants."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from ai_karen_engine.persistence.postgres import transactions
+    from ai_karen_engine.services.database.repositories.supabase_artifact_store import (
+        SupabaseArtifactStore,
+    )
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    tenant = os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"]
+    owner = os.environ["KAREN_TEST_ARTIFACT_OWNER_ID"]
+    engine = create_async_engine(make_url(_dsn()).set(drivername="postgresql+asyncpg"))
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(transactions, "get_postgres_engine",
+                        lambda: SimpleNamespace(async_session_factory=sessions))
+    store = SupabaseArtifactStore(
+        sessions, None, hierarchy_transaction=transactions.async_transaction_scope,
+    )
+    folder_id = None
+    try:
+        capability = await store.owner_hierarchy_available(tenant, owner)
+        assert capability.success and capability.data is True
+        created = await store.create_owner_folder(tenant, owner, name="Admission proof")
+        assert created.success and created.data is not None
+        folder_id = created.data.folder_id
+        renamed = await store.rename_owner_folder(
+            tenant, owner, folder_id, name="Renamed", expected_revision=1,
+        )
+        assert renamed.success and renamed.data.revision == 2
+        stale = await store.rename_owner_folder(
+            tenant, owner, folder_id, name="Stale", expected_revision=1,
+        )
+        assert not stale.success
+        crumbs = await store.resolve_owner_breadcrumbs(tenant, owner, folder_id)
+        assert crumbs.success and [f.name for f in crumbs.data] == ["Renamed"]
+
+        @asynccontextmanager
+        async def denied_scope(tenant_id, *, user_id):
+            async with transactions.async_transaction_scope(tenant_id, user_id=user_id) as session:
+                await session.execute(text("SET LOCAL ROLE ckgen_artifact_rls_actor"))
+                yield session
+
+        denied = SupabaseArtifactStore(sessions, None, hierarchy_transaction=denied_scope)
+        assert not (await denied.owner_hierarchy_available(tenant, owner)).success
+        assert not (await denied.create_owner_folder(tenant, owner, name="Denied")).success
+        async with sessions() as session:
+            assert (await session.execute(text(
+                "SELECT current_user <> 'ckgen_artifact_rls_actor' "
+                "AND COALESCE(current_setting('app.current_user_id', true),'') = ''"
+            ))).scalar_one() is True
+    finally:
+        try:
+            if folder_id:
+                async with sessions.begin() as session:
+                    await session.execute(text(
+                        "DELETE FROM public.artifact_folders WHERE folder_id=CAST(:id AS uuid)"
+                    ), {"id": folder_id})
+        finally:
+            await engine.dispose()

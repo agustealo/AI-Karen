@@ -42,6 +42,8 @@ class _Session:
     def __init__(self, rows):
         self.rows = rows
         self.calls = []
+        self.admissions = []
+        self.admitted = True
 
     async def __aenter__(self):
         return self
@@ -50,6 +52,9 @@ class _Session:
         return False
 
     async def execute(self, statement, params):
+        if "AS hierarchy_admitted" in str(statement):
+            self.admissions.append((str(statement), dict(params)))
+            return SimpleNamespace(scalar_one_or_none=lambda: self.admitted)
         self.calls.append((str(statement), dict(params)))
         return SimpleNamespace(fetchall=lambda: self.rows)
 
@@ -218,6 +223,9 @@ class _HierarchySession(_Session):
         self.commits = 0
 
     async def execute(self, statement, params):
+        if "AS hierarchy_admitted" in str(statement):
+            self.admissions.append((str(statement), dict(params)))
+            return SimpleNamespace(scalar_one_or_none=lambda: self.admitted)
         self.calls.append((str(statement), dict(params)))
         return SimpleNamespace(
             scalar_one_or_none=lambda: self.scalar,
@@ -366,3 +374,30 @@ def test_hierarchy_commit_owned_by_scoped_context():
     assert result.success and result.data == 2
     assert scopes == [(TENANT, OWNER)]
     assert session.commits == 1
+
+
+def test_hierarchy_capability_denial_precedes_any_mutation():
+    session = _HierarchySession(scalar=2)
+    session.admitted = False
+    store = _hierarchy_store(session)
+    result = _run(store.move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert not result.success
+    assert result.error == "artifact_hierarchy_unavailable"
+    assert not session.calls and session.commits == 0
+    sql, params = session.admissions[0]
+    assert params == {"tenant": TENANT, "owner": OWNER}
+    assert "row_security_active" in sql
+    assert "relforcerowsecurity" in sql
+    assert "has_function_privilege" in sql
+
+
+def test_hierarchy_capability_probe_reports_only_live_admission():
+    session = _HierarchySession()
+    store = _hierarchy_store(session)
+    assert _run(store.owner_hierarchy_available(TENANT, OWNER)).data is True
+    session.admitted = False
+    result = _run(store.owner_hierarchy_available(TENANT, OWNER))
+    assert not result.success and result.data is None
+    assert len(session.admissions) == 2 and not session.calls
