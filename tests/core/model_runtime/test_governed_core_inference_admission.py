@@ -8,10 +8,12 @@ the model runtime or compatibility transport can be invoked.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from ai_karen_engine.auth.models import UserData
@@ -24,9 +26,6 @@ from ai_karen_engine.core.model_runtime.inference_port import (
 )
 from ai_karen_engine.core.model_runtime.llm_adapter import LLMUtils
 from ai_karen_engine.core.model_runtime.model_manager import ModelManager, RuntimeSelection
-from ai_karen_engine.core.model_runtime.openai_compatible_client import (
-    OpenAICompatibleRuntimeClient,
-)
 from ai_karen_engine.core.model_runtime.provider_contracts import (
     EmbeddingFailed,
     ProviderNotAvailable,
@@ -51,11 +50,12 @@ def _scope(
     *, calls: int = 2, tenant: str = "tenant-a",
     provider_constraints: dict | None = None,
     meter_model_calls: int | None = None,
+    max_duration_ms: int = 60000,
 ) -> GovernedToolModelAdmission:
     budget = ExecutionBudget(
         max_model_calls=calls,
         max_external_requests=1,
-        max_duration_ms=60000,
+        max_duration_ms=max_duration_ms,
     )
     plan = AuthorizedExecutionPlan(
         execution_id=f"execution-{uuid4().hex}",
@@ -138,23 +138,32 @@ def _local_manager(monkeypatch, *, observed_model: str | None = "model-a"):
         endpoint_type=endpoint.endpoint_type,
         model=endpoint.default_model,
         base_url=endpoint.base_url,
-        runtime_engine="ollama",
-    )
-    client = OpenAICompatibleRuntimeClient(
-        model=observed_model,
-        base_url=endpoint.base_url,
-        provider_name="ollama-local",
+        runtime_engine=endpoint.runtime_engine.value,
     )
     attempts = []
 
-    def generate_text_with_model(prompt, **kwargs):
-        attempts.append(prompt)
-        return ("actual observed output", observed_model)
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://127.0.0.1:11434/v1/chat/completions"
+        attempts.append(json.loads(request.content))
+        return httpx.Response(200, json={
+            "model": observed_model,
+            "choices": [{"message": {"role": "assistant", "content": "actual observed output"}}],
+            "finish_reason": "stop",
+        })
 
-    monkeypatch.setattr(client, "generate_text_with_model", generate_text_with_model)
+    original_client = httpx.AsyncClient
+
+    def client_factory(**kwargs):
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        return original_client(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
     monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
     monkeypatch.setattr(manager, "_resolve_endpoint", lambda _: endpoint)
-    monkeypatch.setattr(manager, "resolve_runtime", lambda _: client)
+    def forbidden_runtime(_):
+        pytest.fail("governed HTTP must not borrow the blocking compatibility runtime")
+    monkeypatch.setattr(manager, "resolve_runtime", forbidden_runtime)
     monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
     monkeypatch.setattr(
         manager,
@@ -1033,3 +1042,98 @@ def test_invalid_embedding_input_and_missing_model_spend_no_budget(monkeypatch):
     assert facade.embed("actual input", execution_admission=scope) == [0.1]
     assert scope.meter.model_calls == 1
     assert invoked == ["actual input"]
+
+
+@pytest.mark.asyncio
+async def test_governed_http_preserves_roles_and_canonical_receipt(monkeypatch):
+    manager, attempts, _ = _local_manager(monkeypatch)
+    admission = _scope(calls=1)
+    messages = [
+        {"role": "system", "content": "Preserve roles"},
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "Prior answer"},
+        {"role": "user", "content": "Next question"},
+    ]
+    result = await manager.generate_chat(
+        messages, execution_admission=admission, return_receipt=True,
+        max_tokens=12, temperature=0.1,
+    )
+    assert isinstance(result, ProviderExecutionResult)
+    assert result.model == "model-a"
+    assert attempts[0]["messages"] == messages
+    assert attempts[0]["stream"] is False
+    assert attempts[0]["max_tokens"] == 12
+    assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("options", [
+    {"stream": True}, {"tools": []}, {"max_tokens": True}, {"temperature": float("nan")},
+    {"messages": [{"role": "user", "content": "injected"}]},
+])
+async def test_governed_http_rejects_unsupported_options_before_reservation(monkeypatch, options):
+    manager, attempts, _ = _local_manager(monkeypatch)
+    admission = _scope(calls=1)
+    # Use the positional messages parameter except when verifying Python's
+    # duplicate-argument rejection; no compatibility kwargs reach the wire.
+    if "messages" in options:
+        with pytest.raises(TypeError):
+            await manager.generate_chat(
+                [{"role": "user", "content": "input"}],
+                execution_admission=admission, **options,
+            )
+    else:
+        with pytest.raises(ProviderNotAvailable, match="governed_model_"):
+            await manager.generate_chat(
+                [{"role": "user", "content": "input"}],
+                execution_admission=admission, **options,
+            )
+    assert attempts == []
+    assert admission.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_governed_http_registry_drift_prevents_wire_and_reservation(monkeypatch):
+    manager, attempts, endpoint = _local_manager(monkeypatch)
+    admission = _scope(calls=1)
+    monkeypatch.setattr(
+        manager, "_resolve_endpoint",
+        lambda _: replace(endpoint, default_model="changed-model"),
+    )
+    with pytest.raises(ProviderNotAvailable, match="registry_drift"):
+        await manager.generate_chat(
+            [{"role": "user", "content": "input"}], execution_admission=admission,
+        )
+    assert attempts == []
+    assert admission.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_governed_http_deadline_rejects_late_receipt_without_success(monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+    from ai_karen_engine.core.model_runtime import model_manager as module
+
+    manager, attempts, endpoint = _local_manager(monkeypatch)
+    admission = _scope(calls=1, max_duration_ms=60000)
+    observations = Mock()
+    monkeypatch.setattr(manager, "_record_provider_result", observations)
+
+    async def late(*args, **kwargs):
+        admission.meter._start_ms -= 61000
+        return ProviderExecutionResult(
+            text="late answer", model=endpoint.default_model,
+            provider_id=endpoint.provider_id, runtime_engine=endpoint.runtime_engine.value,
+        )
+
+    transport = AsyncMock(side_effect=late)
+    monkeypatch.setattr(module, "execute_provider_endpoint", transport)
+    with pytest.raises(RuntimeError, match="execution_deadline_exhausted"):
+        await manager.generate_chat(
+            [{"role": "user", "content": "input"}],
+            execution_admission=admission, return_receipt=True,
+        )
+    transport.assert_awaited_once()
+    assert transport.await_args.kwargs["local_only"] is True
+    assert not any(call.args[1] is True for call in observations.call_args_list)
+    assert attempts == []
+    assert admission.meter.model_calls == 1

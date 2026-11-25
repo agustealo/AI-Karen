@@ -9,6 +9,7 @@ parallel model instance or bypass ProviderRegistryService.
 
 import asyncio
 import inspect
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import (
     ProviderExecutionResult,
+    execute_provider_endpoint,
     provider_endpoint_requires_external_permission,
 )
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
@@ -314,16 +316,55 @@ class ModelManager:
             endpoint = self._resolve_endpoint(selection.provider_id)
             if endpoint is None:
                 raise ProviderNotAvailable("governed_model_endpoint_unavailable")
-            if endpoint.endpoint_type != selection.endpoint_type:
-                raise ProviderNotAvailable("governed_model_selection_registry_drift")
-            # Unscoped compatibility client must remain local-only. Authorized
-            # external execution uses the separately governed canonical
-            # provider executor, never an HTTP allow flag on this raw shim.
+            # Preserve the existing local-only Core inference boundary. Moving
+            # to the canonical executor must not silently enable cloud access.
+            if endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE:
+                if provider_endpoint_requires_external_permission(endpoint):
+                    raise ProviderNotAvailable("governed_external_compatibility_requires_canonical_transport")
             if (
-                provider_endpoint_requires_external_permission(endpoint)
-                and endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE
+                not endpoint.enabled
+                or endpoint.provider_id != selection.provider_id
+                or endpoint.endpoint_type != selection.endpoint_type
+                or endpoint.base_url != selection.base_url
+                or endpoint.default_model != selection.model
+                or (
+                    selection.runtime_engine is not None
+                    and endpoint.runtime_engine.value != selection.runtime_engine
+                )
             ):
-                raise ProviderNotAvailable("governed_external_compatibility_requires_canonical_transport")
+                raise ProviderNotAvailable("governed_model_selection_registry_drift")
+            if endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE:
+                # The compatibility iterator owns no admitted streaming
+                # lifetime. Reject rather than hand out an unbounded iterator.
+                if stream:
+                    raise ProviderNotAvailable("governed_model_stream_unsupported")
+                if set(kwargs) - {"model", "max_tokens", "temperature"}:
+                    raise ProviderNotAvailable("governed_model_execution_options_unsupported")
+                max_tokens = kwargs.get("max_tokens", 512)
+                temperature = kwargs.get("temperature", 0.7)
+                if (
+                    type(max_tokens) is not int
+                    or max_tokens <= 0
+                    or type(temperature) not in (int, float)
+                    or not math.isfinite(temperature)
+                    or temperature < 0
+                ):
+                    raise ProviderNotAvailable("governed_model_execution_options_invalid")
+                if not messages or any(
+                    not isinstance(message, dict)
+                    or set(message) != {"role", "content"}
+                    or message.get("role") not in ("system", "user", "assistant")
+                    or not isinstance(message.get("content"), str)
+                    for message in messages
+                ):
+                    raise ProviderNotAvailable("governed_model_messages_invalid")
+                await execution_admission.reserve_transport(endpoint, model=selection.model)
+                return await self._execute_admitted_http(
+                    endpoint, execution_admission, messages=messages,
+                    model=selection.model, max_tokens=max_tokens,
+                    temperature=float(temperature), return_receipt=return_receipt,
+                    breaker=breaker,
+                )
             await execution_admission.reserve_transport(endpoint, model=selection.model)
         provider = self.resolve_runtime(selection)
 
@@ -397,6 +438,54 @@ class ModelManager:
             )
             breaker.record_failure()
             logger.exception("Primary provider %s failed", selection.provider_id)
+            raise
+
+    async def _execute_admitted_http(
+        self,
+        endpoint: ProviderEndpoint,
+        admission: GovernedToolModelAdmission,
+        *,
+        messages: List[Dict[str, Any]],
+        model: str | None,
+        max_tokens: int,
+        temperature: float,
+        return_receipt: bool,
+        breaker: CircuitBreaker,
+    ) -> ProviderExecutionResult | str:
+        """Use the canonical async executor after exactly one reservation."""
+        start = time.perf_counter()
+        try:
+            async with admission.admitted_execution_deadline():
+                result = await execute_provider_endpoint(
+                    endpoint, messages=messages, model=model,
+                    max_tokens=max_tokens, temperature=temperature, local_only=True,
+                )
+                if (
+                    not isinstance(result, ProviderExecutionResult)
+                    or result.provider_id != endpoint.provider_id
+                    or result.runtime_engine != endpoint.runtime_engine.value
+                    or not isinstance(result.model, str)
+                    or not result.model.strip()
+                    or result.model.strip().lower() == "auto"
+                    or (model not in (None, "", "auto") and result.model != model)
+                    or not isinstance(result.text, str)
+                    or not result.text.strip()
+                ):
+                    raise ProviderNotAvailable("inference_execution_provenance_unavailable")
+            self._record_provider_result(endpoint.provider_id, True, start)
+            breaker.record_success()
+            return result if return_receipt else result.text
+        except Exception as exc:
+            # The canonical executor uses bounded codes; do not expose
+            # arbitrary transport exception contents in provider telemetry.
+            self._record_provider_result(
+                endpoint.provider_id, False, start, error_message=type(exc).__name__,
+            )
+            breaker.record_failure()
+            logger.warning(
+                "governed_model_http_failed",
+                extra={"provider_id": endpoint.provider_id, "error_type": type(exc).__name__},
+            )
             raise
 
     async def generate_embedding(
