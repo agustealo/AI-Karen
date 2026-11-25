@@ -161,8 +161,18 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
 
 
 @pytest.mark.parametrize("winner", ["revocation", "persistence"])
-async def test_private_transcript_session_fence_serializes_revocation(winner, monkeypatch):
-    """Exercise the real auth row locks and completed-turn transaction together."""
+@pytest.mark.parametrize("target", ["transcript", "memory"])
+async def test_private_session_fence_serializes_revocation(winner, target, monkeypatch):
+    """Exercise real auth row locks against both canonical mutation owners."""
+    from contextlib import asynccontextmanager
+    from ai_karen_engine.core.memory.protocols import VaultContext
+    from ai_karen_engine.core.memory.types import MemoryEntry, MemoryMetadata
+    from ai_karen_engine.platform.memory.postgres.ledger_models import (
+        Base as LedgerBase, ConsentScope, MemoryAssertion, MemoryEvent, RetentionPolicy,
+    )
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
     from datetime import datetime
     from sqlalchemy import text
     from ai_karen_engine.auth.models import UserData
@@ -186,6 +196,11 @@ async def test_private_transcript_session_fence_serializes_revocation(winner, mo
     )
     async with engine.begin() as conn:
         await conn.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
+        if target == "memory":
+            await conn.run_sync(lambda sync: LedgerBase.metadata.create_all(
+                sync, tables=[MemoryEvent.__table__, MemoryAssertion.__table__,
+                              ConsentScope.__table__, RetentionPolicy.__table__],
+            ))
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS conversations (
                 conversation_id UUID PRIMARY KEY, tenant_id UUID NOT NULL,
@@ -273,8 +288,36 @@ async def test_private_transcript_session_fence_serializes_revocation(winner, mo
                     locked.set()
                     await release.wait()
 
+        @asynccontextmanager
+        async def vault_session():
+            async with factory() as db:
+                await db.begin()
+                try:
+                    yield db
+                finally:
+                    if db.in_transaction():
+                        await db.rollback()
+
+        vault = PostgresNeuroVault(session_factory=vault_session)
+        vault_context = VaultContext(
+            tenant_id=str(tenant), user_id=str(user),
+            request_id=context.request_id, correlation_id=context.correlation_id,
+            session_id=context.session_id, conversation_id=context.conversation_id,
+            actor_id=str(user), policy_context={"memory_write_authorized": True},
+            private_execution=context,
+        )
+        entry = MemoryEntry(
+            id=str(uuid.uuid4()), content="Synthetic private memory concurrency proof",
+            metadata=MemoryMetadata(tenant_id=str(tenant), user_id=str(user), source="chat_user"),
+        )
+
         async def persist():
-            return await repo.add_completed_turn(*pair, private_execution=context)
+            if target == "transcript":
+                return await repo.add_completed_turn(*pair, private_execution=context)
+            try:
+                return await vault.persist(entry, context=vault_context)
+            except NeuroVaultAuthorizationError as exc:
+                return exc
 
         first = asyncio.create_task(revoke() if winner == "revocation" else persist())
         second = None
@@ -287,9 +330,15 @@ async def test_private_transcript_session_fence_serializes_revocation(winner, mo
             release.set()
             results = await asyncio.wait_for(asyncio.gather(first, second), 10)
             receipt = results[1] if winner == "revocation" else results[0]
-            assert receipt.success is (winner == "persistence")
-            if winner == "revocation":
-                assert receipt.error == "attachment_session_denied"
+            if target == "transcript":
+                assert receipt.success is (winner == "persistence")
+                if winner == "revocation":
+                    assert receipt.error == "attachment_session_denied"
+            elif winner == "revocation":
+                assert isinstance(receipt, NeuroVaultAuthorizationError)
+                assert str(receipt) == "attachment_session_denied"
+            else:
+                assert receipt.persisted is True
             async with factory() as db:
                 count = (await db.execute(text(
                     "SELECT count(*) FROM messages WHERE conversation_id = :cid"
@@ -297,8 +346,21 @@ async def test_private_transcript_session_fence_serializes_revocation(winner, mo
                 active = (await db.execute(select(AuthSession.is_active).where(
                     AuthSession.session_token == session
                 ))).scalar_one()
-            assert count == (2 if winner == "persistence" else 0)
+                if target == "memory":
+                    from sqlalchemy import func
+                    for model in (MemoryEvent, MemoryAssertion):
+                        durable_count = (await db.execute(
+                            select(func.count()).select_from(model).where(
+                                model.tenant_id == tenant, model.user_id == user,
+                            )
+                        )).scalar_one()
+                        assert durable_count == (1 if winner == "persistence" else 0)
+            assert count == (2 if winner == "persistence" and target == "transcript" else 0)
             assert active is False
+            if target == "memory":
+                # A previously successful receipt cannot bypass revoked authority.
+                with pytest.raises(NeuroVaultAuthorizationError, match="attachment_session_denied"):
+                    await vault.persist(entry, context=vault_context)
         finally:
             release.set()
             for task in (first, second):
@@ -311,6 +373,9 @@ async def test_private_transcript_session_fence_serializes_revocation(winner, mo
             await db.execute(text("DELETE FROM messages WHERE conversation_id = :cid"), {"cid": conversation})
             await db.execute(text("DELETE FROM conversations WHERE conversation_id = :cid"), {"cid": conversation})
             from sqlalchemy import delete
+            if target == "memory":
+                await db.execute(delete(MemoryAssertion).where(MemoryAssertion.tenant_id == tenant))
+                await db.execute(delete(MemoryEvent).where(MemoryEvent.tenant_id == tenant))
             await db.execute(delete(AuthSession).where(AuthSession.session_token == session))
             await db.execute(delete(AuthUser).where(AuthUser.user_id == user))
             await db.execute(delete(Tenant).where(Tenant.id == tenant))
