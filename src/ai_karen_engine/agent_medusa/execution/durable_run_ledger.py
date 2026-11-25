@@ -663,7 +663,6 @@ class PostgresDurableRunLedger:
                     "terminal_at": terminal_at,
                     "reconciled_at": reconciled_at,
                     "error_type": error_type,
-                    "outcome_status": outcome_status,
                 }
                 if normalized in _TERMINAL_STATUSES:
                     await session.execute(
