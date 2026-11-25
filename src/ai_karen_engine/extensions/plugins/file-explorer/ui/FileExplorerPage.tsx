@@ -67,6 +67,7 @@ export interface FileExplorerProps {
   error?: string | null;
   selectedSourceIds?: string[];
   multiSelect?: boolean;
+  maxSelection?: number;
   onSelect?: (references: ExplorerSelection[]) => void;
   onRefresh?: () => void;
   /** Host-owned server filename search, separate from the displayed-page filter. */
@@ -89,7 +90,7 @@ export interface FileExplorerProps {
   };
 }
 
-const MAX_SELECTION = 24;
+const LEGACY_MAX_SELECTION = 12;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
 function validSource(value: unknown): value is ExplorerItem {
@@ -126,6 +127,7 @@ function FileExplorerView({
   error = null,
   selectedSourceIds,
   multiSelect = true,
+  maxSelection = LEGACY_MAX_SELECTION,
   onSelect,
   onRefresh,
   search = '',
@@ -268,7 +270,8 @@ function FileExplorerView({
       a.name.localeCompare(b.name) || a.source_id.localeCompare(b.source_id)),
     [entries, currentParent, filter]);
   const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id) && (!hierarchy || byId.get(id)?.kind === 'file'));
-  const selectionSet = new Set(selected);
+  const limit = Number.isSafeInteger(maxSelection) && maxSelection >= 0 && maxSelection <= 200 ? maxSelection : 0;
+  const selectionSet = new Set(selected.slice(0, limit));
 
   function navigate(id: string | null) {
     if (busy || editing) return;
@@ -279,11 +282,12 @@ function FileExplorerView({
   }
 
   function select(item: ExplorerItem) {
-    if (busy || editing || (hierarchy && item.kind !== 'file')) return;
+    if (busy || editing || limit === 0 || (hierarchy && item.kind !== 'file') ||
+        (multiSelect && !selectionSet.has(item.source_id) && selectionSet.size >= limit)) return;
     const next = multiSelect
       ? (selectionSet.has(item.source_id)
         ? selected.filter((id) => id !== item.source_id)
-        : [...selected, item.source_id].slice(0, MAX_SELECTION))
+        : [...selected, item.source_id].slice(0, limit))
       : [item.source_id];
     if (selectedSourceIds === undefined) setLocalSelection(next);
     const references = next.flatMap((id) => {
@@ -423,7 +427,8 @@ function FileExplorerView({
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className="flex min-w-0 flex-wrap items-center gap-2 rounded border p-2">
           {(!hierarchy || item.kind === 'file') && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={busy || editing || loading || Boolean(error)}
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={busy || editing || loading || Boolean(error) || limit === 0 ||
+              (multiSelect && !selectionSet.has(item.source_id) && selectionSet.size >= limit)}
             onChange={() => select(item)} />}
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
@@ -441,7 +446,7 @@ function FileExplorerView({
         </li>)}
       </ul>}
     <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-      <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
+      <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {limit} selections</span>
       {hierarchy?.hasMoreFolders && hierarchy.nextFolderId && <button type="button" className="rounded border px-3 py-2 text-sm"
         disabled={busy || editing || loading || Boolean(error)} onClick={() => { if (!busy && !editing) { clearSelections(); onPageTransition?.(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); } }}>Next folder page</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"

@@ -747,3 +747,20 @@ async def test_hierarchy_search_is_delegated_with_authenticated_folder_scope(mon
     assert kwargs["parent_folder_id"] == FILE
     assert kwargs["file_cursor"] == "bound"
     assert kwargs["user_id"] == OWNER and kwargs["tenant_id"] == TENANT
+
+
+def test_inventory_selection_ceiling_matches_content_execution_contract():
+    from pydantic import ValidationError
+    from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
+
+    page = dict(items=[], has_more=False, next_cursor=None,
+                inventory_semantics="owner_metadata_page_not_live_acl",
+                request_id="request", correlation_id="correlation")
+    assert ingress.FileExplorerInventoryResponse.model_validate(page).max_selection == MAX_CONTENT_SOURCE_REFERENCES
+    for invalid in (True, 0, "12", MAX_CONTENT_SOURCE_REFERENCES + 1):
+        with pytest.raises(ValidationError):
+            ingress.FileExplorerInventoryResponse.model_validate({**page, "max_selection": invalid})
+    refs = [{"source_id": FILE, "revision": SHA}] * MAX_CONTENT_SOURCE_REFERENCES
+    assert len(ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs).references) == MAX_CONTENT_SOURCE_REFERENCES
+    with pytest.raises(ValidationError):
+        ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs + refs[:1])

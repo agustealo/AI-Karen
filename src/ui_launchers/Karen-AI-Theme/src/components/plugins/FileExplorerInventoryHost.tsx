@@ -11,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
+import { MAX_DRAFT_ATTACHMENTS, type DraftAttachment } from '../chat/copilotkit/useKarenPersistedDraft';
 import { ContentIntelligenceSelectionPanel } from './ContentIntelligenceSelectionPanel';
 import type { ExplorerCapability, ExplorerDestinationBrowser, ExplorerManagement, ExplorerMutation, ExplorerOperation } from '@/plugin_repo/file-explorer/FileExplorerPage';
 
@@ -33,6 +34,7 @@ interface ExplorerSelection {
 }
 
 interface InventoryPage {
+  maxSelection: number;
   items: ExplorerItem[];
   has_more: boolean;
   next_cursor: string | null;
@@ -80,6 +82,7 @@ interface PageRequest {
 
 export interface FileExplorerInventoryProps extends Record<string, unknown> {
   authorized: boolean;
+  maxSelection: number;
   items: ExplorerItem[];
   loading: boolean;
   error: string | null;
@@ -106,8 +109,12 @@ const INVENTORY_ENDPOINTS: Record<InventoryConsumer, string> = {
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const MAX_PAGE_SIZE = 200;
 const MAX_CURSOR_LENGTH = 768;
+// Compatibility with older generic inventory servers. The independently
+// authorized Content Intelligence endpoint requires explicit metadata.
+const LEGACY_ANALYSIS_LIMIT = 12;
+const NO_ATTACHMENTS: readonly DraftAttachment[] = [];
 
-function assertInventoryPage(data: unknown, parentId: string | null = null): InventoryPage {
+function assertInventoryPage(data: unknown, parentId: string | null = null, requireCeiling = false): InventoryPage {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('Invalid file inventory response');
   }
@@ -133,6 +140,10 @@ function assertInventoryPage(data: unknown, parentId: string | null = null): Inv
     throw new Error('Invalid file inventory response');
   }
 
+  const ceiling = page.max_selection === undefined && !requireCeiling ? LEGACY_ANALYSIS_LIMIT : page.max_selection;
+  if (typeof ceiling !== 'number' || !Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > MAX_PAGE_SIZE) {
+    throw new Error('Invalid file inventory response');
+  }
   const seen = new Set<string>();
   const items: ExplorerItem[] = [];
   for (const raw of page.items) {
@@ -172,7 +183,7 @@ function assertInventoryPage(data: unknown, parentId: string | null = null): Inv
     });
   }
   return {
-    items,
+    items, maxSelection: ceiling,
     has_more: page.has_more as boolean,
     next_cursor: page.next_cursor as string | null,
     inventory_semantics: 'owner_metadata_page_not_live_acl',
@@ -228,6 +239,7 @@ function assertHierarchyPage(data: unknown, parentId: string | null, folderCurso
   const folders = page.folders.map(raw => folder(raw, parentId));
   const files = assertInventoryPage({
     items: page.files, has_more: page.files_has_more, next_cursor: page.next_file_cursor,
+    max_selection: page.max_selection,
     inventory_semantics: 'owner_metadata_page_not_live_acl',
     request_id: page.request_id, correlation_id: page.correlation_id,
   }, parentId);
@@ -297,6 +309,7 @@ export function FileExplorerInventoryHost({
   consumer = 'file-explorer',
   hierarchy = consumer === 'file-explorer',
   onAttach,
+  existingAttachments = NO_ATTACHMENTS,
   renderAnalysis,
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
@@ -307,6 +320,7 @@ export function FileExplorerInventoryHost({
   /** Flat inventory remains explicit for existing non-hierarchy consumers. */
   hierarchy?: boolean;
   onAttach?: (references: { source_id: string; revision: string }[]) => void;
+  existingAttachments?: readonly DraftAttachment[];
   /** Optional layout slot; authorization and selection remain host-owned. */
   renderAnalysis?: (panel: ReactNode, props: FileExplorerInventoryProps) => ReactNode;
 }) {
@@ -398,7 +412,7 @@ export function FileExplorerInventoryHost({
     void apiClient.get<unknown>(endpoint)
       .then((data) => {
         if (cancelled || scopeRef.current !== scopeIdentity || generationRef.current !== generation) return;
-        const verified = hierarchy ? assertHierarchyPage(data, parentId, afterFolderId, cursor) : assertInventoryPage(data);
+        const verified = hierarchy ? assertHierarchyPage(data, parentId, afterFolderId, cursor) : assertInventoryPage(data, null, consumer === 'content-intelligence');
         if (verified.has_more && verified.next_cursor === cursor) throw new Error('Invalid file inventory response');
         setPage({ ...verified, principalKey, scopeIdentity, generation });
       })
@@ -447,8 +461,32 @@ export function FileExplorerInventoryHost({
     return () => { cancelled = true; };
   }, [managementEnabled, currentPage]);
 
+  const attachedIds = useMemo(() => new Set(existingAttachments.map(item => item.source_id)), [existingAttachments]);
+  const capacity = currentPage ? (mode === 'selection'
+    ? Math.max(0, Math.min(currentPage.maxSelection, MAX_DRAFT_ATTACHMENTS - attachedIds.size))
+    : currentPage.maxSelection) : 0;
+  const selectableItems = useMemo(() => currentPage?.items.filter(item =>
+    mode !== 'selection' || item.kind === 'folder' || !attachedIds.has(item.source_id)) ?? [],
+    [currentPage, mode, attachedIds]);
+  // Distinct identity on every committed capacity/reference transition; A-B-A
+  // cannot revive retained selection or attach callbacks.
+  const capacityKey = JSON.stringify([capacity, ...existingAttachments.map(item =>
+    JSON.stringify([item.source_id, item.revision])).sort()]);
+  const capacityIdentity = useMemo(() => ({ capacityKey }), [capacityKey]);
+  const capacityRef = useRef<object | null>(capacityIdentity);
+  const capacityChanged = capacityRef.current !== capacityIdentity;
+  useLayoutEffect(() => {
+    if (capacityRef.current !== capacityIdentity) setSelectedSourceIds([]);
+    capacityRef.current = capacityIdentity;
+    return () => { capacityRef.current = null; };
+  }, [capacityIdentity]);
+  const eligibleSelection = !capacityChanged && selectedSourceIds.length <= capacity
+    ? selectedSourceIds.filter(id => selectableItems.some(item => item.source_id === id && item.kind === 'file'))
+    : [];
+  const consumedAttachmentSelection = useRef<string[] | null>(null);
   const onSelect = useCallback((references: ExplorerSelection[]) => {
-    if (generationRef.current !== callbackGeneration || !currentPage ||
+    if (scopeRef.current !== scopeIdentity || capacityRef.current !== capacityIdentity ||
+        generationRef.current !== callbackGeneration || !currentPage ||
         currentPage.generation !== callbackGeneration) return;
     if (loading || currentError || mutationRef.current?.principalKey === principalKey) {
       setSelectedSourceIds([]);
@@ -457,11 +495,11 @@ export function FileExplorerInventoryHost({
     // A plugin UI event is untrusted presentation input, not authority.
     // Never accept a remembered ID with a forged/stale revision or hash.
     // Reject the entire event rather than partially accepting mixed evidence.
-    if (!Array.isArray(references) || references.length > 24) {
+    if (!Array.isArray(references) || references.length > capacity) {
       setSelectedSourceIds([]);
       return;
     }
-    const byId = new Map(currentPage.items.map((item) => [item.source_id, item]));
+    const byId = new Map(selectableItems.map((item) => [item.source_id, item]));
     const seen = new Set<string>();
     const accepted: string[] = [];
     for (const reference of references) {
@@ -481,7 +519,8 @@ export function FileExplorerInventoryHost({
       accepted.push(item.source_id);
     }
     setSelectedSourceIds(accepted);
-  }, [currentPage, loading, currentError, principalKey, callbackGeneration]);
+  }, [currentPage, loading, currentError, principalKey, callbackGeneration, scopeIdentity,
+      capacityIdentity, capacity, selectableItems]);
 
   const onSearch = useCallback((value: string) => {
     if (!principalKey || authLoading || scopeRef.current !== scopeIdentity ||
@@ -703,10 +742,11 @@ export function FileExplorerInventoryHost({
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
-    items: currentPage?.items || [],
+    maxSelection: capacity,
+    items: selectableItems,
     loading: Boolean(principalKey && !authLoading && (loading || (!currentPage && !currentError))),
     error: currentError,
-    selectedSourceIds: currentPage && !currentError ? selectedSourceIds : [],
+    selectedSourceIds: currentPage && !currentError ? eligibleSelection : [],
     onSelect,
     onRefresh,
     search: activeSearch,
@@ -727,13 +767,13 @@ export function FileExplorerInventoryHost({
   };
 
   const selectedAnalysisSources = mode === 'analysis' && currentPage && !currentError && !loading
-    ? selectedSourceIds.flatMap((id) => {
+    ? props.selectedSourceIds.flatMap((id) => {
       const item = currentPage.items.find((entry) => entry.source_id === id);
       return item?.kind === 'file' ? [{ source_id: item.source_id, revision: item.revision, name: item.name }] : [];
     })
     : [];
   const selectedDraftSources = mode === 'selection' && currentPage && !currentError && !loading
-    ? selectedSourceIds.flatMap(id => {
+    ? props.selectedSourceIds.flatMap(id => {
       const item = currentPage.items.find(entry => entry.source_id === id);
       return item?.kind === 'file' ? [{ source_id: item.source_id, revision: item.revision }] : [];
     })
@@ -745,6 +785,7 @@ export function FileExplorerInventoryHost({
     <ContentIntelligenceSelectionPanel
       key={selectionKey}
       sources={selectedAnalysisSources}
+      maxSelection={capacity}
       onRefreshInventory={onRefresh}
     />
   ) : null;
@@ -755,7 +796,11 @@ export function FileExplorerInventoryHost({
       {mode === 'selection' && onAttach && selectedDraftSources.length > 0 && (
         <button type="button" className="m-2 min-h-11 rounded-lg border border-input px-3 text-sm"
           onClick={() => {
-            if (!currentPage || currentPage.generation !== generationRef.current) return;
+            if (!currentPage || currentPage.generation !== generationRef.current ||
+                scopeRef.current !== scopeIdentity || capacityRef.current !== capacityIdentity ||
+                selectedDraftSources.length > capacity || consumedAttachmentSelection.current === selectedSourceIds) return;
+            consumedAttachmentSelection.current = selectedSourceIds;
+            setSelectedSourceIds([]);
             onAttach(selectedDraftSources);
           }}>
           Attach selected files ({selectedDraftSources.length})

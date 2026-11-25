@@ -34,6 +34,7 @@ from ai_karen_engine.services.error_response_schemas import (
     create_service_error_response,
     get_http_status_for_error_code,
 )
+from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
@@ -128,6 +129,9 @@ class FileExplorerInventoryEntry(BaseModel):
 
 class FileExplorerInventoryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # Analysis selection ceiling, not a content access grant.
+    max_selection: int = Field(default=MAX_CONTENT_SOURCE_REFERENCES, strict=True,
+                               ge=MAX_CONTENT_SOURCE_REFERENCES, le=MAX_CONTENT_SOURCE_REFERENCES)
     items: List[FileExplorerInventoryEntry]
     has_more: bool
     next_cursor: Optional[str] = None
@@ -215,6 +219,9 @@ class FileExplorerHierarchyFileResponse(BaseModel):
 
 class FileExplorerHierarchyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # Analysis selection ceiling, not a content access grant.
+    max_selection: int = Field(default=MAX_CONTENT_SOURCE_REFERENCES, strict=True,
+                               ge=MAX_CONTENT_SOURCE_REFERENCES, le=MAX_CONTENT_SOURCE_REFERENCES)
     available: bool
     folders: List[FileExplorerFolderResponse]
     breadcrumbs: List[FileExplorerFolderResponse]
@@ -238,7 +245,7 @@ class ContentSourceReference(BaseModel):
 class ContentOwnerSourcesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal["analyze", "search", "compare"]
-    references: List[ContentSourceReference] = Field(min_length=1, max_length=12)
+    references: List[ContentSourceReference] = Field(min_length=1, max_length=MAX_CONTENT_SOURCE_REFERENCES)
     query: Optional[str] = Field(default=None, min_length=1, max_length=512)
     left_id: Optional[UUID] = None
     right_id: Optional[UUID] = None

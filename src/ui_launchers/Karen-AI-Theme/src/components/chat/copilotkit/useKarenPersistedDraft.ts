@@ -8,11 +8,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiClient, ApiError } from "@/lib/api";
 
+export const MAX_DRAFT_ATTACHMENTS = 12;
 export type DraftAttachment = { source_id: string; revision: string };
 type DraftRecord = { text: string; revision: number; attachment_references: DraftAttachment[] };
 
 function validAttachments(value: unknown): value is DraftAttachment[] {
-  if (!Array.isArray(value) || value.length > 12) return false;
+  if (!Array.isArray(value) || value.length > MAX_DRAFT_ATTACHMENTS) return false;
   const seen = new Set<string>();
   return value.every((ref: unknown) => {
     if (!ref || typeof ref !== "object" || Array.isArray(ref)) return false;

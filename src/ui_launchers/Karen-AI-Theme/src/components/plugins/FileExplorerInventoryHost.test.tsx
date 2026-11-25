@@ -36,6 +36,7 @@ function response(id: string, hasMore = false, cursor: string | null = null) {
     }],
     has_more: hasMore,
     next_cursor: cursor,
+    max_selection: 12,
     inventory_semantics: 'owner_metadata_page_not_live_acl',
     request_id: 'request-1',
     correlation_id: 'corr-1',
@@ -935,5 +936,58 @@ describe('governed server filename search', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search authorized filenames' }), { target: { value: 'report' } });
     fireEvent.submit(screen.getByRole('form', { name: 'Search authorized filenames' }));
     expect(onSearch).toHaveBeenCalledWith('report');
+  });
+});
+
+
+describe('consumer-specific reference capacity', () => {
+  const draft = Array.from({length: 11}, (_, index) => ({
+    source_id: '77777777-7777-4777-8777-' + String(index).padStart(12, '0'), revision: SHA,
+  }));
+  it('enforces the backend analysis ceiling rather than the generic UI limit', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue({ ...page, max_selection: 1 });
+    render(<FileExplorerInventoryHost consumer="content-intelligence" mode="analysis">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    expect(latest.maxSelection).toBe(1);
+    await act(async () => latest.onSelect(latest.items));
+    expect(latest.selectedSourceIds).toEqual([]);
+  });
+  it('fails closed on missing Content Intelligence selection evidence', async () => {
+    mocks.get.mockResolvedValue({ ...response(FILE_A), max_selection: undefined });
+    render(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toContain('Invalid file inventory response'));
+    expect(screen.getByTestId('authorized').textContent).toBe('false');
+  });
+  it('excludes attached references, enforces remaining capacity and revokes stale callbacks', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const onAttach = vi.fn();
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue(page);
+    function Probe({ existing }: { existing: typeof draft }) {
+      return <FileExplorerInventoryHost hierarchy={false} mode="selection" existingAttachments={existing} onAttach={onAttach}>
+        {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+      </FileExplorerInventoryHost>;
+    }
+    const view = render(<Probe existing={draft} />);
+    await waitFor(() => expect(latest.maxSelection).toBe(1));
+    const stale = latest;
+    await act(async () => latest.onSelect(latest.items));
+    expect(latest.selectedSourceIds).toEqual([]);
+    await act(async () => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_A]);
+    view.rerender(<Probe existing={[...draft, {source_id: FILE_A, revision: SHA}]} />);
+    expect(latest.maxSelection).toBe(0);
+    expect(latest.items.map(item => item.source_id)).toEqual([FILE_B]);
+    expect(latest.selectedSourceIds).toEqual([]);
+    view.rerender(<Probe existing={draft} />);
+    await act(async () => stale.onSelect([stale.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(onAttach).not.toHaveBeenCalled();
   });
 });

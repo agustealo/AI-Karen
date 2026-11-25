@@ -203,9 +203,11 @@ function validateComparison(raw: unknown, left: AnalyzableSource, right: Analyza
 
 export function ContentIntelligenceSelectionPanel({
   sources,
+  maxSelection,
   onRefreshInventory,
 }: {
   sources: AnalyzableSource[];
+  maxSelection: number;
   onRefreshInventory?: () => void;
 }) {
   const [status, setStatus] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
@@ -227,7 +229,7 @@ export function ContentIntelligenceSelectionPanel({
 
   async function analyze(): Promise<void> {
     const searchQuery = query.trim();
-    if (status === 'pending' || sources.length < 1 || sources.length > 12 ||
+    if (status === 'pending' || sources.length < 1 || !Number.isSafeInteger(maxSelection) || maxSelection < 1 || sources.length > maxSelection ||
         (operation === 'search' && (!searchQuery || searchQuery.length > 512)) ||
         (operation === 'compare' && !canCompare)) {
       return;
@@ -329,7 +331,7 @@ export function ContentIntelligenceSelectionPanel({
       <button
         type="button"
         className="rounded border px-3 py-2 text-sm disabled:opacity-50"
-        disabled={status === 'pending' || sources.length < 1 || sources.length > 12 ||
+        disabled={status === 'pending' || sources.length < 1 || !Number.isSafeInteger(maxSelection) || maxSelection < 1 || sources.length > maxSelection ||
           (operation === 'search' && !query.trim()) || (operation === 'compare' && !canCompare)}
         onClick={() => { void analyze(); }}
       >
@@ -337,9 +339,9 @@ export function ContentIntelligenceSelectionPanel({
           : operation === 'search' ? (status === 'pending' ? 'Searching authorized files…' : 'Search selected files')
           : (status === 'pending' ? 'Analyzing authorized files…' : 'Analyze selected files')}
       </button>
-      {sources.length > 12 && (
+      {(!Number.isSafeInteger(maxSelection) || maxSelection < 1 || sources.length > maxSelection) && (
         <p role="status" className="text-xs text-muted-foreground">
-          Select at most 12 files for analysis.
+          {Number.isSafeInteger(maxSelection) && maxSelection > 0 ? `Select at most ${maxSelection} files for analysis.` : 'Selection capacity unavailable.'}
         </p>
       )}
       {status === 'pending' && <p role="status">Checking current access and analyzing…</p>}

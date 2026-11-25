@@ -24,7 +24,7 @@ import {
   KarenCopilotAssistantSlot,
   KarenCopilotUserSlot,
 } from "./KarenCopilotVerifiedHistory";
-import { useKarenPersistedDraft, type DraftAttachment } from "./useKarenPersistedDraft";
+import { useKarenPersistedDraft, MAX_DRAFT_ATTACHMENTS, type DraftAttachment } from "./useKarenPersistedDraft";
 import { FileText, X } from "lucide-react";
 
 const MAX_INPUT_CHARS = 65536;
@@ -135,8 +135,8 @@ export function KarenCopilotControlledChat({
       }
       next.push(reference);
     }
-    if (next.length > 12) {
-      setError("A draft can contain up to 12 file references. Remove a file before adding more.");
+    if (next.length > MAX_DRAFT_ATTACHMENTS) {
+      setError(`A draft can contain up to ${MAX_DRAFT_ATTACHMENTS} file references. Remove a file before adding more.`);
       return;
     }
     setError(null);
@@ -545,7 +545,7 @@ export function KarenCopilotControlledChat({
         {attachments.length > 0 && (
           <section aria-label="Draft attachments" className="space-y-2 px-3 pt-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-medium">{attachments.length} / 12 file references</p>
+              <p className="text-xs font-medium">{attachments.length} / {MAX_DRAFT_ATTACHMENTS} file references</p>
               <p role="status" className="text-xs text-muted-foreground">
                 {draftStatus === "ready" && draftSynced ? "References saved" : "References not confirmed saved"}
               </p>
@@ -576,6 +576,7 @@ export function KarenCopilotControlledChat({
           key={conversationId + ":" + fileExplorerPluginId}
           pluginId={fileExplorerPluginId}
           onAttach={attachFiles}
+          existingAttachments={attachments}
           disabled={attachmentEditsDisabled} />}
         {onOpenAgents && <KarenComposerAgentDiscovery onOpenAgents={onOpenAgents}
           disabled={draftStatus !== "ready" || !draftSynced || agent.isRunning || failedSubmission !== null} />}
