@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ai_karen_engine.auth.rbac_middleware import (
     FILE_EXPLORER_MUTATION_PERMISSIONS, Permission, get_rbac_manager,
@@ -138,6 +138,14 @@ class FileExplorerInventoryResponse(BaseModel):
     inventory_semantics: Literal["owner_metadata_page_not_live_acl"]
     request_id: str
     correlation_id: str
+
+
+class ContentInventoryResponse(FileExplorerInventoryResponse):
+    """Require explicit selection evidence from the authorized content service."""
+
+    max_selection: int = Field(
+        strict=True, ge=MAX_CONTENT_SOURCE_REFERENCES, le=MAX_CONTENT_SOURCE_REFERENCES
+    )
 
 
 class FileExplorerCapabilitiesResponse(BaseModel):
@@ -820,7 +828,7 @@ async def delete_file_explorer_folder(
         raise HTTPException(status_code=503, detail="Folder deletion not confirmed; refresh before retrying") from None
 
 
-@router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)
+@router.get("/content-intelligence/inventory", response_model=ContentInventoryResponse)
 async def list_content_inventory(
     request: Request,
     limit: int = Query(100, ge=1, le=200),
@@ -828,7 +836,7 @@ async def list_content_inventory(
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
     search: Annotated[Optional[str], Query(max_length=160)] = None,
-) -> FileExplorerInventoryResponse:
+) -> ContentInventoryResponse:
     """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
     user_id = str(current_user.get("user_id") or "").strip()
     tenant_id = str(current_user.get("tenant_id") or "").strip()
@@ -868,7 +876,11 @@ async def list_content_inventory(
             cursor=cursor,
             **({"search": search} if search is not None else {}),
         )
-        return FileExplorerInventoryResponse.model_validate(page)
+        try:
+            return ContentInventoryResponse.model_validate(page)
+        except ValidationError:
+            # Invalid service output is not a client query validation error.
+            raise RuntimeError("content_inventory_evidence_invalid") from None
     except PermissionError:
         raise HTTPException(status_code=403, detail="Content inventory access denied") from None
     except ValueError:

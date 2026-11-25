@@ -764,3 +764,42 @@ def test_inventory_selection_ceiling_matches_content_execution_contract():
     assert len(ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs).references) == MAX_CONTENT_SOURCE_REFERENCES
     with pytest.raises(ValidationError):
         ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs + refs[:1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", ["file-explorer", "content-intelligence"])
+@pytest.mark.parametrize("allowed", [True, False])
+async def test_inventory_route_forwards_search_only_after_rbac(monkeypatch, consumer, allowed):
+    from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
+
+    audit = []
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: allowed,
+        audit_access_attempt=lambda *args, **kwargs: audit.append(kwargs),
+    ))
+    page = dict(items=[], has_more=False, next_cursor=None,
+                inventory_semantics="owner_metadata_page_not_live_acl",
+                request_id="request-1", correlation_id="corr-1")
+    if consumer == "content-intelligence":
+        page["max_selection"] = MAX_CONTENT_SOURCE_REFERENCES
+    method = AsyncMock(return_value=page)
+    service = SimpleNamespace(list_file_explorer_owner_page=method, list_content_owner_page=method)
+    route = ingress.list_file_explorer_inventory if consumer == "file-explorer" else ingress.list_content_inventory
+    request = Request({"type": "http", "method": "GET", "path": f"/api/plugins/{consumer}/inventory", "headers": []})
+    kwargs = dict(request=request, limit=10, cursor="bound-cursor", search="report_%",
+                  current_user={"user_id": OWNER, "tenant_id": TENANT, "roles": ["user"], "permissions": ["data:read"]},
+                  plugin_service=service)
+    if allowed:
+        await route(**kwargs)
+        assert method.await_args.kwargs["search"] == "report_%"
+        assert method.await_args.kwargs["cursor"] == "bound-cursor"
+        assert method.await_args.kwargs["tenant_id"] == TENANT
+        assert method.await_args.kwargs["user_id"] == OWNER
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await route(**kwargs)
+        assert exc.value.status_code == 403
+        method.assert_not_awaited()
+    assert audit and audit[0]["granted"] is allowed
+    assert "search" not in audit[0]["additional_context"]
+    assert "cursor" not in audit[0]["additional_context"]

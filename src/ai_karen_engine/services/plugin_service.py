@@ -519,7 +519,10 @@ class PluginService:
             "user_id": user_id, "tenant_id": tenant_id,
             "item_count": len(page["items"]), "status": "success",
         })
-        return {**page, "request_id": request_id, "correlation_id": correlation_id}
+        return {
+            **page, "request_id": request_id, "correlation_id": correlation_id,
+            "max_selection": MAX_CONTENT_SOURCE_REFERENCES,
+        }
 
     async def analyze_content_owner_sources(
         self,
