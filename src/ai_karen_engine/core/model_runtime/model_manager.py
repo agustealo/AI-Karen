@@ -368,6 +368,8 @@ class ModelManager:
             if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_TRANSFORMERS:
                 if stream:
                     raise ProviderNotAvailable("governed_model_stream_unsupported")
+                if {"required_model", "before_generate"} & kwargs.keys():
+                    raise ProviderNotAvailable("governed_model_execution_options_unsupported")
                 await execution_admission.reserve_transport(endpoint, model=selection.model)
                 return await self._execute_admitted_native(
                     selection, execution_admission, prompt=prompt,
@@ -513,13 +515,33 @@ class ModelManager:
 
         start = time.perf_counter()
         try:
-            async with admission.admitted_execution_deadline():
+            async with admission.admitted_execution_deadline() as deadline:
+                loop = asyncio.get_running_loop()
                 provider = self.resolve_runtime(selection)
                 if not isinstance(provider, TransformersRuntime):
                     raise ProviderNotAvailable("model_execution_provenance_unsupported")
-                response, observed_model = await admission.run_admitted_blocking(
-                    provider.generate_text_with_model, prompt, **options,
-                )
+
+                def check_deadline() -> None:
+                    if loop.time() >= deadline:
+                        raise ProviderNotAvailable("governed_model_execution_deadline_exhausted")
+
+                def generate_selected() -> tuple[str, str]:
+                    target = selection.model
+                    if target in (None, "", "auto"):
+                        from ai_karen_engine.config.config_manager import get_default_model
+
+                        target = get_default_model("builtin_transformers")
+                    if not isinstance(target, str) or not target.strip() or target.strip().lower() == "auto":
+                        raise ProviderNotAvailable("native_authorized_model_unavailable")
+                    check_deadline()
+                    text, observed = provider.generate_text_with_model(
+                        prompt, required_model=target, before_generate=check_deadline, **options,
+                    )
+                    if not isinstance(observed, str) or os.path.realpath(target) != os.path.realpath(observed):
+                        raise ProviderNotAvailable("executed_model_registry_identity_drift")
+                    return text, observed
+
+                response, observed_model = await admission.run_admitted_blocking(generate_selected)
                 if (
                     not isinstance(observed_model, str)
                     or not observed_model.strip()

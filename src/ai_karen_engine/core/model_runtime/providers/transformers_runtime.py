@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 from ai_karen_engine.core.model_runtime.provider_contracts import (
     GenerationFailed,
@@ -62,8 +62,8 @@ class TransformersRuntime(LLMProviderBase):
 
         if not self._transformers_available:
             logger.info("Transformers not installed; runtime unavailable")
-        elif model_path:
-            threading.Thread(target=self.warm, args=(model_path,), daemon=True).start()
+        # Construction is registration/cache setup only. Explicit warm() or
+        # generation owns model loading; no detached constructor worker.
 
     def _resolve_model_name(self, model_path: Optional[str]) -> str:
         if not model_path or model_path == "auto":
@@ -71,7 +71,7 @@ class TransformersRuntime(LLMProviderBase):
         name = Path(model_path).name
         return name[:-5] if name.endswith(".gguf") else name
 
-    def warm(self, model_path: Optional[str] = None) -> bool:
+    def warm(self, model_path: Optional[str] = None, *, exact_only: bool = False) -> bool:
         if not self._transformers_available:
             return False
 
@@ -86,8 +86,12 @@ class TransformersRuntime(LLMProviderBase):
                 return False
 
         with self._lock:
-            if self._pipeline and (not model_path or target_path == self.model_path):
-                return True
+            if self._pipeline:
+                if exact_only:
+                    if self.model_path and os.path.realpath(target_path) == os.path.realpath(self.model_path):
+                        return True
+                elif not model_path or target_path == self.model_path:
+                    return True
 
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
@@ -111,7 +115,8 @@ class TransformersRuntime(LLMProviderBase):
                 if torch.cuda.is_available() and self.torch_dtype == "auto"
                 else "auto"
             )
-            offline_mode = os.getenv("TRANSFORMERS_OFFLINE", "false").lower() == "true"
+            # A governed generation request is not model-download authority.
+            offline_mode = exact_only or os.getenv("TRANSFORMERS_OFFLINE", "false").lower() == "true"
             candidate_paths: List[str] = []
 
             def _add_candidate(value: Optional[str]) -> None:
@@ -121,9 +126,10 @@ class TransformersRuntime(LLMProviderBase):
                         candidate_paths.append(normalized)
 
             _add_candidate(target_path)
-            _add_candidate(str(Path.cwd() / "models/transformers/gpt2"))
-            _add_candidate("models/transformers/gpt2")
-            _add_candidate("gpt2")
+            if not exact_only:
+                _add_candidate(str(Path.cwd() / "models/transformers/gpt2"))
+                _add_candidate("models/transformers/gpt2")
+                _add_candidate("gpt2")
 
             last_error: Optional[Exception] = None
             for candidate in candidate_paths:
@@ -181,11 +187,28 @@ class TransformersRuntime(LLMProviderBase):
             if not self._transformers_available:
                 raise ProviderNotAvailable("Transformers runtime is not available")
             raise ProviderNotAvailable("Transformers model is not warmed")
-        return self._pipeline.model, self._pipeline.tokenizer, self._generation_lock
+        with self._generation_lock:
+            active = self._pipeline
+            if active is None:
+                raise ProviderNotAvailable("Transformers model is not warmed")
+            return active.model, active.tokenizer, self._generation_lock
 
-    def generate_text_with_model(self, prompt: str, **kwargs: Any) -> tuple[str, str]:
-        """Observe text and the actual loaded model inside one generation lock."""
-        if not self._pipeline and self._transformers_available:
+    def generate_text_with_model(
+        self, prompt: str, *, required_model: str | None = None,
+        before_generate: Callable[[], None] | None = None, **kwargs: Any,
+    ) -> tuple[str, str]:
+        """Observe text and loaded identity in the same generation lock.
+
+        The governed caller supplies an explicit model and deadline checkpoint.
+        Loading that model never downloads or tries a different candidate.
+        Legacy callers without the host-selected identity keep their contract.
+        """
+        if required_model is not None:
+            if not required_model.strip() or required_model.strip().lower() == "auto":
+                raise ProviderNotAvailable("native_execution_model_unobserved")
+            if not self.warm(required_model, exact_only=True):
+                raise ProviderNotAvailable("native_authorized_model_unavailable")
+        elif not self._pipeline and self._transformers_available:
             self.warm(self.model_path)
 
         if self._pipeline:
@@ -197,6 +220,12 @@ class TransformersRuntime(LLMProviderBase):
                     active_model = str(self.model_path or "").strip()
                     if active_pipeline is None or not active_model or active_model == "auto":
                         raise ProviderNotAvailable("native_execution_model_unobserved")
+                    if required_model is not None and (
+                        os.path.realpath(required_model) != os.path.realpath(active_model)
+                    ):
+                        raise ProviderNotAvailable("native_authorized_model_identity_drift")
+                    if before_generate is not None:
+                        before_generate()
                     result = active_pipeline(
                         prompt,
                         max_new_tokens=max_new_tokens,

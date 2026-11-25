@@ -1161,7 +1161,12 @@ def _owned_worker_fixture(monkeypatch, native, worker):
             runtime_engine=endpoint.runtime_engine.value, base_url=endpoint.base_url,
         )
         provider = object.__new__(TransformersRuntime)
-        monkeypatch.setattr(provider, "generate_text_with_model", worker, raising=False)
+        def selected_worker(prompt, *, required_model, before_generate, **kwargs):
+            assert required_model == endpoint.default_model
+            before_generate()
+            return worker(prompt, **kwargs)
+
+        monkeypatch.setattr(provider, "generate_text_with_model", selected_worker, raising=False)
         monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
         monkeypatch.setattr(manager, "_resolve_endpoint", lambda _: endpoint)
         monkeypatch.setattr(manager, "resolve_runtime", lambda _: provider)

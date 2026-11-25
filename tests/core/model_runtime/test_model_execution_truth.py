@@ -721,3 +721,81 @@ def test_credential_env_endpoints_are_rebuilt_instead_of_reusing_bearers() -> No
     assert manager.resolve_runtime(selection) is not manager.resolve_runtime(selection)
     assert len(instances) == 2
     assert manager._runtime_cache == {}
+
+
+def test_transformers_constructor_does_not_spawn_warmup(monkeypatch):
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("construction must not launch model loading")
+
+    monkeypatch.setattr(module.TransformersRuntime, "warm", forbidden)
+    monkeypatch.setattr(module.threading, "Thread", forbidden)
+    runtime = module.TransformersRuntime(model_path="selected-local-model")
+    assert runtime._pipeline is None
+    assert runtime.model_path == "selected-local-model"
+
+
+def test_governed_warm_never_downloads_or_tries_unselected_model(monkeypatch, tmp_path):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    selected = str(tmp_path / "selected")
+    calls = []
+
+    def unavailable(path, **kwargs):
+        calls.append((path, kwargs))
+        raise OSError("local model unavailable")
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "false")
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+    ))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=unavailable),
+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=unavailable),
+        pipeline=lambda *a, **kw: pytest.fail("unavailable model must not create a pipeline"),
+    ))
+    runtime = module.TransformersRuntime(model_path=selected)
+    with pytest.raises(ProviderNotAvailable, match="native_authorized_model_unavailable"):
+        runtime.generate_text_with_model("private input", required_model=selected)
+    assert calls == [(selected, {"local_files_only": True})]
+    assert runtime._pipeline is None
+
+
+@pytest.mark.parametrize("load_succeeds", [False, True])
+def test_governed_generation_never_invokes_stale_pipeline(monkeypatch, load_succeeds):
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    runtime = module.TransformersRuntime(model_path="old-model")
+    runtime._pipeline = lambda *args, **kwargs: pytest.fail("wrong model must not see prompt")
+    calls = []
+
+    def warm(model_path, *, exact_only):
+        calls.append((model_path, exact_only))
+        return load_succeeds
+
+    monkeypatch.setattr(runtime, "warm", warm)
+    with pytest.raises(ProviderNotAvailable, match="native_authorized_model_"):
+        runtime.generate_text_with_model("private input", required_model="selected-model")
+    assert calls == [("selected-model", True)]
+
+
+def test_governed_generation_checks_deadline_after_loading_and_lock(monkeypatch):
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    runtime = module.TransformersRuntime(model_path="selected-model")
+    runtime._pipeline = lambda *args, **kwargs: pytest.fail("expired request must not generate")
+
+    def expired():
+        raise ProviderNotAvailable("governed_model_execution_deadline_exhausted")
+
+    with pytest.raises(ProviderNotAvailable, match="execution_deadline_exhausted"):
+        runtime.generate_text_with_model(
+            "private input", required_model="selected-model", before_generate=expired,
+        )
