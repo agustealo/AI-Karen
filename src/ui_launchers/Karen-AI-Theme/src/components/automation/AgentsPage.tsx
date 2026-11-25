@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  ArrowUpRight,
   Bot,
+  CheckCircle2,
+  Users,
   CircleStop,
   RefreshCw,
   ShieldCheck,
@@ -471,16 +474,16 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   }
 
   return (
-    <div className="space-y-6" data-testid="agent-runtime-page">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="mx-auto w-full max-w-7xl min-w-0 space-y-6 pb-6" data-testid="agent-runtime-page">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <Bot className="mt-1 h-8 w-8 text-primary" />
           <div>
             <h2 className="text-2xl font-semibold tracking-tight">
-              Agent Runtime
+              Mission Control
             </h2>
             <p className="karen-page-description mt-1">
-              Delegate work to Karen, monitor verified execution progress, and inspect outcomes. Agent diagnostics are available below.
+              {isAdmin ? "Inspect authorized tenant execution activity and operational evidence." : "Delegate objectives, review execution evidence, and stay in control of your work."}
             </p>
           </div>
         </div>
@@ -498,17 +501,53 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
           />
           Refresh runtime
         </Button>
-      </div>
+      </header>
+
+      {!isAdmin && (
+        <section aria-label="Start a mission" className="relative overflow-hidden rounded-2xl border border-primary/20 bg-card p-5 sm:p-7">
+          <div className="relative flex flex-col items-start gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-widest text-primary">Your AI workspace</p>
+              <h3 className="text-xl font-semibold tracking-tight sm:text-2xl">What are we accomplishing today?</h3>
+              <p className="max-w-xl text-sm text-muted-foreground">Describe your objective in Karen Chat. Authorized executions will appear here when the runtime records them.</p>
+            </div>
+            <Button type="button" size="lg" className="w-full shrink-0 sm:w-auto" onClick={onAskKaren} disabled={!isAuthenticated || !onAskKaren}>
+              Ask Karen <ArrowUpRight aria-hidden="true" className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {isAuthenticated && (
+        <section aria-label="Workspace overview" className="space-y-2">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-sm font-semibold">Workspace overview</h3>
+            <p className="text-xs text-muted-foreground">{isAdmin ? "Tenant executions · your approvals" : "Your visible executions and approvals"}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {[
+              { label: "Active executions", icon: Activity, value: runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : activeRuns.length, hint: isLoadingRuns && runsGeneratedAt ? "Refreshing snapshot" : "Visible run history" },
+              { label: "Completed executions", icon: CheckCircle2, value: runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : runs.filter((run) => ["completed", "succeeded"].includes(run.status.toLowerCase())).length, hint: isLoadingRuns && runsGeneratedAt ? "Refreshing snapshot" : "Visible run history" },
+              { label: "Approval requests", icon: ShieldCheck, value: approvalsError ? "Unavailable" : isLoadingApprovals ? "Loading" : approvals.length, hint: "Your approval inbox" },
+              { label: "Registered specialists", icon: Users, value: catalogError ? "Unavailable" : isLoadingCatalog ? "Loading" : catalog?.total ?? "Unavailable", hint: "Eligibility decided per request" },
+            ].map(({ label, icon: Icon, value, hint }) => (
+              <Card key={label} className="min-w-0">
+                <CardHeader className="space-y-2 p-3 sm:p-4">
+                  <Icon aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
+                  <CardDescription className="text-xs">{label}</CardDescription>
+                  <CardTitle className="break-words text-base tabular-nums sm:text-2xl">{value}</CardTitle>
+                  <p className="text-xs text-muted-foreground">{hint}</p>
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section aria-label="Your AI work" className="space-y-4" data-testid="agent-workspace">
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
-          <div>
-            <h3 className="text-lg font-semibold">{isAdmin ? "Tenant execution workspace" : "Your AI workspace"}</h3>
-            <p className="text-sm text-muted-foreground">Ask Karen to work on a goal, then return to review real progress and results.</p>
-          </div>
-          <Button type="button" onClick={onAskKaren} disabled={!onAskKaren}>
-            <Bot className="mr-2 h-4 w-4" /> Ask Karen
-          </Button>
+        <div>
+          <h3 className="text-lg font-semibold">{isAdmin ? "Tenant execution workspace" : "Mission history"}</h3>
+          <p className="text-sm text-muted-foreground">Inspect recorded executions and their verified status.</p>
         </div>
         {isAuthenticated ? (
           <>
@@ -649,7 +688,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       {actionMessage && (
         <Alert>
           <Activity className="h-4 w-4" />
-          <AlertTitle>Runtime action accepted</AlertTitle>
+          <AlertTitle>Runtime action response</AlertTitle>
           <AlertDescription>{actionMessage}</AlertDescription>
         </Alert>
       )}
