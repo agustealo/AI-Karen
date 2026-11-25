@@ -162,7 +162,8 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
 
 @pytest.mark.parametrize("winner", ["revocation", "persistence"])
 @pytest.mark.parametrize("target", ["transcript", "memory", "memory_replay"])
-async def test_private_session_fence_serializes_revocation(winner, target, monkeypatch):
+@pytest.mark.parametrize("invalidation", ["revocation", "rotation", "password"])
+async def test_private_session_fence_serializes_revocation(winner, target, invalidation, monkeypatch):
     """Exercise real auth row locks against both canonical mutation owners."""
     from contextlib import asynccontextmanager
     from ai_karen_engine.core.memory.protocols import VaultContext
@@ -185,10 +186,12 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
 
     engine = create_async_engine(os.environ["AUTH_TEST_DATABASE_URL"], pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    tables = [Tenant.__table__, AuthUser.__table__, AuthSession.__table__]
+    tables = [Tenant.__table__, AuthUser.__table__, AuthSession.__table__,
+              AuthRefreshTokenHistory.__table__]
     service = AuthService(_auth_config())
     service._initialized = True
     tenant, user, session, conversation = [uuid.uuid4() for _ in range(4)]
+    refresh = str(uuid.uuid4())
     access = jwt.encode(
         {"sub": str(user), "tenant_id": str(tenant), "aud": "ai-karen-users",
          "iss": "ai-karen", "exp": int(__import__("time").time()) + 3600},
@@ -220,11 +223,11 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
             db.add(Tenant(id=tenant, name=str(tenant), slug=str(tenant),
                           subscription_tier="basic", settings={}, is_active=True))
             db.add(AuthUser(user_id=user, tenant_id=tenant, email=f"{user}@example.test",
-                            username=str(user), password_hash="test-only", roles=["admin"],
+                            username=str(user), password_hash=service._hash_password("Original1!"), roles=["admin"],
                             preferences={}, is_active=True, is_verified=True))
             await db.flush()
             db.add(AuthSession(session_token=session, user_id=user, access_token=access,
-                               refresh_token=str(uuid.uuid4()), expires_in=3600, is_active=True))
+                               refresh_token=refresh, expires_in=3600, is_active=True))
             await db.execute(text("""
                 INSERT INTO conversations (conversation_id, tenant_id, user_id)
                 VALUES (:cid, :tid, :uid)
@@ -278,15 +281,48 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
         monkeypatch.setattr(service, "revalidate_issued_session_in_transaction", paused_fence)
 
         async def revoke():
-            async with factory.begin() as db:
-                row = (await db.execute(select(AuthSession).where(
-                    AuthSession.session_token == session
-                ).with_for_update())).scalar_one()
-                row.is_active = False
-                await db.flush()
-                if winner == "revocation":
-                    locked.set()
-                    await release.wait()
+            if invalidation == "revocation":
+                async with factory.begin() as db:
+                    row = (await db.execute(select(AuthSession).where(
+                        AuthSession.session_token == session
+                    ).with_for_update())).scalar_one()
+                    row.is_active = False
+                    await db.flush()
+                    if winner == "revocation":
+                        locked.set()
+                        await release.wait()
+                return
+
+            # Pause the actual credential mutation owner at its commit boundary,
+            # after flush and row-lock acquisition. No simulated token rotation
+            # or password update is used for these cases.
+            from ai_karen_engine.services.auth.auth_service import _db_session_ctx
+            mutation_service = AuthService(_auth_config())
+            mutation_service._initialized = True
+            async with factory() as db:
+                original_commit = db.commit
+
+                async def paused_commit():
+                    if winner == "revocation":
+                        locked.set()
+                        await release.wait()
+                    await original_commit()
+
+                monkeypatch.setattr(db, "commit", paused_commit)
+                binding = _db_session_ctx.set(db)
+                try:
+                    if invalidation == "rotation":
+                        new_access, new_refresh, error = await mutation_service.refresh_access_token(refresh)
+                        assert error is None
+                        assert new_access and new_access != access
+                        assert new_refresh and new_refresh != refresh
+                    else:
+                        error = await mutation_service.change_user_password(
+                            str(user), "Original1!", "Replacement2!",
+                        )
+                        assert error is None
+                finally:
+                    _db_session_ctx.reset(binding)
 
         @asynccontextmanager
         async def vault_session():
@@ -353,9 +389,24 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
                 count = (await db.execute(text(
                     "SELECT count(*) FROM messages WHERE conversation_id = :cid"
                 ), {"cid": conversation})).scalar_one()
-                active = (await db.execute(select(AuthSession.is_active).where(
+                durable_session = (await db.execute(select(AuthSession).where(
                     AuthSession.session_token == session
                 ))).scalar_one()
+                active = durable_session.is_active
+                if invalidation == "rotation":
+                    assert durable_session.access_token != access
+                    assert durable_session.refresh_token != refresh
+                    history = (await db.execute(select(AuthRefreshTokenHistory).where(
+                        AuthRefreshTokenHistory.session_id == session
+                    ))).scalar_one()
+                    assert history.token_hash == hashlib.sha256(refresh.encode()).hexdigest()
+                elif invalidation == "password":
+                    assert durable_session.invalidation_reason == "password_changed"
+                    account_row = (await db.execute(select(AuthUser).where(
+                        AuthUser.user_id == user
+                    ))).scalar_one()
+                    assert service._verify_password("Replacement2!", account_row.password_hash)
+                    assert not service._verify_password("Original1!", account_row.password_hash)
                 if target in {"memory", "memory_replay"}:
                     from sqlalchemy import func
                     for model in (MemoryEvent, MemoryAssertion):
@@ -366,7 +417,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
                         )).scalar_one()
                         assert durable_count == (1 if winner == "persistence" or target == "memory_replay" else 0)
             assert count == (2 if winner == "persistence" and target == "transcript" else 0)
-            assert active is False
+            assert active is (invalidation == "rotation")
             if target in {"memory", "memory_replay"}:
                 # A previously successful receipt cannot bypass revoked authority.
                 with pytest.raises(NeuroVaultAuthorizationError, match="attachment_session_denied"):
@@ -386,6 +437,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, monke
             if target in {"memory", "memory_replay"}:
                 await db.execute(delete(MemoryAssertion).where(MemoryAssertion.tenant_id == tenant))
                 await db.execute(delete(MemoryEvent).where(MemoryEvent.tenant_id == tenant))
+            await db.execute(delete(AuthRefreshTokenHistory).where(AuthRefreshTokenHistory.session_id == session))
             await db.execute(delete(AuthSession).where(AuthSession.session_token == session))
             await db.execute(delete(AuthUser).where(AuthUser.user_id == user))
             await db.execute(delete(Tenant).where(Tenant.id == tenant))
