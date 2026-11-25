@@ -283,6 +283,7 @@ async def rollback_async_transaction(session: AsyncSession) -> None:
 async def async_transaction_scope(
     tenant_id: Optional[str] = None,
     *, user_id: Optional[str] = None,
+    read_only_snapshot: bool = False,
 ) -> AsyncGenerator[AsyncSession, None]:
     """Provide tenant and authenticated-principal scoped async transaction.
 
@@ -295,6 +296,14 @@ async def async_transaction_scope(
     close_in_caller = True
     try:
         try:
+            if read_only_snapshot:
+                if tenant_id is None or user_id is None:
+                    raise ValueError("authenticated_snapshot_identity_required")
+                # Must precede the first scope-setting SELECT, which can
+                # establish the PostgreSQL MVCC snapshot.
+                await session.execute(text(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                ))
             if user_id is not None:
                 await apply_authenticated_transaction_context(
                     session, tenant_id=tenant_id, user_id=user_id,

@@ -14,11 +14,13 @@ from datetime import datetime
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease, SqlChatRunRepository
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.persistence.postgres import get_postgres_engine
+from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.services.database.repositories import (
     Conversation,
     ConversationQuery,
@@ -314,16 +316,19 @@ class ConversationRuntimeGateway:
         *,
         message_limit: int = 100,
         message_offset: int = 0,
+        db_session: Optional[AsyncSession] = None,
     ) -> ConversationSnapshot:
         """Read one owner-validated canonical message page, never an SDK store."""
         if message_offset < 0:
             raise ValueError("invalid_message_offset")
-        conversation = await self.require_owned_conversation(context)
+        session_kwargs = {"db_session": db_session} if db_session is not None else {}
+        conversation = await self.require_owned_conversation(context, **session_kwargs)
         messages_result = await self._repository.get_messages(
             str(conversation.id),
             context.tenant_id,
             limit=max(0, int(message_limit)),
             offset=int(message_offset),
+            **session_kwargs,
         )
         if not messages_result.success:
             raise RuntimeError(
@@ -339,6 +344,7 @@ class ConversationRuntimeGateway:
         context: ChatExecutionContext,
         *,
         message_limit: int = 501,
+        db_session: Optional[AsyncSession] = None,
     ) -> ConversationSnapshot:
         """Return the newest bounded canonical messages in chronological order.
 
@@ -349,13 +355,15 @@ class ConversationRuntimeGateway:
         """
         if not 1 <= message_limit <= 501:
             raise ValueError("invalid_recent_message_limit")
-        conversation = await self.require_owned_conversation(context)
+        session_kwargs = {"db_session": db_session} if db_session is not None else {}
+        conversation = await self.require_owned_conversation(context, **session_kwargs)
         result = await self._repository.get_messages(
             str(conversation.id),
             context.tenant_id,
             limit=message_limit,
             offset=0,
             newest_first=True,
+            **session_kwargs,
         )
         if not result.success:
             raise RuntimeError(_safe_repository_reason(result.error, "conversation_history_read_failed"))
@@ -496,13 +504,16 @@ class ConversationRuntimeGateway:
     async def require_owned_conversation(
         self,
         context: ChatExecutionContext,
+        *, db_session: Optional[AsyncSession] = None,
     ) -> Conversation:
         """Return one canonical conversation only when tenant/user ownership matches."""
         self._require_conversation_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
+        session_kwargs = {"db_session": db_session} if db_session is not None else {}
         existing = await self._repository.get_conversation(
             conversation_id,
             context.tenant_id,
+            **session_kwargs,
         )
         if not existing.success:
             raise RuntimeError(_safe_repository_reason(existing.error, "conversation_lookup_failed"))
@@ -1205,6 +1216,64 @@ class ConversationRuntimeGateway:
             raise ValueError(
                 "transcript_message_identity_incomplete:request_id"
             )
+
+
+@dataclass(frozen=True)
+class OwnedHistoryEvidence:
+    snapshot: ConversationSnapshot
+    recovery_run: Optional[dict[str, Any]]
+    attestations: dict[str, tuple[str, str]]
+    observed_activity: dict[str, tuple[str, str, str, list[dict[str, Any]]]]
+    window_has_older: bool
+
+
+async def read_owned_history_evidence(
+    context: ChatExecutionContext,
+    *,
+    gateway: ConversationRuntimeGateway,
+    ledger: SqlChatRunRepository,
+    text_mode: bool,
+    include_activity: bool,
+) -> OwnedHistoryEvidence:
+    """Read one coherent owned history/ledger snapshot, never an execution grant."""
+    context.require_authenticated_user()
+    scope = {
+        "tenant_id": context.tenant_id,
+        "user_id": context.user_id,
+        "conversation_id": context.require_conversation_id(),
+    }
+    async with async_transaction_scope(
+        context.tenant_id, user_id=context.user_id, read_only_snapshot=True,
+    ) as session:
+        if text_mode:
+            recent = await gateway.get_owned_recent_snapshot(
+                context, message_limit=501, db_session=session,
+            )
+            window_has_older = len(recent.messages) > 500
+            snapshot = ConversationSnapshot(
+                conversation=recent.conversation, messages=recent.messages[-500:],
+            )
+        else:
+            snapshot = await gateway.get_owned_snapshot(
+                context, message_limit=501, db_session=session,
+            )
+            window_has_older = False
+        recovery_run = await ledger.read_recovery_run(**scope, db_session=session)
+        attestations = await ledger.completed_replay_attestations(**scope, db_session=session)
+        observed_activity = (
+            await ledger.completed_agent_activity(**scope, db_session=session)
+            if include_activity else {}
+        )
+    if window_has_older:
+        eligible = {str(m.id) for m in snapshot.messages if str(m.role) == "assistant"}
+        observed_activity = {
+            identifier: activity for identifier, activity in observed_activity.items()
+            if identifier in eligible
+        }
+    return OwnedHistoryEvidence(
+        snapshot=snapshot, recovery_run=recovery_run, attestations=attestations,
+        observed_activity=observed_activity, window_has_older=window_has_older,
+    )
 
 
 _gateway: Optional[ConversationRuntimeGateway] = None

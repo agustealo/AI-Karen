@@ -10,6 +10,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -743,6 +744,7 @@ class SqlChatRunRepository:
 
     async def completed_agent_activity(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
+        db_session: Optional[AsyncSession] = None,
     ) -> dict[str, tuple[str, str, str, list[dict[str, Any]]]]:
         """Owner-scoped, finalized journal steps correlated to saved messages.
 
@@ -753,7 +755,10 @@ class SqlChatRunRepository:
             "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
             "conversation": _uuid(conversation_id),
         }
-        async with async_transaction_scope(scope["tenant"], user_id=scope["owner"]) as session:
+        async with (
+            nullcontext(db_session) if db_session is not None else
+            async_transaction_scope(scope["tenant"], user_id=scope["owner"])
+        ) as session:
             result = await session.execute(text("""
                 SELECT r.assistant_message_id::text AS message_id,
                        r.request_id, r.assistant_message_digest,
@@ -842,6 +847,7 @@ class SqlChatRunRepository:
 
     async def completed_replay_attestations(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
+        db_session: Optional[AsyncSession] = None,
     ) -> dict[str, tuple[str, str]]:
         """Read message ID to (request ID, saved digest) under owner RLS.
 
@@ -854,8 +860,9 @@ class SqlChatRunRepository:
             "owner": _uuid(user_id),
             "conversation": _uuid(conversation_id),
         }
-        async with async_transaction_scope(
-            scope["tenant"], user_id=scope["owner"],
+        async with (
+            nullcontext(db_session) if db_session is not None else
+            async_transaction_scope(scope["tenant"], user_id=scope["owner"])
         ) as session:
             result = await session.execute(
                 text("""
@@ -1078,6 +1085,7 @@ class SqlChatRunRepository:
 
     async def read_recovery_run(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
+        db_session: Optional[AsyncSession] = None,
     ) -> Optional[dict[str, Any]]:
         """Observe the active run or newest unresolved terminal without executing.
 
@@ -1089,8 +1097,9 @@ class SqlChatRunRepository:
             "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
             "conversation": _uuid(conversation_id),
         }
-        async with async_transaction_scope(
-            scope["tenant"], user_id=scope["owner"],
+        async with (
+            nullcontext(db_session) if db_session is not None else
+            async_transaction_scope(scope["tenant"], user_id=scope["owner"])
         ) as session:
             result = await session.execute(text("""
                 SELECT transport_run_id, submission_id, status,

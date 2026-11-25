@@ -1270,3 +1270,8 @@ completion, content-size or presentation validation to silence the UI.
 
 - Governed draft preparation rejects stale callback text when the actual composer is empty; only legacy pre-clear behavior may reconstruct an optimistic SDK clear. Explicit canonical finality uncertainty remains visible and blocks submission even when an exact stop is pending or SDK finalization precedes failure. Clear observed transport identity on subscription cleanup.
 - Regression candidates cover stale callbacks, stop/finality ordering, and independent PostgreSQL repository edits after admission: completion must preserve the newer saved revision and reject the original submission under a different transport ID. Fresh exact-head CI required; no live browser, wire-level acknowledgment-loss, deployment, or review claim.
+
+## KCON-770 / KUI-004B4.48C7S: Coherent governed history snapshot (2026-11-25, SOURCE_CANDIDATE)
+
+- The canonical conversation runtime gateway coordinates owner verification, bounded transcript, recovery ledger, replay digests and optional observed activity within one authenticated PostgreSQL REPEATABLE READ READ ONLY transaction. Existing repository read methods borrow the explicitly supplied session without committing or closing it; legacy independent reads retain their existing contracts. No process-local cache, duplicate store or schema change.
+- Regression candidates verify one explicit session across the route and concurrent database recovery reads. A consistent snapshot is not an execution grant; independent admission, orphan resolution, exact-run recovery binding, migration/real browser acceptance and independent review remain required. Fresh exact-head CI required.

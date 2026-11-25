@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -182,10 +183,13 @@ class PostgresConversationRepository(ConversationRepository):
         operation="get_conversation", repository="PostgresConversationRepository"
     )
     async def get_conversation(
-        self, conversation_id: str, tenant_id: str
+        self, conversation_id: str, tenant_id: str,
+        *, db_session: Optional[AsyncSession] = None,
     ) -> RepositoryResult[Optional[Conversation]]:
         try:
-            async with await self._session() as session:
+            async with (
+                nullcontext(db_session) if db_session is not None else await self._session()
+            ) as session:
                 result = await session.execute(
                     text(
                         f"""
@@ -1316,6 +1320,7 @@ class PostgresConversationRepository(ConversationRepository):
         offset: int = 0,
         *,
         newest_first: bool = False,
+        db_session: Optional[AsyncSession] = None,
     ) -> RepositoryResult[List[Message]]:
         start = time.perf_counter()
         # Static, controlled SQL ordering only. Never interpolate request
@@ -1331,7 +1336,9 @@ class PostgresConversationRepository(ConversationRepository):
             "m.message_id ASC"
         )
         try:
-            async with await self._session() as session:
+            async with (
+                nullcontext(db_session) if db_session is not None else await self._session()
+            ) as session:
                 result = await session.execute(
                     text(
                         f"""

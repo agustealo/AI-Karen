@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
     from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
@@ -124,7 +125,10 @@ class ConversationRepository(Repository):
         """Create a conversation. Returns the assigned id."""
 
     @abstractmethod
-    async def get_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[Optional[Conversation]]:
+    async def get_conversation(
+        self, conversation_id: str, tenant_id: str,
+        *, db_session: Optional[AsyncSession] = None,
+    ) -> RepositoryResult[Optional[Conversation]]:
         """Retrieve a conversation by id."""
 
     @abstractmethod
@@ -228,7 +232,7 @@ class ConversationRepository(Repository):
     @abstractmethod
     async def get_messages(
         self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0,
-        *, newest_first: bool = False,
+        *, newest_first: bool = False, db_session: Optional[AsyncSession] = None,
     ) -> RepositoryResult[List[Message]]:
         """Read canonical messages in a bounded deterministic order.
 

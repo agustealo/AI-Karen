@@ -1347,79 +1347,36 @@ async def get_ag_ui_owned_history(
         request_id=correlation_id, correlation_id=correlation_id,
     )
     from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
-        ConversationSnapshot, get_conversation_runtime_gateway,
+        get_conversation_runtime_gateway, read_owned_history_evidence,
     )
     text_mode = view == "text_continuation"
-    window_has_older = False
     try:
-        gateway = get_conversation_runtime_gateway()
-        if text_mode:
-            # A sentinel preceding the latest 500 messages proves older
-            # saved text exists without creating a partial full-rich replay.
-            recent = await gateway.get_owned_recent_snapshot(
-                context, message_limit=501,
-            )
-            window_has_older = len(recent.messages) > 500
-            snapshot = ConversationSnapshot(
-                conversation=recent.conversation,
-                messages=recent.messages[-500:],
-            )
-        else:
-            snapshot = await gateway.get_owned_snapshot(
-                context, message_limit=501,
-            )
+        evidence = await read_owned_history_evidence(
+            context,
+            gateway=get_conversation_runtime_gateway(),
+            ledger=SqlChatRunRepository(),
+            text_mode=text_mode,
+            include_activity=getattr(features, "enable_ag_ui_event_journal", False),
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
-    except RuntimeError as exc:
-        if str(exc) == "conversation_not_found":
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and str(exc) == "conversation_not_found":
             raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
         logger.error("Governed history read failed", extra={
             "correlation_id": correlation_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="History temporarily unavailable") from exc
     try:
-        repository = SqlChatRunRepository()
-        # Read only after the canonical gateway verified conversation ownership.
-        # This observation is not an execution grant or a transcript receipt.
-        recovery_run = await repository.read_recovery_run(
-            tenant_id=context.tenant_id,
-            user_id=context.user_id,
-            conversation_id=thread,
-        )
-        attestations = await repository.completed_replay_attestations(
-            tenant_id=context.tenant_id,
-            user_id=context.user_id,
-            conversation_id=thread,
-        )
-        observed_activity = (
-            await repository.completed_agent_activity(
-                tenant_id=context.tenant_id,
-                user_id=context.user_id,
-                conversation_id=thread,
-            )
-            if getattr(features, "enable_ag_ui_event_journal", False)
-            else {}
-        )
-        # Observed events from older saved entries are neither replayed nor
-        # promoted into authority by a bounded recent-message window.
-        if window_has_older:
-            eligible = {
-                str(message.id) for message in snapshot.messages
-                if str(message.role) == "assistant"
-            }
-            observed_activity = {
-                identifier: activity for identifier, activity in observed_activity.items()
-                if identifier in eligible
-            }
         history = project_owned_history(
-            snapshot, attestations=attestations,
-            observed_activity=observed_activity,
+            evidence.snapshot, attestations=evidence.attestations,
+            observed_activity=evidence.observed_activity,
             text_continuation=text_mode,
         )
-        history["recovery_run"] = recovery_run
+        history["recovery_run"] = evidence.recovery_run
         if text_mode:
             history.update({
-                "history_window_has_older": window_has_older,
+                "history_window_has_older": evidence.window_has_older,
                 "history_window_message_limit": 500,
             })
     except UnreplayableHistory as exc:

@@ -650,6 +650,44 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             draft_thread, tenant_a, user_id=user_a,
         )).data == {"text": "", "revision": 4}
 
+        # A repeatable-read recovery snapshot cannot mix an older ledger
+        # state with a newer completion committed by another connection.
+        snapshot_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="snapshot-race",
+            request_id="snapshot-race", correlation_id="snapshot-race",
+            submission_id="snapshot-original",
+        )
+        assert snapshot_lease is not None
+        async with factory() as read_session:
+            async with read_session.begin():
+                await read_session.execute(text(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                ))
+                await read_session.execute(text(
+                    "SELECT set_config('app.current_tenant_id', :tenant, true)"
+                ), {"tenant": tenant_a})
+                await read_session.execute(text(
+                    "SELECT set_config('app.current_user_id', :owner, true)"
+                ), {"owner": user_a})
+                first_recovery = await worker_a.read_recovery_run(
+                    **draft_identity, db_session=read_session,
+                )
+                assert first_recovery == {
+                    "runId": "snapshot-race", "submissionId": "snapshot-original",
+                    "status": "running",
+                }
+                assert await worker_b.finish(
+                    snapshot_lease, status="failed", error_code="CHAT_TEST_TERMINAL",
+                )
+                assert await worker_b.read_recovery_run(**draft_identity) is None
+                assert await worker_a.read_recovery_run(
+                    **draft_identity, db_session=read_session,
+                ) == first_recovery
+                assert await worker_a.completed_replay_attestations(
+                    **draft_identity, db_session=read_session,
+                )
+        assert await worker_a.read_recovery_run(**draft_identity) is None
+
         # Actual PostgreSQL RLS must hold for a least-privilege login;
         # superuser-only repository queries do not prove policy isolation.
         await raw.execute(
