@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
 import { ContentIntelligenceSelectionPanel } from './ContentIntelligenceSelectionPanel';
+import type { ExplorerCapability, ExplorerManagement, ExplorerMutation, ExplorerOperation } from '@/plugin_repo/file-explorer/FileExplorerPage';
 
 interface ExplorerItem {
   source_id: string;
@@ -76,6 +77,7 @@ export interface FileExplorerInventoryProps extends Record<string, unknown> {
   onNextPage: (cursor: string) => void;
   pageKey: string;
   hierarchy?: HierarchyLocation;
+  management?: ExplorerManagement;
 }
 
 export type InventoryConsumer = 'file-explorer' | 'content-intelligence';
@@ -229,6 +231,50 @@ function assertHierarchyPage(data: unknown, parentId: string | null, folderCurso
     hasMoreFolders: page.has_more, nextFolderId: page.next_folder_id as string | null } };
 }
 
+const OPERATIONS: ExplorerOperation[] = [
+  'file_explorer.folder.create', 'file_explorer.folder.rename', 'file_explorer.folder.move',
+  'file_explorer.artifact.move', 'file_explorer.folder.delete',
+];
+
+function capabilityResponse(data: unknown): ExplorerManagement['capabilities'] {
+  if (!data || typeof data !== 'object') return {};
+  const value = data as Record<string, unknown>;
+  if (value.browse !== 'available' || value.semantics !== 'preflight_not_resource_authorization' ||
+      typeof value.request_id !== 'string' || !value.request_id ||
+      typeof value.correlation_id !== 'string' || !value.correlation_id ||
+      !value.operations || typeof value.operations !== 'object') return {};
+  const operations = value.operations as Record<string, unknown>;
+  const result: Partial<Record<ExplorerOperation, ExplorerCapability>> = {};
+  for (const operation of OPERATIONS) {
+    const state = operations[operation];
+    if (state !== 'available' && state !== 'denied' && state !== 'unavailable') return {};
+    result[operation] = state;
+  }
+  return result;
+}
+
+function assertMutationReceipt(data: unknown, mutation: ExplorerMutation, parent: string | null, item?: ExplorerItem) {
+  if (!data || typeof data !== 'object') throw new Error('Unconfirmed organization change');
+  const result = data as Record<string, unknown>;
+  if (typeof result.request_id !== 'string' || !result.request_id ||
+      typeof result.correlation_id !== 'string' || !result.correlation_id) throw new Error('Unconfirmed organization change');
+  const matchesRevision = (revision: unknown, expected: string) => validRevision(revision) &&
+    (revision === expected || BigInt(revision) === BigInt(expected) + BigInt(1));
+  if (mutation.action === 'delete') {
+    if (result.deleted === true && result.folder_id === mutation.sourceId) return;
+  } else if (mutation.action === 'move') {
+    if (result.source_id === mutation.sourceId && result.kind === (item?.kind === 'file' ? 'artifact' : 'folder') &&
+        result.parent_folder_id === mutation.destinationId &&
+        matchesRevision(result.organization_revision, mutation.expectedRevision)) return;
+  } else if (result.folder && typeof result.folder === 'object') {
+    const folder = result.folder as Record<string, unknown>;
+    if (validUuid(folder.folder_id) && folder.parent_folder_id === parent && folder.name === mutation.name &&
+        (mutation.action === 'create' ? folder.revision === '1' :
+          folder.folder_id === mutation.sourceId && matchesRevision(folder.revision, mutation.expectedRevision))) return;
+  }
+  throw new Error('Unconfirmed organization change');
+}
+
 export function FileExplorerInventoryHost({
   children,
   mode = 'analysis',
@@ -273,10 +319,17 @@ export function FileExplorerInventoryHost({
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const generationRef = useRef(0);
+  const managementEnabled = hierarchy && consumer === 'file-explorer' && mode === 'analysis';
+  const [capability, setCapability] = useState<{ generation: number; operations: ExplorerManagement['capabilities'] } | null>(null);
+  const [mutationState, setMutationState] = useState<{ principalKey: string; message: string | null; busy: boolean } | null>(null);
+  const mutationRef = useRef<{ generation: number; principalKey: string } | null>(null);
 
   useEffect(() => {
     // The source is authenticated API truth, never browser-supplied inventory.
     if (!principalKey || authLoading) {
+      mutationRef.current = null;
+      setMutationState(null);
+      setCapability(null);
       generationRef.current += 1;
       setPage(null);
       setSelectedSourceIds([]);
@@ -337,8 +390,24 @@ export function FileExplorerInventoryHost({
   const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
   const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
 
+  useEffect(() => {
+    if (!managementEnabled || !currentPage) return;
+    let cancelled = false;
+    const generation = currentPage.generation;
+    void apiClient.get<unknown>('/api/plugins/file-explorer/capabilities')
+      .then(data => {
+        if (!cancelled && generationRef.current === generation) {
+          setCapability({ generation, operations: capabilityResponse(data) });
+        }
+      })
+      .catch(() => {
+        if (!cancelled && generationRef.current === generation) setCapability({ generation, operations: {} });
+      });
+    return () => { cancelled = true; };
+  }, [managementEnabled, currentPage]);
+
   const onSelect = useCallback((references: ExplorerSelection[]) => {
-    if (!currentPage || loading || currentError) {
+    if (!currentPage || loading || currentError || mutationRef.current?.principalKey === principalKey) {
       setSelectedSourceIds([]);
       return;
     }
@@ -369,10 +438,10 @@ export function FileExplorerInventoryHost({
       accepted.push(item.source_id);
     }
     setSelectedSourceIds(accepted);
-  }, [currentPage, loading, currentError]);
+  }, [currentPage, loading, currentError, principalKey]);
 
   const onRefresh = useCallback(() => {
-    if (!principalKey) return;
+    if (!principalKey || mutationRef.current?.principalKey === principalKey) return;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
@@ -386,7 +455,7 @@ export function FileExplorerInventoryHost({
 
   const onNextPage = useCallback((cursor: string) => {
     if (
-      !principalKey || !currentPage || loading || currentError ||
+      !principalKey || !currentPage || loading || currentError || mutationRef.current?.principalKey === principalKey ||
       !currentPage.has_more || currentPage.next_cursor !== cursor
     ) return;
     setSelectedSourceIds([]);
@@ -401,7 +470,7 @@ export function FileExplorerInventoryHost({
   }, [principalKey, currentPage, loading, currentError]);
 
   const onNavigate = useCallback((folderId: string | null) => {
-    if (!principalKey || !currentPage?.hierarchy || loading || currentError) return;
+    if (!principalKey || !currentPage?.hierarchy || loading || currentError || mutationRef.current?.principalKey === principalKey) return;
     if (folderId !== null &&
         !currentPage.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === folderId) &&
         !currentPage.items.some(item => item.kind === 'folder' && item.source_id === folderId)) return;
@@ -412,7 +481,7 @@ export function FileExplorerInventoryHost({
   }, [principalKey, currentPage, loading, currentError]);
 
   const onNextFolders = useCallback((folderId: string) => {
-    if (!principalKey || !currentPage?.hierarchy || loading || currentError ||
+    if (!principalKey || !currentPage?.hierarchy || loading || currentError || mutationRef.current?.principalKey === principalKey ||
         !currentPage.hierarchy.hasMoreFolders || currentPage.hierarchy.nextFolderId !== folderId) return;
     setSelectedSourceIds([]);
     setPage(null);
@@ -421,6 +490,72 @@ export function FileExplorerInventoryHost({
       parentId: currentPage.hierarchy?.parentId ?? null,
       afterFolderId: folderId, generation: value.generation + 1 }));
   }, [principalKey, currentPage, loading, currentError]);
+
+  const onMutate = useCallback(async (mutation: ExplorerMutation) => {
+    if (!managementEnabled || !currentPage?.hierarchy || loading || currentError ||
+        generationRef.current !== currentPage.generation ||
+        capability?.generation !== currentPage.generation ||
+        mutationRef.current?.principalKey === principalKey) return;
+    const item = mutation.action === 'create' ? undefined :
+      currentPage.items.find(entry => entry.source_id === mutation.sourceId);
+    if (mutation.action !== 'create' && (!item || !validRevision(item.organization_revision) ||
+        mutation.expectedRevision !== item.organization_revision)) return;
+    if ((mutation.action === 'rename' || mutation.action === 'delete') && item?.kind !== 'folder') return;
+    if (mutation.action === 'create' || mutation.action === 'rename') {
+      if (typeof mutation.name !== 'string' || !mutation.name || mutation.name.length > 256 ||
+          mutation.name !== mutation.name.trim() || /[\x00-\x1f\x7f-\x9f]/.test(mutation.name)) return;
+    }
+    const operation: ExplorerOperation = mutation.action === 'move'
+      ? (item?.kind === 'file' ? 'file_explorer.artifact.move' : 'file_explorer.folder.move')
+      : mutation.action === 'create' ? 'file_explorer.folder.create'
+      : mutation.action === 'rename' ? 'file_explorer.folder.rename' : 'file_explorer.folder.delete';
+    if (capability.operations[operation] !== 'available') return;
+    const location = currentPage.hierarchy;
+    if (mutation.action === 'move' && mutation.destinationId !== null &&
+        (mutation.destinationId === item?.source_id || !(
+          location.breadcrumbs.some(crumb => crumb.folder_id === mutation.destinationId) ||
+          currentPage.items.some(entry => entry.kind === 'folder' && entry.source_id === mutation.destinationId)
+        ))) return;
+    const token = { generation: currentPage.generation, principalKey };
+    mutationRef.current = token;
+    setSelectedSourceIds([]);
+    setMutationState({ principalKey, busy: true, message: null });
+    const prefix = '/api/plugins/file-explorer';
+    let message = 'Organization change confirmed. Reloading inventory.';
+    try {
+      let result: unknown;
+      if (mutation.action === 'create') {
+        result = await apiClient.post(prefix + '/folders', { name: mutation.name, parent_folder_id: location.parentId });
+      } else if (mutation.action === 'rename') {
+        result = await apiClient.patch(prefix + '/folders/' + mutation.sourceId, {
+          name: mutation.name, expected_revision: mutation.expectedRevision,
+        });
+      } else if (mutation.action === 'delete') {
+        result = await apiClient.delete(prefix + '/folders/' + mutation.sourceId, {
+          expected_revision: mutation.expectedRevision,
+        });
+      } else {
+        result = await apiClient.post(prefix + '/move/' + (item?.kind === 'file' ? 'artifact' : 'folder') + '/' + mutation.sourceId, {
+          destination_id: mutation.destinationId, expected_revision: mutation.expectedRevision,
+        });
+      }
+      assertMutationReceipt(result, mutation, location.parentId, item);
+    } catch (error) {
+      const status = error && typeof error === 'object' && 'status' in error ? error.status : null;
+      message = status === 409 ? 'Organization conflict. Review the refreshed inventory before trying again.'
+        : status === 403 ? 'Organization change denied. Permissions will be checked again.'
+        : 'Organization change not confirmed. Review inventory before trying again; no automatic retry.';
+    } finally {
+      if (mutationRef.current === token) mutationRef.current = null;
+      if (generationRef.current === token.generation) {
+        setMutationState({ principalKey, busy: false, message });
+        setCapability(null);
+        setPage(null);
+        setRequest(value => ({ principalKey, cursor: null, parentId: location.parentId,
+          afterFolderId: null, generation: value.generation + 1 }));
+      }
+    }
+  }, [managementEnabled, currentPage, loading, currentError, capability, principalKey]);
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
@@ -435,6 +570,12 @@ export function FileExplorerInventoryHost({
     onNextPage,
     pageKey: principalKey + ':' + (currentPage?.generation ?? 'pending'),
     hierarchy: currentPage?.hierarchy ? { ...currentPage.hierarchy, onNavigate, onNextFolders } : undefined,
+    management: managementEnabled && currentPage?.hierarchy ? {
+      capabilities: capability?.generation === currentPage.generation ? capability.operations : {},
+      busy: mutationState?.principalKey === principalKey && mutationState.busy,
+      message: mutationState?.principalKey === principalKey ? mutationState.message : null,
+      onMutate,
+    } : undefined,
   };
 
   const selectedAnalysisSources = mode === 'analysis' && currentPage && !currentError && !loading

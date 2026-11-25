@@ -27,6 +27,21 @@ export interface ExplorerSelection {
   kind: 'file' | 'folder';
 }
 
+export type ExplorerOperation = 'file_explorer.folder.create' | 'file_explorer.folder.rename'
+  | 'file_explorer.folder.move' | 'file_explorer.artifact.move' | 'file_explorer.folder.delete';
+export type ExplorerCapability = 'available' | 'denied' | 'unavailable';
+export type ExplorerMutation =
+  | { action: 'create'; name: string }
+  | { action: 'rename'; sourceId: string; expectedRevision: string; name: string }
+  | { action: 'move'; sourceId: string; expectedRevision: string; destinationId: string | null }
+  | { action: 'delete'; sourceId: string; expectedRevision: string };
+export interface ExplorerManagement {
+  capabilities: Partial<Record<ExplorerOperation, ExplorerCapability>>;
+  busy: boolean;
+  message: string | null;
+  onMutate: (mutation: ExplorerMutation) => void;
+}
+
 export interface FileExplorerProps {
   authorized?: boolean;
   items?: ExplorerItem[];
@@ -42,6 +57,7 @@ export interface FileExplorerProps {
   onNextPage?: (cursor: string) => void;
   /** Change this on every authorized page or identity/scope transition. */
   pageKey?: string;
+  management?: ExplorerManagement;
   hierarchy?: {
     parentId: string | null;
     breadcrumbs: { folder_id: string; name: string }[];
@@ -95,10 +111,40 @@ function FileExplorerView({
   nextCursor = null,
   onNextPage,
   hierarchy,
+  management,
 }: FileExplorerProps) {
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  const [edit, setEdit] = useState<{ action: ExplorerMutation['action']; item?: ExplorerItem } | null>(null);
+  const [name, setName] = useState('');
+  const [destination, setDestination] = useState('root');
+  const busy = management?.busy === true;
+  const can = (operation: ExplorerOperation) => management?.capabilities[operation] === 'available';
+  function openEditor(action: ExplorerMutation['action'], item?: ExplorerItem) {
+    if (busy) return;
+    setName(action === 'rename' ? item?.name ?? '' : '');
+    setDestination('root');
+    setEdit({ action, item });
+  }
+  function submitEdit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!edit || !management || busy) return;
+    const item = edit.item;
+    if (edit.action === 'create' && can('file_explorer.folder.create') && name.trim()) {
+      management.onMutate({ action: 'create', name: name.trim() });
+    } else if (item?.organization_revision) {
+      const evidence = { sourceId: item.source_id, expectedRevision: item.organization_revision };
+      if (edit.action === 'rename' && can('file_explorer.folder.rename') && name.trim()) {
+        management.onMutate({ action: 'rename', ...evidence, name: name.trim() });
+      } else if (edit.action === 'delete' && can('file_explorer.folder.delete')) {
+        management.onMutate({ action: 'delete', ...evidence });
+      } else if (edit.action === 'move' && can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')) {
+        management.onMutate({ action: 'move', ...evidence, destinationId: destination === 'root' ? null : destination });
+      }
+    }
+    setEdit(null);
+  }
   const pageEvidenceValid = typeof hasMore === 'boolean' && (
     hasMore
       ? typeof nextCursor === 'string' && nextCursor.length > 0 &&
@@ -155,6 +201,7 @@ function FileExplorerView({
   const selectionSet = new Set(selected);
 
   function navigate(id: string | null) {
+    if (busy) return;
     clearSelections();
     setFilter('');
     if (hierarchy) hierarchy.onNavigate?.(id);
@@ -162,7 +209,7 @@ function FileExplorerView({
   }
 
   function select(item: ExplorerItem) {
-    if (hierarchy && item.kind !== 'file') return;
+    if (busy || (hierarchy && item.kind !== 'file')) return;
     const next = multiSelect
       ? (selectionSet.has(item.source_id)
         ? selected.filter((id) => id !== item.source_id)
@@ -202,6 +249,22 @@ function FileExplorerView({
       </div>
       {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
+    {management && <div className="flex flex-wrap items-center gap-2">
+      <button type="button" disabled={busy || !can('file_explorer.folder.create')} className="rounded border px-3 py-2 text-sm disabled:opacity-50" onClick={() => openEditor('create')}>New folder</button>
+      {management.message && <p role="status" className="text-sm">{management.message}</p>}
+      {busy && <p role="status" className="text-sm">Saving organization change…</p>}
+    </div>}
+    {edit && management && <form aria-label="Confirm organization change" onSubmit={submitEdit} className="flex flex-col gap-3 rounded-lg border p-3">
+      <h3 className="font-medium">{edit.action === 'create' ? 'Create folder' : edit.action === 'rename' ? 'Rename folder' : edit.action === 'move' ? 'Move ' + (edit.item?.name ?? '') : 'Delete empty folder'}</h3>
+      {(edit.action === 'create' || edit.action === 'rename') && <label className="flex flex-col gap-1 text-sm">Folder name<input autoFocus required maxLength={256} value={name} onChange={event => setName(event.target.value)} className="rounded border bg-background p-2" /></label>}
+      {edit.action === 'move' && <label className="flex flex-col gap-1 text-sm">Destination<select value={destination} onChange={event => setDestination(event.target.value)} className="rounded border bg-background p-2">
+        <option value="root">Root</option>
+        {hierarchy?.breadcrumbs.filter(crumb => crumb.folder_id !== edit.item?.source_id).map(crumb => <option key={crumb.folder_id} value={crumb.folder_id}>{crumb.name}</option>)}
+        {entries.filter(item => item.kind === 'folder' && item.source_id !== edit.item?.source_id).map(item => <option key={item.source_id} value={item.source_id}>{item.name}</option>)}
+      </select></label>}
+      {edit.action === 'delete' && <p className="text-sm">Delete {edit.item?.name}? Only empty folders can be deleted, including no archived files. File contents will not be deleted.</p>}
+      <div className="flex flex-wrap gap-2"><button type="submit" disabled={busy} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={() => setEdit(null)} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
+    </form>}
     <nav aria-label="Folder location" className="flex items-center gap-3 text-sm">
       <button type="button" className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
       {hierarchy?.breadcrumbs.map(crumb => <React.Fragment key={crumb.folder_id}>
@@ -227,7 +290,7 @@ function FileExplorerView({
     {loading ? <p role="status" className="py-8 text-center text-sm">Loading authorized file inventory…</p>
       : visible.length === 0 ? <p role="status" className="py-8 text-center text-sm text-muted-foreground">No files or folders in this view.</p>
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
-        {visible.map((item) => <li key={item.source_id} className="flex min-w-0 items-center gap-2 rounded border p-2">
+        {visible.map((item) => <li key={item.source_id} className="flex min-w-0 flex-wrap items-center gap-2 rounded border p-2">
           {(!hierarchy || item.kind === 'file') && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
             aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error)}
             onChange={() => select(item)} />}
@@ -239,6 +302,11 @@ function FileExplorerView({
                 <p className="truncate text-sm" title={item.name}>📄 {item.name}</p>
                 <p className="text-xs text-muted-foreground">{prettyBytes(item.size_bytes)}</p>
               </div>}
+          {management && hierarchy && item.organization_revision && <div className="flex flex-wrap gap-1 text-xs">
+            {item.kind === 'folder' && <button type="button" disabled={busy || !can('file_explorer.folder.rename')} onClick={() => openEditor('rename', item)} aria-label={'Rename ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Rename</button>}
+            <button type="button" disabled={busy || !can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')} onClick={() => openEditor('move', item)} aria-label={'Move ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Move</button>
+            {item.kind === 'folder' && <button type="button" disabled={busy || !can('file_explorer.folder.delete')} onClick={() => openEditor('delete', item)} aria-label={'Delete ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Delete</button>}
+          </div>}
         </li>)}
       </ul>}
     <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">

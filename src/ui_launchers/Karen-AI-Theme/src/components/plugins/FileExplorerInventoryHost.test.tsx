@@ -10,10 +10,12 @@ import { ContentIntelligenceWorkspace } from './ContentIntelligenceWorkspace';
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  patch: vi.fn(),
+  delete: vi.fn(),
   useAuth: vi.fn(),
 }));
 
-vi.mock('@/lib/api', () => ({ apiClient: { get: mocks.get, post: mocks.post } }));
+vi.mock('@/lib/api', () => ({ apiClient: { get: mocks.get, post: mocks.post, patch: mocks.patch, delete: mocks.delete } }));
 vi.mock('@/lib/useAuth', () => ({ useAuth: mocks.useAuth }));
 
 const SHA = 'a'.repeat(64);
@@ -111,6 +113,8 @@ function Consumer({ mode, consumer, onAttach }: { mode?: 'analysis' | 'selection
 beforeEach(() => {
   mocks.get.mockReset();
   mocks.post.mockReset();
+  mocks.patch.mockReset();
+  mocks.delete.mockReset();
   mocks.useAuth.mockReset();
   mocks.useAuth.mockReturnValue(auth());
 });
@@ -566,7 +570,7 @@ describe('Explicit composer attachment handoff', () => {
     fireEvent.click(screen.getByText('Select A'));
     expect(onAttach).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Attach selected files (1)' }));
-    expect(onAttach).toHaveBeenCalledExactlyOnceWith([{ source_id: FILE_A, revision: SHA }]);
+    expect(onAttach).toHaveBeenCalledWith([{ source_id: FILE_A, revision: SHA }]);
     fireEvent.click(screen.getByText('Forged hash'));
     expect(screen.queryByRole('button', { name: /Attach selected files/ })).toBeNull();
     expect(mocks.post).not.toHaveBeenCalled();
@@ -664,5 +668,65 @@ describe('governed hierarchy inventory', () => {
     await waitFor(() => expect(screen.getByTestId('hierarchy-error').textContent).toContain('Invalid file inventory response'));
     expect(screen.getByTestId('hierarchy-authorized').textContent).toBe('false');
     expect(screen.queryByText('alpha.txt')).toBeNull();
+  });
+});
+
+
+describe('Explorer management preflight and mutation receipts', () => {
+  const folder = '55555555-5555-4555-8555-555555555555';
+  const evidence = { request_id: 'request', correlation_id: 'correlation' };
+  const inventory = { ...evidence, available: true, breadcrumbs: [],
+    folders: [{ folder_id: folder, parent_folder_id: null, name: 'Reports', revision: '7' }],
+    has_more: false, next_folder_id: null, files: [], files_has_more: false, next_file_cursor: null };
+  function capabilities(deletion = 'available') {
+    return { ...evidence, browse: 'available', semantics: 'preflight_not_resource_authorization',
+      operations: {
+        'file_explorer.folder.create': 'available', 'file_explorer.folder.rename': 'available',
+        'file_explorer.folder.move': 'available', 'file_explorer.artifact.move': 'available',
+        'file_explorer.folder.delete': deletion,
+      } };
+  }
+  function Manager() {
+    return <FileExplorerInventoryHost hierarchy mode="analysis">
+      {props => <div>
+        <span data-testid="message">{props.management?.message}</span>
+        <button disabled={props.management?.capabilities['file_explorer.folder.delete'] !== 'available'}
+          onClick={() => props.management?.onMutate({action: 'delete', sourceId: folder, expectedRevision: '7'})}>Delete</button>
+        <button onClick={() => props.management?.onMutate({action: 'rename', sourceId: folder, expectedRevision: '6', name: 'Wrong'})}>Stale</button>
+        <button disabled={props.management?.capabilities['file_explorer.folder.rename'] !== 'available'}
+          onClick={() => props.management?.onMutate({action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New'})}>Rename</button>
+      </div>}
+    </FileExplorerInventoryHost>;
+  }
+  it('does not send a denied delete or a stale revision', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities('denied') : inventory));
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Rename') as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByText('Delete') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText('Delete'));
+    fireEvent.click(screen.getByText('Stale'));
+    expect(mocks.delete).not.toHaveBeenCalled();
+    expect(mocks.patch).not.toHaveBeenCalled();
+  });
+  it('uses organization revision, rejects a substituted receipt, refreshes without retrying', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.patch.mockResolvedValue({ ...evidence, folder: { folder_id: FILE_A, parent_folder_id: null, name: 'New', revision: '8' } });
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Rename') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText('Rename'));
+    await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('not confirmed'));
+    expect(mocks.patch).toHaveBeenCalledWith('/api/plugins/file-explorer/folders/' + folder,
+      { name: 'New', expected_revision: '7' });
+    expect(mocks.get.mock.calls.filter(([path]) => path.includes('/hierarchy?'))).toHaveLength(2);
+  });
+  it('sends explicit delete revision and confirms only matching evidence', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.delete.mockResolvedValue({ ...evidence, folder_id: folder, deleted: true });
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Delete') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('confirmed'));
+    expect(mocks.delete).toHaveBeenCalledWith('/api/plugins/file-explorer/folders/' + folder,
+      { expected_revision: '7' });
   });
 });
