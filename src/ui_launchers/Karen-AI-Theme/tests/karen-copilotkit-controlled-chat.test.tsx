@@ -22,6 +22,7 @@ const sdk = vi.hoisted(() => ({
   clearDraft: vi.fn(),
   post: vi.fn(),
   get: vi.fn(),
+  refreshHistory: vi.fn(),
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   lifecycle: null as null | {
@@ -88,7 +89,9 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedHistory", () => ({
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
   return {
-    useKarenScopedAgent: () => ({ agent: sdk.agent, isReady: sdk.isReady }),
+    useKarenScopedAgent: () => ({
+      agent: sdk.agent, isReady: sdk.isReady, refreshVerifiedHistory: sdk.refreshHistory,
+    }),
   };
 });
 
@@ -115,6 +118,7 @@ beforeEach(() => {
   sdk.runAgent.mockReset().mockResolvedValue(undefined);
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
+  sdk.refreshHistory.mockReset().mockResolvedValue(true);
   sdk.get.mockReset().mockResolvedValue({
     status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
   });
@@ -1040,5 +1044,62 @@ describe("Attachment-aware controlled composer", () => {
     expect(screen.queryByText("1 / 12 file references")).toBeNull();
     act(() => input().onSubmitMessage("Text only"));
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+  });
+});
+
+
+describe("KUI uncertain finality recovery", () => {
+  it("blocks a new send until exact terminal status and verified history are read", async () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "uncertain-run" },
+    }));
+    act(() => sdk.lifecycle?.onRunFailed({
+      event: { code: "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED" },
+    }));
+    act(() => input().onSubmitMessage("new message"));
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+
+    sdk.get.mockResolvedValueOnce({
+      status: "interrupted", cancel_requested: false, cancellation_confirmed: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/No verified completion/)).toBeTruthy());
+    expect(sdk.refreshHistory).not.toHaveBeenCalled();
+    act(() => input().onSubmitMessage("new message"));
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+
+    sdk.get.mockResolvedValueOnce({
+      status: "completed", cancel_requested: false, cancellation_confirmed: false,
+    });
+    sdk.refreshHistory.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/saved history could not be verified/)).toBeTruthy());
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+
+    sdk.get.mockResolvedValueOnce({
+      status: "completed", cancel_requested: false, cancellation_confirmed: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/Run status and saved history were checked/)).toBeTruthy());
+    expect(sdk.get).toHaveBeenCalledWith(
+      "/api/copilotkit/agent/default/runs/" + THREAD + "/uncertain-run/status",
+    );
+    expect(sdk.refreshHistory).toHaveBeenCalledTimes(2);
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    act(() => input().onSubmitMessage("new message"));
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not invent a run identity or resend after a pre-start uncertainty error", async () => {
+    sdk.runAgent.mockRejectedValueOnce({ code: "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED" });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("first message"));
+    await waitFor(() => expect(screen.getByText(/No verified run identity was received/)).toBeTruthy());
+    act(() => input().onSubmitMessage("second message"));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).toHaveBeenCalledTimes(1);
+    expect(sdk.get).not.toHaveBeenCalled();
   });
 });

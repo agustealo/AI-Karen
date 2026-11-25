@@ -1,7 +1,7 @@
 "use client";
 
 import { useAgent } from "@copilotkit/react-core/v2";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { apiClient } from "@/lib/api";
@@ -118,7 +118,9 @@ const HISTORY_REPLAY_DIAGNOSTICS: Readonly<Record<string, string>> = {
 // The history gate owns the sole SDK agent registration for this conversation.
 // Children consume the same instance; a second useAgent call with the same ID
 // causes CopilotKitCore.registerProxiedAgent to reject the duplicate.
-type ScopedAgentRegistration = ReturnType<typeof useAgent>;
+type ScopedAgentRegistration = ReturnType<typeof useAgent> & {
+  refreshVerifiedHistory: () => Promise<boolean>;
+};
 const ScopedAgentContext = createContext<ScopedAgentRegistration | null>(null);
 
 export function useKarenScopedAgent(): ScopedAgentRegistration {
@@ -236,6 +238,10 @@ export function KarenCopilotHistoryGate({
   const textContinuationRequested = useRef(false);
   const continuationConversationId = useRef(conversationId);
   const recoveryGeneration = useRef(0);
+  const restoreHistoryRef = useRef<(() => Promise<boolean>) | null>(null);
+  const refreshVerifiedHistory = useCallback(async () => {
+    return await restoreHistoryRef.current?.() ?? false;
+  }, []);
 
   useEffect(() => {
     recoveryGeneration.current += 1;
@@ -407,10 +413,12 @@ export function KarenCopilotHistoryGate({
       });
       unsubscribe = subscription.unsubscribe;
     };
+    restoreHistoryRef.current = restore;
     void start();
 
     return () => {
       cancelled = true;
+      if (restoreHistoryRef.current === restore) restoreHistoryRef.current = null;
       recoveryGeneration.current += 1;
       unsubscribe?.();
     };
@@ -569,7 +577,7 @@ export function KarenCopilotHistoryGate({
     );
   }
   return (
-    <ScopedAgentContext.Provider value={registration}>
+    <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory }}>
       <KarenVerifiedHistoryProvider parts={verifiedParts}>
         {textContinuationActive && (
           <p role="status" data-testid="karen-text-continuation-banner"
