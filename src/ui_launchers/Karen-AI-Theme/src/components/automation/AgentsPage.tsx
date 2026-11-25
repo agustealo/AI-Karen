@@ -39,6 +39,9 @@ export interface AgentRunRecord {
   status: string;
   started_at?: string | null;
   completed_at?: string | null;
+  created_at?: string | null;
+  cancel_requested_at?: string | null;
+  outcome_status?: string | null;
   error_type?: string | null;
   cancellable?: boolean;
   durable?: boolean;
@@ -75,7 +78,7 @@ function nonemptyString(value: unknown): value is string {
 
 export function isAgentRunRecord(value: unknown): value is AgentRunRecord {
   return isObject(value) && nonemptyString(value.run_id) && nonemptyString(value.status)
-    && ["correlation_id", "request_id", "session_id", "policy_decision_id", "tenant_id", "user_id", "started_at", "completed_at", "error_type", "response_source"].every((key) => value[key] == null || typeof value[key] === "string")
+    && ["correlation_id", "request_id", "session_id", "policy_decision_id", "tenant_id", "user_id", "started_at", "completed_at", "created_at", "cancel_requested_at", "outcome_status", "error_type", "response_source"].every((key) => value[key] == null || typeof value[key] === "string")
     && ["cancellable", "durable"].every((key) => value[key] === undefined || typeof value[key] === "boolean")
     && (value.distributed_control == null || (isObject(value.distributed_control) && (value.distributed_control.supported === undefined || typeof value.distributed_control.supported === "boolean")));
 }
@@ -98,6 +101,14 @@ function formatTimestamp(value?: string | null): string {
   if (!value) return "Not recorded";
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function formatRunElapsed(run: AgentRunRecord): string {
+  if (!run.started_at || !run.completed_at) return "Not recorded";
+  const elapsed = Date.parse(run.completed_at) - Date.parse(run.started_at);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return "Not recorded";
+  const seconds = Math.floor(elapsed / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function statusVariant(
@@ -180,6 +191,28 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   const [historyQuery, setHistoryQuery] = useState("");
+  const [objective, setObjective] = useState("");
+  const [objectiveError, setObjectiveError] = useState("");
+  const objectiveHandoffPending = useRef(false);
+
+  function reviewObjective() {
+    if (!workspaceLive.current || !isAuthenticated || isAdmin || objectiveHandoffPending.current || !objective.trim()) return;
+    objectiveHandoffPending.current = true;
+    try {
+      const accepted = !window.dispatchEvent(new CustomEvent("karen:inject-message", {
+        cancelable: true,
+        detail: { role: "user", content: objective.trim(), autoSubmit: false },
+      }));
+      if (!accepted) {
+        setObjectiveError("Karen could not prepare the objective. Your text is retained. Check the conversation is ready and not processing a message, then retry.");
+        return;
+      }
+      setObjective("");
+      setObjectiveError("");
+    } finally {
+      objectiveHandoffPending.current = false;
+    }
+  }
   const normalizedHistoryQuery = historyQuery.trim().toLowerCase();
 
   const activeRuns = useMemo(
@@ -513,12 +546,21 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             <div className="min-w-0 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-widest text-primary">Your AI workspace</p>
               <h3 className="text-xl font-semibold tracking-tight sm:text-2xl">What are we accomplishing today?</h3>
-              <p className="max-w-xl text-sm text-muted-foreground">Describe your objective in Karen Chat. Authorized executions will appear here when the runtime records them.</p>
+              <p className="max-w-xl text-sm text-muted-foreground">Prepare an objective for review in your current Karen conversation. Existing draft text is preserved. Nothing is submitted automatically.</p>
             </div>
             <Button type="button" size="lg" className="w-full shrink-0 sm:w-auto" onClick={onAskKaren} disabled={!isAuthenticated || !onAskKaren}>
               Ask Karen <ArrowUpRight aria-hidden="true" className="ml-2 h-4 w-4" />
             </Button>
           </div>
+          {isAuthenticated && <form className="mt-5 space-y-3" onSubmit={(event) => { event.preventDefault(); reviewObjective(); }}>
+            <label htmlFor="mission-objective" className="block text-sm font-medium">Mission objective</label>
+            <textarea id="mission-objective" rows={4} value={objective} maxLength={65536} onChange={(event) => { setObjective(event.target.value); setObjectiveError(""); }} className="w-full rounded-lg border border-input bg-background p-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring" placeholder="Describe the outcome, deliverables and constraints…" />
+            {objectiveError && <p role="alert" className="text-sm text-destructive">{objectiveError}</p>}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">Review in the current conversation before sending.</p>
+              <Button type="submit" disabled={!objective.trim()}>Review objective <ArrowUpRight aria-hidden="true" className="ml-2 h-4 w-4" /></Button>
+            </div>
+          </form>}
         </section>
       )}
 
@@ -608,8 +650,31 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                       <Badge variant={statusVariant(selectedRun.status)}>{selectedRun.status}</Badge>
                     </div>
                     {(isRevalidatingRun || isLoadingRuns) && <p role="status" className="mt-2 text-xs text-muted-foreground">Revalidating execution status…</p>}
-                    <p className="mt-2 text-sm text-muted-foreground">Started {formatTimestamp(selectedRun.started_at)}</p>
-                    {selectedRun.completed_at && <p className="mt-1 text-sm text-muted-foreground">Ended {formatTimestamp(selectedRun.completed_at)}</p>}
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg border border-border p-3">
+                        <p className="text-xs text-muted-foreground">Reported task outcome</p>
+                        <p className="mt-1 break-words text-sm font-medium">{selectedRun.outcome_status || "Not recorded"}</p>
+                      </div>
+                      <div className="rounded-lg border border-border p-3">
+                        <p className="text-xs text-muted-foreground">Recorded elapsed time</p>
+                        <p className="mt-1 text-sm font-medium">{formatRunElapsed(selectedRun)}</p>
+                      </div>
+                    </div>
+                    <section aria-label="Recorded lifecycle timestamps" className="mt-4 space-y-2">
+                      <h5 className="text-sm font-medium">Recorded lifecycle timestamps</h5>
+                      <p className="text-xs text-muted-foreground">Snapshot evidence only; not a complete transition history.</p>
+                      <dl className="space-y-2 border-l border-border pl-3 text-sm">
+                        {([
+                          ["Created", selectedRun.created_at],
+                          ["Started", selectedRun.started_at],
+                          ["Cancellation requested", selectedRun.cancel_requested_at],
+                          ["Ended", selectedRun.completed_at],
+                        ] as const).filter(([, value]) => typeof value === "string" && Number.isFinite(Date.parse(value))).map(([label, value]) => (
+                          <div key={label}><dt className="font-medium">{label}</dt><dd className="text-xs text-muted-foreground">{formatTimestamp(value)}</dd></div>
+                        ))}
+                      </dl>
+                      {![selectedRun.created_at, selectedRun.started_at, selectedRun.cancel_requested_at, selectedRun.completed_at].some((value) => typeof value === "string" && Number.isFinite(Date.parse(value))) && <p className="text-sm text-muted-foreground">No valid lifecycle timestamps were recorded.</p>}
+                    </section>
                     <p className="mt-2 text-sm text-muted-foreground">{selectedRun.status.toLowerCase() === "completed" ? "Execution completed. A saved artifact is not implied by this status." : selectedRun.status.toLowerCase() === "cancelling" ? "Cancellation requested, awaiting confirmed terminal status." : "This status comes from the Medusa run ledger, not a simulated progress estimate."}</p>
                     {selectedRun.error_type && <p role="alert" className="mt-3 text-sm text-destructive">Reported failure: {selectedRun.error_type}</p>}
                     <details className="mt-4 text-sm">

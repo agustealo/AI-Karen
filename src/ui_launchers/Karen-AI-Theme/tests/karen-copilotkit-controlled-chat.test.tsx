@@ -1205,3 +1205,56 @@ it("preserves explicit finality uncertainty when stop and SDK finalization race"
     "/api/copilotkit/agent/default/runs/" + THREAD + "/stop-uncertain/status",
   ));
 });
+
+
+describe("ARM-04 canonical mission draft admission", () => {
+  function handoff(content: string) {
+    const event = new CustomEvent("karen:inject-message", {
+      cancelable: true, detail: { role: "user", autoSubmit: false, content },
+    });
+    act(() => window.dispatchEvent(event));
+    return event.defaultPrevented;
+  }
+
+  it("preserves unsent text and attachment references without starting execution", () => {
+    sdk.initialAttachments = [{ source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) }];
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange("Existing unsent objective"));
+    expect(handoff("Prepare a verified report")).toBe(true);
+    expect(input().value).toBe("Existing unsent objective\n\nPrepare a verified report");
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects running, conflicting, mismatched and unmounted receivers", () => {
+    const view = render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange("Retain this draft"));
+    const writes = sdk.draftWrites.length;
+    const navigation = vi.fn();
+    window.addEventListener("karen:chat-draft-prepared", navigation);
+    try {
+      sdk.agent.isRunning = true;
+      view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+      expect(handoff("Busy objective")).toBe(false);
+      sdk.agent.isRunning = false;
+      sdk.draftStatus = "conflict";
+      view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+      expect(handoff("Conflicting objective")).toBe(false);
+      sdk.draftStatus = "ready";
+      sdk.agent.threadId = "another-thread";
+      view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+      expect(handoff("Wrong conversation")).toBe(false);
+      expect(input().value).toBe("Retain this draft");
+      view.unmount();
+      expect(handoff("No receiver")).toBe(false);
+      expect(sdk.draftWrites).toHaveLength(writes);
+      expect(navigation).not.toHaveBeenCalled();
+      expect(sdk.clearDraft).not.toHaveBeenCalled();
+      expect(sdk.runAgent).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("karen:chat-draft-prepared", navigation);
+    }
+  });
+});
