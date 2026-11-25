@@ -873,3 +873,67 @@ describe('shared Explorer accessible organization controls', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('File Explorer content'));
   });
 });
+
+
+describe('governed server filename search', () => {
+  it('binds search to pagination and refresh, and clears selection on query changes', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'old'))
+      .mockResolvedValueOnce(response(FILE_B, true, 'bound'))
+      .mockResolvedValueOnce(response(FILE_A))
+      .mockResolvedValueOnce(response(FILE_B));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{props.items.map(item => item.name).join(',')}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    const stale = latest;
+    await act(async () => latest.onSearch?.(' report_% '));
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_B));
+    expect(latest.search).toBe('report_%');
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/api/plugins/file-explorer/inventory?limit=100&search=report_%25');
+    await act(async () => stale.onNextPage('old'));
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+    await act(async () => latest.onNextPage('bound'));
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_A));
+    expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/file-explorer/inventory?limit=100&cursor=bound&search=report_%25');
+    await act(async () => latest.onRefresh());
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_B));
+    expect(mocks.get).toHaveBeenNthCalledWith(4, '/api/plugins/file-explorer/inventory?limit=100&search=report_%25');
+  });
+  it('discards a delayed query result and resets query on principal changes', async () => {
+    let latest!: FileExplorerInventoryProps;
+    let finish!: (data: unknown) => void;
+    mocks.get.mockResolvedValueOnce(response(FILE_A))
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce(response(FILE_B));
+    function Probe() { return <FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{props.items.map(item => item.name).join(',')}</span>; }}
+    </FileExplorerInventoryHost>; }
+    const view = render(<Probe />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    const stale = latest;
+    await act(async () => latest.onSearch?.('private'));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    mocks.useAuth.mockReturnValue(auth('owner-two'));
+    view.rerender(<Probe />);
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_B));
+    await act(async () => finish(response(FILE_A)));
+    await act(async () => stale.onSearch?.('private'));
+    expect(latest.search).toBe('');
+    expect(latest.items[0]?.source_id).toBe(FILE_B);
+    expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/file-explorer/inventory?limit=100');
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
+  it('submits explicit search without replacing the local page filter', () => {
+    const onSearch = vi.fn();
+    const item = { ...response(FILE_A).items[0], kind: 'file' as const };
+    render(<SharedFileExplorer authorized items={[item]} onSearch={onSearch} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'alpha' } });
+    expect(onSearch).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search authorized filenames' }), { target: { value: 'report' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Search authorized filenames' }));
+    expect(onSearch).toHaveBeenCalledWith('report');
+  });
+});

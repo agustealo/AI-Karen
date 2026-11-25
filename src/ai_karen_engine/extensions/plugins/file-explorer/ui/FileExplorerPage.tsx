@@ -69,6 +69,9 @@ export interface FileExplorerProps {
   multiSelect?: boolean;
   onSelect?: (references: ExplorerSelection[]) => void;
   onRefresh?: () => void;
+  /** Host-owned server filename search, separate from the displayed-page filter. */
+  search?: string;
+  onSearch?: (query: string) => void;
   /** The host owns pagination state and must reject stale/out-of-order responses. */
   hasMore?: boolean;
   nextCursor?: string | null;
@@ -125,6 +128,8 @@ function FileExplorerView({
   multiSelect = true,
   onSelect,
   onRefresh,
+  search = '',
+  onSearch,
   hasMore = false,
   nextCursor = null,
   onNextPage,
@@ -135,6 +140,8 @@ function FileExplorerView({
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  const [searchDraft, setSearchDraft] = useState(search);
+  const searchId = useId();
   const [edit, setEdit] = useState<{ action: ExplorerMutation['action']; item?: ExplorerItem } | null>(null);
   const [name, setName] = useState('');
   const destination = management?.destination;
@@ -292,12 +299,40 @@ function FileExplorerView({
     onSelect?.(references);
   }
 
+  const validSearch = Array.from(searchDraft).length <= 160 &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(searchDraft) &&
+    !/[\uD800-\uDFFF]/u.test(searchDraft);
+  const searchForm = onSearch && <form aria-label="Search authorized filenames"
+    className="flex flex-wrap items-end gap-2 w-full min-w-0"
+    onSubmit={event => {
+      event.preventDefault();
+      if (busy || editing || loading || !validSearch) return;
+      onPageTransition?.();
+      onSearch(searchDraft);
+    }}>
+    <label htmlFor={searchId} className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+      {hierarchy ? 'Search filenames in this folder' : 'Search authorized filenames'}
+      <input id={searchId} type="search" value={searchDraft}
+        onChange={event => setSearchDraft(event.target.value)}
+        disabled={busy || editing || loading}
+        aria-invalid={!validSearch} className="min-w-0 rounded border bg-background px-3 py-2"
+        placeholder="Search filenames…" />
+    </label>
+    <button type="submit" disabled={busy || editing || loading || !validSearch}
+      className="rounded border px-3 py-2 text-sm">Search</button>
+    {search && <button type="button" disabled={busy || editing || loading}
+      onClick={() => { setSearchDraft(''); onPageTransition?.(); onSearch(''); }}
+      className="rounded border px-3 py-2 text-sm">Clear search</button>}
+    {!validSearch && <p role="alert" className="w-full text-xs">Use at most 160 characters without control characters.</p>}
+    {search && <p role="status" className="w-full break-words text-xs">Filename results for “{search}”{hierarchy ? ' in this folder. Folder navigation remains visible.' : '.'}</p>}
+  </form>;
   if (!authorized || Boolean(error) || !pageEvidenceValid || (!loading && inventory === null)) {
     return <section role="alert" className="flex flex-col items-start gap-3 rounded-lg border p-6 text-sm text-muted-foreground">
       {loading ? <p role="status">Loading authorized file inventory…</p> :
         <p>File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.</p>}
       {error && <p className="text-destructive">{error}</p>}
       {error && <p>Refresh to reload authorized inventory from the root.</p>}
+      {error && searchForm}
       {authorized && !pageEvidenceValid && <p className="text-destructive">Invalid host pagination evidence.</p>}
       {(authorized || Boolean(error)) && onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </section>;
@@ -376,10 +411,11 @@ function FileExplorerView({
         }}>Up</button>
       </>}
     </nav>
+    {searchForm}
     <label className="flex flex-col gap-1 text-sm">
       Filter current folder
       <input className="rounded border bg-background px-3 py-2" type="search" disabled={busy || editing} value={filter}
-        onChange={(event) => setFilter(event.target.value)} placeholder="Find files or folders…" />
+        onChange={(event) => setFilter(event.target.value)} placeholder="Filter this page…" />
     </label>
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {loading ? <p role="status" className="py-8 text-center text-sm">Loading authorized file inventory…</p>

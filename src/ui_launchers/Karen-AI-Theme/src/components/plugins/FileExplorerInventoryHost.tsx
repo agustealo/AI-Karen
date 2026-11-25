@@ -51,6 +51,7 @@ interface HierarchyLocation {
 }
 
 interface ScopedPage extends InventoryPage {
+  scopeIdentity: object;
   hierarchy?: HierarchyLocation;
   principalKey: string;
   generation: number;
@@ -68,6 +69,8 @@ interface DestinationRequest {
 }
 
 interface PageRequest {
+  scopeIdentity?: object;
+  search?: string;
   principalKey: string;
   cursor: string | null;
   parentId?: string | null;
@@ -83,6 +86,8 @@ export interface FileExplorerInventoryProps extends Record<string, unknown> {
   selectedSourceIds: string[];
   onSelect: (references: ExplorerSelection[]) => void;
   onRefresh: () => void;
+  search: string;
+  onSearch?: (query: string) => void;
   hasMore: boolean;
   nextCursor: string | null;
   onNextPage: (cursor: string) => void;
@@ -321,13 +326,15 @@ export function FileExplorerInventoryHost({
     ].join('|');
   }, [isAuthenticated, user, consumer, hierarchy, mode]);
 
+  const scopeIdentity = useMemo(() => ({ principalKey, authLoading }), [principalKey, authLoading]);
+  const scopeRef = useRef<object | null>(scopeIdentity);
   const [request, setRequest] = useState<PageRequest>({
     principalKey: '',
     cursor: null,
     generation: 0,
   });
   const [page, setPage] = useState<ScopedPage | null>(null);
-  const [errorState, setErrorState] = useState<{ principalKey: string; message: string } | null>(null);
+  const [errorState, setErrorState] = useState<{ scopeIdentity: object; principalKey: string; message: string } | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const generationRef = useRef(0);
@@ -341,12 +348,14 @@ export function FileExplorerInventoryHost({
   // Revoke event closures at the committed identity/mode boundary, before
   // passive fetch effects run. Retained plugin callbacks are untrusted.
   useLayoutEffect(() => {
+    scopeRef.current = scopeIdentity;
     return () => {
+      scopeRef.current = null;
       generationRef.current += 1;
       mutationRef.current = null;
       destinationRef.current = null;
     };
-  }, [principalKey, authLoading]);
+  }, [scopeIdentity]);
 
   useEffect(() => {
     // The source is authenticated API truth, never browser-supplied inventory.
@@ -367,36 +376,39 @@ export function FileExplorerInventoryHost({
     let cancelled = false;
     const generation = ++generationRef.current;
     setMutationState(value => value?.principalKey === principalKey && !value.busy ? value : null);
-    const cursor = request.principalKey === principalKey ? request.cursor : null;
-    const parentId = request.principalKey === principalKey ? request.parentId ?? null : null;
-    const afterFolderId = request.principalKey === principalKey ? request.afterFolderId ?? null : null;
+    const cursor = request.scopeIdentity === scopeIdentity ? request.cursor : null;
+    const parentId = request.scopeIdentity === scopeIdentity ? request.parentId ?? null : null;
+    const afterFolderId = request.scopeIdentity === scopeIdentity ? request.afterFolderId ?? null : null;
+    const search = request.scopeIdentity === scopeIdentity ? request.search ?? '' : '';
 
     setLoading(true);
     setPage(null);
     setErrorState(null);
     setSelectedSourceIds([]);
 
-    const endpoint = hierarchy
+    const inventoryEndpoint = hierarchy
       ? '/api/plugins/file-explorer/hierarchy?limit=100' +
         (parentId ? '&parent_folder_id=' + encodeURIComponent(parentId) : '') +
         (afterFolderId ? '&after_folder_id=' + encodeURIComponent(afterFolderId) : '') +
         (cursor ? '&file_cursor=' + encodeURIComponent(cursor) : '')
       : INVENTORY_ENDPOINTS[consumer] + '?limit=100' +
         (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    const endpoint = inventoryEndpoint + (search ? '&search=' + encodeURIComponent(search) : '');
 
     void apiClient.get<unknown>(endpoint)
       .then((data) => {
-        if (cancelled || generationRef.current !== generation) return;
+        if (cancelled || scopeRef.current !== scopeIdentity || generationRef.current !== generation) return;
         const verified = hierarchy ? assertHierarchyPage(data, parentId, afterFolderId, cursor) : assertInventoryPage(data);
-        setPage({ ...verified, principalKey, generation });
+        if (verified.has_more && verified.next_cursor === cursor) throw new Error('Invalid file inventory response');
+        setPage({ ...verified, principalKey, scopeIdentity, generation });
       })
       .catch((error: unknown) => {
-        if (cancelled || generationRef.current !== generation) return;
+        if (cancelled || scopeRef.current !== scopeIdentity || generationRef.current !== generation) return;
         // Failure is not an empty authorized inventory. Avoid exposing API
         // error payloads containing tenancy or internal runtime detail.
         setPage(null);
         setErrorState({
-          principalKey,
+          principalKey, scopeIdentity,
           message: error instanceof Error && error.message === 'Invalid file inventory response'
             ? 'Invalid file inventory response.'
             : 'File inventory is unavailable or access was denied.',
@@ -412,11 +424,12 @@ export function FileExplorerInventoryHost({
       cancelled = true;
       generationRef.current += 1;
     };
-  }, [principalKey, authLoading, request, consumer, hierarchy]);
+  }, [principalKey, authLoading, request, consumer, hierarchy, scopeIdentity]);
 
-  const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
+  const currentPage = !authLoading && principalKey && page?.scopeIdentity === scopeIdentity ? page : null;
   const callbackGeneration = generationRef.current;
-  const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
+  const currentError = !authLoading && principalKey && errorState?.scopeIdentity === scopeIdentity ? errorState.message : null;
+  const activeSearch = !authLoading && request.scopeIdentity === scopeIdentity ? request.search ?? '' : '';
 
   useEffect(() => {
     if (!managementEnabled || !currentPage) return;
@@ -470,20 +483,39 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds(accepted);
   }, [currentPage, loading, currentError, principalKey, callbackGeneration]);
 
+  const onSearch = useCallback((value: string) => {
+    if (!principalKey || authLoading || scopeRef.current !== scopeIdentity ||
+        generationRef.current !== callbackGeneration || mutationRef.current ||
+        typeof value !== 'string' || Array.from(value).length > 160 ||
+        /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return;
+    // URI encoding must not throw for an unpaired surrogate.
+    try { encodeURIComponent(value); } catch { return; }
+    const search = value.trim();
+    generationRef.current += 1;
+    destinationRef.current = null;
+    setDestinationState(null);
+    setSelectedSourceIds([]);
+    setPage(null);
+    setErrorState(null);
+    setRequest(previous => ({ principalKey, scopeIdentity, search, cursor: null,
+      parentId: previous.scopeIdentity === scopeIdentity ? previous.parentId ?? null : null,
+      afterFolderId: null, generation: previous.generation + 1 }));
+  }, [principalKey, authLoading, scopeIdentity, callbackGeneration]);
+
   const onRefresh = useCallback(() => {
-    if (!principalKey || authLoading || generationRef.current !== callbackGeneration ||
+    if (!principalKey || authLoading || scopeRef.current !== scopeIdentity || generationRef.current !== callbackGeneration ||
         mutationRef.current?.principalKey === principalKey) return;
     generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
-      principalKey,
+      principalKey, scopeIdentity, search: activeSearch,
       cursor: null,
-      parentId: !currentError && value.principalKey === principalKey ? value.parentId ?? null : null,
+      parentId: !currentError && value.scopeIdentity === scopeIdentity ? value.parentId ?? null : null,
       afterFolderId: null,
       generation: value.generation + 1,
     }));
-  }, [principalKey, authLoading, callbackGeneration, currentError]);
+  }, [principalKey, authLoading, callbackGeneration, currentError, scopeIdentity, activeSearch]);
 
   const onNextPage = useCallback((cursor: string) => {
     if (
@@ -495,13 +527,13 @@ export function FileExplorerInventoryHost({
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
-      principalKey,
+      principalKey, scopeIdentity, search: activeSearch,
       cursor,
       parentId: currentPage.hierarchy?.parentId ?? null,
-      afterFolderId: value.principalKey === principalKey ? value.afterFolderId ?? null : null,
+      afterFolderId: value.scopeIdentity === scopeIdentity ? value.afterFolderId ?? null : null,
       generation: value.generation + 1,
     }));
-  }, [principalKey, currentPage, loading, currentError]);
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch]);
 
   const onNavigate = useCallback((folderId: string | null) => {
     if (!principalKey || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
@@ -512,9 +544,9 @@ export function FileExplorerInventoryHost({
     generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
-    setRequest(value => ({ principalKey, cursor: null, parentId: folderId,
+    setRequest(value => ({ principalKey, scopeIdentity, search: '', cursor: null, parentId: folderId,
       afterFolderId: null, generation: value.generation + 1 }));
-  }, [principalKey, currentPage, loading, currentError]);
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch]);
 
   const onNextFolders = useCallback((folderId: string) => {
     if (!principalKey || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
@@ -523,11 +555,11 @@ export function FileExplorerInventoryHost({
     generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
-    setRequest(value => ({ principalKey,
-      cursor: value.principalKey === principalKey ? value.cursor : null,
+    setRequest(value => ({ principalKey, scopeIdentity, search: activeSearch,
+      cursor: value.scopeIdentity === scopeIdentity ? value.cursor : null,
       parentId: currentPage.hierarchy?.parentId ?? null,
       afterFolderId: folderId, generation: value.generation + 1 }));
-  }, [principalKey, currentPage, loading, currentError]);
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch]);
 
   const loadDestination = useCallback((next: DestinationRequest) => {
     if (generationRef.current !== next.generation || mutationRef.current) return;
@@ -663,11 +695,11 @@ export function FileExplorerInventoryHost({
         setMutationState({ principalKey, busy: false, message });
         setCapability(null);
         setPage(null);
-        setRequest(value => ({ principalKey, cursor: null, parentId: location.parentId,
+        setRequest(value => ({ principalKey, scopeIdentity, search: activeSearch, cursor: null, parentId: location.parentId,
           afterFolderId: null, generation: value.generation + 1 }));
       }
     }
-  }, [managementEnabled, currentPage, loading, currentError, capability, principalKey]);
+  }, [managementEnabled, currentPage, loading, currentError, capability, principalKey, scopeIdentity, activeSearch]);
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
@@ -677,6 +709,8 @@ export function FileExplorerInventoryHost({
     selectedSourceIds: currentPage && !currentError ? selectedSourceIds : [],
     onSelect,
     onRefresh,
+    search: activeSearch,
+    onSearch: principalKey && !authLoading ? onSearch : undefined,
     hasMore: currentPage?.has_more || false,
     nextCursor: currentPage?.next_cursor || null,
     onNextPage,
