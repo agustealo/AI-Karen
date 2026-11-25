@@ -11,7 +11,6 @@ import {
   RefreshCw,
   ShieldCheck,
   Search,
-  Workflow,
 } from "lucide-react";
 
 import useAuth from "@/lib/useAuth";
@@ -549,7 +548,14 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         </section>
       )}
 
-      <section aria-label="Your AI work" className="space-y-4" data-testid="agent-workspace">
+      <nav aria-label="Mission Control sections" className="flex flex-wrap gap-2 border-b border-border pb-3">
+        <Button asChild variant="ghost" size="sm"><a href="#mission-history">Mission history</a></Button>
+        <Button asChild variant="ghost" size="sm"><a href="#mission-approvals">Approvals</a></Button>
+        <Button asChild variant="ghost" size="sm"><a href="#mission-specialists">Specialists</a></Button>
+        <Button asChild variant="ghost" size="sm"><a href="#mission-diagnostics">Diagnostics</a></Button>
+      </nav>
+
+      <section id="mission-history" aria-label="Your AI work" className="scroll-mt-4 space-y-4" data-testid="agent-workspace">
         <div>
           <h3 className="text-lg font-semibold">{isAdmin ? "Tenant execution workspace" : "Mission history"}</h3>
           <p className="text-sm text-muted-foreground">Inspect recorded executions and their verified status.</p>
@@ -612,6 +618,12 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                         <div><dt>Run ID</dt><dd className="break-all">{selectedRun.run_id}</dd></div>
                         <div><dt>Correlation ID</dt><dd className="break-all">{selectedRun.correlation_id || "Not recorded"}</dd></div>
                         <div><dt>Response source</dt><dd>{selectedRun.response_source || "Not recorded"}</dd></div>
+                        {isAdmin && <>
+                          <div><dt>User</dt><dd className="break-all">{selectedRun.user_id || "Not recorded"}</dd></div>
+                          <div><dt>Session</dt><dd className="break-all">{selectedRun.session_id || "Not recorded"}</dd></div>
+                          <div><dt>Policy decision</dt><dd className="break-all">{selectedRun.policy_decision_id || "Not recorded"}</dd></div>
+                          <div><dt>Durability</dt><dd>{selectedRun.durable === undefined ? "Not recorded" : selectedRun.durable ? "Durable" : "Not durable"}</dd></div>
+                        </>}
                       </dl>
                     </details>
                     <div className="mt-4 flex flex-wrap gap-2">
@@ -638,7 +650,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         )}
       </section>
 
-      <section aria-label="Needs your review" className="space-y-3" data-testid="agent-runtime-approvals">
+      <section id="mission-approvals" aria-label="Needs your review" className="scroll-mt-4 space-y-3" data-testid="agent-runtime-approvals">
         <h3 className="text-lg font-semibold">Needs your review</h3>
         <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
         {approvalDecisionError && <p role="alert" className="text-sm text-destructive">{approvalDecisionError}</p>}
@@ -684,7 +696,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         ))}
       </section>
 
-      <details className="rounded-lg border border-border p-3 text-sm"><summary className="cursor-pointer font-medium">Runtime architecture and authorization</summary><Alert className="mt-3">
+      <details id="mission-diagnostics" className="scroll-mt-4 rounded-lg border border-border p-3 text-sm"><summary className="cursor-pointer font-medium">Runtime architecture and authorization</summary><Alert className="mt-3">
         <ShieldCheck className="h-4 w-4" />
         <AlertTitle>Canonical ownership</AlertTitle>
         <AlertDescription>
@@ -710,7 +722,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
         </Alert>
       )}
 
-      <details className="space-y-3 rounded-lg border border-border p-3"><summary className="cursor-pointer font-medium">Registered specialists and diagnostics</summary><section className="mt-3 space-y-3">
+      <section id="mission-specialists" aria-label="Registered specialists" className="scroll-mt-4 space-y-3 rounded-xl border border-border p-4 sm:p-5">
         <div>
           <h3 className="text-lg font-semibold">Registered specialists</h3>
           <p className="text-sm text-muted-foreground">
@@ -775,157 +787,15 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             </CardContent>
           </Card>
         )}
-      </section></details>
+      </section>
 
-      <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer font-medium">Administrative execution diagnostics</summary><section className="mt-3 space-y-3">
-        <div className="flex items-center gap-2">
-          <Workflow className="h-5 w-5 text-primary" />
-          <div>
-            <h3 className="text-lg font-semibold">Execution control</h3>
-            <p className="text-sm text-muted-foreground">
-              {isAdmin
-                ? "Tenant-scoped Medusa run history and cancellation authority."
-                : "Run-level operational controls are available only in the authorized tenant administration workspace. Your chat still uses Medusa automatically when policy selects multi-agent execution."}
-            </p>
-          </div>
-        </div>
-
-        {!isAdmin ? (
-          <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
-              Agent execution activity is surfaced directly in Chat when a
-              multi-agent plan runs. Administrative run history is intentionally
-              excluded from personal work.
-            </CardContent>
-          </Card>
-        ) : (
-          <>
-            {runsError && (
-              <Alert variant="destructive">
-                <AlertTitle>Run control unavailable</AlertTitle>
-                <AlertDescription>{runsError}</AlertDescription>
-              </Alert>
-            )}
-
-            <div className="grid gap-3 md:grid-cols-3">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardDescription>Total visible runs</CardDescription>
-                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : runs.length}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardDescription>Active runs</CardDescription>
-                  <CardTitle>{runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : activeRuns.length}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardDescription>Registered specialists</CardDescription>
-                  <CardTitle>{isLoadingCatalog ? "Loading" : catalogError || !catalog ? "Unavailable" : catalog.total}</CardTitle>
-                </CardHeader>
-              </Card>
-            </div>
-
-            {isLoadingRuns && !runsGeneratedAt && !runsError ? (
-              <Card>
-                <CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                  Loading Medusa run history…
-                </CardContent>
-              </Card>
-            ) : runsError ? (
-              <p className="text-sm text-muted-foreground">Run history is unavailable. Refresh runtime to try again.</p>
-            ) : runs.length ? (
-              <div className="space-y-3">
-                {runs.map((run) => (
-                  <Card key={run.run_id} data-run-id={run.run_id}>
-                    <CardHeader>
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                          <CardTitle className="break-all text-sm">
-                            {run.run_id}
-                          </CardTitle>
-                          <CardDescription>
-                            Started {formatTimestamp(run.started_at)}
-                          </CardDescription>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Badge variant={statusVariant(run.status)}>
-                            {run.status}
-                          </Badge>
-                          {run.durable && <Badge variant="outline">durable</Badge>}
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <dl className="grid gap-2 text-xs text-muted-foreground md:grid-cols-2 xl:grid-cols-3">
-                        <div>
-                          <dt className="font-medium text-foreground">User</dt>
-                          <dd className="break-all">{run.user_id || "Unknown"}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Session</dt>
-                          <dd className="break-all">{run.session_id || "Unknown"}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Policy decision</dt>
-                          <dd className="break-all">
-                            {run.policy_decision_id || "Not recorded"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Correlation ID</dt>
-                          <dd className="break-all">
-                            {run.correlation_id || "Not recorded"}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Completed</dt>
-                          <dd>{formatTimestamp(run.completed_at)}</dd>
-                        </div>
-                        <div>
-                          <dt className="font-medium text-foreground">Response source</dt>
-                          <dd>{run.response_source || "Not recorded"}</dd>
-                        </div>
-                      </dl>
-
-                      {run.error_type && (
-                        <Alert variant="destructive">
-                          <AlertTitle>Run failure</AlertTitle>
-                          <AlertDescription>{run.error_type}</AlertDescription>
-                        </Alert>
-                      )}
-
-                      {run.cancellable && (
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          disabled={isLoadingRuns || cancellationUncertain || cancellingRunId !== null}
-                          onClick={() => void cancelRun(run.run_id)}
-                        >
-                          <CircleStop className="mr-2 h-4 w-4" />
-                          {cancellingRunId === run.run_id
-                            ? "Requesting cancellation…"
-                            : "Cancel run"}
-                        </Button>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            ) : (
-              <Card>
-                <CardContent className="p-6 text-sm text-muted-foreground">
-                  No Medusa execution runs are visible for this tenant.
-                </CardContent>
-              </Card>
-            )}
-          </>
-        )}
-      </section></details>
+      {isAdmin && (
+        <details className="rounded-lg border border-border p-3 text-sm">
+          <summary className="cursor-pointer font-medium">Administrative execution diagnostics</summary>
+          <p className="mt-3 text-muted-foreground">Select an execution in Mission history to inspect its verified user, session, policy decision and durability details. Authorized cancellation controls are available in that inspector only.</p>
+          <p className="mt-2 text-muted-foreground">Execution snapshot: {runsGeneratedAt ? formatTimestamp(runsGeneratedAt) : "Unavailable"}</p>
+        </details>
+      )}
     </div>
   );
 }
