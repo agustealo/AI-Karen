@@ -11,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import { apiClient } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
+import { MAX_DRAFT_ATTACHMENTS, type DraftAttachment } from '../chat/copilotkit/useKarenPersistedDraft';
 import { ContentIntelligenceSelectionPanel } from './ContentIntelligenceSelectionPanel';
 
 interface ExplorerItem {
@@ -79,7 +80,7 @@ const MAX_CURSOR_LENGTH = 768;
 
 // Legacy generic inventory has no execution capability metadata. Preserve its
 // draft-only cap; analysis remains bounded by the existing legacy panel contract.
-const LEGACY_DRAFT_LIMIT = 24;
+const LEGACY_DRAFT_LIMIT = MAX_DRAFT_ATTACHMENTS;
 const LEGACY_ANALYSIS_LIMIT = 12;
 
 function assertInventoryPage(data: unknown, consumer: InventoryConsumer, mode: 'analysis' | 'selection'): InventoryPage {
@@ -167,6 +168,7 @@ export function FileExplorerInventoryHost({
   mode = 'analysis',
   consumer = 'file-explorer',
   onAttach,
+  existingAttachments = [],
   renderAnalysis,
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
@@ -174,6 +176,7 @@ export function FileExplorerInventoryHost({
   mode?: 'analysis' | 'selection';
   /** Trusted UI composition selects a fixed endpoint; the server authorizes it. */
   consumer?: InventoryConsumer;
+  existingAttachments?: readonly DraftAttachment[];
   onAttach?: (references: { source_id: string; revision: string }[]) => void;
   /** Optional layout slot; authorization and selection remain host-owned. */
   renderAnalysis?: (panel: ReactNode, props: FileExplorerInventoryProps) => ReactNode;
@@ -265,11 +268,20 @@ export function FileExplorerInventoryHost({
   const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
   const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
 
+  const attachedIds = new Set(existingAttachments.map(item => item.source_id));
+  const capacity = currentPage ? Math.max(0, Math.min(currentPage.maxSelection,
+    mode === 'selection' ? MAX_DRAFT_ATTACHMENTS - attachedIds.size : currentPage.maxSelection)) : 0;
+  const selectableItems = currentPage?.items.filter(item => mode !== 'selection' || !attachedIds.has(item.source_id)) ?? [];
+  const selectableIds = new Set(selectableItems.map(item => item.source_id));
+  const effectiveSelection = selectedSourceIds.filter(id => selectableIds.has(id));
+  const capacityKey = JSON.stringify([capacity, ...Array.from(attachedIds).sort()]);
+  const capacityRef = useRef(capacityKey);
+  useLayoutEffect(() => { capacityRef.current = capacityKey; }, [capacityKey]);
   const callbackGeneration = generationRef.current;
   const isCurrentCallback = useCallback(() => !scopeRef.current.authLoading &&
     scopeRef.current.principalKey === principalKey &&
-    generationRef.current === callbackGeneration,
-  [principalKey, callbackGeneration]);
+    generationRef.current === callbackGeneration && capacityRef.current === capacityKey,
+  [principalKey, callbackGeneration, capacityKey]);
 
   const onSelect = useCallback((references: ExplorerSelection[]) => {
     if (!isCurrentCallback()) return;
@@ -280,11 +292,11 @@ export function FileExplorerInventoryHost({
     // A plugin UI event is untrusted presentation input, not authority.
     // Never accept a remembered ID with a forged/stale revision or hash.
     // Reject the entire event rather than partially accepting mixed evidence.
-    if (!Array.isArray(references) || references.length > currentPage.maxSelection) {
+    if (!Array.isArray(references) || references.length > capacity) {
       setSelectedSourceIds([]);
       return;
     }
-    const byId = new Map(currentPage.items.map((item) => [item.source_id, item]));
+    const byId = new Map(selectableItems.map((item) => [item.source_id, item]));
     const seen = new Set<string>();
     const accepted: string[] = [];
     for (const reference of references) {
@@ -304,7 +316,7 @@ export function FileExplorerInventoryHost({
       accepted.push(item.source_id);
     }
     setSelectedSourceIds(accepted);
-  }, [currentPage, loading, currentError, isCurrentCallback]);
+  }, [currentPage, loading, currentError, isCurrentCallback, capacity, selectableItems]);
 
   const onRefresh = useCallback(() => {
     if (!principalKey || !isCurrentCallback()) return;
@@ -336,11 +348,11 @@ export function FileExplorerInventoryHost({
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
-    maxSelection: currentPage?.maxSelection ?? 0,
-    items: currentPage?.items || [],
+    maxSelection: capacity,
+    items: selectableItems,
     loading: Boolean(principalKey && !authLoading && (loading || (!currentPage && !currentError))),
     error: currentError,
-    selectedSourceIds: currentPage && !currentError ? selectedSourceIds : [],
+    selectedSourceIds: currentPage && !currentError && effectiveSelection.length <= capacity ? effectiveSelection : [],
     onSelect,
     onRefresh,
     hasMore: currentPage?.has_more || false,
@@ -356,7 +368,7 @@ export function FileExplorerInventoryHost({
     })
     : [];
   const selectedDraftSources = mode === 'selection' && currentPage && !currentError && !loading
-    ? selectedSourceIds.flatMap(id => {
+    ? props.selectedSourceIds.flatMap(id => {
       const item = currentPage.items.find(entry => entry.source_id === id);
       return item ? [{ source_id: item.source_id, revision: item.revision }] : [];
     })
@@ -380,6 +392,7 @@ export function FileExplorerInventoryHost({
         <button type="button" className="m-2 min-h-11 rounded-lg border border-input px-3 text-sm"
           onClick={() => {
             if (!isCurrentCallback() || !currentPage || currentPage.generation !== generationRef.current) return;
+            if (selectedDraftSources.length > capacity) return;
             onAttach(selectedDraftSources);
           }}>
           Attach selected files ({selectedDraftSources.length})

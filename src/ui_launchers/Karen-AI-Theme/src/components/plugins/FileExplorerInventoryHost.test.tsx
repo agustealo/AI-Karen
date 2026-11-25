@@ -781,3 +781,25 @@ describe('KEXP-003E stale callback isolation', () => {
     expect(mocks.get).toHaveBeenCalledTimes(2);
   });
 });
+
+
+describe('KEXP-003F remaining draft capacity', () => {
+  it('excludes attached IDs and rejects a selection exceeding remaining capacity', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue(page);
+    const existing = Array.from({ length: 11 }, (_, i) => ({ source_id: i === 0 ? FILE_A : 'existing-' + i, revision: SHA }));
+    render(<FileExplorerInventoryHost mode="selection" existingAttachments={existing}>{props => {
+      latest = props;
+      return <output>{props.items.map(item => item.name).join(',')}</output>;
+    }}</FileExplorerInventoryHost>);
+    await screen.findByText('beta.txt');
+    await waitFor(() => expect(latest.loading).toBe(false));
+    expect(latest.maxSelection).toBe(1);
+    act(() => latest.onSelect([{ source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file' }]));
+    expect(latest.selectedSourceIds).toEqual([]);
+    act(() => latest.onSelect([{ source_id: FILE_B, revision: SHA, sha256: SHA, kind: 'file' }]));
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+  });
+});
