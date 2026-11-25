@@ -8,6 +8,9 @@ prompts and facade dictionaries cannot issue permission or reset a budget.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -156,6 +159,36 @@ class GovernedToolModelAdmission:
                 raise PermissionError("governed_external_model_execution_denied")
         if not await self.meter.reserve_model_execution(external=external):
             raise RuntimeError("governed_model_execution_budget_exhausted")
+
+    @asynccontextmanager
+    async def admitted_execution_deadline(self) -> AsyncIterator[None]:
+        """Fence already-reserved async work by the original meter deadline.
+
+        Call only after the existing atomic reservation. This is neither
+        another grant nor another reservation, and never resets the clock.
+        Scope expiry is local cancellation, not proof of remote cessation.
+        """
+        self._require_scope()
+        loop = asyncio.get_running_loop()
+        sampled_at = loop.time()
+        remaining = await self.meter.remaining_admitted_duration_ms()
+        deadline = sampled_at + remaining / 1000.0
+        if remaining <= 0 or loop.time() >= deadline:
+            raise RuntimeError("governed_model_execution_deadline_exhausted")
+        scope = asyncio.timeout_at(deadline)
+        try:
+            async with scope:
+                yield
+                # A transport can suppress cancellation and return late.
+                # Do not project its result into a successful SDK receipt.
+                self._require_scope()
+                remaining = await self.meter.remaining_admitted_duration_ms()
+                if scope.expired() or remaining <= 0 or loop.time() >= deadline:
+                    raise RuntimeError("governed_model_execution_deadline_exhausted")
+        except TimeoutError:
+            if scope.expired():
+                raise RuntimeError("governed_model_execution_deadline_exhausted") from None
+            raise
 
     async def reserve_local_embedding(self, *, model: str) -> None:
         """Charge a real local embedding attempt, never a synthetic fallback."""
