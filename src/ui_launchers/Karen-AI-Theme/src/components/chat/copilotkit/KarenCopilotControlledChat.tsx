@@ -72,7 +72,7 @@ export function KarenCopilotControlledChat({
   onOpenAgents?: () => void;
   fileExplorerPluginId?: string;
 }) {
-  const { agent, isReady, refreshVerifiedHistory, recoveryRun } = useKarenScopedAgent();
+  const { agent, isReady, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
   const [draftRecoveryFeedback, setDraftRecoveryFeedback] = useState<string | null>(null);
@@ -113,6 +113,7 @@ export function KarenCopilotControlledChat({
     draft, setText: setDraftText, readText: readDraftText,
     attachments, updateAttachments,
     status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, prepareSubmission,
+    prepareRevisionSubmission, refreshSubmittedDraft,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
   const onDraftChange = useCallback((value: string) => {
@@ -288,29 +289,36 @@ export function KarenCopilotControlledChat({
     setSubmitting(true);
     reportBusy(true);
     setError(null);
-    // This is an explicit user gesture. Durable draft clearance is a
-    // separate canonical CAS write and must succeed before inference starts.
+    // This is an explicit user gesture. Governed runs retain the original
+    // verified draft revision until the backend atomically commits the turn.
+    // Only legacy non-governed history uses the existing pre-run clear.
     void (async () => {
       try {
-        if (!await prepareSubmission(text) || !mounted.current ||
-            agent.threadId !== conversationId) {
+        const submissionId = revisionBoundSubmission
+          ? await prepareRevisionSubmission(text)
+          : await prepareSubmission(text) ? crypto.randomUUID() : null;
+        if (!submissionId || !mounted.current || agent.threadId !== conversationId) {
           if (mounted.current) {
-            setError("The draft could not be safely saved and cleared. No message was sent.");
+            setError(revisionBoundSubmission
+              ? "The original draft revision could not be verified. No message was sent."
+              : "The draft could not be safely saved and cleared. No message was sent.");
           }
           return;
         }
         try {
           agent.addMessage({
-            id: crypto.randomUUID(),
+            id: submissionId,
             role: "user",
             content: text,
           });
         } catch {
           if (mounted.current) {
-            if (!readDraftText()) {
+            if (revisionBoundSubmission && readDraftText().trim() === text) {
+              // The original saved revision still exists; do not rewrite it.
+            } else if (!readDraftText()) {
               setDraftText(text);
             } else {
-              // Never clobber a newer edit while a durable clear is in flight.
+              // Never clobber a newer edit while a durable handoff is in flight.
               setCopyFeedback(null);
               setFailedSubmission(text);
             }
@@ -339,6 +347,12 @@ export function KarenCopilotControlledChat({
           }
         } finally {
           sdkInvocationPending.current = false;
+          if (revisionBoundSubmission && mounted.current && agent.threadId === conversationId) {
+            // Neither SDK resolution nor RUN_ERROR is permission to clear a
+            // draft. Read the authenticated server state, including any
+            // retirement committed despite a lost transport receipt.
+            await refreshSubmittedDraft();
+          }
         }
       } finally {
         submitPending.current = false;
@@ -351,7 +365,8 @@ export function KarenCopilotControlledChat({
   }, [
     agent, conversationId, copilotkit, isReady, prepareSubmission,
     draftStatus, readDraftText, setDraftText, failedSubmission, attachments.length,
-    reportBusy, holdUnverifiedRun, recoveryRun,
+    reportBusy, holdUnverifiedRun, recoveryRun, revisionBoundSubmission,
+    prepareRevisionSubmission, refreshSubmittedDraft,
   ]);
 
   const checkUnverifiedFinality = useCallback(() => {

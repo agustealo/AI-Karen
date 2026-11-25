@@ -20,6 +20,9 @@ const sdk = vi.hoisted(() => ({
   runAgent: vi.fn(),
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
+  prepareRevision: vi.fn(),
+  refreshDraft: vi.fn(),
+  revisionBoundSubmission: false,
   post: vi.fn(),
   get: vi.fn(),
   refreshHistory: vi.fn(),
@@ -77,6 +80,8 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
       synced: sdk.draftSynced,
       failureStatus: sdk.draftFailureStatus,
       prepareSubmission: (...args: unknown[]) => sdk.clearDraft(...args),
+      prepareRevisionSubmission: (...args: unknown[]) => sdk.prepareRevision(...args),
+      refreshSubmittedDraft: sdk.refreshDraft,
       retry: vi.fn(),
       discardAndReload: vi.fn(),
     };
@@ -92,7 +97,7 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
   return {
     useKarenScopedAgent: () => ({
       agent: sdk.agent, isReady: sdk.isReady, refreshVerifiedHistory: sdk.refreshHistory,
-      recoveryRun: sdk.recoveryRun,
+      recoveryRun: sdk.recoveryRun, revisionBoundSubmission: sdk.revisionBoundSubmission,
     }),
   };
 });
@@ -120,6 +125,9 @@ beforeEach(() => {
   sdk.runAgent.mockReset().mockResolvedValue(undefined);
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
+  sdk.prepareRevision.mockReset().mockResolvedValue("draft-v1-7");
+  sdk.refreshDraft.mockReset().mockResolvedValue(undefined);
+  sdk.revisionBoundSubmission = false;
   sdk.refreshHistory.mockReset().mockResolvedValue(true);
   sdk.recoveryRun = null;
   sdk.get.mockReset().mockResolvedValue({
@@ -1115,4 +1123,52 @@ it("blocks draft clearance and inference for a recovered outstanding run", () =>
   expect(sdk.clearDraft).not.toHaveBeenCalled();
   expect(sdk.agent.addMessage).not.toHaveBeenCalled();
   expect(sdk.runAgent).not.toHaveBeenCalled();
+});
+
+
+describe("KUI governed revision-bound submission", () => {
+  it("uses the saved revision as original user ID and never clears before inference", async () => {
+    sdk.revisionBoundSubmission = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original governed question");
+      input().onSubmitMessage("Original governed question");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    expect(sdk.prepareRevision).toHaveBeenCalledWith("Original governed question");
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).toHaveBeenCalledWith({
+      id: "draft-v1-7", role: "user", content: "Original governed question",
+    });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+  });
+
+  it("fails closed without an original revision and never falls back to a random ID", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.prepareRevision.mockResolvedValueOnce(null);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Unsaved question");
+      input().onSubmitMessage("Unsaved question");
+    });
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("original draft revision"));
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(input().value).toBe("Unsaved question");
+  });
+
+  it("rereads the canonical draft after an ambiguous SDK failure without clearing it", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error("connection lost"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original governed question");
+      input().onSubmitMessage("Original governed question");
+    });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(input().value).toBe("Original governed question");
+  });
 });

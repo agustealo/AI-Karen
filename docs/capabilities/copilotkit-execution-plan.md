@@ -1259,3 +1259,8 @@ completion, content-size or presentation validation to silence the UI.
 - Reserve draft-v1-<revision> for durable text-only original submissions. Canonical run admission checks and locks the exact owned draft revision and normalized text inside the same ledger transaction; conflicts roll back admission. No draft clear at admission.
 - Canonical transcript commit verifies the ledger submission identity and retires only the matching draft revision in the same transaction as both messages and the completed run. Failed or interrupted runs and newer edits retain saved text. No new store or migration.
 - This is the backend contract slice; the existing consumer still clears before invoking SDK and must be migrated to revision-bound IDs with verified readback before claiming browser recovery. Regression candidates require exact-head CI and real PostgreSQL evidence. Legacy ingress and independent review remain outstanding.
+
+## KCON-770 / KUI-004B4.48C7Q: Consumer revision-bound submission (2026-11-25, SOURCE_CANDIDATE)
+
+- Governed history's required recovery observation selects the revision-bound consumer path. The canonical draft hook flushes the exact CAS revision without clearing it, derives the reserved original user-message ID, and reads authenticated draft state after the SDK invocation settles. The legacy non-governed bridge retains its existing clear contract; no fallback after governed verification failure.
+- Regression candidates cover stable identity, no pre-run clear, missing receipt denial, ambiguous SDK failure, and server-owned draft retirement. Fresh exact-head frontend/backend and PostgreSQL proof required; no production migration, deployment, or browser acceptance claimed.

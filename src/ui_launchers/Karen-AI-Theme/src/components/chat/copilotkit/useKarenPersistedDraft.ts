@@ -388,10 +388,12 @@ export function useKarenPersistedDraft(conversationId: string) {
     }
   }, [commitDraftWrite, announceRevision]);
 
-  const prepareSubmission = useCallback(async (submittedText: string): Promise<boolean> => {
+  const flushSubmission = useCallback(async (
+    submittedText: string, legacyOptimisticClear: boolean,
+  ): Promise<boolean> => {
     // Enter is a real user gesture, not permission to skip persistence.
     // Flush an edited draft immediately and await a verified CAS receipt
-    // before the existing revision-fenced clear and one SDK model run.
+    // before deriving an original submission identity or the legacy clear.
     if (!activeRef.current || revisionRef.current === null ||
         attachmentsRef.current.length > 0 || !submittedText.trim()) {
       return false;
@@ -416,7 +418,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     if (!activeRef.current || generationRef.current !== generation ||
         attachmentsRef.current.length > 0) return false;
     if (textRef.current.trim() !== submittedText.trim()) {
-      if (textRef.current === "") {
+      if (legacyOptimisticClear && textRef.current === "") {
         textRef.current = submittedText;
         dirtyRef.current = true;
       } else {
@@ -435,6 +437,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     // was in flight, textRef became "" and dirtyRef remained true.
     // Reset dirtyRef since submittedText was confirmed saved.
     if (dirtyRef.current) {
+      if (!legacyOptimisticClear) return false;
       if (textRef.current === "" || textRef.current.trim() === submittedText.trim()) {
         textRef.current = submittedText;
         dirtyRef.current = false;
@@ -442,8 +445,34 @@ export function useKarenPersistedDraft(conversationId: string) {
         return false;
       }
     }
+    return textRef.current.trim() === submittedText.trim();
+  }, [startSave]);
+
+  const prepareSubmission = useCallback(async (submittedText: string): Promise<boolean> => {
+    if (!await flushSubmission(submittedText, true)) return false;
     return clearBeforeSubmit(submittedText);
-  }, [startSave, clearBeforeSubmit]);
+  }, [flushSubmission, clearBeforeSubmit]);
+
+  // Governed admission binds the original saved revision to the run.
+  // Do not clear or advance this revision in the browser: the transcript
+  // transaction retires it only after the completed pair is durable.
+  const prepareRevisionSubmission = useCallback(async (
+    submittedText: string,
+  ): Promise<string | null> => {
+    const generation = generationRef.current;
+    if (!await flushSubmission(submittedText, false)) return null;
+    const revision = revisionRef.current;
+    if (!activeRef.current || generationRef.current !== generation ||
+        busyRef.current || dirtyRef.current || attachmentsRef.current.length > 0 ||
+        textRef.current.trim() !== submittedText.trim() ||
+        revision === null || revision < 1 || revision > Number.MAX_SAFE_INTEGER - 1) return null;
+    return "draft-v1-" + revision;
+  }, [flushSubmission]);
+
+  const refreshSubmittedDraft = useCallback(async () => {
+    // Preserve a newer unsent edit; the regular CAS path owns its recovery.
+    await refresh(false);
+  }, [refresh]);
 
   const retry = useCallback(() => {
     if (!activeRef.current || status !== "unavailable" || busyRef.current) return;
@@ -530,6 +559,7 @@ export function useKarenPersistedDraft(conversationId: string) {
 
   return {
     draft, setText, readText, attachments, updateAttachments, status, synced, failureStatus,
-    clearBeforeSubmit, prepareSubmission, retry, discardAndReload,
+    clearBeforeSubmit, prepareSubmission, prepareRevisionSubmission, refreshSubmittedDraft,
+    retry, discardAndReload,
   };
 }

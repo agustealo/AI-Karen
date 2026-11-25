@@ -148,6 +148,7 @@ function parseRecoveryRun(value: unknown): RecoveryRun | null {
 type ScopedAgentRegistration = ReturnType<typeof useAgent> & {
   refreshVerifiedHistory: () => Promise<boolean>;
   recoveryRun: RecoveryRun | null;
+  revisionBoundSubmission: boolean;
 };
 const ScopedAgentContext = createContext<ScopedAgentRegistration | null>(null);
 
@@ -251,6 +252,7 @@ export function KarenCopilotHistoryGate({
   const { agent, isReady } = registration;
   const [loaded, setLoaded] = useState<string | null>(null);
   const [recoveryRun, setRecoveryRun] = useState<RecoveryRun | null>(null);
+  const [revisionBoundSubmission, setRevisionBoundSubmission] = useState(false);
   const [checkingRecovery, setCheckingRecovery] = useState(false);
   const recoveryCheckInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -286,6 +288,7 @@ export function KarenCopilotHistoryGate({
     let cancelled = false;
     setLoaded(null);
     setRecoveryRun(null);
+    setRevisionBoundSubmission(false);
     setCheckingRecovery(false);
     recoveryCheckInFlight.current = false;
     setError(null);
@@ -343,6 +346,10 @@ export function KarenCopilotHistoryGate({
             if (restoreQueued) continue;
             agent.setMessages(messages);
             setRecoveryRun(pendingRun);
+            // The governed proxy requires the recovery_run field. The
+            // legacy projection never supplies it. Both governed contracts
+            // ship together; admission independently enforces the revision.
+            setRevisionBoundSubmission(Object.hasOwn(snapshot, "recovery_run"));
             setVerifiedParts(parts);
             setTextContinuationActive(textMode);
             setContinuationWindowHasOlder(
@@ -613,7 +620,7 @@ export function KarenCopilotHistoryGate({
     );
   }
   return (
-    <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun }}>
+    <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission }}>
       <KarenVerifiedHistoryProvider parts={verifiedParts}>
         {recoveryRun && (
           <section aria-label="Saved run recovery" className="space-y-2 border-b border-border px-3 py-2">
