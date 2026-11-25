@@ -102,3 +102,89 @@ async def test_opposite_folder_moves_cannot_commit_cycle(isolation):
             )
         finally:
             await first.close()
+
+
+@pytest.mark.parametrize("delete_account", [False, True])
+async def test_artifact_move_after_concurrent_destination_removal(delete_account):
+    """Deletion wins; a waiting assignment must never retain a dead folder."""
+    tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"])
+    owner, folder = uuid4(), uuid4()
+    artifact = str(uuid4())
+    first = await asyncpg.connect(_dsn())
+    second = None
+    pending = None
+    try:
+        second = await asyncpg.connect(_dsn())
+        for conn in (first, second):
+            await conn.execute("SET lock_timeout = '5s'")
+            await conn.execute("SET statement_timeout = '10s'")
+        await first.execute(
+            "INSERT INTO public.auth_users(user_id,tenant_id,email,roles) "
+            "VALUES ($1,$2,$3,'[]'::jsonb)",
+            owner, tenant, f"{owner}@ci.invalid",
+        )
+        await first.execute(
+            "INSERT INTO public.artifact_folders(folder_id,tenant_id,owner_user_id,name) "
+            "VALUES ($1,$2,$3,'Destination')", folder, tenant, owner,
+        )
+        uri = f"supabase://artifacts/{tenant}/{artifact}/content"
+        await first.execute(
+            "INSERT INTO public.files(file_id,tenant_id,owner_user_id,name,mime_type,"
+            "bytes,storage_uri,sha256,metadata) "
+            "VALUES ($1,$2,$3,'proof.txt','text/plain',42,$4,$5,'{}'::jsonb)",
+            artifact, tenant, owner, uri, "a" * 64,
+        )
+
+        async def assign():
+            try:
+                return await second.fetchval(
+                    "UPDATE public.files SET folder_id=$1 "
+                    "WHERE file_id=$2 AND tenant_id=$3 AND owner_user_id=$4 "
+                    "AND deleted_at IS NULL AND organization_revision=1 "
+                    "RETURNING organization_revision",
+                    folder, artifact, tenant, owner,
+                )
+            except (asyncpg.ForeignKeyViolationError, asyncpg.SerializationError,
+                    asyncpg.DeadlockDetectedError):
+                return None
+
+        async with first.transaction():
+            if delete_account:
+                await first.execute("DELETE FROM public.auth_users WHERE user_id=$1", owner)
+            else:
+                await first.execute("DELETE FROM public.artifact_folders WHERE folder_id=$1", folder)
+            pending = asyncio.create_task(assign())
+            for _ in range(100):
+                if await first.fetchval(
+                    "SELECT cardinality(pg_blocking_pids($1)) > 0", second.get_server_pid()
+                ):
+                    break
+                if pending.done():
+                    pytest.fail("Assignment did not contend with uncommitted deletion")
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("Assignment never contended with deletion")
+        assert await asyncio.wait_for(pending, timeout=12) is None
+        row = await first.fetchrow(
+            "SELECT tenant_id,owner_user_id,folder_id,organization_revision,storage_uri,sha256,bytes "
+            "FROM public.files WHERE file_id=$1", artifact,
+        )
+        assert row is not None
+        assert row["tenant_id"] == tenant
+        assert row["owner_user_id"] == (None if delete_account else owner)
+        assert row["folder_id"] is None and row["organization_revision"] == 1
+        assert row["storage_uri"] == uri and row["sha256"] == "a" * 64 and row["bytes"] == 42
+        assert not await first.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM public.artifact_folders WHERE folder_id=$1)", folder,
+        )
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        if second is not None:
+            await second.close()
+        try:
+            await first.execute("DELETE FROM public.files WHERE file_id=$1", artifact)
+            await first.execute("DELETE FROM public.auth_users WHERE user_id=$1", owner)
+        finally:
+            await first.close()
