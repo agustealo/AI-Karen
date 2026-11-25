@@ -138,7 +138,8 @@ def test_soft_reasoning_activation_injects_runtime_composed_strategy(monkeypatch
     )
 
 
-def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeypatch) -> None:
+@pytest.mark.parametrize("model_calls", [10, 30])
+def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeypatch, model_calls) -> None:
     import ai_karen_engine.core.runtime.reasoning_bridge as bridge_module
 
     monkeypatch.setattr(
@@ -147,7 +148,7 @@ def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeyp
         lambda: DummyComposer(),
     )
 
-    plan = _plan(model_calls=10)
+    plan = _plan(model_calls=model_calls)
     context, meter = _bound_scope(plan)
     monkeypatch.setattr(
         bridge_module, "get_runtime_soft_reasoning_composer",
@@ -160,7 +161,7 @@ def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeyp
         RuntimeReasoningBridge().activate(
             objective="Solve the problem",
             evidence=[],
-            decision=_decision(model_calls=10),
+            decision=_decision(model_calls=model_calls),
             plan=plan,
             preferred_provider=None,
             preferred_model=None,
@@ -256,7 +257,7 @@ def test_execution_decision_keeps_reasoning_and_model_call_budgets_distinct() ->
     decision = _decision(model_calls=30)
 
     assert decision.max_steps == 4
-    assert decision.max_model_calls == 31
+    assert decision.max_model_calls == 30
 
 
 def test_execution_decision_canonicalizes_reasoning_mode_aliases_once() -> None:
