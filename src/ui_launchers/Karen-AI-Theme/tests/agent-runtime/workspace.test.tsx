@@ -285,4 +285,36 @@ describe("runtime projection validation", () => {
     } finally { visibility.mockRestore(); }
   });
 
+
+  it("preserves history and blocks cancellation retries until a verified refresh", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const cancellableRun = { ...run, cancellable: true };
+    const reconciliation = deferred<unknown>();
+    let tenantReads = 0;
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      mocks.get.mockImplementation((path: string) => {
+        if (path === "/api/admin/agents/runs?include_terminal=true") return ++tenantReads === 1 ? Promise.resolve(history([cancellableRun])) : reconciliation.promise;
+        if (path.endsWith("/" + run.run_id)) return Promise.resolve(cancellableRun);
+        return fallback(path);
+      });
+      mocks.post.mockRejectedValue(new Error("Response lost"));
+      render(<AgentsPage />);
+      fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+      fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+      const cancel = await screen.findByRole("button", { name: "Request cancellation" });
+      fireEvent.click(cancel);
+      await screen.findByText("Cancellation outcome could not be verified. Refresh to inspect current execution status.");
+      expect(screen.getByRole("button", { name: /Execution run-1234/ })).toBeTruthy();
+      expect((cancel as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(cancel);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect((cancel as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => { reconciliation.resolve(history([cancellableRun])); });
+      await waitFor(() => expect((screen.getByRole("button", { name: "Request cancellation" }) as HTMLButtonElement).disabled).toBe(false));
+      expect(screen.queryByText(/Cancellation outcome could not be verified/)).toBeNull();
+    } finally { visibility.mockRestore(); }
+  });
+
 });
