@@ -87,12 +87,12 @@ DO $$ BEGIN
         RAISE EXCEPTION 'folder cleanup failed';
     END IF;
 END $$;
-DO $ BEGIN
+DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.files WHERE file_id='folder-proof-file'
         AND owner_user_id IS NULL AND folder_id IS NULL AND organization_revision=4
         AND tenant_id='a0000000-0000-4000-8000-000000000001'
         AND storage_uri='fixture://proof' AND sha256=repeat('a',64)) THEN
         RAISE EXCEPTION 'account deletion changed retained artifact or left folder reference';
     END IF;
-END $;
+END $$;
 ROLLBACK;

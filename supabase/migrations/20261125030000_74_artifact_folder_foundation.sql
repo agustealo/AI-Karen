@@ -82,7 +82,7 @@ CREATE INDEX idx_files_owner_folder_page
 -- Account deletion can null the file owner before cascading folder deletion.
 -- Clear the association in that same row update, independent of FK trigger order.
 CREATE FUNCTION public.guard_file_folder_organization() RETURNS trigger
-LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $
+LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $$
 BEGIN
     IF TG_OP = 'UPDATE' THEN
         IF NEW.owner_user_id IS NULL AND OLD.owner_user_id IS NOT NULL THEN
@@ -98,7 +98,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$;
+$$;
 CREATE TRIGGER file_folder_organization_guard
     BEFORE INSERT OR UPDATE ON public.files
     FOR EACH ROW EXECUTE FUNCTION public.guard_file_folder_organization();
