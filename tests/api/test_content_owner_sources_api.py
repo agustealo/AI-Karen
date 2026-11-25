@@ -387,6 +387,7 @@ async def test_content_inventory_ingress_delegates_authenticated_scope(monkeypat
 async def test_content_inventory_rejects_invalid_service_ceiling(monkeypatch, ceiling):
     monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
         has_permission=lambda *_: True,
+        get_user_permissions=lambda *_: [ingress.Permission.DATA_READ],
         audit_access_attempt=lambda *args, **kwargs: None,
     ))
     service = SimpleNamespace(list_content_owner_page=AsyncMock(return_value={
@@ -404,3 +405,4 @@ async def test_content_inventory_rejects_invalid_service_ceiling(monkeypatch, ce
         )
     assert exc.value.status_code == 503
     assert exc.value.detail == "Content inventory is unavailable"
+    service.list_content_owner_page.assert_awaited_once()

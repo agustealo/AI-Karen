@@ -32,6 +32,7 @@ from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
 )
 from ai_karen_engine.core.runtime.policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
+from ai_karen_engine.core.runtime.policy.runtime_policy import FileExplorerOperationScope
 from ai_karen_engine.extensions.contracts import (
     ExtensionExecutionContext,
     ExtensionExecutionRequest,
@@ -157,7 +158,7 @@ class PluginService:
     async def _prepare_file_explorer(
         self, *, user_id: str, tenant_id: str, roles: List[str],
         permissions: List[str], request_id: str, correlation_id: str,
-        mutation: Optional[str] = None, resource_scope: Optional[Dict[str, Any]] = None,
+        mutation: Optional[str] = None, resource_scope: Optional[FileExplorerOperationScope] = None,
     ):
         """Shared fresh policy admission for the trusted Explorer host."""
         from ai_karen_engine.auth.rbac_middleware import (
@@ -208,7 +209,7 @@ class PluginService:
                 action="plugin_execution",
                 plugin_id="file-explorer",
                 requested_capabilities=capabilities,
-                resource_scope=resource_scope or {},
+                resource_scope=resource_scope,
             )
         )
         if not decision.allowed or decision.requires_human_gate:

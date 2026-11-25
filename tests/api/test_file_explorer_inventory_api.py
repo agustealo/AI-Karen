@@ -97,6 +97,15 @@ async def test_owner_inventory_evaluates_runtime_policy_and_uses_one_kernel(monk
     from ai_karen_engine.services.database.repositories import repository_factory
 
     repository = Repository()
+    service, kernel, policy = _service()
+    list_page = repository.list_owner_artifacts_page
+
+    async def admitted_list(*args, **kwargs):
+        assert len(kernel.calls) == 1
+        assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
+        return await list_page(*args, **kwargs)
+
+    repository.list_owner_artifacts_page = admitted_list
     monkeypatch.setattr(
         database_factory,
         "get_database_client",
@@ -107,10 +116,13 @@ async def test_owner_inventory_evaluates_runtime_policy_and_uses_one_kernel(monk
         "RepositoryFactory",
         lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository),
     )
-    service, kernel, policy = _service()
     page = await PluginService.list_file_explorer_owner_page(service, **_args())
     assert repository.calls == [(TENANT, OWNER, 25, None)]
-    assert len(kernel.calls) == 1
+    assert len(kernel.calls) == 2
+    assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
+    assert kernel.calls[1].context.resource_scope["file_explorer_entries"] == page["items"]
+    assert kernel.calls[0].authorized_plan is kernel.calls[1].authorized_plan
+    assert policy.evaluate.await_count == 1
     assert page["items"][0]["source_id"] == FILE
     assert page["items"][0]["sha256"] == SHA
     assert page["next_cursor"] is None
@@ -644,6 +656,9 @@ async def test_real_runtime_policy_requires_owner_entitlement(operation):
         **kwargs, permissions=["data:read", entitlement],
     ))
     assert granted.allowed and operation in granted.allowed_capabilities
+    plan = granted.to_authorized_plan()
+    assert plan.resource_scope == {"operation": operation}
+    assert plan.resource_scope is not granted.resource_scope
     kwargs["resource_scope"] = {"operation": "file_explorer.unknown"}
     assert not (await policy.evaluate(PolicyEvaluationRequest(
         **kwargs, permissions=["data:read", entitlement],
@@ -726,6 +741,7 @@ async def test_hierarchy_search_is_delegated_with_authenticated_folder_scope(mon
 
     monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
         has_permission=lambda *_: True,
+        get_user_permissions=lambda *_: [ingress.Permission.DATA_READ],
         audit_access_attempt=lambda *args, **kwargs: None,
     ))
     service = SimpleNamespace(list_file_explorer_owner_page=AsyncMock(return_value={
@@ -775,6 +791,7 @@ async def test_inventory_route_forwards_search_only_after_rbac(monkeypatch, cons
     audit = []
     monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
         has_permission=lambda *_: allowed,
+        get_user_permissions=lambda *_: [ingress.Permission.DATA_READ] if allowed else [],
         audit_access_attempt=lambda *args, **kwargs: audit.append(kwargs),
     ))
     page = dict(items=[], has_more=False, next_cursor=None,
@@ -803,3 +820,16 @@ async def test_inventory_route_forwards_search_only_after_rbac(monkeypatch, cons
     assert audit and audit[0]["granted"] is allowed
     assert "search" not in audit[0]["additional_context"]
     assert "cursor" not in audit[0]["additional_context"]
+
+
+def test_policy_plan_rejects_operation_scope_outside_authorized_explorer():
+    decision = PolicyDecision(
+        decision_id="foreign-scope", policy_version="v2", allowed=True,
+        allowed_capabilities=["data:read"],
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["content-intelligence"]},
+        resource_scope={"operation": "file_explorer.folder.create", "name": "Reports"},
+    )
+    with pytest.raises(ValueError, match="policy_operation_scope_invalid"):
+        decision.to_authorized_plan()

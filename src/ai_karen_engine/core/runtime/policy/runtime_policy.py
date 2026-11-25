@@ -15,7 +15,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, NotRequired, Optional, TypedDict
 from weakref import WeakValueDictionary, finalize
 
 from ai_karen_engine.core.runtime.contracts import (
@@ -71,6 +71,19 @@ class PolicyResourceScope:
     forbidden_networks: List[str] = field(default_factory=list)
 
 
+class FileExplorerOperationScope(TypedDict):
+    """Exact owner-organization operation arguments, not filesystem paths."""
+
+    operation: str
+    availability_only: NotRequired[bool]
+    name: NotRequired[str]
+    folder_id: NotRequired[str]
+    parent_folder_id: NotRequired[str | None]
+    source_id: NotRequired[str]
+    destination_id: NotRequired[str | None]
+    expected_revision: NotRequired[int]
+
+
 @dataclass
 class ProviderConstraints:
     """Typed provider constraints from policy decision."""
@@ -119,7 +132,7 @@ class PolicyEvaluationRequest:
     tool_id: Optional[str] = None
     provider_constraints: Optional[ProviderConstraints] = None
     environment: str = "production"
-    resource_scope: Optional[PolicyResourceScope] = None
+    resource_scope: PolicyResourceScope | FileExplorerOperationScope | None = None
     execution_topology: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -138,7 +151,7 @@ class PolicyDecision:
     reasoning_denial_reasons: Dict[str, List[str]] = field(default_factory=dict)
     requires_human_gate: bool = False
     runtime_constraints: Dict[str, Any] = field(default_factory=dict)
-    resource_scope: Optional[PolicyResourceScope] = None
+    resource_scope: PolicyResourceScope | FileExplorerOperationScope | None = None
     provider_constraints: Optional[ProviderConstraints] = None
     resource_constraints: Optional[ResourceConstraints] = None
     risk_level: Optional[str] = None
@@ -166,6 +179,36 @@ class PolicyDecision:
             topology = ExecutionTopology.WORKFLOW
 
         resource = self.resource_constraints
+        scope = self.resource_scope
+        plan_scope: Dict[str, Any] = {}
+        if isinstance(scope, PolicyResourceScope):
+            plan_scope = {
+                "allowed_paths": list(scope.allowed_paths),
+                "forbidden_paths": list(scope.forbidden_paths),
+                "max_file_size_mb": scope.max_file_size_mb,
+            }
+        elif isinstance(scope, dict):
+            # Explorer's exact mutation arguments are a different contract
+            # from path/network constraints. Never forward arbitrary maps
+            # into another plugin's authorization plan.
+            from ai_karen_engine.auth.rbac_middleware import (
+                FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+            )
+
+            operation = scope.get("operation")
+            entitlement = (FILE_EXPLORER_MUTATION_PERMISSIONS.get(operation)
+                           if isinstance(operation, str) else None)
+            if self.allowed and scope:
+                if (
+                    entitlement is None
+                    or "file-explorer" not in (self.runtime_constraints.get("allowed_plugins") or [])
+                    or not {"file-explorer", Permission.DATA_READ.value,
+                            entitlement.value, operation}.issubset(self.allowed_capabilities)
+                ):
+                    raise ValueError("policy_operation_scope_invalid")
+                plan_scope = deepcopy(dict(scope))
+        elif scope is not None:
+            raise ValueError("policy_resource_scope_invalid")
         return AuthorizedExecutionPlan(
             execution_id=self.decision_id,
             policy_decision_id=self.decision_id,
@@ -194,15 +237,7 @@ class PolicyDecision:
                 else {}
             ),
             memory_scope=str(self.runtime_constraints.get("memory_scope", "session")),
-            resource_scope=(
-                {
-                    "allowed_paths": list(self.resource_scope.allowed_paths),
-                    "forbidden_paths": list(self.resource_scope.forbidden_paths),
-                    "max_file_size_mb": self.resource_scope.max_file_size_mb,
-                }
-                if self.resource_scope
-                else {}
-            ),
+            resource_scope=plan_scope,
             budget=ExecutionBudget(
                 max_duration_ms=(resource.max_wall_time_seconds * 1000 if resource else 30000),
                 max_model_calls=int(self.runtime_constraints.get("max_model_calls", 10)),
