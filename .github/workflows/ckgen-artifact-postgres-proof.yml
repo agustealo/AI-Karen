@@ -15,6 +15,7 @@ on:
       - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
+      - "tests/integration/test_artifact_folder_concurrency_postgres.py"
       - "tests/integration/test_upload_session_rls_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   push:
@@ -31,6 +32,7 @@ on:
       - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
+      - "tests/integration/test_artifact_folder_concurrency_postgres.py"
       - "tests/integration/test_upload_session_rls_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   workflow_dispatch:
@@ -262,11 +264,13 @@ jobs:
             tests/services/test_artifact_storage_platform_client.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
+            tests/integration/test_artifact_folder_concurrency_postgres.py \
             tests/integration/test_upload_session_rls_postgres.py
           pytest tests/services/test_artifact_owner_paging_contract.py \
             tests/services/test_artifact_storage_platform_client.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
+            tests/integration/test_artifact_folder_concurrency_postgres.py \
             tests/integration/test_upload_session_rls_postgres.py \
             -q -rs --junitxml=ckgen-artifact-postgres-junit.xml
 
