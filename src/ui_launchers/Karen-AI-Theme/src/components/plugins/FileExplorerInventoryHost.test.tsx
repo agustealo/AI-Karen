@@ -611,3 +611,49 @@ describe('Standalone Content Intelligence workspace', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 });
+
+
+describe('KEXP-002A shared explorer interaction feedback', () => {
+  it('distinguishes filtered results from empty inventory and clears the filter', async () => {
+    mocks.get.mockResolvedValue(response(FILE_A, true, 'owner-scoped-cursor'));
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'unmatched' } });
+    expect(screen.getByText('No matching references on this page.')).toBeTruthy();
+    expect(screen.getByText(/Filtering and sorting apply only to this page/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
+    expect(screen.getByRole('checkbox', { name: 'Select alpha.txt' })).toBeTruthy();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables a 25th selection, permits deselection, and clears through the host', async () => {
+    const page = response(FILE_A);
+    page.items = Array.from({ length: 25 }, (_, i) => ({
+      ...page.items[0],
+      source_id: '44444444-4444-4444-8444-' + String(i + 1).padStart(12, '0'),
+      name: 'file-' + String(i + 1).padStart(2, '0') + '.txt',
+    }));
+    mocks.get.mockResolvedValue(page);
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select file-01.txt' });
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(25);
+    boxes.slice(0, 24).forEach(box => fireEvent.click(box));
+    expect(boxes[24].disabled).toBe(true);
+    expect(screen.getByText(/Selection limit reached/)).toBeTruthy();
+    fireEvent.click(boxes[0]);
+    expect(boxes[24].disabled).toBe(false);
+    fireEvent.click(boxes[24]);
+    expect(boxes[24].checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(boxes.every(box => !box.checked && !box.disabled)).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+  });
+
+  it('reports empty authorized inventory without a filtered-results message', async () => {
+    mocks.get.mockResolvedValue({ ...response(FILE_A), items: [] });
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByText('No files or folders in this view.');
+    expect(screen.queryByText('No matching references on this page.')).toBeNull();
+  });
+});

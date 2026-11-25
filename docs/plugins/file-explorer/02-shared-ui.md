@@ -86,3 +86,17 @@ revocation and RLS proofs. Test Storage bytes are an in-process fixture.
 A passing run is **real PostgreSQL authorization/revision evidence**, not
 live Supabase object-store integration, a production runtime deployment,
 or authenticated browser consumer acceptance. Those remain separate gates.
+
+
+## KEXP-002A: page-aware interaction feedback
+
+The shared component explicitly labels filtering as loaded-page-only, distinguishes
+an empty view from a filter miss, and exposes a clear-filter action. At the
+existing 24-reference multi-selection cap, unchecked items are disabled while
+selected items remain deselectable. Clear selection uses the existing host
+callback; refresh and next page still invalidate the current selection. No
+cross-page persistence, global search, folder inventory, or new content grant
+is introduced. The canonical UI and published frontend projection must remain
+byte-identical. The existing host Vitest suite exercises these interactions
+through the shared Content Intelligence workspace. Browser acceptance and
+exact-head CI remain required.
