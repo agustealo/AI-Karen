@@ -842,7 +842,7 @@ describe('shared Explorer accessible organization controls', () => {
     fireEvent.click(rename);
     const input = screen.getByLabelText('Folder name');
     expect(document.activeElement).toBe(input);
-    expect((screen.getByRole('button', { name: 'Root', exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /^Root$/ }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByLabelText('Folder name')).toBeNull();
     expect(document.activeElement).toBe(rename);

@@ -47,7 +47,10 @@ def test_live_file_explorer_acceptance_is_not_a_mock_or_skipped_proof():
     assert "KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE" in source
     assert "signInApprovedKaren" in source
     assert 'import { expect, test } from "./fixtures/verified-search-deployment";' in source
-    assert "/api/plugins/file-explorer/inventory" in source
+    assert "/api/plugins/file-explorer/hierarchy" in source
+    assert "KAREN_FILE_EXPLORER_REQUIRE_NESTED" in source
+    assert "parent_folder_id" in source
+    assert "organization_revision" in source
     assert "firstPage.items.length" in source
     assert "expect(firstPage.has_more" in source
     assert "route.fulfill(" not in source

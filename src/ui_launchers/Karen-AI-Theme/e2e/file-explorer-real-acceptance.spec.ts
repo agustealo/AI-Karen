@@ -5,7 +5,7 @@ import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 /**
  * Real authenticated File Explorer acceptance. No mocked routes, files,
  * authentication or plugin availability. The source is the live owner-scoped
- * ArtifactStore behind /api/plugins/file-explorer/inventory.
+ * ArtifactStore behind /api/plugins/file-explorer/hierarchy.
  *
  * Opt-in: KAREN_FILE_EXPLORER_ACCEPTANCE=true
  * Local loopback requires KAREN_LOCAL_CHAT_ACCEPTANCE=1.
@@ -28,18 +28,28 @@ const widths = [
 
 interface Source {
   source_id: string;
-  parent_id: null;
+  parent_id: string | null;
   kind: "file";
   name: string;
   revision: string;
   size_bytes: number;
   sha256: string;
+  organization_revision: string;
+}
+interface Folder {
+  folder_id: string;
+  parent_folder_id: string | null;
+  name: string;
+  revision: string;
 }
 interface Inventory {
   items: Source[];
   has_more: boolean;
   next_cursor: string | null;
-  inventory_semantics: "owner_metadata_page_not_live_acl";
+  folders: Folder[];
+  breadcrumbs: Folder[];
+  folders_has_more: boolean;
+  next_folder_id: string | null;
   request_id: string;
   correlation_id: string;
 }
@@ -63,44 +73,80 @@ function trustedOrigin(): URL {
   return url;
 }
 
-function inventoryResponse(raw: unknown): Inventory {
+const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+const validRevision = (value: unknown): value is string => typeof value === "string" &&
+  /^[1-9][0-9]{0,18}$/.test(value) && (value.length < 19 || value <= "9223372036854775806");
+
+function inventoryResponse(raw: unknown, parent: string | null = null): Inventory {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("Real inventory response is not an object");
+    throw new Error("Real hierarchy response is not an object");
   }
   const data = raw as Record<string, unknown>;
-  if (!Array.isArray(data.items) || data.items.length > 200 ||
-      typeof data.has_more !== "boolean" ||
-      data.inventory_semantics !== "owner_metadata_page_not_live_acl" ||
+  if (data.available !== true || !Array.isArray(data.files) || data.files.length > 100 ||
+      !Array.isArray(data.folders) || data.folders.length > 100 ||
+      !Array.isArray(data.breadcrumbs) || data.breadcrumbs.length > 64 ||
+      typeof data.has_more !== "boolean" || typeof data.files_has_more !== "boolean" ||
       typeof data.request_id !== "string" || !data.request_id ||
       typeof data.correlation_id !== "string" || !data.correlation_id ||
-      (data.has_more ? typeof data.next_cursor !== "string" ||
-        !data.next_cursor || data.items.length === 0 : data.next_cursor !== null)) {
-    throw new Error("Real inventory metadata contract is invalid");
+      (data.files_has_more ? typeof data.next_file_cursor !== "string" ||
+        !data.next_file_cursor || data.next_file_cursor.length > 768 || data.files.length === 0 :
+        data.next_file_cursor !== null) ||
+      (data.has_more ? typeof data.next_folder_id !== "string" ||
+        !uuidPattern.test(data.next_folder_id) || data.folders.length === 0 :
+        data.next_folder_id !== null)) {
+    throw new Error("Real hierarchy metadata contract is invalid");
   }
   const seen = new Set<string>();
-  for (const entry of data.items) {
+  function checkFolder(rawFolder: unknown, expectedParent: string | null): Folder {
+    if (!rawFolder || typeof rawFolder !== "object" || Array.isArray(rawFolder)) {
+      throw new Error("Malformed folder evidence");
+    }
+    const folder = rawFolder as Record<string, unknown>;
+    if (typeof folder.folder_id !== "string" || !uuidPattern.test(folder.folder_id) ||
+        seen.has(folder.folder_id) || folder.folder_id === expectedParent ||
+        folder.parent_folder_id !== expectedParent ||
+        typeof folder.name !== "string" || !folder.name || folder.name.length > 256 ||
+        !validRevision(folder.revision)) throw new Error("Invalid folder evidence");
+    seen.add(folder.folder_id);
+    return folder as unknown as Folder;
+  }
+  let prior: string | null = null;
+  const breadcrumbs = data.breadcrumbs.map(crumb => {
+    const folder = checkFolder(crumb, prior);
+    prior = folder.folder_id;
+    return folder;
+  });
+  if (prior !== parent) throw new Error("Breadcrumb chain does not end at requested parent");
+  const folders = data.folders.map(folder => checkFolder(folder, parent));
+  if (data.has_more && folders[folders.length - 1]?.folder_id !== data.next_folder_id) {
+    throw new Error("Folder pagination anchor is not the last returned folder");
+  }
+  for (const entry of data.files) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       throw new Error("Real file inventory entry is malformed");
     }
     const file = entry as Record<string, unknown>;
-    if (typeof file.source_id !== "string" || seen.has(file.source_id) ||
-        file.kind !== "file" || file.parent_id !== null ||
+    if (typeof file.source_id !== "string" || !uuidPattern.test(file.source_id) || seen.has(file.source_id) ||
+        file.kind !== "file" || file.parent_id !== parent ||
         typeof file.name !== "string" || !file.name || file.name.length > 256 ||
         typeof file.revision !== "string" || !/^[a-f0-9]{64}$/.test(file.revision) ||
-        file.revision !== file.sha256 ||
+        file.revision !== file.sha256 || !validRevision(file.organization_revision) ||
         typeof file.size_bytes !== "number" || !Number.isSafeInteger(file.size_bytes) || file.size_bytes < 0) {
       throw new Error("Real file inventory item violates the source contract");
     }
     seen.add(file.source_id);
   }
-  return data as unknown as Inventory;
+  return { items: data.files as Source[], folders, breadcrumbs,
+    has_more: data.files_has_more, next_cursor: data.next_file_cursor as string | null,
+    folders_has_more: data.has_more, next_folder_id: data.next_folder_id as string | null,
+    request_id: data.request_id, correlation_id: data.correlation_id };
 }
 
 async function nextRealPage(page: Page, target: URL) {
   return page.waitForResponse((response) => {
     const url = new URL(response.url());
     return url.origin === target.origin &&
-      url.pathname === "/api/plugins/file-explorer/inventory" &&
+      url.pathname === "/api/plugins/file-explorer/hierarchy" &&
       response.request().method() === "GET";
   }, { timeout: 45_000 });
 }
@@ -118,10 +164,14 @@ async function verifyDisplayedInventory(page: Page, inventory: Inventory) {
   const explorer = page.getByRole("region", { name: "Shared File Explorer" });
   await expect(explorer).toBeVisible();
   const entries = explorer.getByRole("list", { name: "Files and folders" });
-  if (inventory.items.length === 0) {
+  const count = inventory.items.length + inventory.folders.length;
+  if (count === 0) {
     await expect(explorer.getByText("No files or folders in this view.")).toBeVisible();
   } else {
-    await expect(entries.getByRole("listitem")).toHaveCount(inventory.items.length);
+    await expect(entries.getByRole("listitem")).toHaveCount(count);
+    for (const folder of inventory.folders) {
+      await expect(entries.getByRole('button', { name: 'Open folder ' + folder.name, exact: true }).first()).toBeVisible();
+    }
     const pageNames = await entries.getByRole("listitem").allTextContents();
     for (const artifact of inventory.items) {
       expect(
@@ -131,12 +181,17 @@ async function verifyDisplayedInventory(page: Page, inventory: Inventory) {
     }
   }
   await expect(explorer.getByText(
-    new RegExp(`\\b${inventory.items.length} shown on this page\\b`),
+    new RegExp(`\\b${count} shown on this page\\b`),
   )).toBeVisible();
   if (inventory.has_more) {
-    await expect(explorer.getByRole("button", { name: "Next page" })).toBeEnabled();
+    await expect(explorer.getByRole("button", { name: "Next file page" })).toBeEnabled();
   } else {
-    await expect(explorer.getByRole("button", { name: "Next page" })).toHaveCount(0);
+    await expect(explorer.getByRole("button", { name: "Next file page" })).toHaveCount(0);
+  }
+  if (inventory.folders_has_more) {
+    await expect(explorer.getByRole('button', { name: 'Next folder page' })).toBeEnabled();
+  } else {
+    await expect(explorer.getByRole('button', { name: 'Next folder page' })).toHaveCount(0);
   }
 }
 
@@ -180,7 +235,7 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
 
   const explorer = page.getByRole("region", { name: "Shared File Explorer" });
   const firstFileCheckbox = explorer.getByRole("list", { name: "Files and folders" })
-    .getByRole("listitem").first().getByRole("checkbox");
+    .getByRole("checkbox").first();
   await expect(firstFileCheckbox).not.toBeChecked();
   await firstFileCheckbox.check();
   await expect(firstFileCheckbox).toBeChecked();
@@ -203,7 +258,7 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
     await verifyDisplayedInventory(page, firstPage);
     await expect(explorer.getByRole("list", { name: "Files and folders" })
-      .getByRole("listitem").first().getByRole("checkbox")).toBeChecked();
+      .getByRole("checkbox").first()).toBeChecked();
     await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
   }
 
@@ -213,7 +268,7 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   await expect(filter).toBeFocused();
   await filter.fill(firstPage.items[0].name);
   await expect(explorer.getByRole("listitem")).toHaveCount(
-    firstPage.items.filter((item) => item.name.toLowerCase().includes(firstPage.items[0].name.toLowerCase())).length,
+    [...firstPage.items, ...firstPage.folders].filter((item) => item.name.toLowerCase().includes(firstPage.items[0].name.toLowerCase())).length,
   );
   await filter.fill("");
 
@@ -222,10 +277,10 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   }
   if (firstPage.has_more) {
     const next = nextRealPage(page, origin);
-    await explorer.getByRole("button", { name: "Next page" }).click();
+    await explorer.getByRole("button", { name: "Next file page" }).click();
     const secondResponse = await next;
     expect(secondResponse.status()).toBe(200);
-    const cursorSent = new URL(secondResponse.request().url()).searchParams.get("cursor");
+    const cursorSent = new URL(secondResponse.request().url()).searchParams.get("file_cursor");
     expect(cursorSent, "The UI must forward the precise backend-owned cursor").toBe(firstPage.next_cursor);
     const secondPage = inventoryResponse(await secondResponse.json());
     expect(secondPage.items.length).toBeGreaterThan(0);
@@ -235,7 +290,7 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     await verifyDisplayedInventory(page, secondPage);
     await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
     const secondFileCheckbox = explorer.getByRole("list", { name: "Files and folders" })
-      .getByRole("listitem").first().getByRole("checkbox");
+      .getByRole("checkbox").first();
     await secondFileCheckbox.check();
     await expect(secondFileCheckbox).toBeChecked();
     await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
@@ -245,14 +300,39 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   await explorer.getByRole("button", { name: "Refresh" }).click();
   const refreshedResponse = await refresh;
   expect(refreshedResponse.status()).toBe(200);
-  expect(new URL(refreshedResponse.request().url()).searchParams.has("cursor"),
+  expect(new URL(refreshedResponse.request().url()).searchParams.has("file_cursor"),
     "Refresh must request a fresh first owner page, not retain the old cursor").toBe(false);
   const refreshed = inventoryResponse(await refreshedResponse.json());
   await verifyDisplayedInventory(page, refreshed);
   await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
   if (refreshed.items.length > 0) {
     await expect(explorer.getByRole("list", { name: "Files and folders" })
-      .getByRole("listitem").first().getByRole("checkbox")).not.toBeChecked();
+      .getByRole("checkbox").first()).not.toBeChecked();
+  }
+
+  // Observe real nested navigation when a sanitized fixture exists.
+  // The protected fixture may explicitly require nested proof; absence is not a pass.
+  if (process.env.KAREN_FILE_EXPLORER_REQUIRE_NESTED === "true") {
+    expect(refreshed.folders.length, "A real root folder fixture is required").toBeGreaterThan(0);
+  }
+  if (refreshed.folders.length > 0) {
+    const folder = refreshed.folders[0];
+    const next = nextRealPage(page, origin);
+    await explorer.getByRole("button", { name: "Open folder " + folder.name, exact: true }).first().click();
+    const nestedHttp = await next;
+    expect(nestedHttp.status()).toBe(200);
+    expect(new URL(nestedHttp.request().url()).searchParams.get("parent_folder_id")).toBe(folder.folder_id);
+    const nested = inventoryResponse(await nestedHttp.json(), folder.folder_id);
+    await verifyDisplayedInventory(page, nested);
+    await expect(explorer.getByRole("navigation", { name: "Folder location" })
+      .getByRole("button", { name: folder.name, exact: true }).last()).toHaveAttribute("aria-current", "location");
+    await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+    const back = nextRealPage(page, origin);
+    await explorer.getByRole("navigation", { name: "Folder location" }).getByRole("button", { name: "Root", exact: true }).click();
+    const rootHttp = await back;
+    expect(rootHttp.status()).toBe(200);
+    expect(new URL(rootHttp.request().url()).searchParams.has("parent_folder_id")).toBe(false);
+    await verifyDisplayedInventory(page, inventoryResponse(await rootHttp.json()));
   }
 
   // A read-only acceptance run never uploads, changes ACLs or disables plugins.
@@ -342,7 +422,7 @@ test('KCONTENT-LIVE: selected owner text is analyzed by the authorized runtime',
   await explorer.getByRole('button', { name: 'Refresh' }).click();
   const refreshedHttp = await refreshResponse;
   expect(refreshedHttp.status()).toBe(200);
-  expect(new URL(refreshedHttp.request().url()).searchParams.has('cursor')).toBe(false);
+  expect(new URL(refreshedHttp.request().url()).searchParams.has('file_cursor')).toBe(false);
   const refreshed = inventoryResponse(await refreshedHttp.json());
   const current = refreshed.items.find((file) => file.source_id === expectedId);
   expect(current, 'Approved source must remain owner-active for refresh proof').toBeDefined();
