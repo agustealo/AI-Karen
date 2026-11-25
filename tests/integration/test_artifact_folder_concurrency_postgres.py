@@ -251,3 +251,110 @@ async def test_scoped_repository_hierarchy_admission(monkeypatch):
                     ), {"id": folder_id})
         finally:
             await engine.dispose()
+
+
+_DELETE_EMPTY = "SELECT public.delete_empty_owned_artifact_folder($1,$2,$3,$4)"
+
+
+@pytest.mark.parametrize("assignment_first", [True, False])
+@pytest.mark.parametrize("reference_kind", ["file", "folder"])
+async def test_empty_folder_delete_serializes_destination_assignment(assignment_first, reference_kind):
+    tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"])
+    owner = UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_ID"])
+    destination, child = uuid4(), uuid4()
+    artifact = str(uuid4())
+    first = await asyncpg.connect(_dsn())
+    second = None
+    pending = None
+    try:
+        second = await asyncpg.connect(_dsn())
+        for conn in (first, second):
+            await conn.execute("SET lock_timeout = '5s'")
+            await conn.execute("SET statement_timeout = '10s'")
+        await first.execute(
+            "INSERT INTO public.artifact_folders(folder_id,tenant_id,owner_user_id,name) "
+            "VALUES ($1,$3,$4,'Destination'),($2,$3,$4,'Child')",
+            destination, child, tenant, owner,
+        )
+        uri = f"supabase://artifacts/{tenant}/{artifact}/content"
+        await first.execute(
+            "INSERT INTO public.files(file_id,tenant_id,owner_user_id,name,mime_type,"
+            "bytes,storage_uri,sha256,metadata) "
+            "VALUES ($1,$2,$3,'proof.txt','text/plain',42,$4,$5,'{}'::jsonb)",
+            artifact, tenant, owner, uri, "a" * 64,
+        )
+
+        async def assign(conn):
+            try:
+                if reference_kind == "folder":
+                    return await conn.fetchval(_MOVE, tenant, owner, child, destination, 1)
+                return await conn.fetchval(
+                    "UPDATE public.files SET folder_id=$1 WHERE file_id=$2 "
+                    "AND tenant_id=$3 AND owner_user_id=$4 AND organization_revision=1 "
+                    "RETURNING organization_revision",
+                    destination, artifact, tenant, owner,
+                )
+            except asyncpg.ForeignKeyViolationError:
+                return None
+
+        async def delete(conn):
+            return await conn.fetchval(_DELETE_EMPTY, tenant, owner, destination, 1)
+
+        async with first.transaction():
+            if assignment_first:
+                assert await assign(first) == 2
+                pending = asyncio.create_task(delete(second))
+            else:
+                assert await delete(first) is True
+                pending = asyncio.create_task(assign(second))
+            for _ in range(100):
+                if await first.fetchval(
+                    "SELECT cardinality(pg_blocking_pids($1)) > 0", second.get_server_pid()
+                ):
+                    break
+                if pending.done():
+                    pytest.fail("Competing operation completed before lock release")
+                await asyncio.sleep(0.02)
+            else:
+                pytest.fail("Competing operation never contended")
+        assert await asyncio.wait_for(pending, timeout=12) is (False if assignment_first else None)
+        row = await first.fetchrow(
+            "SELECT folder_id,organization_revision,storage_uri,sha256,bytes "
+            "FROM public.files WHERE file_id=$1", artifact,
+        )
+        assigned_file = assignment_first and reference_kind == "file"
+        assert row["folder_id"] == (destination if assigned_file else None)
+        assert row["organization_revision"] == (2 if assigned_file else 1)
+        assert row["storage_uri"] == uri and row["sha256"] == "a" * 64 and row["bytes"] == 42
+        assert await first.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM public.artifact_folders WHERE folder_id=$1)", destination
+        ) is assignment_first
+        assert await first.fetchval(
+            "SELECT parent_folder_id FROM public.artifact_folders WHERE folder_id=$1", child
+        ) == (destination if assignment_first and reference_kind == "folder" else None)
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        if second is not None:
+            await second.close()
+        try:
+            await first.execute("DELETE FROM public.files WHERE file_id=$1", artifact)
+            await first.execute("DELETE FROM public.artifact_folders WHERE folder_id IN ($1,$2)",
+                                child, destination)
+        finally:
+            await first.close()
+
+
+async def test_empty_folder_delete_rejects_stale_isolation():
+    conn = await asyncpg.connect(_dsn())
+    try:
+        async with conn.transaction(isolation="repeatable_read"):
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                async with conn.transaction():
+                    await conn.fetchval(
+                        _DELETE_EMPTY, UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"]),
+                        UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_ID"]), uuid4(), 1,
+                    )
+    finally:
+        await conn.close()

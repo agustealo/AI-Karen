@@ -95,6 +95,42 @@ DO $$ BEGIN
     EXCEPTION WHEN check_violation THEN NULL;
     END;
 END $$;
+DO $$
+DECLARE
+    tenant UUID := 'a0000000-0000-4000-8000-000000000001';
+    owner_id UUID := 'b0000000-0000-4000-8000-000000000001';
+    root_id UUID := 'c0000000-0000-4000-8000-000000000001';
+    child_id UUID := 'c0000000-0000-4000-8000-000000000002';
+    empty_id UUID;
+    client_role TEXT;
+BEGIN
+    IF public.delete_empty_owned_artifact_folder(tenant, owner_id, root_id, 1) IS DISTINCT FROM FALSE
+       OR public.delete_empty_owned_artifact_folder(tenant, owner_id, child_id, 3) IS DISTINCT FROM FALSE THEN
+        RAISE EXCEPTION 'nonempty folder deletion accepted';
+    END IF;
+    UPDATE public.files SET deleted_at=now() WHERE file_id='folder-proof-file';
+    IF public.delete_empty_owned_artifact_folder(tenant, owner_id, child_id, 3) IS DISTINCT FROM FALSE THEN
+        RAISE EXCEPTION 'archived reference ignored';
+    END IF;
+    UPDATE public.files SET deleted_at=NULL WHERE file_id='folder-proof-file';
+    INSERT INTO public.artifact_folders(tenant_id,owner_user_id,name)
+    VALUES (tenant,owner_id,'Empty') RETURNING folder_id INTO empty_id;
+    IF public.delete_empty_owned_artifact_folder(tenant, owner_id, empty_id, 2) IS DISTINCT FROM FALSE
+       OR public.delete_empty_owned_artifact_folder(tenant, 'b0000000-0000-4000-8000-000000000002', empty_id, 1) IS DISTINCT FROM FALSE
+       OR public.delete_empty_owned_artifact_folder('a0000000-0000-4000-8000-000000000002', owner_id, empty_id, 1) IS DISTINCT FROM FALSE THEN
+        RAISE EXCEPTION 'stale or foreign delete accepted';
+    END IF;
+    IF public.delete_empty_owned_artifact_folder(tenant, owner_id, empty_id, 1) IS DISTINCT FROM TRUE
+       OR public.delete_empty_owned_artifact_folder(tenant, owner_id, empty_id, 1) IS DISTINCT FROM FALSE THEN
+        RAISE EXCEPTION 'empty deletion or replay result invalid';
+    END IF;
+    FOREACH client_role IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+        IF has_function_privilege(client_role,'public.delete_empty_owned_artifact_folder(uuid,uuid,uuid,bigint)','EXECUTE') THEN
+            RAISE EXCEPTION 'unexpected client delete privilege';
+        END IF;
+    END LOOP;
+END;
+$$;
 UPDATE public.files SET deleted_at=now() WHERE file_id='folder-proof-file';
 UPDATE public.files SET deleted_at=NULL WHERE file_id='folder-proof-file';
 DO $$ BEGIN

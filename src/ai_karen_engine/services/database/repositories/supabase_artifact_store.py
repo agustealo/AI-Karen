@@ -417,6 +417,45 @@ class SupabaseArtifactStore(ArtifactStore):
             logger.warning("Artifact folder movement unavailable")
             return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
+    @instrument_repository(operation="delete_empty_owner_folder", repository="SupabaseArtifactStore")
+    async def delete_empty_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        expected_revision: int,
+    ) -> RepositoryResult[bool]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        commit_attempted = False
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
+                result = await session.execute(text("""
+                    SELECT public.delete_empty_owned_artifact_folder(
+                        CAST(:tenant AS uuid), CAST(:owner AS uuid),
+                        CAST(:folder AS uuid), CAST(:revision AS bigint)
+                    )
+                """), {"tenant": tenant_id, "owner": user_id,
+                       "folder": folder_id, "revision": expected_revision})
+                deleted = result.scalar_one_or_none()
+                if deleted is False:
+                    raise _HierarchyConflict()
+                if deleted is not True:
+                    raise ValueError("artifact_folder_delete_result_invalid")
+                commit_attempted = True
+            return RepositoryResult(success=True, data=True)
+        except _HierarchyConflict:
+            return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+        except Exception as exc:
+            if commit_attempted:
+                logger.warning("Artifact folder deletion commit outcome uncertain")
+                return RepositoryResult(success=False, error="artifact_folder_commit_uncertain")
+            code = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if code in {"23503", "23514", "40001", "40P01"}:
+                return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+            logger.warning("Artifact folder deletion unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
         try:

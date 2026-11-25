@@ -177,4 +177,55 @@ COMMENT ON COLUMN public.files.folder_id IS
 COMMENT ON COLUMN public.files.organization_revision IS
     'Database-managed folder assignment revision; not SHA-256 content revision. Governed CAS API pending.';
 
+-- The owner-facing delete contract is deliberately stricter than the FK's
+-- administrative/account cleanup behavior. A full reference index includes
+-- archived files, which must prevent an empty-folder deletion too.
+CREATE INDEX idx_files_owned_folder_references
+    ON public.files (tenant_id, owner_user_id, folder_id)
+    WHERE folder_id IS NOT NULL;
+
+CREATE FUNCTION public.delete_empty_owned_artifact_folder(
+    p_tenant UUID, p_owner UUID, p_folder UUID, p_revision BIGINT
+) RETURNS BOOLEAN
+LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = pg_catalog, public AS $$
+BEGIN
+    IF p_tenant IS NULL OR p_owner IS NULL OR p_folder IS NULL
+       OR p_revision IS NULL OR p_revision NOT BETWEEN 1 AND 9223372036854775806 THEN
+        RAISE EXCEPTION 'artifact_folder_delete_invalid' USING ERRCODE = '22023';
+    END IF;
+    -- Fresh statement snapshots after the row lock are essential. Do not
+    -- accept a stale repeatable-read snapshot or filtered reference inventory.
+    IF current_setting('transaction_isolation') <> 'read committed'
+       OR row_security_active('public.files'::regclass)
+       OR row_security_active('public.artifact_folders'::regclass) THEN
+        RAISE EXCEPTION 'artifact_folder_delete_scope_unavailable' USING ERRCODE = '42501';
+    END IF;
+    -- This conflicts with the FK's key-share lock on a destination folder.
+    -- If an assignment wins, the following statement sees it; if deletion
+    -- wins, a waiting assignment fails its FK instead of silently detaching.
+    PERFORM 1 FROM public.artifact_folders
+    WHERE tenant_id = p_tenant AND owner_user_id = p_owner
+      AND folder_id = p_folder AND revision = p_revision
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN FALSE;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM public.artifact_folders
+        WHERE tenant_id = p_tenant AND owner_user_id = p_owner AND parent_folder_id = p_folder
+    ) OR EXISTS (
+        SELECT 1 FROM public.files
+        WHERE tenant_id = p_tenant AND owner_user_id = p_owner AND folder_id = p_folder
+    ) THEN
+        RETURN FALSE;
+    END IF;
+    DELETE FROM public.artifact_folders
+    WHERE tenant_id = p_tenant AND owner_user_id = p_owner
+      AND folder_id = p_folder AND revision = p_revision;
+    RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.delete_empty_owned_artifact_folder(UUID, UUID, UUID, BIGINT)
+    FROM PUBLIC, anon, authenticated, service_role;
+
 COMMIT;

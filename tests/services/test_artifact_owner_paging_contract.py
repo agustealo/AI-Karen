@@ -401,3 +401,28 @@ def test_hierarchy_capability_probe_reports_only_live_admission():
     result = _run(store.owner_hierarchy_available(TENANT, OWNER))
     assert not result.success and result.data is None
     assert len(session.admissions) == 2 and not session.calls
+
+
+def test_empty_folder_delete_commits_only_explicit_true():
+    folder = str(uuid.uuid4())
+    for returned in (False, None, 1, True):
+        session = _HierarchySession(scalar=returned)
+        result = _run(_hierarchy_store(session).delete_empty_owner_folder(
+            TENANT, OWNER, folder, expected_revision=7,
+        ))
+        assert result.success is (returned is True)
+        assert session.commits == int(returned is True)
+        sql, params = session.calls[0]
+        assert "public.delete_empty_owned_artifact_folder" in sql
+        assert params == {"tenant": TENANT, "owner": OWNER,
+                          "folder": folder, "revision": 7}
+
+
+def test_empty_folder_delete_uncertainty_is_not_success_or_retry():
+    session = _HierarchySession(scalar=True, fail_commit=True)
+    result = _run(_hierarchy_store(session).delete_empty_owner_folder(
+        TENANT, OWNER, str(uuid.uuid4()), expected_revision=1,
+    ))
+    assert not result.success
+    assert result.error == "artifact_folder_commit_uncertain"
+    assert session.commits == 1 and len(session.calls) == 1

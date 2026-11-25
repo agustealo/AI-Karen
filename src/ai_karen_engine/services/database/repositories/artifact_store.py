@@ -194,6 +194,13 @@ class ArtifactStore(Repository):
         """Move active metadata only; return the committed organization revision."""
         return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
+    async def delete_empty_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        expected_revision: int,
+    ) -> RepositoryResult[bool]:
+        """Delete only empty folder metadata; never detach or delete artifacts."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
     @abstractmethod
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:
         """Delete an artifact (metadata + bytes)."""
