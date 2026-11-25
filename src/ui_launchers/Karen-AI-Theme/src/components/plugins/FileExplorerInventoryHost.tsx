@@ -528,9 +528,13 @@ export function FileExplorerInventoryHost({
   }, [currentPage, loading, currentError, principalKey, callbackGeneration, scopeIdentity,
       capacityIdentity, capacity, selectableItems]);
 
+  const isCurrentNavigation = useCallback(() => !authLoading &&
+    scopeRef.current === scopeIdentity && capacityRef.current === capacityIdentity &&
+    generationRef.current === callbackGeneration,
+  [authLoading, scopeIdentity, capacityIdentity, callbackGeneration]);
+
   const onSearch = useCallback((value: string) => {
-    if (!principalKey || authLoading || scopeRef.current !== scopeIdentity ||
-        generationRef.current !== callbackGeneration || mutationRef.current ||
+    if (!principalKey || !isCurrentNavigation() || mutationRef.current ||
         typeof value !== 'string' || Array.from(value).length > 160 ||
         /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return;
     // URI encoding must not throw for an unpaired surrogate.
@@ -545,10 +549,10 @@ export function FileExplorerInventoryHost({
     setRequest(previous => ({ principalKey, scopeIdentity, search, cursor: null,
       parentId: previous.scopeIdentity === scopeIdentity ? previous.parentId ?? null : null,
       afterFolderId: null, generation: previous.generation + 1 }));
-  }, [principalKey, authLoading, scopeIdentity, callbackGeneration]);
+  }, [principalKey, isCurrentNavigation, scopeIdentity]);
 
   const onRefresh = useCallback(() => {
-    if (!principalKey || authLoading || scopeRef.current !== scopeIdentity || generationRef.current !== callbackGeneration ||
+    if (!principalKey || !isCurrentNavigation() ||
         mutationRef.current?.principalKey === principalKey) return;
     generationRef.current += 1;
     setSelectedSourceIds([]);
@@ -560,11 +564,11 @@ export function FileExplorerInventoryHost({
       afterFolderId: null,
       generation: value.generation + 1,
     }));
-  }, [principalKey, authLoading, callbackGeneration, currentError, scopeIdentity, activeSearch]);
+  }, [principalKey, isCurrentNavigation, currentError, scopeIdentity, activeSearch]);
 
   const onNextPage = useCallback((cursor: string) => {
     if (
-      !principalKey || !currentPage || generationRef.current !== currentPage.generation ||
+      !principalKey || !isCurrentNavigation() || !currentPage || generationRef.current !== currentPage.generation ||
       loading || currentError || mutationRef.current?.principalKey === principalKey ||
       !currentPage.has_more || currentPage.next_cursor !== cursor
     ) return;
@@ -578,10 +582,10 @@ export function FileExplorerInventoryHost({
       afterFolderId: value.scopeIdentity === scopeIdentity ? value.afterFolderId ?? null : null,
       generation: value.generation + 1,
     }));
-  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch]);
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch, isCurrentNavigation]);
 
   const onNavigate = useCallback((folderId: string | null) => {
-    if (!principalKey || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
+    if (!principalKey || !isCurrentNavigation() || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
         loading || currentError || mutationRef.current?.principalKey === principalKey) return;
     if (folderId !== null &&
         !currentPage.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === folderId) &&
@@ -591,10 +595,10 @@ export function FileExplorerInventoryHost({
     setPage(null);
     setRequest(value => ({ principalKey, scopeIdentity, search: '', cursor: null, parentId: folderId,
       afterFolderId: null, generation: value.generation + 1 }));
-  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch]);
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch, isCurrentNavigation]);
 
   const onNextFolders = useCallback((folderId: string) => {
-    if (!principalKey || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
+    if (!principalKey || !isCurrentNavigation() || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
         loading || currentError || mutationRef.current?.principalKey === principalKey ||
         !currentPage.hierarchy.hasMoreFolders || currentPage.hierarchy.nextFolderId !== folderId) return;
     generationRef.current += 1;
@@ -604,7 +608,7 @@ export function FileExplorerInventoryHost({
       cursor: value.scopeIdentity === scopeIdentity ? value.cursor : null,
       parentId: currentPage.hierarchy?.parentId ?? null,
       afterFolderId: folderId, generation: value.generation + 1 }));
-  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch]);
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch, isCurrentNavigation]);
 
   const loadDestination = useCallback((next: DestinationRequest) => {
     if (generationRef.current !== next.generation || mutationRef.current) return;
