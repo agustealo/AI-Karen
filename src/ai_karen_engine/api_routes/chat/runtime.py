@@ -41,6 +41,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     SearchRetrievalOptions,
     ChatExecutionRequest,
+    ChatExecutionResult,
     ChatExecutionStatus,
     ChatStreamChunk,
     ChatStreamEventType,
@@ -426,6 +427,28 @@ async def _verified_workspace_run_reference(
     )
 
 
+def _runtime_error_response(
+    result: ChatExecutionResult, correlation_id: str,
+) -> JSONResponse:
+    """Translate the canonical runtime failure without exposing answer bytes."""
+    uncertain = (
+        result.metadata.extra.get("error_code") == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+    )
+    return JSONResponse(
+        status_code=409 if uncertain else 503,
+        content={
+            "error_code": result.metadata.extra.get("error_code") or "CHAT_EXECUTION_FAILED",
+            "message": (
+                "Chat persistence is unverified. Check saved history before sending again."
+                if uncertain else "The chat runtime could not complete the response."
+            ),
+            "correlation_id": correlation_id,
+            "requires_retry": not uncertain,
+        },
+        headers={"X-Correlation-Id": correlation_id},
+    )
+
+
 async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
     """Serialize runtime events once for every authenticated chat transport.
 
@@ -442,6 +465,23 @@ async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
         # canonical producer cleanup deterministic, not dependent on GC.
         async with aclosing(get_chat_runtime().execute_stream(runtime_request)) as stream:
             async for chunk in stream:
+                if (
+                    chunk.type == ChatStreamEventType.COMPLETE
+                    and isinstance(chunk.metadata, dict)
+                    and chunk.metadata.get("transcript_persistence_status") == "unverified"
+                ):
+                    # A runtime COMPLETE envelope is not a durable success
+                    # receipt. All legacy wire adapters share this serializer.
+                    chunk = ChatStreamChunk(
+                        type=ChatStreamEventType.ERROR,
+                        content="Chat persistence is unverified. Check saved history before sending again.",
+                        correlation_id=correlation_id,
+                        metadata={
+                            "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                            "transcript_persistence_status": "unverified",
+                            "requires_retry": False,
+                        },
+                    )
                 encoded = json.dumps(
                     chunk.to_sse_payload(), ensure_ascii=False, allow_nan=False,
                 )
@@ -620,24 +660,7 @@ async def create_chat_response(
             return JSONResponse(status_code=status_code, content=payload, headers=headers)
 
         if result.status == ChatExecutionStatus.ERROR:
-            # An unsuccessful runtime execution must not become an HTTP 200
-            # success envelope with empty assistant content.
-            uncertain = (
-                result.metadata.extra.get("error_code") == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
-            )
-            return JSONResponse(
-                status_code=409 if uncertain else 503,
-                content={
-                    "error_code": result.metadata.extra.get("error_code") or "CHAT_EXECUTION_FAILED",
-                    "message": (
-                        "Chat persistence is unverified. Check saved history before sending again."
-                        if uncertain else "The chat runtime could not complete the response."
-                    ),
-                    "correlation_id": correlation_id,
-                    "requires_retry": not uncertain,
-                },
-                headers={"X-Correlation-Id": correlation_id},
-            )
+            return _runtime_error_response(result, correlation_id)
 
         response_metadata = result.metadata.to_dict()
         actual_model = response_metadata.get("actual_model") or "unknown"
