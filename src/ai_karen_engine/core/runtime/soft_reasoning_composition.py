@@ -151,7 +151,8 @@ class RuntimeSoftReasoningComposer:
 
         batches = 1 + config.max_iterations
         maximum_total_model_calls = (
-            config.initial_samples
+            1  # greedy reference forward
+            + config.initial_samples
             + config.max_iterations * config.batch_size
             + batches
         )
