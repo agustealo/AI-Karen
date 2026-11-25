@@ -59,6 +59,18 @@ class VerifiedArtifactText:
     text: str
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactFolder:
+    """Owner-scoped logical organization metadata; never a content grant."""
+
+    folder_id: str
+    parent_folder_id: Optional[str]
+    name: str
+    revision: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class ArtifactStore(Repository):
     """Canonical contract for durable artifact/object storage.
 
@@ -127,6 +139,22 @@ class ArtifactStore(Repository):
         Cursors select a position, never confer access. No bytes or storage
         locations are exposed by the explorer projection.
         """
+
+    async def list_owner_folders(
+        self, tenant_id: str, user_id: str, *,
+        parent_folder_id: Optional[str] = None,
+        after_folder_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        """Bounded metadata only. Caller supplies authenticated actor identity."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def move_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        parent_folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        """Compare-and-swap movement; success returns committed revision."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
     @abstractmethod
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:

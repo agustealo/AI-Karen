@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_karen_engine.services.database.repositories.artifact_store import (
     Artifact,
     ArtifactStore,
+    ArtifactFolder,
     ArtifactUploadRequest,
     VerifiedArtifactText,
     RepositoryResult,
@@ -87,6 +88,129 @@ class SupabaseArtifactStore(ArtifactStore):
         if storage_uri == f"supabase://artifacts/{historical}":
             return historical
         return None
+
+    @staticmethod
+    def _valid_folder_ids(*values: Optional[str]) -> bool:
+        try:
+            return all(value is None or (
+                isinstance(value, str) and str(uuid.UUID(value)) == value
+            ) for value in values)
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    @instrument_repository(operation="list_owner_folders", repository="SupabaseArtifactStore")
+    async def list_owner_folders(
+        self, tenant_id: str, user_id: str, *,
+        parent_folder_id: Optional[str] = None,
+        after_folder_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        """Read bounded children in UUID order, with an owner-scoped anchor."""
+        if (not tenant_id or not user_id or not self._valid_folder_ids(
+            tenant_id, user_id, parent_folder_id, after_folder_id
+        ) or type(limit) is not int or not 1 <= limit <= 200):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        params = {
+            "tenant": tenant_id, "owner": user_id, "parent": parent_folder_id,
+            "after": after_folder_id, "limit": limit + 1,
+        }
+        try:
+            async with await self._session() as session:
+                # Verify a non-root location and continuation anchor in the
+                # same statement snapshot as the listing. A foreign or deleted
+                # anchor must not silently become an empty authorized page.
+                result = await session.execute(text("""
+                    WITH scope AS (
+                        SELECT
+                            (CAST(:parent AS uuid) IS NULL OR EXISTS (
+                                SELECT 1 FROM public.artifact_folders
+                                WHERE tenant_id = CAST(:tenant AS uuid)
+                                  AND owner_user_id = CAST(:owner AS uuid)
+                                  AND folder_id = CAST(:parent AS uuid)
+                            )) AND
+                            (CAST(:after AS uuid) IS NULL OR EXISTS (
+                                SELECT 1 FROM public.artifact_folders
+                                WHERE tenant_id = CAST(:tenant AS uuid)
+                                  AND owner_user_id = CAST(:owner AS uuid)
+                                  AND parent_folder_id IS NOT DISTINCT FROM CAST(:parent AS uuid)
+                                  AND folder_id = CAST(:after AS uuid)
+                            )) AS valid
+                    )
+                    SELECT scope.valid, page.*
+                    FROM scope LEFT JOIN LATERAL (
+                        SELECT folder_id, parent_folder_id, name, revision,
+                               created_at, updated_at
+                        FROM public.artifact_folders
+                        WHERE scope.valid AND tenant_id = CAST(:tenant AS uuid)
+                          AND owner_user_id = CAST(:owner AS uuid)
+                          AND parent_folder_id IS NOT DISTINCT FROM CAST(:parent AS uuid)
+                          AND (CAST(:after AS uuid) IS NULL OR folder_id > CAST(:after AS uuid))
+                        ORDER BY folder_id LIMIT :limit
+                    ) AS page ON TRUE
+                    ORDER BY page.folder_id
+                """), params)
+                rows = result.mappings().all()
+            if not rows or not rows[0]["valid"]:
+                return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+            folders = [
+                ArtifactFolder(
+                    folder_id=str(row["folder_id"]),
+                    parent_folder_id=str(row["parent_folder_id"]) if row["parent_folder_id"] else None,
+                    name=row["name"], revision=row["revision"],
+                    created_at=row["created_at"], updated_at=row["updated_at"],
+                )
+                for row in rows if row["folder_id"] is not None
+            ]
+            page = folders[:limit]
+            more = len(folders) > limit
+            return RepositoryResult(success=True, data=page, metadata={
+                "has_more": more,
+                "next_folder_id": page[-1].folder_id if more else None,
+            })
+        except Exception:
+            logger.warning("Artifact folder listing unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @instrument_repository(operation="move_owner_folder", repository="SupabaseArtifactStore")
+    async def move_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        parent_folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id, parent_folder_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        commit_attempted = False
+        try:
+            async with await self._session() as session:
+                result = await session.execute(text("""
+                    SELECT public.move_owned_artifact_folder(
+                        CAST(:tenant AS uuid), CAST(:owner AS uuid),
+                        CAST(:folder AS uuid), CAST(:parent AS uuid),
+                        CAST(:revision AS bigint)
+                    )
+                """), {
+                    "tenant": tenant_id, "owner": user_id, "folder": folder_id,
+                    "parent": parent_folder_id, "revision": expected_revision,
+                })
+                revision = result.scalar_one()
+                if revision is None:
+                    return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+                if type(revision) is not int or revision not in (expected_revision, expected_revision + 1):
+                    return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+                commit_attempted = True
+                await session.commit()
+            return RepositoryResult(success=True, data=revision)
+        except Exception as exc:
+            if commit_attempted:
+                logger.warning("Artifact folder move commit outcome uncertain")
+                return RepositoryResult(success=False, error="artifact_folder_commit_uncertain")
+            code = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if code in {"23503", "23514", "40001", "40P01"}:
+                return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+            logger.warning("Artifact folder movement unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
